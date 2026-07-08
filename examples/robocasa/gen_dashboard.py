@@ -569,10 +569,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--output-dir", type=Path, default=Path("/data5/jellyho/robocasa365"),
                     help="Converted-dataset dir, scanned for per-task status.")
-    ap.add_argument("--mode", choices=["artifact", "site"], default="artifact",
-                    help="'artifact': self-contained, static thumbnails (for the claude.ai artifact). "
-                         "'site': references site/videos/<Task>.mp4 for full-trajectory playback "
-                         "(serve locally or via GitHub Pages).")
+    ap.add_argument("--mode", choices=["site", "artifact"], default="site",
+                    help="'site' (default): the GitHub Pages dashboard; references site/videos/<Task>.mp4 "
+                         "for full-trajectory playback (serve locally or via Pages). "
+                         "'artifact': a self-contained single file with static thumbnails and no videos.")
     ap.add_argument("--out", type=Path, default=None,
                     help="Output HTML path. Defaults to dashboard.html (artifact) or site/index.html (site).")
     args = ap.parse_args()

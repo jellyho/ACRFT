@@ -206,41 +206,33 @@ success or the task horizon. It reports a per-task success rate and can save rol
 
 ## Task overview / dashboard
 
-For a browsable overview of all 50 target tasks (thumbnail, category, horizon, description, and
-on-disk conversion status) plus project status and roadmap, generate the dashboard page:
+A browsable dashboard covers all 50 target tasks (thumbnail + full-trajectory video, category,
+horizon, description, single/multi language-instruction badge, and on-disk status) plus project
+status, roadmap, and the dataset schema. It's published via **GitHub Pages** from
+`examples/robocasa/site/` (see `.github/workflows/pages.yml`) — enable *Settings → Pages → Source:
+GitHub Actions* once, and it deploys to `https://<user>.github.io/<repo>/`.
+
+Rebuild it after adding tasks or updating project status:
 
 ```bash
-uv run examples/robocasa/gen_dashboard.py \
-    --output-dir /data5/jellyho/robocasa365 \
-    --out examples/robocasa/dashboard.html
-```
-
-It re-scans the dataset dir and embeds any thumbnails found under `examples/robocasa/assets/`
-(one `<Task>.jpg` per task, sampled from the converted agent-view videos). Re-run it to refresh
-as more tasks finish converting or as the project evolves.
-
-### Two modes
-
-- **`--mode artifact`** (default) → `dashboard.html`: fully self-contained (thumbnails embedded as
-  data URIs, no external files). This is what gets published as a claude.ai artifact.
-- **`--mode site`** → `site/index.html`: references `site/videos/<Task>.mp4` so you can **play the
-  full episode-0 trajectory** for each task. Full videos are too large to embed in a self-contained
-  artifact, so this mode is meant to be served locally (or via GitHub Pages).
-
-Generate the full-trajectory videos first, then build and serve the site:
-
-```bash
-# Cut each task's episode-0 video (exact boundaries from the LeRobot episode metadata):
+# 1) Cut each task's episode-0 video (exact boundaries from the LeRobot episode metadata)
+#    and sample a poster frame:
 uv run examples/robocasa/make_previews.py --output-dir /data5/jellyho/robocasa365
+# (optional) refresh the single/multi instruction counts:
+uv run examples/robocasa/make_previews.py --instruction-counts
 
-# Build the site page and serve it (videos play in-browser with controls):
-uv run examples/robocasa/gen_dashboard.py --mode site
+# 2) Build the site page (default mode):
+uv run examples/robocasa/gen_dashboard.py --output-dir /data5/jellyho/robocasa365
+
+# 3) Preview locally, or commit site/ and push to redeploy Pages:
 cd examples/robocasa/site && python -m http.server 8000   # → http://localhost:8000/
 ```
 
-The videos (~150 KB–1 MB each, `site/videos/`) are **git-ignored** — regenerate them locally with
-`make_previews.py`. To publish the site on GitHub Pages, commit `site/` (including videos, or host
-them elsewhere) and enable Pages for the directory.
+The page embeds poster thumbnails inline and references `site/videos/<Task>.mp4` for playback;
+both `site/index.html` and the videos (~150 KB–1 MB each) are committed so Pages can serve them.
+
+> `gen_dashboard.py --mode artifact` can also emit a single self-contained HTML file (thumbnails
+> embedded, no videos) if you ever want a portable one-file version.
 
 ## Output layout
 
