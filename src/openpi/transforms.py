@@ -310,7 +310,8 @@ class ExtractFASTActions(DataTransformFn):
 class PromptFromLeRobotTask(DataTransformFn):
     """Extracts a prompt from the current LeRobot dataset task."""
 
-    # Contains the LeRobot dataset tasks (dataset.meta.tasks).
+    # Maps ``task_index`` -> task string. Built from ``dataset.meta.tasks``
+    # (see ``data_loader._task_index_to_prompt`` for the v2.1/v3.0 normalization).
     tasks: dict[int, str]
 
     def __call__(self, data: DataDict) -> DataDict:

@@ -7,7 +7,7 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+import lerobot.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
@@ -146,9 +146,24 @@ def create_torch_dataset(
     )
 
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])
 
     return dataset
+
+
+def _task_index_to_prompt(dataset_meta: lerobot_dataset.LeRobotDatasetMetadata) -> dict[int, str]:
+    """Build a ``{task_index: task}`` mapping from LeRobot dataset metadata.
+
+    LeRobot dataset format v3.0 (CODEBASE_VERSION >= "v3.0", lerobot >= 0.4.0) stores
+    ``meta.tasks`` as a pandas DataFrame indexed by the task string with a ``task_index``
+    column, whereas v2.1 exposed it directly as a ``{task_index: task}`` dict. Normalize
+    both to the dict form expected by ``PromptFromLeRobotTask``.
+    """
+    tasks = dataset_meta.tasks
+    if isinstance(tasks, dict):
+        return tasks
+    # v3.0 DataFrame: index is the task string, "task_index" is a column.
+    return {int(task_index): str(task) for task, task_index in tasks["task_index"].items()}
 
 
 def create_rlds_dataset(
