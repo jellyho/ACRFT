@@ -89,7 +89,14 @@ uv run examples/robocasa/prepare_robocasa365.py --output-dir /data5/jellyho/robo
 
 - One dataset repo per task: **`<hf-user>/<prefix>-<Task>`** (e.g. `jellyho/robocasa365-CloseBlenderLid`).
   Each repo is tagged `v3.0` so `LeRobotDataset(repo_id)` resolves it.
+- A proper **LeRobot dataset card** (README) is generated for each repo from `meta/info.json`.
 - A collection titled *"RoboCasa 365 Target (Human) — LeRobot v3.0"* is created and all repos added.
+
+To (re)generate just the dataset cards on already-uploaded repos without re-uploading data:
+
+```bash
+uv run examples/robocasa/prepare_robocasa365.py --output-dir /data5/jellyho/robocasa365 --push-cards-only
+```
 
 Requires a HF token with **write** access (`huggingface-cli login`, or `HF_TOKEN`).
 

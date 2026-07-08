@@ -182,8 +182,9 @@ def push_task_to_hub(task: str, output_dir: Path, repo_id: str, *, private: bool
     """Upload the local v3.0 dataset ``<output_dir>/<task>`` to ``repo_id`` on the HF Hub.
 
     Uses HfApi directly (create_repo + upload_folder + version tag) rather than
-    ``LeRobotDataset.push_to_hub`` to avoid re-loading the dataset from disk. Equivalent result:
-    a dataset repo whose files are the v3.0 dataset, tagged ``v3.0`` so lerobot can resolve it.
+    ``LeRobotDataset.push_to_hub`` to avoid re-loading the dataset from disk, then generates the
+    LeRobot dataset card the same way ``push_to_hub`` would. Result: a dataset repo whose files are
+    the v3.0 dataset, tagged ``v3.0``, with a proper LeRobot dataset card.
     """
     from huggingface_hub import HfApi
 
@@ -206,8 +207,34 @@ def push_task_to_hub(task: str, output_dir: Path, repo_id: str, *, private: bool
         api.create_tag(repo_id=repo_id, tag="v3.0", repo_type="dataset", exist_ok=True)
     except Exception as e:  # noqa: BLE001 - a missing tag is non-fatal
         logger.warning("[%s] could not create v3.0 tag: %s", task, e)
+    push_dataset_card(task, output_dir, repo_id)
     logger.info("[%s] pushed.", task)
     return repo_id
+
+
+def push_dataset_card(task: str, output_dir: Path, repo_id: str) -> None:
+    """Generate and upload the LeRobot dataset card (README) for an already-uploaded repo.
+
+    Reads ``meta/info.json`` and renders the same card ``LeRobotDataset.push_to_hub`` would, without
+    loading the full dataset. Safe to call on its own to backfill cards on existing repos.
+    """
+    import json
+
+    from lerobot.datasets.utils import create_lerobot_dataset_card
+
+    info_path = output_dir / task / "meta" / "info.json"
+    if not info_path.exists():
+        logger.warning("[%s] no meta/info.json; skipping dataset card.", task)
+        return
+    info = json.loads(info_path.read_text())
+    card = create_lerobot_dataset_card(
+        tags=["robocasa", "robocasa365", "robosuite", "kitchen", "manipulation"],
+        dataset_info=info,
+        license="apache-2.0",
+        repo_id=repo_id,
+    )
+    card.push_to_hub(repo_id=repo_id, repo_type="dataset")
+    logger.info("[%s] dataset card pushed.", task)
 
 
 def build_collection(title: str, namespace: str, repo_ids: list[str], *, private: bool) -> str | None:
@@ -241,6 +268,11 @@ def main() -> None:
         "--push-to-hub", action="store_true", help="After converting, upload each v3.0 dataset to the HF Hub."
     )
     parser.add_argument(
+        "--push-cards-only", action="store_true",
+        help="Backfill: only (re)generate and push the LeRobot dataset card to already-uploaded "
+             "repos. Skips download/convert/upload.",
+    )
+    parser.add_argument(
         "--hf-user", type=str, default=None, help="HF username/org for repos. Defaults to the logged-in user."
     )
     parser.add_argument(
@@ -259,7 +291,7 @@ def main() -> None:
     registry_tasks = parse_target_tasks()
     logger.info("RoboCasa registry lists %d target tasks.", len(registry_tasks))
 
-    if args.convert_only:
+    if args.convert_only or args.push_cards_only:
         # Work from what's already on disk.
         selected_tasks = sorted(p.name for p in args.output_dir.iterdir() if (p / "meta" / "info.json").exists())
         tar_paths: dict[str, str] = {}
@@ -290,44 +322,50 @@ def main() -> None:
 
     failures: list[tuple[str, str]] = []
     skipped = 0
-    for i, task in enumerate(selected_tasks, 1):
-        logger.info("=== (%d/%d) %s ===", i, len(selected_tasks), task)
-        # Resume support: a fully converted (v3.0) task is skipped entirely (no redownload,
-        # no reconversion) unless --overwrite is given.
-        want_convert = not args.download_only
-        if not args.overwrite and codebase_version(args.output_dir / task) == "v3.0" and want_convert:
-            logger.info("[%s] already v3.0 — skipping.", task)
-            skipped += 1
-            continue
-        try:
-            if not args.convert_only:
-                download_and_extract(task, tar_paths[task], args.output_dir, overwrite=args.overwrite)
-            if want_convert:
-                upgrade_to_v30(task, args.output_dir, keep_backup=args.keep_backup)
-        except Exception as e:  # noqa: BLE001 - keep going, report at the end
-            logger.exception("[%s] FAILED: %s", task, e)
-            failures.append((task, str(e)))
+    if not args.push_cards_only:
+        for i, task in enumerate(selected_tasks, 1):
+            logger.info("=== (%d/%d) %s ===", i, len(selected_tasks), task)
+            # Resume support: a fully converted (v3.0) task is skipped entirely (no redownload,
+            # no reconversion) unless --overwrite is given.
+            want_convert = not args.download_only
+            if not args.overwrite and codebase_version(args.output_dir / task) == "v3.0" and want_convert:
+                logger.info("[%s] already v3.0 — skipping.", task)
+                skipped += 1
+                continue
+            try:
+                if not args.convert_only:
+                    download_and_extract(task, tar_paths[task], args.output_dir, overwrite=args.overwrite)
+                if want_convert:
+                    upgrade_to_v30(task, args.output_dir, keep_backup=args.keep_backup)
+            except Exception as e:  # noqa: BLE001 - keep going, report at the end
+                logger.exception("[%s] FAILED: %s", task, e)
+                failures.append((task, str(e)))
 
-    done = len(selected_tasks) - len(failures) - skipped
-    logger.info("Finished. %d converted, %d already-done skipped, %d failed.", done, skipped, len(failures))
+        done = len(selected_tasks) - len(failures) - skipped
+        logger.info("Finished. %d converted, %d already-done skipped, %d failed.", done, skipped, len(failures))
 
     push_failures: list[tuple[str, str]] = []
-    if args.push_to_hub:
+    if args.push_to_hub or args.push_cards_only:
         from huggingface_hub import HfApi
 
         user = args.hf_user or HfApi().whoami()["name"]
-        logger.info("Pushing to HF Hub under '%s' (%s) ...", user, "private" if args.private else "public")
+        cards_only = args.push_cards_only
+        verb = "cards" if cards_only else "datasets"
+        logger.info("Pushing %s to HF Hub under '%s' (%s) ...", verb, user, "private" if args.private else "public")
         pushed: list[str] = []
         # Only push tasks that are actually v3.0 on disk (skips any that failed to convert).
         pushable = [t for t in selected_tasks if codebase_version(args.output_dir / t) == "v3.0"]
         not_ready = sorted(set(selected_tasks) - set(pushable))
         if not_ready:
-            logger.warning("%d task(s) not v3.0 on disk, skipping upload: %s", len(not_ready), not_ready)
+            logger.warning("%d task(s) not v3.0 on disk, skipping: %s", len(not_ready), not_ready)
         for i, task in enumerate(pushable, 1):
             repo_id = f"{user}/{args.repo_prefix}-{task}"
-            logger.info("=== push (%d/%d) %s ===", i, len(pushable), task)
+            logger.info("=== push %s (%d/%d) %s ===", verb, i, len(pushable), task)
             try:
-                push_task_to_hub(task, args.output_dir, repo_id, private=args.private)
+                if cards_only:
+                    push_dataset_card(task, args.output_dir, repo_id)
+                else:
+                    push_task_to_hub(task, args.output_dir, repo_id, private=args.private)
                 pushed.append(repo_id)
             except Exception as e:  # noqa: BLE001 - keep pushing the rest
                 logger.exception("[%s] PUSH FAILED: %s", task, e)
