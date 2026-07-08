@@ -145,6 +145,30 @@ TASKS = [
 
 _MAX_HORIZON = max(h for _, _, h, _ in TASKS)
 
+# Number of distinct natural-language instructions per task (from
+# annotation.human.task_description across all episodes). 1 = a single fixed instruction; >1 =
+# episode-specific instructions that describe the randomized objects/config. Recompute with:
+#   uv run examples/robocasa/make_previews.py --instruction-counts (writes assets/instruction_counts.json)
+INSTRUCTION_COUNTS = {
+    "SeparateFreezerRack": 409, "StirVegetables": 238, "WashFruitColander": 157,
+    "PickPlaceCounterToCabinet": 105, "PackIdenticalLunches": 51, "PickPlaceSinkToCounter": 34,
+    "SearingMeat": 32, "PickPlaceCounterToStove": 28, "StoreLeftoversInBowl": 17,
+    "SteamInMicrowave": 17, "NavigateKitchen": 13, "PickPlaceDrawerToCounter": 9,
+    "TurnOffStove": 8, "WeighIngredients": 7, "CuttingToolSelection": 7,
+    "SlideDishwasherRack": 2, "OpenDrawer": 2, "OpenCabinet": 2, "CloseFridge": 2,
+}
+
+
+def _instruction_count(task: str) -> int:
+    """Distinct instructions for a task. Prefers a cached scan, falls back to the baked-in map."""
+    cache = _ASSETS / "instruction_counts.json"
+    if cache.exists():
+        try:
+            return int(json.loads(cache.read_text()).get(task, INSTRUCTION_COUNTS.get(task, 1)))
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    return INSTRUCTION_COUNTS.get(task, 1)
+
 
 def _thumb_data_uri(task: str) -> str | None:
     p = _ASSETS / f"{task}.jpg"
@@ -224,11 +248,21 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
             media = f'<img class="thumb" loading="lazy" src="{uri}" alt="{_esc(name)} scene">'
         else:
             media = '<div class="thumb thumb-empty"><span>no preview yet</span></div>'
+        n_instr = _instruction_count(name)
+        instr_kind = "single" if n_instr <= 1 else "multi"
+        instr_label = "1 instruction" if n_instr <= 1 else f"{n_instr} instructions"
+        instr_title = (
+            "Single fixed language instruction for every episode"
+            if n_instr <= 1
+            else f"{n_instr} distinct, episode-specific language instructions"
+        )
         cards.append(
-            f'<article class="card" data-cat="{cat}" data-status="{st}" data-name="{_esc(name.lower())}">'
+            f'<article class="card" data-cat="{cat}" data-status="{st}" data-instr="{instr_kind}" '
+            f'data-name="{_esc(name.lower())}">'
             f"{media}"
             f'<div class="card-body">'
             f'<div class="card-top"><span class="chip chip-{cat}">{cat}</span>'
+            f'<span class="chip chip-instr chip-{instr_kind}" title="{instr_title}">{instr_label}</span>'
             f'<span class="status status-{st}"><i></i>{_STATUS_LABEL[st]}</span></div>'
             f'<h3 class="task-name">{_esc(name)}</h3>'
             f'<p class="task-desc">{_esc(desc)}</p>'
@@ -241,6 +275,8 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
 
     n_atomic = sum(1 for _, c, *_ in TASKS if c == "atomic")
     n_comp = sum(1 for _, c, *_ in TASKS if c == "composite")
+    n_single = sum(1 for name, *_ in TASKS if _instruction_count(name) <= 1)
+    n_multi = len(TASKS) - n_single
 
     return _TEMPLATE.format(
         title=_esc(PROJECT["title"]),
@@ -256,6 +292,8 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
         n_total=len(TASKS),
         n_atomic=n_atomic,
         n_comp=n_comp,
+        n_single=n_single,
+        n_multi=n_multi,
         n_ready=ready,
         css=_CSS,
         js=_JS,
@@ -361,12 +399,15 @@ section{padding:8px 0 12px;}
 .thumb-empty{display:grid;place-items:center;color:var(--muted);font-size:12.5px;
   background:repeating-linear-gradient(45deg,var(--surface2),var(--surface2) 10px,transparent 10px,transparent 20px);}
 .card-body{padding:14px 15px 15px;display:flex;flex-direction:column;gap:8px;flex:1;}
-.card-top{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.card-top{display:flex;justify-content:flex-start;align-items:center;gap:6px;}
 .chip{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
   padding:3px 9px;border-radius:999px;font-family:ui-monospace,monospace;}
 .chip-atomic{background:var(--teal-bg);color:var(--teal);}
 .chip-composite{background:var(--amber-bg);color:var(--amber);}
-.status{font-size:11.5px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;
+.chip-instr{background:var(--surface2);color:var(--muted);border:1px solid var(--hairline);}
+.chip-multi{background:transparent;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 45%,transparent);}
+.card-top{flex-wrap:wrap;}
+.status{margin-left:auto;font-size:11.5px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;
   font-family:ui-monospace,monospace;}
 .status i{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none;}
 .status-ready{color:var(--green);}
@@ -432,7 +473,7 @@ _JS = """
     var q=(search&&search.value||'').trim().toLowerCase();
     var shown=0;
     cards.forEach(function(c){
-      var okF = mode==='all' || c.dataset.cat===mode || c.dataset.status===mode;
+      var okF = mode==='all' || c.dataset.cat===mode || c.dataset.status===mode || c.dataset.instr===mode;
       var okQ = !q || c.dataset.name.indexOf(q)>-1;
       var vis=okF&&okQ; c.style.display=vis?'':'none'; if(vis)shown++;
     });
@@ -496,13 +537,16 @@ _TEMPLATE = """<style>{css}</style>
   <section>
     <div class="section-head">
       <h2>RoboCasa 365 · target tasks</h2>
-      <span class="count">{n_ready}/{n_total} v3.0 ready · {n_atomic} atomic · {n_comp} composite</span>
+      <span class="count">{n_ready}/{n_total} v3.0 ready · {n_atomic} atomic · {n_comp} composite ·
+        {n_single} single-instruction · {n_multi} multi-instruction</span>
     </div>
     <div class="controls">
       <div class="filters">
         <button class="filter" data-filter="all" aria-pressed="true">All</button>
         <button class="filter" data-filter="atomic" aria-pressed="false">Atomic</button>
         <button class="filter" data-filter="composite" aria-pressed="false">Composite</button>
+        <button class="filter" data-filter="single" aria-pressed="false">Single instr.</button>
+        <button class="filter" data-filter="multi" aria-pressed="false">Multi instr.</button>
         <button class="filter" data-filter="ready" aria-pressed="false">v3.0 ready</button>
         <button class="filter" data-filter="pending" aria-pressed="false">Not yet</button>
       </div>

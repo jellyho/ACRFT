@@ -46,12 +46,37 @@ def run(cmd: list[str]) -> bool:
     return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0
 
 
+def write_instruction_counts(output_dir: Path, out_json: Path) -> None:
+    """Count each task's distinct language instructions and dump {task: count} to JSON."""
+    import json
+
+    counts: dict[str, int] = {}
+    for task_dir in sorted(p for p in output_dir.iterdir() if (p / "meta").is_dir()):
+        seen = set()
+        for f in sorted((task_dir / "data").glob("chunk-*/*.parquet")):
+            col = pq.read_table(f, columns=["annotation.human.task_description"]).to_pydict()
+            seen.update(v[0] if isinstance(v, list) else v for v in col["annotation.human.task_description"])
+        counts[task_dir.name] = len(seen)
+        print(f"[{task_dir.name}] {len(seen)} distinct instruction(s)")
+    out_json.write_text(json.dumps(counts, indent=1, sort_keys=True))
+    n_single = sum(1 for c in counts.values() if c <= 1)
+    print(f"Wrote {out_json}: {len(counts)} tasks ({n_single} single, {len(counts) - n_single} multi).")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--output-dir", type=Path, default=Path("/data5/jellyho/robocasa365"))
     ap.add_argument("--only", type=str, nargs="+", default=None, help="Only these task names.")
     ap.add_argument("--overwrite", action="store_true", help="Re-extract even if outputs exist.")
+    ap.add_argument("--instruction-counts", action="store_true",
+                    help="Instead of extracting media, scan each task's distinct language instructions "
+                         "and write assets/instruction_counts.json (used by the dashboard).")
     args = ap.parse_args()
+
+    _HERE.joinpath("assets").mkdir(parents=True, exist_ok=True)
+    if args.instruction_counts:
+        write_instruction_counts(args.output_dir, _HERE / "assets" / "instruction_counts.json")
+        return
 
     videos_dir = _HERE / "site" / "videos"
     assets_dir = _HERE / "assets"
