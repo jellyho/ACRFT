@@ -830,7 +830,7 @@ _CONFIGS = [
         # action_horizon is the predicted action-chunk length (RoboCasa runs at 20 fps); tune as needed.
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         data=LeRobotRoboCasaDataConfig(
-            repo_id="jellyho/robocasa365-PickPlaceCounterToCabinet",
+            repo_id="jellyho/robocasa365-PrepareCoffee",
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=256,
@@ -856,7 +856,7 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
         ),
         data=LeRobotRoboCasaDataConfig(
-            repo_id="jellyho/robocasa365-PickPlaceCounterToCabinet",
+            repo_id="jellyho/robocasa365-PrepareCoffee",
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
