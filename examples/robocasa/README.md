@@ -172,6 +172,31 @@ Notes:
 - Training uses a **single** LeRobot dataset (one task) per run. Multi-task training would need a
   merged dataset — see the roadmap.
 
+## Inference / evaluation in sim
+
+Rollouts use openpi's server/client split: a **policy server** (openpi training venv) and a
+**RoboCasa eval client** ([`main.py`](main.py)) that drives the sim. Keep them in separate venvs
+— robosuite pins numpy<2, which conflicts with the LeRobot v3.0 / numpy≥2 training stack.
+
+```bash
+# 1) Serve a trained checkpoint (openpi venv):
+uv run scripts/serve_policy.py policy:checkpoint \
+    --policy.config pi05_robocasa --policy.dir /path/to/checkpoint
+
+# 2) Roll out in sim (a venv with robocasa + robosuite + openpi-client installed):
+python examples/robocasa/main.py --task PickPlaceCounterToCabinet --host <server-host> \
+    --num-trials 10 --video-dir /tmp/robocasa_eval
+```
+
+The client builds the model input from live env observations (three `256²` cameras, the 16-d
+`observation.state` from the robot proprio keys, and the task's language instruction), reorders the
+returned 12-d action from LeRobot order into the env's expected order, and steps the env until
+success or the task horizon. It reports a per-task success rate and can save rollout videos.
+
+> Note: the client flips camera frames vertically to match the (upright) training data — if
+> rollouts look wrong, verify orientation against a dataset frame. RoboCasa's sim env
+> (robosuite + MuJoCo + kitchen assets) must be installed in the client venv.
+
 ## Task overview / dashboard
 
 For a browsable overview of all 50 target tasks (thumbnail, category, horizon, description, and

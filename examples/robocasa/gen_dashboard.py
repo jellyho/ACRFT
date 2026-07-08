@@ -44,12 +44,13 @@ PROJECT = {
         ("Dataset pipeline", "`prepare_robocasa365.py`: download the 50 target/human LeRobot tars from the public NVIDIA mirror, extract, and upgrade v2.1 → v3.0. Resumable — finished tasks are skipped."),
         ("Hub upload", "`--push-to-hub`: publish each converted dataset as `<user>/robocasa365-<Task>` (tagged v3.0) and gather them into a HF collection."),
         ("Training config", "Added `robocasa_policy.py` (3 cameras → base/left-wrist/right-wrist, 16-d state, 12-d action) plus `LeRobotRoboCasaDataConfig` and the `pi05_robocasa` / `pi05_robocasa_low_mem_finetune` train configs."),
+        ("Sim eval client", "`main.py`: server/client rollout in the RoboCasa sim — builds the model input from live obs, reorders the 12-d action into the env's order, steps to success, reports success rate + optional videos."),
     ],
     "roadmap": [
         ("Norm stats + training", "Compute norm stats over a chosen task and run a first π0.5 fine-tune from the base checkpoint."),
         ("Task selection", "Pick the target task(s) to train/evaluate on from the gallery below."),
+        ("Run evaluation", "Serve the trained checkpoint and roll out with `main.py`; confirm camera orientation against a dataset frame."),
         ("Multi-task training", "Merge tasks into one LeRobot dataset (or add multi-repo loading) to train across the target set at once."),
-        ("Eval loop", "Wire RoboCasa sim evaluation for the trained policy."),
     ],
 }
 
