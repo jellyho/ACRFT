@@ -407,6 +407,8 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            # RoboCasa's action column is named "action" (singular), unlike the default "actions".
+            action_sequence_keys=("action",),
         )
 
 
@@ -833,17 +835,9 @@ _CONFIGS = [
             repo_id="jellyho/robocasa365-PrepareCoffee",
             base_config=DataConfig(prompt_from_task=True),
         ),
-        batch_size=256,
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=100_000,
-            decay_lr=5e-5,
-        ),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
+        batch_size=32,
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=30_000,
+        num_train_steps=100_000,
     ),
     TrainConfig(
         name="pi05_robocasa_low_mem_finetune",
