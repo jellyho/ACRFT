@@ -313,9 +313,16 @@ def main(config: _config.TrainConfig):
         diag_now = pcompute_action_dist is not None and step % config.action_dist_interval == 0
         diag_info = {}
         if diag_now:
-            with sharding.set_mesh(mesh):
-                diag_info = pcompute_action_dist(jax.random.fold_in(train_rng, step), train_state, batch)
-            diag_info = jax.device_get(diag_info)
+            # The action-distribution diagnostic is a monitor, not part of training: never let it
+            # kill the run — on failure, log once and disable it.
+            try:
+                with sharding.set_mesh(mesh):
+                    diag_info = pcompute_action_dist(jax.random.fold_in(train_rng, step), train_state, batch)
+                diag_info = jax.device_get(diag_info)
+            except Exception as e:  # noqa: BLE001
+                logging.warning(f"action-dist diagnostic failed at step {step}; disabling it. ({e})")
+                pcompute_action_dist = None
+                diag_info = {}
 
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)

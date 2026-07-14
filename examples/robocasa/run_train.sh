@@ -16,6 +16,10 @@
 #   EXP_SUFFIX=run           exp name is "<Task>_<EXP_SUFFIX>" (checkpoints/<config>/<exp>)
 #   SKIP_NORM_STATS=1        always skip norm-stats
 #   FORCE_NORM_STATS=1       recompute norm-stats even if the file already exists
+#   RESUME=1                 resume training from the last checkpoint
+#   OVERWRITE=1              wipe the checkpoint dir and start fresh
+#     (default: a dir with real checkpoints is protected; a stale dir with no saved
+#      steps is auto-overwritten)
 #   ROBOCASA_LOCAL_DIR=...   local converted datasets to symlink into the HF cache (avoids
 #                            re-downloading from the Hub). Default /data5/jellyho/robocasa365.
 #   HF_USER=jellyho          Hub owner used in the repo id / cache path.
@@ -50,6 +54,12 @@ link_local() {
   fi
 }
 
+# True if the exp dir holds an actual saved checkpoint (a numeric step subdir), vs. just stale
+# metadata (e.g. wandb_id.txt) left by a run that failed before the first save.
+has_checkpoint() {
+  [ -d "$1" ] && find "$1" -maxdepth 1 -type d -regex '.*/[0-9]+' 2>/dev/null | grep -q .
+}
+
 failures=()
 for TASK in "$@"; do
   CONFIG="pi05_robocasa_${TASK}"
@@ -74,8 +84,24 @@ for TASK in "$@"; do
     fi
   fi
 
-  echo "[2/2] train ($CONFIG --exp-name=$EXP)"
-  if ! uv run scripts/train.py "$CONFIG" --exp-name="$EXP"; then
+  # Decide how to handle an existing checkpoint dir.
+  CKPT_DIR="$REPO_ROOT/checkpoints/$CONFIG/$EXP"
+  TRAIN_FLAGS=()
+  if [ "${OVERWRITE:-0}" = "1" ]; then
+    TRAIN_FLAGS+=(--overwrite)
+  elif [ "${RESUME:-0}" = "1" ]; then
+    TRAIN_FLAGS+=(--resume)
+  elif [ -d "$CKPT_DIR" ]; then
+    if has_checkpoint "$CKPT_DIR"; then
+      echo "  !! $CKPT_DIR has saved checkpoints; set RESUME=1 to continue or OVERWRITE=1 to restart."
+      failures+=("$TASK (checkpoint exists)"); continue
+    fi
+    echo "  stale checkpoint dir (no saved steps) -> auto --overwrite"
+    TRAIN_FLAGS+=(--overwrite)
+  fi
+
+  echo "[2/2] train ($CONFIG --exp-name=$EXP ${TRAIN_FLAGS[*]})"
+  if ! uv run scripts/train.py "$CONFIG" --exp-name="$EXP" "${TRAIN_FLAGS[@]}"; then
     echo "  !! training failed for $TASK"; failures+=("$TASK (train)"); continue
   fi
   echo "  done: checkpoints/$CONFIG/$EXP"
