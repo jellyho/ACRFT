@@ -191,6 +191,42 @@ def train_step(
     return new_state, info
 
 
+def compute_action_dist_metrics(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+    *,
+    num_samples: int,
+) -> dict[str, at.Array]:
+    """Measure how diverse the policy's action distribution is for a given observation.
+
+    pi05 is a flow-matching policy: for a fixed observation it maps different noise samples to
+    different action chunks. We draw ``num_samples`` chunks per observation (using the EMA params,
+    i.e. what inference uses) and report the spread across those samples. If this spread keeps
+    shrinking toward zero, the policy is collapsing to a single action per state (overfitting);
+    healthy training keeps some spread. ``data_std`` is the marginal spread of the ground-truth
+    actions across the batch, as a scale reference (actions are normalized, so ~1).
+    """
+    observation, actions = batch
+    params = state.ema_params if state.ema_params is not None else state.params
+    model = nnx.merge(state.model_def, params)
+    model.eval()
+    rngs = jax.random.split(rng, num_samples)
+    samples = jnp.stack(
+        [model.sample_actions(rngs[k], observation) for k in range(num_samples)], axis=0
+    )  # (num_samples, b, action_horizon, action_dim)
+    std_over_samples = jnp.std(samples, axis=0)  # per (obs, horizon, dim) spread across samples
+    sample_std = jnp.mean(std_over_samples)
+    data_std = jnp.mean(jnp.std(actions, axis=0))
+    return {
+        "action_dist/sample_std": sample_std,
+        "action_dist/sample_std_median": jnp.median(std_over_samples),
+        "action_dist/data_std": data_std,
+        "action_dist/sample_to_data_ratio": sample_std / (data_std + 1e-8),
+    }
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -247,6 +283,14 @@ def main(config: _config.TrainConfig):
         donate_argnums=(1,),
     )
 
+    pcompute_action_dist = None
+    if config.action_dist_interval > 0:
+        pcompute_action_dist = jax.jit(
+            functools.partial(compute_action_dist_metrics, config, num_samples=config.action_dist_num_samples),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=replicated_sharding,
+        )
+
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
@@ -260,13 +304,24 @@ def main(config: _config.TrainConfig):
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
+
+        diag_now = pcompute_action_dist is not None and step % config.action_dist_interval == 0
+        diag_info = {}
+        if diag_now:
+            with sharding.set_mesh(mesh):
+                diag_info = pcompute_action_dist(jax.random.fold_in(train_rng, step), train_state, batch)
+            diag_info = jax.device_get(diag_info)
+
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            reduced_info.update(diag_info)
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
+        elif diag_now:
+            wandb.log(diag_info, step=step)
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:

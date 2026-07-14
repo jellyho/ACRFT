@@ -188,6 +188,20 @@ uv run scripts/compute_norm_stats.py --config-name=pi05_robocasa_PrepareCoffee
 uv run scripts/train.py pi05_robocasa_PrepareCoffee --exp-name=PrepareCoffee_run
 ```
 
+### Monitoring action-distribution collapse
+
+pi05 is a flow-matching policy, so for a fixed observation it maps different noise samples to
+different action chunks. Training logs (to wandb) how much those samples spread — a shrinking
+spread means the policy is collapsing to a single action per state (overfitting):
+
+- `action_dist/sample_std` — mean spread of `K` sampled action chunks for the same observations
+  (the key signal; watch for it trending toward 0).
+- `action_dist/data_std` — spread of the ground-truth actions across the batch (scale reference).
+- `action_dist/sample_to_data_ratio` — the two above, as a ratio.
+
+Enabled in the RoboCasa configs via `action_dist_interval` (default every 1000 steps, `K` =
+`action_dist_num_samples` = 8). Set `action_dist_interval=0` to disable.
+
 Notes:
 - `action_horizon` (default 10) is the predicted chunk length at 20 fps — tune per task.
 - RoboCasa actions are already deltas, so no delta conversion is applied. If yours are absolute,

@@ -569,6 +569,11 @@ class TrainConfig:
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
+    # How often (in steps) to log action-distribution diagnostics (sampled-action spread given an
+    # observation, to watch for mode collapse / overfitting). 0 disables it.
+    action_dist_interval: int = 0
+    # Number of action samples drawn per observation for the diagnostic above.
+    action_dist_num_samples: int = 8
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
@@ -843,6 +848,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
         save_interval=10_000,
+        action_dist_interval=1_000,
     ),
     #
     # Fine-tuning Aloha configs.
@@ -1076,6 +1082,7 @@ def _robocasa_task_config(task: str) -> TrainConfig:
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
         save_interval=10_000,
+        action_dist_interval=1_000,
     )
 
 
