@@ -152,24 +152,37 @@ lid on top."*) and is surfaced as the `prompt` when `prompt_from_task=True`.
 
 ## Training
 
-A π0.5 config is wired up in [`src/openpi/training/config.py`](../../src/openpi/training/config.py):
-`pi05_robocasa` (full fine-tune) and `pi05_robocasa_low_mem_finetune` (LoRA). The mapping from the
-schema above into model inputs lives in
+The model-input mapping lives in
 [`src/openpi/policies/robocasa_policy.py`](../../src/openpi/policies/robocasa_policy.py)
 (3 cameras → `base_0_rgb` / `left_wrist_0_rgb` / `right_wrist_0_rgb`; 16-d state and 12-d action
-passed through and padded to the model action dim).
+passed through and padded to the model action dim). π0.5 configs are registered in
+[`src/openpi/training/config.py`](../../src/openpi/training/config.py):
 
-Pick the dataset via `repo_id`:
+- **`pi05_robocasa`** — the default (currently PrepareCoffee), pi05, constant `5e-5` after a 1k
+  warmup, batch 32, 100k steps, checkpoint every 10k.
+- **`pi05_robocasa_<Task>`** — one config per target task (same recipe), so norm-stats and training
+  can be run for any task by config name.
+
+### Easy per-task runs
 
 ```bash
-# Option A — train from a pushed Hub dataset:
-#   set data.repo_id="<user>/robocasa365-<Task>" in the config, then:
-uv run scripts/compute_norm_stats.py --config-name=pi05_robocasa
-uv run scripts/train.py pi05_robocasa --exp-name=my_run
+# One task (computes norm stats, then trains):
+examples/robocasa/run_train.sh PrepareCoffee
 
-# Option B — train from the local converted dir (no upload):
-export HF_LEROBOT_HOME=/data5/jellyho/robocasa365
-#   set data.repo_id="<Task>" (bare task name) in the config, then run the two commands above.
+# Several tasks, sequentially:
+examples/robocasa/run_train.sh PrepareCoffee OpenDrawer TurnOnMicrowave
+```
+
+The script symlinks the local converted datasets (`/data5/jellyho/robocasa365/<Task>`) into the
+LeRobot cache under the Hub id, so training reuses them instead of re-downloading from the Hub.
+Env overrides: `EXP_SUFFIX` (exp name suffix), `SKIP_NORM_STATS=1`, `ROBOCASA_LOCAL_DIR`, `HF_USER`.
+Checkpoints land in `checkpoints/pi05_robocasa_<Task>/<Task>_<EXP_SUFFIX>/`.
+
+Equivalently, by hand:
+
+```bash
+uv run scripts/compute_norm_stats.py --config-name=pi05_robocasa_PrepareCoffee
+uv run scripts/train.py pi05_robocasa_PrepareCoffee --exp-name=PrepareCoffee_run
 ```
 
 Notes:

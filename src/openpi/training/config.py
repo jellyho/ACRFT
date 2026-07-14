@@ -836,33 +836,13 @@ _CONFIGS = [
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
+        # Constant 5e-5 after a short warmup (peak == decay), matching the pi05 LIBERO recipe.
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
-    ),
-    TrainConfig(
-        name="pi05_robocasa_low_mem_finetune",
-        # LoRA fine-tune variant for single-GPU / lower memory.
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            action_horizon=10,
-            discrete_state_input=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-        ),
-        data=LeRobotRoboCasaDataConfig(
-            repo_id="jellyho/robocasa365-PrepareCoffee",
-            base_config=DataConfig(prompt_from_task=True),
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=30_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            action_horizon=10,
-            discrete_state_input=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-        ).get_freeze_filter(),
-        ema_decay=None,
+        save_interval=10_000,
     ),
     #
     # Fine-tuning Aloha configs.
@@ -1075,6 +1055,47 @@ _CONFIGS = [
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")
+def _robocasa_task_config(task: str) -> TrainConfig:
+    """A pi05 fine-tune config for a single RoboCasa 365 target task (same recipe as pi05_robocasa).
+
+    Registered as ``pi05_robocasa_<Task>`` for every target task so norm-stats and training can be
+    run per task by config name (see examples/robocasa/run_train.sh).
+    """
+    return TrainConfig(
+        name=f"pi05_robocasa_{task}",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id=f"jellyho/robocasa365-{task}",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        # Constant 5e-5 after a short warmup (peak == decay).
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        save_interval=10_000,
+    )
+
+
+# The 50 published RoboCasa 365 target tasks (atomic + composite).
+_ROBOCASA_TARGET_TASKS = (
+    "ArrangeBreadBasket", "ArrangeTea", "BreadSelection", "CategorizeCondiments", "CloseBlenderLid",
+    "CloseFridge", "CloseToasterOvenDoor", "CoffeeSetupMug", "CuttingToolSelection", "DeliverStraw",
+    "GarnishPancake", "GatherTableware", "GetToastedBread", "HeatKebabSandwich", "KettleBoiling",
+    "LoadDishwasher", "MakeIceLemonade", "NavigateKitchen", "OpenCabinet", "OpenDrawer",
+    "OpenStandMixerHead", "PackIdenticalLunches", "PanTransfer", "PickPlaceCounterToCabinet",
+    "PickPlaceCounterToStove", "PickPlaceDrawerToCounter", "PickPlaceSinkToCounter",
+    "PickPlaceToasterToCounter", "PortionHotDogs", "PreSoakPan", "PrepareCoffee",
+    "RecycleBottlesByType", "RinseSinkBasin", "ScrubCuttingBoard", "SearingMeat",
+    "SeparateFreezerRack", "SetUpCuttingStation", "SlideDishwasherRack", "StackBowlsCabinet",
+    "SteamInMicrowave", "StirVegetables", "StoreLeftoversInBowl", "TurnOffStove",
+    "TurnOnElectricKettle", "TurnOnMicrowave", "TurnOnSinkFaucet", "WaffleReheat",
+    "WashFruitColander", "WashLettuce", "WeighIngredients",
+)
+_CONFIGS.extend(_robocasa_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
+
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
 
