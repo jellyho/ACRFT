@@ -175,7 +175,10 @@ examples/robocasa/run_train.sh PrepareCoffee OpenDrawer TurnOnMicrowave
 
 The script symlinks the local converted datasets (`/data5/jellyho/robocasa365/<Task>`) into the
 LeRobot cache under the Hub id, so training reuses them instead of re-downloading from the Hub.
-Env overrides: `EXP_SUFFIX` (exp name suffix), `SKIP_NORM_STATS=1`, `ROBOCASA_LOCAL_DIR`, `HF_USER`.
+**Norm stats are computed once per task** (saved to `assets/<config>/<repo_id>/norm_stats.json`)
+and reused — the script auto-skips the step if that file already exists.
+Env overrides: `EXP_SUFFIX` (exp name suffix), `SKIP_NORM_STATS=1` (always skip),
+`FORCE_NORM_STATS=1` (recompute), `ROBOCASA_LOCAL_DIR`, `HF_USER`.
 Checkpoints land in `checkpoints/pi05_robocasa_<Task>/<Task>_<EXP_SUFFIX>/`.
 
 Equivalently, by hand:

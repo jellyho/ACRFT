@@ -9,9 +9,13 @@
 #   examples/robocasa/run_train.sh PrepareCoffee
 #   examples/robocasa/run_train.sh PrepareCoffee OpenDrawer TurnOnMicrowave   # sequential
 #
+# Norm stats are computed once per task and saved to assets/<config>/<repo_id>/norm_stats.json;
+# subsequent runs detect the file and skip recomputation automatically.
+#
 # Env overrides:
 #   EXP_SUFFIX=run           exp name is "<Task>_<EXP_SUFFIX>" (checkpoints/<config>/<exp>)
-#   SKIP_NORM_STATS=1        skip norm-stats (e.g. already computed)
+#   SKIP_NORM_STATS=1        always skip norm-stats
+#   FORCE_NORM_STATS=1       recompute norm-stats even if the file already exists
 #   ROBOCASA_LOCAL_DIR=...   local converted datasets to symlink into the HF cache (avoids
 #                            re-downloading from the Hub). Default /data5/jellyho/robocasa365.
 #   HF_USER=jellyho          Hub owner used in the repo id / cache path.
@@ -56,13 +60,18 @@ for TASK in "$@"; do
 
   link_local "$TASK"
 
-  if [ "$SKIP_NORM_STATS" != "1" ]; then
+  # Norm stats are computed once and persisted here; training reloads them (no need to recompute).
+  NORM_STATS_FILE="$REPO_ROOT/assets/$CONFIG/$HF_USER/robocasa365-$TASK/norm_stats.json"
+  if [ "$SKIP_NORM_STATS" = "1" ]; then
+    echo "[1/2] skipping norm stats (SKIP_NORM_STATS=1)"
+  elif [ -f "$NORM_STATS_FILE" ] && [ "${FORCE_NORM_STATS:-0}" != "1" ]; then
+    echo "[1/2] norm stats already exist, skipping ($NORM_STATS_FILE)"
+    echo "      set FORCE_NORM_STATS=1 to recompute."
+  else
     echo "[1/2] compute norm stats ($CONFIG)"
     if ! uv run scripts/compute_norm_stats.py --config-name="$CONFIG"; then
       echo "  !! norm stats failed for $TASK"; failures+=("$TASK (norm-stats)"); continue
     fi
-  else
-    echo "[1/2] skipping norm stats (SKIP_NORM_STATS=1)"
   fi
 
   echo "[2/2] train ($CONFIG --exp-name=$EXP)"
