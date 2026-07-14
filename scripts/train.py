@@ -210,12 +210,17 @@ def compute_action_dist_metrics(
     """
     observation, actions = batch
     params = state.ema_params if state.ema_params is not None else state.params
-    model = nnx.merge(state.model_def, params)
-    model.eval()
+    graphdef = state.model_def
+
+    def sample_one(sample_rng: at.KeyArrayLike) -> _model.Actions:
+        model = nnx.merge(graphdef, params)
+        model.eval()
+        return model.sample_actions(sample_rng, observation)
+
+    # Sequential map over the K noise seeds (small compiled graph, bounded memory) rather than
+    # unrolling K full sampling passes.
     rngs = jax.random.split(rng, num_samples)
-    samples = jnp.stack(
-        [model.sample_actions(rngs[k], observation) for k in range(num_samples)], axis=0
-    )  # (num_samples, b, action_horizon, action_dim)
+    samples = jax.lax.map(sample_one, rngs)  # (num_samples, b, action_horizon, action_dim)
     std_over_samples = jnp.std(samples, axis=0)  # per (obs, horizon, dim) spread across samples
     sample_std = jnp.mean(std_over_samples)
     data_std = jnp.mean(jnp.std(actions, axis=0))

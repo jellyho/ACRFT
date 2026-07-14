@@ -200,7 +200,8 @@ spread means the policy is collapsing to a single action per state (overfitting)
 - `action_dist/sample_to_data_ratio` — the two above, as a ratio.
 
 Enabled in the RoboCasa configs via `action_dist_interval` (default every 1000 steps, `K` =
-`action_dist_num_samples` = 8). Set `action_dist_interval=0` to disable.
+`action_dist_num_samples` = 32; sampled sequentially so cost/memory stay bounded). Set
+`action_dist_interval=0` to disable.
 
 Notes:
 - `action_horizon` (default 10) is the predicted chunk length at 20 fps — tune per task.

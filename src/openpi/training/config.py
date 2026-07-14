@@ -573,7 +573,7 @@ class TrainConfig:
     # observation, to watch for mode collapse / overfitting). 0 disables it.
     action_dist_interval: int = 0
     # Number of action samples drawn per observation for the diagnostic above.
-    action_dist_num_samples: int = 8
+    action_dist_num_samples: int = 32
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
