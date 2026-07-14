@@ -175,8 +175,14 @@ examples/robocasa/run_train.sh PrepareCoffee OpenDrawer TurnOnMicrowave
 
 The script symlinks the local converted datasets (`/data5/jellyho/robocasa365/<Task>`) into the
 LeRobot cache under the Hub id, so training reuses them instead of re-downloading from the Hub.
-**Norm stats are computed once per task** (saved to `assets/<config>/<repo_id>/norm_stats.json`)
-and reused — the script auto-skips the step if that file already exists.
+
+**Normalization is shared across all tasks.** `compute_shared_norm_stats.py` computes one
+mean/std/quantile set over every task and writes it into each per-task config's asset dir. This is
+required: per-task stats are ill-conditioned for near-stationary tasks (e.g. WashLettuce, where
+base motion / control-mode are ~constant → a `q99-q01` range of ~0 that amplifies rare values
+~1e6× and blows up the loss). RoboCasa is one robot with one action space, so a shared range is
+correct. The script runs once on the first task (writes all 50) and is auto-skipped afterward
+(`FORCE_NORM_STATS=1` to recompute).
 Env overrides: `EXP_SUFFIX` (exp name suffix), `SKIP_NORM_STATS=1` (always skip),
 `FORCE_NORM_STATS=1` (recompute), `ROBOCASA_LOCAL_DIR`, `HF_USER`.
 Checkpoints land in `checkpoints/pi05_robocasa_<Task>/<Task>_<EXP_SUFFIX>/`.

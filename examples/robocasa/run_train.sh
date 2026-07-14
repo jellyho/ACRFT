@@ -78,8 +78,12 @@ for TASK in "$@"; do
     echo "[1/2] norm stats already exist, skipping ($NORM_STATS_FILE)"
     echo "      set FORCE_NORM_STATS=1 to recompute."
   else
-    echo "[1/2] compute norm stats ($CONFIG)"
-    if ! uv run scripts/compute_norm_stats.py --config-name="$CONFIG"; then
+    # Shared normalization across ALL tasks (writes every task's norm_stats.json in one pass).
+    # Per-task stats are ill-conditioned for near-stationary tasks (base/control ~constant -> a
+    # ~0 range that blows up the loss); a shared range is well-conditioned. Runs once: after the
+    # first task all others hit the auto-skip above.
+    echo "[1/2] compute SHARED norm stats (all tasks)"
+    if ! uv run examples/robocasa/compute_shared_norm_stats.py --output-dir "$ROBOCASA_LOCAL_DIR" --hf-user "$HF_USER"; then
       echo "  !! norm stats failed for $TASK"; failures+=("$TASK (norm-stats)"); continue
     fi
   fi
