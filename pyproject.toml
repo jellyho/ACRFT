@@ -54,6 +54,15 @@ dev = [
     "matplotlib>=3.10.0",
     "pynvml>=12.0.0",
 ]
+# RoboCasa sim rollout client (examples/robocasa/main.py, run_eval.sh). Install with
+# `uv sync --group eval`. robocasa itself is used from third_party/robocasa via PYTHONPATH
+# (not installed). numpy is pinned to the exact version robocasa asserts at import.
+eval = [
+    "robosuite==1.5.2",
+    "mujoco==3.3.1",
+    "numpy==2.2.5",
+    "h5py>=3.0",
+]
 # NOTE: The DROID/RLDS group was removed from the main workspace when migrating to
 # LeRobot dataset format v3.0 (lerobot 0.4.4). v3.0 requires numpy>=2 (via rerun-sdk),
 # but the RLDS stack depends on `dlimp`, which hard-pins `tensorflow==2.15.0` (numpy<2).
@@ -64,7 +73,10 @@ dev = [
 #         "git+https://github.com/kvablack/dlimp@ad72ce3a9b414db2185bc0b38461d4101a65477a"
 
 [tool.uv]
-override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74"]
+# numpy override: robosuite's `mink` dep pins numpy<2, but robocasa (eval group) needs numpy
+# 2.2.5. mink is only used for whole-body IK, which the PandaOmron OSC_POSE controller doesn't
+# use, so forcing numpy 2.2.5 is safe (robosuite runs fine on numpy 2.x — cf. the debs env).
+override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74", "numpy==2.2.5"]
 
 [tool.uv.sources]
 openpi-client = { workspace = true }

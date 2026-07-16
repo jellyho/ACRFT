@@ -2,15 +2,13 @@
 # Evaluate EVERY checkpoint of a trained RoboCasa pi05 model: N rollouts each, saving per-step
 # success rates (+ a summary) and a few sample rollout videos.
 #
-# Uses openpi's server/client split, so TWO Python envs are involved:
-#   - policy server  -> `uv run` (the openpi / LeRobot v3.0 training venv)
-#   - rollout client -> $EVAL_PYTHON (a venv with robosuite + robocasa + openpi-client;
-#                       robosuite pins numpy<2, so keep it separate from the training venv)
+# Uses openpi's server/client split (server = JAX policy, client = MuJoCo sim), but both run
+# from the same openpi .venv. Install the sim deps once:  uv sync --group eval
 # For each checkpoint the script starts a server, waits for it, runs the rollouts, then stops it.
 #
 # Usage:
+#   uv sync --group eval          # one-time: adds robosuite/mujoco/etc to .venv
 #   examples/robocasa/run_eval.sh PrepareCoffee
-#   EVAL_PYTHON=/path/to/robocasa-venv/bin/python examples/robocasa/run_eval.sh PrepareCoffee
 #
 # Env overrides:
 #   EXP_SUFFIX=run     exp name suffix -> checkpoints/pi05_robocasa_<Task>/<Task>_<EXP_SUFFIX>
@@ -20,7 +18,8 @@
 #                      checkpoint is evaluated on the identical set of scenes (fair comparison)
 #   PORT=8000          policy server port (auto-bumped to the next free port if busy, so several
 #                      eval runs can share a node; server shutdown is scoped to this run's port)
-#   EVAL_PYTHON=python client interpreter (must have robosuite/robocasa/openpi-client)
+#   EVAL_PYTHON=.venv/bin/python   client interpreter (defaults to the openpi .venv, which has
+#                      the sim deps after `uv sync --group eval`)
 #   OUT_DIR=...        output root (default eval/<config>/<exp>)
 #   STEPS="10000 20000"  only these checkpoints (default: all)
 set -uo pipefail
@@ -35,7 +34,7 @@ NUM_TRIALS="${NUM_TRIALS:-50}"
 NUM_VIDEOS="${NUM_VIDEOS:-5}"
 SEED="${SEED:-0}"          # fixed across checkpoints -> identical scenes for a fair comparison
 PORT="${PORT:-8000}"
-EVAL_PYTHON="${EVAL_PYTHON:-python}"
+EVAL_PYTHON="${EVAL_PYTHON:-$REPO_ROOT/.venv/bin/python}"
 CONFIG="pi05_robocasa_${TASK}"
 EXP="${TASK}_${EXP_SUFFIX}"
 CKPT_BASE="$REPO_ROOT/checkpoints/$CONFIG/$EXP"

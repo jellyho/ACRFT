@@ -261,18 +261,20 @@ Env overrides: `NUM_TRIALS=50`, `NUM_VIDEOS=5`, `PORT=8000`, `EXP_SUFFIX=run`, `
 `STEPS="10000 20000"` (subset), `OUT_DIR`. The server runs via `uv run` (openpi venv); only the
 client uses `EVAL_PYTHON`.
 
-**Client env** — `EVAL_PYTHON` must point at a Python with the sim deps: **`numpy==2.2.5`**
-(robocasa pins this exactly), `robosuite`, `mujoco`, `websockets`, `imageio`. `robocasa` and
-`openpi_client` are added from this repo via `PYTHONPATH` by the script, so you don't install
-those. `run_eval.sh` verifies this up front and fails with a clear message if something's missing.
-If you already have an env with robosuite + mujoco (e.g. `robosuite==1.5.2`, `mujoco==3.3.1`),
-the quickest path is to clone it and pin the rest:
+**Client env** — the sim rollout runs from the same openpi `.venv` via the optional `eval`
+dependency group. Install it once:
 
 ```bash
-conda create -y --clone <existing-robosuite-env> -n robocasa_eval
-/home/jellyho/miniconda3/envs/robocasa_eval/bin/pip install "numpy==2.2.5" websockets imageio
-EVAL_PYTHON=/home/jellyho/miniconda3/envs/robocasa_eval/bin/python examples/robocasa/run_eval.sh PrepareCoffee
+uv sync --group eval    # adds robosuite==1.5.2, mujoco==3.3.1, h5py, and pins numpy==2.2.5
 ```
+
+`robocasa` (from `third_party/robocasa`) and `openpi_client` are added to the client's
+`PYTHONPATH` by the script, so they aren't installed. `run_eval.sh` defaults `EVAL_PYTHON` to
+`.venv/bin/python` and verifies the stack up front. Note: `numpy` is pinned to `2.2.5` (robocasa
+asserts this exact version); robosuite's `mink` dep declares `numpy<2` but is only used for
+whole-body IK (unused by the PandaOmron OSC controller), so a uv `override-dependencies` entry
+forces `numpy==2.2.5`. RoboCasa also needs its kitchen assets:
+`uv run third_party/robocasa/robocasa/scripts/download_kitchen_assets.py`.
 
 ## Task overview / dashboard
 
