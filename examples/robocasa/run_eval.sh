@@ -34,6 +34,7 @@ NUM_TRIALS="${NUM_TRIALS:-50}"
 NUM_VIDEOS="${NUM_VIDEOS:-5}"
 SEED="${SEED:-0}"          # fixed across checkpoints -> identical scenes for a fair comparison
 PORT="${PORT:-8000}"
+export MUJOCO_GL="${MUJOCO_GL:-egl}"   # headless offscreen rendering for the sim client
 EVAL_PYTHON="${EVAL_PYTHON:-$REPO_ROOT/.venv/bin/python}"
 CONFIG="pi05_robocasa_${TASK}"
 EXP="${TASK}_${EXP_SUFFIX}"

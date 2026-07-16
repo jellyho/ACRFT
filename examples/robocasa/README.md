@@ -273,8 +273,18 @@ uv sync --group eval    # adds robosuite==1.5.2, mujoco==3.3.1, h5py, and pins n
 `.venv/bin/python` and verifies the stack up front. Note: `numpy` is pinned to `2.2.5` (robocasa
 asserts this exact version); robosuite's `mink` dep declares `numpy<2` but is only used for
 whole-body IK (unused by the PandaOmron OSC controller), so a uv `override-dependencies` entry
-forces `numpy==2.2.5`. RoboCasa also needs its kitchen assets:
-`uv run third_party/robocasa/robocasa/scripts/download_kitchen_assets.py`.
+forces `numpy==2.2.5`. `robosuite` itself is pinned to its **`robocasa-dev`** branch commit —
+RoboCasa's kitchen env uses `load_model_on_init` / `get_elements`, which the PyPI release and
+master lack.
+
+RoboCasa also needs its kitchen assets (~10 GB), a one-time download:
+
+```bash
+yes y | PYTHONPATH=third_party/robocasa .venv/bin/python \
+    third_party/robocasa/robocasa/scripts/download_kitchen_assets.py
+```
+
+Headless rendering uses `MUJOCO_GL=egl` (set by `run_eval.sh`).
 
 ## Task overview / dashboard
 
