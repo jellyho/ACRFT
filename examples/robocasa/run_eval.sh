@@ -63,7 +63,7 @@ stop_server() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
   # Only kill the server for THIS run's port (matched in the cmdline), so concurrent eval runs
   # on the same node don't kill each other's servers.
-  pkill -f "serve_policy.py.*--port ${PORT}\$" 2>/dev/null
+  pkill -f "serve_policy.py.*--port ${PORT}([^0-9]|\$)" 2>/dev/null
   SERVER_PID=""
   # wait for the port to be released
   for _ in $(seq 1 30); do
@@ -88,8 +88,10 @@ for STEP in "${STEP_LIST[@]}"; do
   echo "================ checkpoint $STEP ================"
 
   echo "  starting policy server (config=$CONFIG dir=$CKPT) ..."
-  uv run scripts/serve_policy.py policy:checkpoint \
-      --policy.config "$CONFIG" --policy.dir "$CKPT" --port "$PORT" \
+  # Top-level options (--port) go BEFORE the `policy:checkpoint` subcommand; subcommand options
+  # (--policy.*) go after (tyro applies args to the directly preceding subcommand).
+  uv run scripts/serve_policy.py --port "$PORT" policy:checkpoint \
+      --policy.config "$CONFIG" --policy.dir "$CKPT" \
       > "$STEP_OUT/server.log" 2>&1 &
   SERVER_PID=$!
 
