@@ -42,9 +42,6 @@ class WebsocketPolicyServer:
             compression=None,
             max_size=None,
             process_request=_health_check,
-            # Disable keepalive pings: inference (esp. the first, JIT-compiling call) blocks the
-            # event loop long enough that pings would time out and drop the connection.
-            ping_interval=None,
         ) as server:
             await server.serve_forever()
 

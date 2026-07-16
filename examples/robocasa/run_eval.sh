@@ -35,6 +35,8 @@ NUM_VIDEOS="${NUM_VIDEOS:-5}"
 SEED="${SEED:-0}"          # fixed across checkpoints -> identical scenes for a fair comparison
 PORT="${PORT:-8000}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"   # headless offscreen rendering for the sim client
+# Persistent JAX compile cache so only the first checkpoint's server pays the full compile cost.
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$REPO_ROOT/.jax_cache}"
 EVAL_PYTHON="${EVAL_PYTHON:-$REPO_ROOT/.venv/bin/python}"
 CONFIG="pi05_robocasa_${TASK}"
 EXP="${TASK}_${EXP_SUFFIX}"
@@ -120,6 +122,25 @@ for STEP in "${STEP_LIST[@]}"; do
     echo "  !! server did not come up for $STEP (see $STEP_OUT/server.log)"
     stop_server; continue
   fi
+
+  # Warm up: the first inference JIT-compiles the model on the server, which can exceed the
+  # websocket keepalive timeout and drop the connection. Trigger the compile with a dummy request
+  # (retrying past the keepalive drop) so the timed rollout connects to an already-compiled server.
+  echo "  warming up server (compiling model; may take a minute) ..."
+  "$EVAL_PYTHON" - "$PORT" <<'PY' || echo "  (warmup did not confirm; proceeding anyway)"
+import sys, time
+from openpi_client import websocket_client_policy as W
+from openpi.policies.robocasa_policy import make_robocasa_example
+port = int(sys.argv[1]); ex = make_robocasa_example()
+for _ in range(40):
+    try:
+        W.WebsocketClientPolicy("127.0.0.1", port).infer(ex)
+        print("  warmup ok (server compiled)"); break
+    except Exception as e:
+        print(f"  ...still compiling ({type(e).__name__})"); time.sleep(3)
+else:
+    raise SystemExit(1)
+PY
 
   echo "  running $NUM_TRIALS rollouts (saving up to $NUM_VIDEOS videos) ..."
   "$EVAL_PYTHON" examples/robocasa/main.py --task "$TASK" --host 127.0.0.1 --port "$PORT" \
