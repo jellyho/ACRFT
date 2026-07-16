@@ -75,7 +75,11 @@ def main() -> None:
     ap.add_argument("--camera-size", type=int, default=256, help="Camera height/width for the env.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--video-dir", type=pathlib.Path, default=None,
-                    help="If set, save an mp4 of each rollout here (needs imageio).")
+                    help="If set, save mp4 rollouts here (needs imageio).")
+    ap.add_argument("--num-videos", type=int, default=5,
+                    help="Max number of rollout videos to save when --video-dir is set (0 = none).")
+    ap.add_argument("--output-json", type=pathlib.Path, default=None,
+                    help="If set, write a JSON summary (success rate + per-trial results) here.")
     args = ap.parse_args()
 
     env = create_env(
@@ -94,9 +98,11 @@ def main() -> None:
         args.video_dir.mkdir(parents=True, exist_ok=True)
 
     successes = 0
+    trials = []
     for trial in range(args.num_trials):
         obs = env.reset()
         prompt = env.get_ep_meta().get("lang", args.task)
+        record = args.video_dir is not None and trial < args.num_videos
         print(f"[trial {trial + 1}/{args.num_trials}] prompt: {prompt!r}")
 
         frames = []
@@ -115,7 +121,7 @@ def main() -> None:
             for action in action_chunk[: args.replan_steps]:
                 obs, _, _, _ = env.step(_lerobot_action_to_env(np.asarray(action)))
                 step += 1
-                if args.video_dir is not None:
+                if record:
                     frames.append(_image(obs, _CAMERAS["observation/image"]))
                 if env._check_success():  # noqa: SLF001 - robosuite's success hook
                     success = True
@@ -124,16 +130,36 @@ def main() -> None:
                     break
 
         successes += success
+        trials.append({"trial": trial, "success": bool(success), "steps": step})
         print(f"[trial {trial + 1}] {'SUCCESS' if success else 'failure'} in {step} steps")
 
-        if args.video_dir is not None and frames:
+        if record and frames:
             import imageio
 
             out = args.video_dir / f"{args.task}_trial{trial:02d}_{'succ' if success else 'fail'}.mp4"
             imageio.mimwrite(out, frames, fps=20)
             print(f"  saved {out}")
 
-    print(f"\n{args.task}: success rate {successes}/{args.num_trials} = {successes / args.num_trials:.1%}")
+    rate = successes / args.num_trials
+    print(f"\n{args.task}: success rate {successes}/{args.num_trials} = {rate:.1%}")
+
+    if args.output_json is not None:
+        import json
+
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(
+            json.dumps(
+                {
+                    "task": args.task,
+                    "num_trials": args.num_trials,
+                    "successes": successes,
+                    "success_rate": rate,
+                    "trials": trials,
+                },
+                indent=2,
+            )
+        )
+        print(f"  wrote {args.output_json}")
 
 
 if __name__ == "__main__":

@@ -241,6 +241,26 @@ success or the task horizon. It reports a per-task success rate and can save rol
 > rollouts look wrong, verify orientation against a dataset frame. RoboCasa's sim env
 > (robosuite + MuJoCo + kitchen assets) must be installed in the client venv.
 
+### Sweep every checkpoint
+
+[`run_eval.sh`](run_eval.sh) evaluates all checkpoints of a run — for each one it starts a
+server, runs `NUM_TRIALS` rollouts, stops the server, and finally writes a success-rate summary:
+
+```bash
+# client venv must have robosuite + robocasa + openpi-client:
+EVAL_PYTHON=/path/to/robocasa-venv/bin/python \
+    examples/robocasa/run_eval.sh PrepareCoffee
+```
+
+Per checkpoint it writes `eval/<config>/<exp>/<step>/`:
+`results.json` (success count/rate + per-trial), `videos/` (up to `NUM_VIDEOS` rollout mp4s),
+and `server.log` / `client.log`. A combined `eval/<config>/<exp>/summary.csv`
+(`step,successes,num_trials,success_rate`) is written at the end.
+
+Env overrides: `NUM_TRIALS=50`, `NUM_VIDEOS=5`, `PORT=8000`, `EXP_SUFFIX=run`,
+`STEPS="10000 20000"` (subset), `OUT_DIR`. The server runs via `uv run` (openpi venv); only the
+client uses `EVAL_PYTHON`.
+
 ## Task overview / dashboard
 
 A browsable dashboard covers all 50 target tasks (thumbnail + full-trajectory video, category,
