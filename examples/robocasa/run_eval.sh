@@ -16,6 +16,8 @@
 #   EXP_SUFFIX=run     exp name suffix -> checkpoints/pi05_robocasa_<Task>/<Task>_<EXP_SUFFIX>
 #   NUM_TRIALS=50      rollouts per checkpoint
 #   NUM_VIDEOS=5       sample videos saved per checkpoint
+#   SEED=0             base seed; trial i uses seed+i, fixed across checkpoints so every
+#                      checkpoint is evaluated on the identical set of scenes (fair comparison)
 #   PORT=8000          policy server port (auto-bumped to the next free port if busy, so several
 #                      eval runs can share a node; server shutdown is scoped to this run's port)
 #   EVAL_PYTHON=python client interpreter (must have robosuite/robocasa/openpi-client)
@@ -31,6 +33,7 @@ TASK="${1:-}"
 EXP_SUFFIX="${EXP_SUFFIX:-run}"
 NUM_TRIALS="${NUM_TRIALS:-50}"
 NUM_VIDEOS="${NUM_VIDEOS:-5}"
+SEED="${SEED:-0}"          # fixed across checkpoints -> identical scenes for a fair comparison
 PORT="${PORT:-8000}"
 EVAL_PYTHON="${EVAL_PYTHON:-python}"
 CONFIG="pi05_robocasa_${TASK}"
@@ -97,7 +100,7 @@ for STEP in "${STEP_LIST[@]}"; do
 
   echo "  running $NUM_TRIALS rollouts (saving up to $NUM_VIDEOS videos) ..."
   "$EVAL_PYTHON" examples/robocasa/main.py --task "$TASK" --host 127.0.0.1 --port "$PORT" \
-      --num-trials "$NUM_TRIALS" --num-videos "$NUM_VIDEOS" \
+      --num-trials "$NUM_TRIALS" --num-videos "$NUM_VIDEOS" --seed "$SEED" \
       --video-dir "$STEP_OUT/videos" --output-json "$STEP_OUT/results.json" \
       2>&1 | tee "$STEP_OUT/client.log" || echo "  !! rollouts failed for $STEP"
 

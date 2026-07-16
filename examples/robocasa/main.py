@@ -100,6 +100,11 @@ def main() -> None:
     successes = 0
     trials = []
     for trial in range(args.num_trials):
+        # Re-seed the env's RNG before every reset with a deterministic per-trial seed. RoboCasa
+        # samples the layout/style/objects/textures from env.rng on reset, so this makes trial i
+        # the exact same scene for every checkpoint (fair comparison) regardless of how the
+        # rollout consumed the RNG.
+        env.rng = np.random.default_rng(args.seed + trial)
         obs = env.reset()
         prompt = env.get_ep_meta().get("lang", args.task)
         record = args.video_dir is not None and trial < args.num_videos
