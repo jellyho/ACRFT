@@ -58,6 +58,23 @@ echo "Config: $CONFIG | ${#STEP_LIST[@]} checkpoints: ${STEP_LIST[*]}"
 echo "Output: $OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+# The rollout client (main.py) needs `robocasa` and `openpi_client`, both of which live in this
+# repo — add them to the client's import path so EVAL_PYTHON only needs the heavy sim deps
+# (numpy==2.2.5, robosuite, mujoco, websockets, imageio).
+export PYTHONPATH="$REPO_ROOT/third_party/robocasa:$REPO_ROOT/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# Pre-flight: verify the client env before spinning up any server, so failures are immediate and clear.
+if ! _err="$("$EVAL_PYTHON" -c "import numpy, robosuite, robocasa, openpi_client.websocket_client_policy, imageio" 2>&1)"; then
+  echo "ERROR: EVAL_PYTHON ($EVAL_PYTHON) cannot import the eval client stack:"
+  echo "$_err" | tail -3 | sed 's/^/    /'
+  echo
+  echo "Point EVAL_PYTHON at a Python env with: numpy==2.2.5, robosuite, mujoco, websockets, imageio."
+  echo "(robocasa + openpi_client come from this repo via PYTHONPATH — you don't install those.)"
+  echo "See examples/robocasa/README.md for a one-time env setup. Example:"
+  echo "    EVAL_PYTHON=/home/jellyho/miniconda3/envs/robocasa_eval/bin/python $0 $TASK"
+  exit 1
+fi
+
 SERVER_PID=""
 stop_server() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null

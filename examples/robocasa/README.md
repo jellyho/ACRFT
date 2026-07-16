@@ -257,9 +257,22 @@ Per checkpoint it writes `eval/<config>/<exp>/<step>/`:
 and `server.log` / `client.log`. A combined `eval/<config>/<exp>/summary.csv`
 (`step,successes,num_trials,success_rate`) is written at the end.
 
-Env overrides: `NUM_TRIALS=50`, `NUM_VIDEOS=5`, `PORT=8000`, `EXP_SUFFIX=run`,
+Env overrides: `NUM_TRIALS=50`, `NUM_VIDEOS=5`, `PORT=8000`, `EXP_SUFFIX=run`, `SEED=0`,
 `STEPS="10000 20000"` (subset), `OUT_DIR`. The server runs via `uv run` (openpi venv); only the
 client uses `EVAL_PYTHON`.
+
+**Client env** — `EVAL_PYTHON` must point at a Python with the sim deps: **`numpy==2.2.5`**
+(robocasa pins this exactly), `robosuite`, `mujoco`, `websockets`, `imageio`. `robocasa` and
+`openpi_client` are added from this repo via `PYTHONPATH` by the script, so you don't install
+those. `run_eval.sh` verifies this up front and fails with a clear message if something's missing.
+If you already have an env with robosuite + mujoco (e.g. `robosuite==1.5.2`, `mujoco==3.3.1`),
+the quickest path is to clone it and pin the rest:
+
+```bash
+conda create -y --clone <existing-robosuite-env> -n robocasa_eval
+/home/jellyho/miniconda3/envs/robocasa_eval/bin/pip install "numpy==2.2.5" websockets imageio
+EVAL_PYTHON=/home/jellyho/miniconda3/envs/robocasa_eval/bin/python examples/robocasa/run_eval.sh PrepareCoffee
+```
 
 ## Task overview / dashboard
 
