@@ -16,7 +16,8 @@
 #   EXP_SUFFIX=run     exp name suffix -> checkpoints/pi05_robocasa_<Task>/<Task>_<EXP_SUFFIX>
 #   NUM_TRIALS=50      rollouts per checkpoint
 #   NUM_VIDEOS=5       sample videos saved per checkpoint
-#   PORT=8000          policy server port
+#   PORT=8000          policy server port (auto-bumped to the next free port if busy, so several
+#                      eval runs can share a node; server shutdown is scoped to this run's port)
 #   EVAL_PYTHON=python client interpreter (must have robosuite/robocasa/openpi-client)
 #   OUT_DIR=...        output root (default eval/<config>/<exp>)
 #   STEPS="10000 20000"  only these checkpoints (default: all)
@@ -37,6 +38,12 @@ EXP="${TASK}_${EXP_SUFFIX}"
 CKPT_BASE="$REPO_ROOT/checkpoints/$CONFIG/$EXP"
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/eval/$CONFIG/$EXP}"
 
+port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&- 3<&-; return 0; }; return 1; }
+# Pick the first free port at/after $PORT so several eval runs can share a node without clashing.
+_req_port="$PORT"
+for _ in $(seq 1 200); do port_in_use "$PORT" || break; PORT=$((PORT + 1)); done
+[ "$PORT" != "$_req_port" ] && echo "port $_req_port busy -> using $PORT"
+
 [ -d "$CKPT_BASE" ] || { echo "No checkpoints at $CKPT_BASE"; exit 1; }
 if [ -n "${STEPS:-}" ]; then
   read -r -a STEP_LIST <<< "$STEPS"
@@ -51,11 +58,13 @@ mkdir -p "$OUT_DIR"
 SERVER_PID=""
 stop_server() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
-  pkill -f "scripts/serve_policy.py" 2>/dev/null
+  # Only kill the server for THIS run's port (matched in the cmdline), so concurrent eval runs
+  # on the same node don't kill each other's servers.
+  pkill -f "serve_policy.py.*--port ${PORT}\$" 2>/dev/null
   SERVER_PID=""
   # wait for the port to be released
   for _ in $(seq 1 30); do
-    (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && { exec 3>&- 3<&-; sleep 1; } || break
+    port_in_use "$PORT" && sleep 1 || break
   done
 }
 trap 'stop_server; exit 130' INT TERM
