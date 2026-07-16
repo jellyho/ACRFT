@@ -90,9 +90,13 @@ stop_server() {
 trap 'stop_server; exit 130' INT TERM
 trap 'stop_server' EXIT
 
-wait_for_port() {  # $1 tries (x2s)
-  for ((i=0; i<${1:-600}; i++)); do
-    (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && { exec 3>&- 3<&-; return 0; }
+# Wait until the server logs that it's listening. Polling the log (rather than a bare TCP probe)
+# avoids a spurious "opening handshake failed" traceback in the server log, and lets us bail early
+# if the server process dies during startup.  $1 = server log path, $2 = tries (x2s).
+wait_for_server() {
+  for ((i=0; i<${2:-600}; i++)); do
+    grep -q "server listening on" "$1" 2>/dev/null && return 0
+    kill -0 "$SERVER_PID" 2>/dev/null || return 1
     sleep 2
   done
   return 1
@@ -112,7 +116,7 @@ for STEP in "${STEP_LIST[@]}"; do
       > "$STEP_OUT/server.log" 2>&1 &
   SERVER_PID=$!
 
-  if ! wait_for_port 600; then
+  if ! wait_for_server "$STEP_OUT/server.log" 600; then
     echo "  !! server did not come up for $STEP (see $STEP_OUT/server.log)"
     stop_server; continue
   fi
