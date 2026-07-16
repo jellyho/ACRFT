@@ -12,6 +12,25 @@ download paths are discovered from the HF repo, so the script is robust to path/
 > published in the HF dataset (`DessertAssembly` has a registry entry but no uploaded data).
 > The script processes the 50 that exist and warns about the missing one.
 
+## End-to-end pipeline (reproducible)
+
+Every step is a committed, idempotent script — run them in order (details in the sections below):
+
+```bash
+git submodule update --init third_party/robocasa
+GIT_LFS_SKIP_SMUDGE=1 uv sync                          # openpi training venv
+
+# 1. Data: download the 50 target/human demos and convert to LeRobot v3.0 (optionally push to Hub)
+uv run examples/robocasa/prepare_robocasa365.py --output-dir /data5/jellyho/robocasa365
+
+# 2. Train a task (computes SHARED norm stats across all tasks on first run, then trains)
+examples/robocasa/run_train.sh PrepareCoffee           # -> checkpoints/pi05_robocasa_PrepareCoffee/...
+
+# 3. Eval: one-time sim-env setup (deps + ~10 GB assets), then sweep every checkpoint
+examples/robocasa/setup_eval_env.sh
+examples/robocasa/run_eval.sh PrepareCoffee            # -> eval/.../summary.csv + videos
+```
+
 ## Which HF dataset?
 
 RoboCasa's own `download_datasets.py` points at `nvidia/PhysicalAI-Robotics-Kitchen-Sim-Demos`,
@@ -261,28 +280,25 @@ Env overrides: `NUM_TRIALS=50`, `NUM_VIDEOS=5`, `PORT=8000`, `EXP_SUFFIX=run`, `
 `STEPS="10000 20000"` (subset), `OUT_DIR`. The server runs via `uv run` (openpi venv); only the
 client uses `EVAL_PYTHON`.
 
-**Client env** — the sim rollout runs from the same openpi `.venv` via the optional `eval`
-dependency group. Install it once:
+**Client env + assets** — one reproducible, idempotent setup script does everything (installs the
+sim deps into the openpi `.venv` and downloads all assets):
 
 ```bash
-uv sync --group eval    # adds robosuite==1.5.2, mujoco==3.3.1, h5py, and pins numpy==2.2.5
+examples/robocasa/setup_eval_env.sh
 ```
 
-`robocasa` (from `third_party/robocasa`) and `openpi_client` are added to the client's
-`PYTHONPATH` by the script, so they aren't installed. `run_eval.sh` defaults `EVAL_PYTHON` to
-`.venv/bin/python` and verifies the stack up front. Note: `numpy` is pinned to `2.2.5` (robocasa
-asserts this exact version); robosuite's `mink` dep declares `numpy<2` but is only used for
-whole-body IK (unused by the PandaOmron OSC controller), so a uv `override-dependencies` entry
-forces `numpy==2.2.5`. `robosuite` itself is pinned to its **`robocasa-dev`** branch commit —
-RoboCasa's kitchen env uses `load_model_on_init` / `get_elements`, which the PyPI release and
-master lack.
-
-RoboCasa also needs its kitchen assets (~10 GB), a one-time download:
-
-```bash
-yes y | PYTHONPATH=third_party/robocasa .venv/bin/python \
-    third_party/robocasa/robocasa/scripts/download_kitchen_assets.py
-```
+What it sets up, and why (all captured so it reproduces cleanly):
+- **`uv sync --group eval`** — the sim rollout runs from the same `.venv`; the `eval` group adds
+  `mujoco==3.3.1`, `h5py`, pins `numpy==2.2.5` (robocasa asserts this exact version), and pins
+  `robosuite` to its **`robocasa-dev`** branch commit (RoboCasa's kitchen env needs
+  `load_model_on_init` / `get_elements`, absent from the PyPI release and master). A uv
+  `override-dependencies` entry forces `numpy==2.2.5` past robosuite's `mink` dep (`numpy<2`, only
+  used for whole-body IK, unused here). `robocasa` and `openpi_client` are added via `PYTHONPATH`
+  (not installed); `run_eval.sh` defaults `EVAL_PYTHON` to `.venv/bin/python`.
+- **Kitchen assets (~10 GB)** — the official `download_kitchen_assets.py` for textures/objaverse/
+  aigen, plus [`download_lightwheel_assets.py`](download_lightwheel_assets.py) for the lightwheel
+  objects/fixtures (NVIDIA renamed + restructured that HF repo into per-object zips, so the official
+  script 404s — this fetches the same assets from the new layout).
 
 Headless rendering uses `MUJOCO_GL=egl` (set by `run_eval.sh`).
 
