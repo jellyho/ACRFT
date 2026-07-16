@@ -3028,7 +3028,7 @@ eval = [
     { name = "h5py", specifier = ">=3.0" },
     { name = "mujoco", specifier = "==3.3.1" },
     { name = "numpy", specifier = "==2.2.5" },
-    { name = "robosuite", specifier = "==1.5.2" },
+    { name = "robosuite", git = "https://github.com/ARISE-Initiative/robosuite.git?rev=7736d3248abba04abe00b5c3882c4059ed08ce1b" },
 ]
 
 [[package]]
@@ -4077,7 +4077,7 @@ wheels = [
 [[package]]
 name = "robosuite"
 version = "1.5.2"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ARISE-Initiative/robosuite.git?rev=7736d3248abba04abe00b5c3882c4059ed08ce1b#7736d3248abba04abe00b5c3882c4059ed08ce1b" }
 dependencies = [
     { name = "mink" },
     { name = "mujoco" },
@@ -4091,10 +4091,6 @@ dependencies = [
     { name = "scipy" },
     { name = "termcolor" },
     { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/27/96/13c4c63860a3809740efa7406d01ff8ea3ebbdbd5d35eec0e8ead486f654/robosuite-1.5.2.tar.gz", hash = "sha256:9f128d57e4f090a9d78d93b246bd2a862b7fa6fc2ccb837aac06cf0ab19fde78", size = 155629116, upload-time = "2025-12-24T22:31:47.394Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/54/3c0940c92d381eb5837cd29bf2c9fbf0a9dff313a2b2779e3902665276b3/robosuite-1.5.2-py3-none-any.whl", hash = "sha256:b9e02df55de8949739de6ba1d196d2ba59cf33c51a76efcfbe5c2f73cdcf99ce", size = 156827641, upload-time = "2025-12-24T22:31:40.166Z" },
 ]
 
 [[package]]

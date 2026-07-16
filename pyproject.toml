@@ -58,7 +58,9 @@ dev = [
 # `uv sync --group eval`. robocasa itself is used from third_party/robocasa via PYTHONPATH
 # (not installed). numpy is pinned to the exact version robocasa asserts at import.
 eval = [
-    "robosuite==1.5.2",
+    # RoboCasa 365 needs robosuite's `robocasa-dev` branch (adds load_model_on_init / lite_physics
+    # used by robocasa's kitchen env); the PyPI 1.5.2 release and current master lack it.
+    "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@7736d3248abba04abe00b5c3882c4059ed08ce1b",
     "mujoco==3.3.1",
     "numpy==2.2.5",
     "h5py>=3.0",
