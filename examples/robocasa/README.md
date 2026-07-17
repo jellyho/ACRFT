@@ -280,6 +280,12 @@ Env overrides: `NUM_TRIALS=50`, `NUM_VIDEOS=5`, `PORT=8000`, `EXP_SUFFIX=run`, `
 `STEPS="10000 20000"` (subset), `OUT_DIR`. The server runs via `uv run` (openpi venv); only the
 client uses `EVAL_PYTHON`.
 
+Plot the sweep (`summary.csv` -> `summary.png`, success rate vs checkpoint):
+
+```bash
+uv run examples/robocasa/plot_eval.py --task PrepareCoffee
+```
+
 **Client env + assets** — one reproducible, idempotent setup script does everything (installs the
 sim deps into the openpi `.venv` and downloads all assets):
 
