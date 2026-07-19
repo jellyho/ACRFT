@@ -16,6 +16,7 @@ import tyro
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
+import openpi.models.pi0_rlt as pi0_rlt
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
@@ -574,6 +575,12 @@ class TrainConfig:
     action_dist_interval: int = 0
     # Number of action samples drawn per observation for the diagnostic above.
     action_dist_num_samples: int = 32
+    # How often (in steps) to log RLT embedding-quality diagnostics (participation ratio + z stats,
+    # for Pi0RLT models). 0 disables it.
+    rlt_monitor_interval: int = 0
+    # How often (in steps) to log the RLT embedding visualization (PCA scatter + held-out linear-probe
+    # R^2, host-side). 0 disables it.
+    rlt_vis_interval: int = 0
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
@@ -849,6 +856,42 @@ _CONFIGS = [
         num_train_steps=100_000,
         save_interval=10_000,
         action_dist_interval=1_000,
+    ),
+    # RLT ("RL Token") variant of pi05_robocasa: learns the compact RL-token bottleneck jointly with
+    # the BC finetune (language-conditioned token, single forward). Same data/optimizer as pi05_robocasa;
+    # the RLT loss (reconstruction + proprio) is added on top and monitored. Variant switches live on
+    # Pi0RLTConfig: rlt_backbone_gradient (RLT grad into the VLM backbone), rlt_target_stop_gradient.
+    # No freeze filter -> the VLA is BC-finetuned and the rlt_* bottleneck trains together.
+    TrainConfig(
+        name="pi05_robocasa_rlt",
+        model=pi0_rlt.Pi0RLTConfig(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            # readout head by default: RLT loss does not reshape the backbone (BC does). Flip to True to
+            # let the RLT loss flow into the VLM features.
+            rlt_backbone_gradient=False,
+        ),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id="jellyho/robocasa365-PrepareCoffee",
+            # RLT doesn't change normalization, so reuse pi05_robocasa's norm stats (same data/action)
+            # instead of recomputing under this config's own assets dir.
+            assets=AssetsConfig(assets_dir="./assets/pi05_robocasa"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        # Keeps the freshly-initialized rlt_* params (absent from pi05_base) while loading the VLA.
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=1_000,
+        rlt_monitor_interval=1_000,
+        rlt_vis_interval=5_000,
     ),
     #
     # Fine-tuning Aloha configs.

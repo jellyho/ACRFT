@@ -55,6 +55,24 @@ class CheckpointWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderKeepMissing(WeightLoader):
+    """Like ``CheckpointWeightLoader`` but keeps freshly-initialized params whose flattened key
+    matches ``missing_regex`` (in addition to LoRA weights).
+
+    Used to finetune a base checkpoint while adding new modules that are absent from it — e.g. the
+    Pi0RLT ``rlt_*`` bottleneck on top of ``pi05_base``: the base VLA weights load from the
+    checkpoint, and the new ``rlt_*`` params keep their initialized values.
+    """
+
+    params_path: str
+    missing_regex: str = ".*(lora|rlt_).*"
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params(loaded_params, params, missing_regex=self.missing_regex)
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 
