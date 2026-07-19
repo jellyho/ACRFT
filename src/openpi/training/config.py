@@ -578,9 +578,14 @@ class TrainConfig:
     # How often (in steps) to log RLT embedding-quality diagnostics (participation ratio + z stats,
     # for Pi0RLT models). 0 disables it.
     rlt_monitor_interval: int = 0
-    # How often (in steps) to log the RLT embedding visualization (PCA scatter + held-out linear-probe
-    # R^2, host-side). 0 disables it.
+    # How often (in steps) to log the RLT embedding visualization (PCA trajectory paths + held-out
+    # linear-probe R^2, host-side). 0 disables it.
     rlt_vis_interval: int = 0
+    # Number of episodes drawn as trajectory paths in the RLT embedding visualization. Also sets the
+    # held-out-episode probe split (half fit / half scored), so keep it >= 4.
+    rlt_vis_num_trajectories: int = 8
+    # Frames sampled per trajectory (evenly spaced over the episode) for that visualization.
+    rlt_vis_frames_per_trajectory: int = 24
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
@@ -626,6 +631,19 @@ class TrainConfig:
 
 
 # Use `get_config` if you need to get a config by name in your code.
+# Normalization stats shared by every RoboCasa 365 task, CHECKED INTO THE REPO so a fresh clone can
+# train/serve without downloading any dataset just to recompute them. They are shared (not per-task)
+# on purpose: per-task stats are ill-conditioned for near-stationary tasks, where a near-constant
+# base/control dim gives a ~0 range that blows the loss up. `compute_shared_norm_stats.py` writes
+# byte-identical files for all 50 tasks, so a single copy under a shared asset id suffices.
+#
+# Only the RLT configs point here. The BC configs keep asset_id=<repo_id>: serving reads norm stats
+# from the checkpoint's own assets dir keyed by asset_id, so changing it would break the already
+# trained pi05_robocasa_<Task> checkpoints.
+_ROBOCASA_SHARED_ASSETS = AssetsConfig(
+    assets_dir="./examples/robocasa/norm_stats", asset_id="robocasa365_shared"
+)
+
 _CONFIGS = [
     #
     # Inference Aloha configs.
@@ -874,9 +892,9 @@ _CONFIGS = [
         ),
         data=LeRobotRoboCasaDataConfig(
             repo_id="jellyho/robocasa365-PrepareCoffee",
-            # RLT doesn't change normalization, so reuse pi05_robocasa's norm stats (same data/action)
-            # instead of recomputing under this config's own assets dir.
-            assets=AssetsConfig(assets_dir="./assets/pi05_robocasa"),
+            # Repo-checked-in shared stats (see _ROBOCASA_SHARED_ASSETS): no recomputation, and no
+            # dataset download needed just to normalize.
+            assets=_ROBOCASA_SHARED_ASSETS,
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
@@ -1145,6 +1163,46 @@ _ROBOCASA_TARGET_TASKS = (
     "WashFruitColander", "WashLettuce", "WeighIngredients",
 )
 _CONFIGS.extend(_robocasa_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
+
+
+def _robocasa_rlt_task_config(task: str) -> TrainConfig:
+    """RLT variant of ``pi05_robocasa_<Task>``: learns the RL-token bottleneck during the BC finetune.
+
+    Registered as ``pi05_robocasa_<Task>_rlt``. Identical data/optimizer recipe to the BC config, so
+    the only difference is the added RLT loss (+ its monitoring). Norm stats are REUSED from the BC
+    config's assets dir (RLT does not change normalization), so no recomputation is needed.
+
+    Variant switches live on the model config and can be overridden from the CLI, e.g.
+        --model.rlt-backbone-gradient   (let the RLT loss reshape the VLM backbone)
+        --model.rlt-loss-weight 0.5
+    """
+    return TrainConfig(
+        name=f"pi05_robocasa_{task}_rlt",
+        model=pi0_rlt.Pi0RLTConfig(
+            pi05=True, action_horizon=10, discrete_state_input=False, rlt_backbone_gradient=False
+        ),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id=f"jellyho/robocasa365-{task}",
+            assets=_ROBOCASA_SHARED_ASSETS,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        # Keeps the freshly-initialized rlt_* params (absent from pi05_base) while loading the VLA.
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=1_000,
+        rlt_monitor_interval=1_000,
+        rlt_vis_interval=5_000,
+    )
+
+
+_CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 

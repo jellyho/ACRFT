@@ -281,57 +281,230 @@ def extract_rlt_embeddings(
     return model.extract_rl_token(observation), observation.state
 
 
-def log_rlt_embedding_vis(z: np.ndarray, proprio: np.ndarray, step: int) -> dict:
-    """Host-side RLT embedding visualization: PCA-2D scatter + a held-out linear-probe R².
+def build_rlt_trajectory_probe(
+    config: _config.TrainConfig, *, n_traj: int, n_frames: int, pad_to: int
+) -> tuple[_model.Observation, at.Array, np.ndarray, np.ndarray, int]:
+    """A FIXED probe set of consecutive frames from a few episodes, for trajectory-path visualization.
 
-    Returns a wandb-loggable dict {"rlt/embedding_pca": Image, "rlt/probe_proprio_r2": float}.
-    Best-effort: any failure returns {} (never touches the training loop).
+    Training batches are shuffled across episodes and timesteps, so they carry no temporal structure.
+    To see how the RL token evolves *along* a rollout we need ordered frames, so we sample ``n_frames``
+    evenly-spaced frames from each of ``n_traj`` episodes and keep that set fixed for the whole run
+    (so successive visualizations are comparable).
+
+    The batch is padded (by repeating the last frame) to a multiple of ``pad_to`` so the extraction can
+    reuse the already-compiled extractor instead of triggering a recompile per chunk.
+
+    Returns (observation, actions, episode_ids, t_norm, n_valid).
+    """
+    from lerobot.datasets import lerobot_dataset
+
+    data_config = config.data.create(config.assets_dirs, config.model)
+    dataset = _data_loader.create_torch_dataset(data_config, config.model.action_horizon, config.model)
+    dataset = _data_loader.transform_dataset(dataset, data_config)
+    meta = lerobot_dataset.LeRobotDatasetMetadata(data_config.repo_id)
+    episodes = meta.episodes
+
+    # Deterministic, spread across the dataset so the probe isn't all near-identical episodes.
+    chosen = np.unique(np.linspace(0, meta.total_episodes - 1, n_traj).astype(int))
+
+    idxs: list[int] = []
+    ep_of: list[int] = []
+    t_of: list[float] = []
+    for e in chosen:
+        lo = int(episodes["dataset_from_index"][int(e)])
+        hi = int(episodes["dataset_to_index"][int(e)])
+        # Keep the sampled action chunk inside the episode.
+        hi = max(lo + 1, hi - config.model.action_horizon)
+        sel = np.unique(np.linspace(lo, hi - 1, n_frames).astype(int))
+        span = max(1, hi - 1 - lo)
+        idxs.extend(int(i) for i in sel)
+        ep_of.extend([int(e)] * len(sel))
+        t_of.extend(float((i - lo) / span) for i in sel)
+
+    n_valid = len(idxs)
+    padded = idxs + [idxs[-1]] * ((-n_valid) % pad_to)
+    items = [dataset[i] for i in padded]
+    batch = jax.tree.map(lambda *xs: np.stack(xs), *items)
+    return (
+        _model.Observation.from_dict(batch),
+        batch["actions"],
+        np.asarray(ep_of),
+        np.asarray(t_of),
+        n_valid,
+    )
+
+
+def log_rlt_embedding_vis(
+    z_traj: np.ndarray,
+    proprio_traj: np.ndarray,
+    ep_ids: np.ndarray,
+    t_norm: np.ndarray,
+    z_rand: np.ndarray,
+    step: int,
+) -> dict:
+    """Trajectory-aware RLT embedding visualization.
+
+    Projects the RL tokens onto their top-2 principal components and draws each probe episode as a
+    *path* (line + markers colored by normalized time t), over a grey scatter of the current random
+    training batch for context. A healthy token traces smooth, ordered paths (embedding moves
+    consistently as the task progresses); a collapsed or uninformative token gives tangled blobs.
+
+    PC1 is sign-oriented to correlate positively with t, so "progress runs left→right" and successive
+    visualizations stay comparable.
+
+    Also reports held-out-EPISODE linear-probe R²: fit z -> t on some episodes, score on unseen ones.
+    That measures whether task progress is linearly decodable from the token and generalizes across
+    episodes — the property the downstream RL critic actually needs.
+
+    Returns a wandb-loggable dict (static image, interactive table, optional interactive plotly, R²s).
     """
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    z = np.asarray(z, dtype=np.float64)
-    proprio = np.asarray(proprio, dtype=np.float64)
-    b = z.shape[0]
+    z_traj = np.asarray(z_traj, dtype=np.float64)
+    z_rand = np.asarray(z_rand, dtype=np.float64)
+    t_norm = np.asarray(t_norm, dtype=np.float64)
+    ep_ids = np.asarray(ep_ids)
 
-    # --- PCA-2D of the RL tokens (center + top-2 right singular vectors) ---
-    zc = z - z.mean(0, keepdims=True)
-    _, _, vt = np.linalg.svd(zc, full_matrices=False)
-    pcs = zc @ vt[:2].T  # [b, 2]
-    # Color by the dominant proprio direction (a rough pose/progress proxy).
-    pc_prop = proprio - proprio.mean(0, keepdims=True)
-    color = pc_prop @ np.linalg.svd(pc_prop, full_matrices=False)[2][0] if proprio.shape[1] else np.arange(b)
+    # Shared basis over both sets so the two overlays live in the same 2-D frame.
+    z_all = np.concatenate([z_traj, z_rand], axis=0)
+    mean = z_all.mean(0, keepdims=True)
+    _, _, vt = np.linalg.svd(z_all - mean, full_matrices=False)
 
-    # --- Held-out linear probe: can proprio be linearly read off z? (generalization, not fit) ---
-    probe_r2 = float("nan")
-    try:
-        half = max(1, b // 2)
-        ztr, zval = zc[:half], zc[half:]
-        ytr, yval = pc_prop[:half], pc_prop[half:]
-        if zval.shape[0] > 0 and ytr.shape[0] > 0:
-            # ridge on the top PCA components (compact, avoids the D>>b degenerate exact fit)
-            k = min(half, 64)
-            ftr, fval = ztr @ vt[:k].T, zval @ vt[:k].T
-            w = np.linalg.solve(ftr.T @ ftr + 1e-2 * np.eye(k), ftr.T @ ytr)
-            pred = fval @ w
-            ss_res = np.sum((yval - pred) ** 2)
-            ss_tot = np.sum((yval - yval.mean(0, keepdims=True)) ** 2) + 1e-9
-            probe_r2 = float(1.0 - ss_res / ss_tot)
-    except Exception:  # noqa: BLE001
-        pass
+    # Sign convention: PC1 increases with progress; PC2's largest loading is positive.
+    pc_traj = (z_traj - mean) @ vt[:2].T
+    if np.corrcoef(pc_traj[:, 0], t_norm)[0, 1] < 0:
+        vt[0] = -vt[0]
+    if vt[1][np.argmax(np.abs(vt[1]))] < 0:
+        vt[1] = -vt[1]
+    pc_traj = (z_traj - mean) @ vt[:2].T
+    pc_rand = (z_rand - mean) @ vt[:2].T
 
-    fig, ax = plt.subplots(figsize=(5.2, 4.6), dpi=130)
-    sc = ax.scatter(pcs[:, 0], pcs[:, 1], c=color, cmap="viridis", s=28, edgecolor="white", linewidth=0.4)
-    fig.colorbar(sc, ax=ax, label="proprio PC1")
-    ax.set_title(f"RLT z_rl — PCA-2D (step {step:,})\nheld-out proprio probe R²={probe_r2:.2f}", fontsize=10)
-    ax.set_xlabel("PC1")
+    def _heldout_r2(target: np.ndarray) -> float:
+        """Ridge on top-k PCs, fit on half the episodes and scored on the held-out half.
+
+        Features are standardized so the ridge penalty actually bites (raw PCA scores carry the
+        singular-value scale, against which a small absolute penalty is a no-op), and k is kept well
+        below the number of training frames so the fit measures generalization rather than memorization.
+        """
+        uniq = np.unique(ep_ids)
+        if len(uniq) < 2:
+            return float("nan")
+        tr = np.isin(ep_ids, uniq[::2])  # interleaved, so both halves span the dataset
+        va = ~tr
+        if tr.sum() < 4 or va.sum() < 2:
+            return float("nan")
+        k = int(min(16, max(2, tr.sum() // 3)))
+        feats = (z_traj - mean) @ vt[:k].T
+        mu, sd = feats[tr].mean(0), feats[tr].std(0) + 1e-9
+        f = (feats - mu) / sd
+        ftr, fva = f[tr], f[va]
+        y_mu = target[tr].mean(0, keepdims=True)
+        w = np.linalg.solve(ftr.T @ ftr + np.eye(k), ftr.T @ (target[tr] - y_mu))
+        pred = fva @ w + y_mu
+        ss_res = float(np.sum((target[va] - pred) ** 2))
+        ss_tot = float(np.sum((target[va] - target[va].mean(0, keepdims=True)) ** 2)) + 1e-9
+        return float(1.0 - ss_res / ss_tot)
+
+    def _spearman(a: np.ndarray, b: np.ndarray) -> float:
+        ra = np.argsort(np.argsort(a)).astype(float)
+        rb = np.argsort(np.argsort(b)).astype(float)
+        if ra.std() < 1e-12 or rb.std() < 1e-12:
+            return float("nan")
+        return float(np.corrcoef(ra, rb)[0, 1])
+
+    progress_r2 = _heldout_r2(t_norm[:, None])
+    # Fit-free companion: within each episode, does PC1 advance monotonically with time? This is the
+    # robust signal (no tiny-sample regression), and is what the trajectory paths show visually.
+    per_ep_rho = [_spearman(pc_traj[ep_ids == e, 0], t_norm[ep_ids == e]) for e in np.unique(ep_ids)]
+    progress_spearman = float(np.nanmean(per_ep_rho)) if len(per_ep_rho) else float("nan")
+
+    # --- static figure: trajectory paths over the random-batch cloud ---
+    fig, ax = plt.subplots(figsize=(6.2, 5.2), dpi=130)
+    ax.scatter(pc_rand[:, 0], pc_rand[:, 1], c="#d9dce1", s=14, linewidth=0, zorder=1, label="random batch")
+    cmap = plt.get_cmap("tab10")
+    sc = None
+    for j, e in enumerate(np.unique(ep_ids)):
+        m = ep_ids == e
+        p, tt = pc_traj[m], t_norm[m]
+        order = np.argsort(tt)
+        p, tt = p[order], tt[order]
+        ax.plot(p[:, 0], p[:, 1], "-", color=cmap(j % 10), lw=1.4, alpha=0.85, zorder=2, label=f"ep {e}")
+        sc = ax.scatter(p[:, 0], p[:, 1], c=tt, cmap="viridis", s=26, vmin=0, vmax=1, zorder=3,
+                        edgecolor="white", linewidth=0.3)
+        ax.scatter(p[0, 0], p[0, 1], marker="o", s=95, facecolor="none", edgecolor=cmap(j % 10), lw=1.8, zorder=4)
+        ax.scatter(p[-1, 0], p[-1, 1], marker="*", s=170, color=cmap(j % 10), zorder=4)
+    if sc is not None:
+        fig.colorbar(sc, ax=ax, label="normalized time t (0=start, 1=end)")
+    ax.set_title(
+        f"RLT z_rl — PCA-2D trajectories (step {step:,})\n"
+        f"progress ρ={progress_spearman:.2f}  ·  held-out-episode probe R²={progress_r2:.2f}"
+        f"   (○ start, ★ end)",
+        fontsize=10,
+    )
+    ax.set_xlabel("PC1 (oriented with progress)")
     ax.set_ylabel("PC2")
+    ax.legend(fontsize=7, loc="best", framealpha=0.7)
     fig.tight_layout()
     img = wandb.Image(fig)
     plt.close(fig)
-    return {"rlt/embedding_pca": img, "rlt/probe_proprio_r2": probe_r2}
+
+    out = {
+        "rlt/embedding_pca": img,
+        "rlt/progress_spearman": progress_spearman,
+        "rlt/probe_progress_r2": progress_r2,
+        # Same held-out-episode split, but predicting proprio instead of progress.
+        "rlt/probe_proprio_r2": _heldout_r2(np.asarray(proprio_traj, dtype=np.float64)),
+    }
+
+    # --- interactive: a wandb.Table is queryable/chartable in the UI without extra deps ---
+    try:
+        table = wandb.Table(columns=["pc1", "pc2", "kind", "episode", "t"])
+        for (x, y), e, tt in zip(pc_traj, ep_ids, t_norm):
+            table.add_data(float(x), float(y), "trajectory", int(e), float(tt))
+        for x, y in pc_rand:
+            table.add_data(float(x), float(y), "random", -1, float("nan"))
+        out["rlt/embedding_table"] = table
+    except Exception:  # noqa: BLE001
+        pass
+
+    # --- optional: fully interactive plotly paths (hover + per-episode legend toggle) ---
+    try:
+        import plotly.graph_objects as go
+
+        pfig = go.Figure()
+        pfig.add_trace(
+            go.Scattergl(
+                x=pc_rand[:, 0], y=pc_rand[:, 1], mode="markers", name="random batch",
+                marker={"size": 5, "color": "#d9dce1"}, hoverinfo="skip",
+            )
+        )
+        for e in np.unique(ep_ids):
+            m = ep_ids == e
+            p, tt = pc_traj[m], t_norm[m]
+            order = np.argsort(tt)
+            p, tt = p[order], tt[order]
+            pfig.add_trace(
+                go.Scatter(
+                    x=p[:, 0], y=p[:, 1], mode="lines+markers", name=f"ep {e}",
+                    marker={"size": 7, "color": tt, "colorscale": "Viridis", "cmin": 0, "cmax": 1},
+                    line={"width": 1.5},
+                    text=[f"ep {e}, t={v:.2f}" for v in tt], hoverinfo="text",
+                )
+            )
+        pfig.update_layout(
+            title=f"RLT z_rl PCA trajectories (step {step:,})",
+            xaxis_title="PC1 (oriented with progress)", yaxis_title="PC2", height=560,
+        )
+        out["rlt/embedding_pca_interactive"] = wandb.Plotly(pfig)
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+
+    return out
 
 
 def main(config: _config.TrainConfig):
@@ -406,12 +579,28 @@ def main(config: _config.TrainConfig):
             out_shardings=replicated_sharding,
         )
     pextract_rlt = None
+    rlt_probe = None
     if config.rlt_vis_interval > 0:
         pextract_rlt = jax.jit(
             extract_rlt_embeddings,
             in_shardings=(train_state_sharding, data_sharding),
             out_shardings=replicated_sharding,
         )
+        # Fixed episode-ordered probe set, so the visualization can draw trajectory paths and stays
+        # comparable across steps. Padded to a multiple of batch_size to reuse the compiled extractor.
+        try:
+            rlt_probe = build_rlt_trajectory_probe(
+                config,
+                n_traj=config.rlt_vis_num_trajectories,
+                n_frames=config.rlt_vis_frames_per_trajectory,
+                pad_to=config.batch_size,
+            )
+            logging.info(
+                f"Built RLT trajectory probe: {rlt_probe[4]} frames from {len(np.unique(rlt_probe[2]))} episodes."
+            )
+        except Exception as e:  # noqa: BLE001
+            logging.warning(f"Could not build the RLT trajectory probe; embedding vis disabled. ({e})")
+            pextract_rlt = None
 
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(
@@ -449,9 +638,22 @@ def main(config: _config.TrainConfig):
 
         if pextract_rlt is not None and step % config.rlt_vis_interval == 0:
             try:
+                probe_obs, probe_act, ep_ids, t_norm, n_valid = rlt_probe
+                zs, props = [], []
+                for s in range(0, probe_act.shape[0], config.batch_size):
+                    sl = slice(s, s + config.batch_size)
+                    chunk = (jax.tree.map(lambda x, sl=sl: x[sl], probe_obs), probe_act[sl])
+                    with sharding.set_mesh(mesh):
+                        zc, pc = pextract_rlt(train_state, chunk)
+                    zs.append(np.asarray(zc))
+                    props.append(np.asarray(pc))
+                z_traj = np.concatenate(zs)[:n_valid]
+                proprio_traj = np.concatenate(props)[:n_valid]
                 with sharding.set_mesh(mesh):
-                    z, proprio = pextract_rlt(train_state, batch)
-                diag_info.update(log_rlt_embedding_vis(np.asarray(z), np.asarray(proprio), step))
+                    z_rand, _ = pextract_rlt(train_state, batch)
+                diag_info.update(
+                    log_rlt_embedding_vis(z_traj, proprio_traj, ep_ids, t_norm, np.asarray(z_rand), step)
+                )
             except Exception as e:  # noqa: BLE001
                 logging.warning(f"rlt embedding vis failed at step {step}; disabling it. ({e})")
                 pextract_rlt = None
