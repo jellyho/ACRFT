@@ -281,9 +281,27 @@ def extract_rlt_embeddings(
     return model.extract_rl_token(observation), observation.state
 
 
+def _obs_thumbnails(observation: _model.Observation, n: int, stride: int = 3) -> np.ndarray:
+    """Small uint8 previews of the camera views, one per frame: [n, h, w*cams, 3].
+
+    Used to show *what the robot was looking at* next to each embedding point. Subsampled by
+    ``stride`` because these are thumbnails, not training data.
+    """
+    views = []
+    for img in observation.images.values():
+        x = np.asarray(img[:n], dtype=np.float32)[:, ::stride, ::stride]
+        # Model-space images are normalized; map whichever convention back to bytes.
+        if x.min() < -0.01:  # [-1, 1]
+            x = (x + 1.0) * 127.5
+        elif x.max() <= 1.001:  # [0, 1]
+            x = x * 255.0
+        views.append(np.clip(x, 0, 255).astype(np.uint8))
+    return np.concatenate(views, axis=2) if views else np.zeros((n, 1, 1, 3), np.uint8)
+
+
 def build_rlt_trajectory_probe(
     config: _config.TrainConfig, *, n_traj: int, n_frames: int, pad_to: int
-) -> tuple[_model.Observation, at.Array, np.ndarray, np.ndarray, int]:
+) -> tuple[_model.Observation, at.Array, np.ndarray, np.ndarray, int, np.ndarray]:
     """A FIXED probe set of consecutive frames from a few episodes, for trajectory-path visualization.
 
     Training batches are shuffled across episodes and timesteps, so they carry no temporal structure.
@@ -325,12 +343,14 @@ def build_rlt_trajectory_probe(
     padded = idxs + [idxs[-1]] * ((-n_valid) % pad_to)
     items = [dataset[i] for i in padded]
     batch = jax.tree.map(lambda *xs: np.stack(xs), *items)
+    observation = _model.Observation.from_dict(batch)
     return (
-        _model.Observation.from_dict(batch),
+        observation,
         batch["actions"],
         np.asarray(ep_of),
         np.asarray(t_of),
         n_valid,
+        _obs_thumbnails(observation, n_valid),
     )
 
 
@@ -341,6 +361,7 @@ def log_rlt_embedding_vis(
     t_norm: np.ndarray,
     z_rand: np.ndarray,
     step: int,
+    thumbs: np.ndarray | None = None,
 ) -> dict:
     """Trajectory-aware RLT embedding visualization.
 
@@ -460,12 +481,26 @@ def log_rlt_embedding_vis(
     }
 
     # --- interactive: a wandb.Table is queryable/chartable in the UI without extra deps ---
+    # Each trajectory row carries the camera view it came from, so you can see WHICH SCENE a point in
+    # embedding space corresponds to (plotly hover cannot render images; a media column can).
+    # The `embedding` column additionally feeds W&B's Embedding Projector panel, which projects in the
+    # browser and shows the image on hover. The probe frames are fixed, so W&B dedupes the media by
+    # content hash across steps instead of re-uploading them.
     try:
-        table = wandb.Table(columns=["pc1", "pc2", "kind", "episode", "t"])
-        for (x, y), e, tt in zip(pc_traj, ep_ids, t_norm):
-            table.add_data(float(x), float(y), "trajectory", int(e), float(tt))
+        cols = ["pc1", "pc2", "kind", "episode", "t", "embedding"]
+        if thumbs is not None:
+            cols.append("view")
+        table = wandb.Table(columns=cols)
+        for i, ((x, y), e, tt) in enumerate(zip(pc_traj, ep_ids, t_norm)):
+            row = [float(x), float(y), "trajectory", int(e), float(tt), z_traj[i].astype(np.float32).tolist()]
+            if thumbs is not None:
+                row.append(wandb.Image(thumbs[i]) if i < len(thumbs) else None)
+            table.add_data(*row)
         for x, y in pc_rand:
-            table.add_data(float(x), float(y), "random", -1, float("nan"))
+            row = [float(x), float(y), "random", -1, float("nan"), None]
+            if thumbs is not None:
+                row.append(None)
+            table.add_data(*row)
         out["rlt/embedding_table"] = table
     except Exception:  # noqa: BLE001
         pass
@@ -603,10 +638,13 @@ def main(config: _config.TrainConfig):
             pextract_rlt = None
 
     start_step = int(train_state.step)
+    # Iterate one step past num_train_steps so the run ends ON a round step (100_000, not 99_999).
+    # That final step is a multiple of the save/log/diagnostic intervals, so the last checkpoint gets
+    # its visualizations and metrics for free — no special-casing needed anywhere below.
     pbar = tqdm.tqdm(
-        range(start_step, config.num_train_steps),
+        range(start_step, config.num_train_steps + 1),
         initial=start_step,
-        total=config.num_train_steps,
+        total=config.num_train_steps + 1,
         dynamic_ncols=True,
     )
 
@@ -638,7 +676,7 @@ def main(config: _config.TrainConfig):
 
         if pextract_rlt is not None and step % config.rlt_vis_interval == 0:
             try:
-                probe_obs, probe_act, ep_ids, t_norm, n_valid = rlt_probe
+                probe_obs, probe_act, ep_ids, t_norm, n_valid, probe_thumbs = rlt_probe
                 zs, props = [], []
                 for s in range(0, probe_act.shape[0], config.batch_size):
                     sl = slice(s, s + config.batch_size)
@@ -652,7 +690,9 @@ def main(config: _config.TrainConfig):
                 with sharding.set_mesh(mesh):
                     z_rand, _ = pextract_rlt(train_state, batch)
                 diag_info.update(
-                    log_rlt_embedding_vis(z_traj, proprio_traj, ep_ids, t_norm, np.asarray(z_rand), step)
+                    log_rlt_embedding_vis(
+                        z_traj, proprio_traj, ep_ids, t_norm, np.asarray(z_rand), step, probe_thumbs
+                    )
                 )
             except Exception as e:  # noqa: BLE001
                 logging.warning(f"rlt embedding vis failed at step {step}; disabling it. ({e})")
@@ -676,7 +716,7 @@ def main(config: _config.TrainConfig):
             wandb.log(diag_info, step=step)
         batch = next(data_iter)
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
+        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
 
     logging.info("Waiting for checkpoint manager to finish")

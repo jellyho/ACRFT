@@ -524,8 +524,8 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
-    # Project name.
-    project_name: str = "openpi"
+    # Project name. Used as the wandb project for every run unless overridden with --project-name.
+    project_name: str = "acrft"
     # Experiment name. Will be used to name the metadata and checkpoint directories.
     exp_name: str = tyro.MISSING
 
@@ -909,7 +909,7 @@ _CONFIGS = [
         save_interval=10_000,
         action_dist_interval=1_000,
         rlt_monitor_interval=1_000,
-        rlt_vis_interval=5_000,
+        rlt_vis_interval=10_000,
     ),
     #
     # Fine-tuning Aloha configs.
@@ -1198,7 +1198,7 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
         save_interval=10_000,
         action_dist_interval=1_000,
         rlt_monitor_interval=1_000,
-        rlt_vis_interval=5_000,
+        rlt_vis_interval=10_000,
     )
 
 
