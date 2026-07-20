@@ -129,6 +129,10 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
     # Objective for the bottleneck. "progress" / "reconstruction+progress" need a reward/success
     # task-progress label plumbed into the batch (a later increment); only reconstruction is wired now.
     rlt_objective: str = "reconstruction"
+    # How the reconstruction is decoded from z_rl. "autoregressive" is the paper's Eq. 2 (teacher
+    # forced on the true previous embeddings); "parallel" decodes every position from z_rl alone, so
+    # the token cannot be bypassed via context. See Pi0RLT._decode.
+    rlt_decoder_mode: str = "autoregressive"
 
     def __post_init__(self):
         super().__post_init__()
@@ -136,6 +140,8 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
             raise ValueError("Pi0RLTConfig requires pi05=True")
         if self.rlt_width % 2 != 0:
             raise ValueError(f"rlt_width must be even (sincos posemb), got {self.rlt_width}")
+        if self.rlt_decoder_mode not in ("autoregressive", "parallel"):
+            raise ValueError(f"rlt_decoder_mode must be 'autoregressive' or 'parallel', got {self.rlt_decoder_mode!r}")
         if self.rlt_objective != "reconstruction":
             raise ValueError(
                 f"rlt_objective={self.rlt_objective!r} is not wired yet; only 'reconstruction' is "
@@ -171,6 +177,7 @@ class Pi0RLT(Pi0):
         self.proprio_loss_weight = config.proprio_loss_weight
         self.rlt_backbone_gradient = config.rlt_backbone_gradient
         self.rlt_target_stop_gradient = config.rlt_target_stop_gradient
+        self.rlt_decoder_mode = config.rlt_decoder_mode
         self._enc_depth = config.rlt_encoder_depth
         self._dec_depth = config.rlt_decoder_depth
 
@@ -224,15 +231,31 @@ class Pi0RLT(Pi0):
     # ------------------------------------------------------------------
 
     def _decode(self, z_rl, z_tgt, img_mask):
-        """Teacher-forced AR reconstruction; returns recon [b, M, W].
+        """Reconstruct z̄_{1:M} [b, M, W] from the single RL token z_rl [b, rlt_token_dim].
 
-        Input sequence (length M): [z_rl, z̄_1, ..., z̄_{M-1}] with a causal mask, so position j
-        (seeing z_rl + z̄_{1:j}) predicts z̄_{j+1} (Eq. 2).
+        ``autoregressive`` (default) is the paper's Eq. 2: teacher-forced over the sequence
+        [z_rl, z̄_1, ..., z̄_{M-1}] with a causal mask, so position j predicts z̄_{j+1} having seen
+        z_rl and the *true* z̄_{1:j}.
+
+        ``parallel`` drops the teacher forcing entirely: every output position is decoded from z_rl
+        plus a positional query, so the token is the ONLY route by which information can reach the
+        reconstruction. Neighbouring SigLIP tokens are highly correlated, so the autoregressive
+        decoder can score well while ignoring z_rl (see ``rlt_bypass_diagnostics``); this mode makes
+        that impossible, at the cost of a much harder reconstruction task (expect a higher loss —
+        what matters is what ends up inside z_rl, not the loss value).
         """
         b, M, _ = z_tgt.shape
         d = self.rlt_width
-
         start = self.rlt_dec_rl_proj(z_rl)[:, None, :]  # [b, 1, d]
+
+        if self.rlt_decoder_mode == "parallel":
+            # Broadcast the token to every position; positions differ only by the positional code.
+            x = jnp.broadcast_to(start, (b, M, d)) + _sincos_posemb(M, d)[None]
+            mask = jnp.ones((b, 1, 1, M), dtype=jnp.bool_)  # full attention, nothing to hide
+            for i in range(self._dec_depth):
+                x = self.rlt_decoder[f"blk_{i}"](x, mask)
+            return self.rlt_dec_out_proj(x)  # [b, M, W]
+
         shifted = self.rlt_dec_tgt_proj(z_tgt[:, : M - 1])  # [b, M-1, d]
         x = jnp.concatenate([start, shifted], axis=1)  # [b, M, d]
         x = x + _sincos_posemb(M, d)[None]
@@ -280,6 +303,40 @@ class Pi0RLT(Pi0):
     # ------------------------------------------------------------------
     # Inference: extract the RL token (used by monitoring + downstream RL)
     # ------------------------------------------------------------------
+
+    def rlt_bypass_diagnostics(self, observation: _model.Observation) -> dict[str, at.Array]:
+        """Does the decoder actually USE the RL token, or is it reconstructing from context alone?
+
+        The decoder is teacher-forced on z̄_{1:i-1}, and neighbouring SigLIP image tokens are highly
+        correlated, so it can reach a very low reconstruction loss by interpolating from the previous
+        tokens while ignoring z_rl — the bottleneck would look "trained" while carrying nothing.
+
+        We measure that directly: reconstruct once with the true token and once with the tokens
+        rolled across the batch (so every sample gets *another* sample's token). If the loss barely
+        moves, the token is being bypassed.
+
+            bypass_ratio = loss(shuffled z_rl) / loss(true z_rl)
+              ~1   -> token ignored (bad; reconstruction is coming from context)
+              >>1  -> token carries the information the decoder depends on (good)
+        """
+        observation = _model.preprocess_observation(None, observation, train=False)
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        outs, _ = self.PaliGemma.llm([prefix_tokens, None], mask=attn_mask, positions=positions)
+        z, img_mask = self._split_image_tokens(observation, outs[0], prefix_mask)
+
+        z_rl = self._encode_rl_token(z, img_mask, observation.state)
+        m = img_mask.astype(jnp.float32)
+
+        def _recon_loss(token):
+            recon = self._decode(token, z, img_mask)
+            err = jnp.mean(jnp.square(recon - z), axis=-1)
+            return jnp.sum(err * m, axis=-1) / (jnp.sum(m, axis=-1) + 1e-6)
+
+        real = jnp.mean(_recon_loss(z_rl))
+        shuffled = jnp.mean(_recon_loss(jnp.roll(z_rl, 1, axis=0)))
+        return {"z_rl": z_rl, "recon_real": real, "recon_shuffled": shuffled}
 
     def extract_rl_token(self, observation: _model.Observation) -> at.Float[at.Array, "b t"]:
         """Language-conditioned forward → RL token z_rl [b, rlt_token_dim]."""

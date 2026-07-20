@@ -254,7 +254,8 @@ def compute_rlt_metrics(
     params = state.ema_params if state.ema_params is not None else state.params
     model = nnx.merge(state.model_def, params)
     model.eval()
-    z = model.extract_rl_token(observation)  # [b, D]
+    diag = model.rlt_bypass_diagnostics(observation)
+    z = diag["z_rl"]  # [b, D]
     b = z.shape[0]
     zc = z - jnp.mean(z, axis=0, keepdims=True)
     # participation ratio without forming the DxD covariance: use the [b,b] Gram matrix.
@@ -267,6 +268,10 @@ def compute_rlt_metrics(
         "rlt/participation_ratio": part_ratio,
         "rlt/eval_z_batch_std": jnp.mean(jnp.std(z, axis=0)),
         "rlt/eval_z_norm_mean": jnp.mean(jnp.linalg.norm(z, axis=-1)),
+        # ~1 means the decoder reconstructs fine with somebody else's RL token, i.e. it is ignoring
+        # the bottleneck and a low recon loss is NOT evidence the token carries anything.
+        "rlt/bypass_ratio": diag["recon_shuffled"] / (diag["recon_real"] + 1e-9),
+        "rlt/recon_shuffled_token": diag["recon_shuffled"],
     }
 
 
@@ -281,14 +286,18 @@ def extract_rlt_embeddings(
     return model.extract_rl_token(observation), observation.state
 
 
-def _obs_thumbnails(observation: _model.Observation, n: int, stride: int = 3) -> np.ndarray:
-    """Small uint8 previews of the camera views, one per frame: [n, h, w*cams, 3].
+def _obs_thumbnails(observation: _model.Observation, n: int, stride: int = 2) -> np.ndarray:
+    """Small uint8 previews of the camera view(s), one per frame: [n, h, w*cams, 3].
 
-    Used to show *what the robot was looking at* next to each embedding point. Subsampled by
-    ``stride`` because these are thumbnails, not training data.
+    Used to show *what the robot was looking at* next to each embedding point. Prefers the wrist
+    camera — it is the view that actually distinguishes task phases (the fixed exterior cameras look
+    nearly identical for most of an episode). Falls back to every view if there is no wrist key.
+    Subsampled by ``stride`` because these are thumbnails, not training data.
     """
+    wrist = [v for k, v in observation.images.items() if "wrist" in k and "right" not in k]
+    chosen = wrist or list(observation.images.values())
     views = []
-    for img in observation.images.values():
+    for img in chosen:
         x = np.asarray(img[:n], dtype=np.float32)[:, ::stride, ::stride]
         # Model-space images are normalized; map whichever convention back to bytes.
         if x.min() < -0.01:  # [-1, 1]
@@ -472,7 +481,47 @@ def log_rlt_embedding_vis(
     img = wandb.Image(fig)
     plt.close(fig)
 
+    # --- projection-free structure plots ---------------------------------------------------------
+    # A 2-D projection only shows structure once the token has some; early in training it is noise.
+    # These two read the geometry directly, so they stay informative before the PCA plot does.
+    fig2, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(11.4, 4.5), dpi=130)
+
+    # (a) Distance from each frame's token to that episode's final (near-success) token. If the token
+    #     tracks progress at all, these curves fall monotonically toward 0 as the task completes.
+    for j, e in enumerate(np.unique(ep_ids)):
+        m = ep_ids == e
+        zz, tt = z_traj[m], t_norm[m]
+        o = np.argsort(tt)
+        zz, tt = zz[o], tt[o]
+        d = np.linalg.norm(zz - zz[-1], axis=-1)
+        ax_a.plot(tt, d / (d.max() + 1e-9), "-", color=cmap(j % 10), lw=1.4, alpha=0.85, label=f"ep {e}")
+    ax_a.set_xlabel("normalized time t")
+    ax_a.set_ylabel("‖z_t − z_final‖  (per-episode normalized)")
+    ax_a.set_title("distance to the episode's final token\n(monotone ↓ = token tracks progress)", fontsize=9)
+    ax_a.grid(True, lw=0.5, alpha=0.4)
+
+    # (b) Cosine-similarity matrix over all probe frames, ordered by (episode, t). Bright blocks on the
+    #     diagonal mean the token mostly encodes WHICH episode; a smooth gradient inside each block
+    #     (and bright off-diagonal bands between episodes) means it encodes the task PHASE instead.
+    o = np.lexsort((t_norm, ep_ids))
+    zn = z_traj[o]
+    zn = zn / (np.linalg.norm(zn, axis=-1, keepdims=True) + 1e-9)
+    sim = zn @ zn.T
+    im = ax_b.imshow(sim, cmap="magma", interpolation="nearest")
+    fig2.colorbar(im, ax=ax_b, label="cosine similarity")
+    bounds = np.cumsum([int((ep_ids == e).sum()) for e in np.unique(ep_ids)])[:-1]
+    for bnd in bounds:
+        ax_b.axhline(bnd - 0.5, color="#5cf", lw=0.6)
+        ax_b.axvline(bnd - 0.5, color="#5cf", lw=0.6)
+    ax_b.set_title("token cosine similarity, ordered by (episode, t)\n(blocks = episode identity, "
+                   "bands = shared phase)", fontsize=9)
+    ax_b.set_xlabel("frame (episode, then time)")
+    fig2.tight_layout()
+    structure_img = wandb.Image(fig2)
+    plt.close(fig2)
+
     out = {
+        "rlt/embedding_structure": structure_img,
         "rlt/embedding_pca": img,
         "rlt/progress_spearman": progress_spearman,
         "rlt/probe_progress_r2": progress_r2,
@@ -505,41 +554,111 @@ def log_rlt_embedding_vis(
     except Exception:  # noqa: BLE001
         pass
 
-    # --- optional: fully interactive plotly paths (hover + per-episode legend toggle) ---
+    # --- interactive scatter with IMAGE-ON-HOVER -------------------------------------------------
+    # Plotly (and W&B's plotly panel) can only put text in a hover label, so this is a small
+    # self-contained HTML panel instead: the camera view for each frame is inlined as base64 and
+    # shown next to the cursor. That is the whole point of the panel — seeing *which scene* a region
+    # of embedding space corresponds to.
     try:
-        import plotly.graph_objects as go
-
-        pfig = go.Figure()
-        pfig.add_trace(
-            go.Scattergl(
-                x=pc_rand[:, 0], y=pc_rand[:, 1], mode="markers", name="random batch",
-                marker={"size": 5, "color": "#d9dce1"}, hoverinfo="skip",
-            )
+        out["rlt/embedding_hover"] = wandb.Html(
+            _embedding_hover_html(pc_traj, pc_rand, ep_ids, t_norm, thumbs, step), inject=False
         )
-        for e in np.unique(ep_ids):
-            m = ep_ids == e
-            p, tt = pc_traj[m], t_norm[m]
-            order = np.argsort(tt)
-            p, tt = p[order], tt[order]
-            pfig.add_trace(
-                go.Scatter(
-                    x=p[:, 0], y=p[:, 1], mode="lines+markers", name=f"ep {e}",
-                    marker={"size": 7, "color": tt, "colorscale": "Viridis", "cmin": 0, "cmax": 1},
-                    line={"width": 1.5},
-                    text=[f"ep {e}, t={v:.2f}" for v in tt], hoverinfo="text",
-                )
-            )
-        pfig.update_layout(
-            title=f"RLT z_rl PCA trajectories (step {step:,})",
-            xaxis_title="PC1 (oriented with progress)", yaxis_title="PC2", height=560,
-        )
-        out["rlt/embedding_pca_interactive"] = wandb.Plotly(pfig)
-    except ImportError:
-        pass
     except Exception:  # noqa: BLE001
         pass
 
     return out
+
+
+def _embedding_hover_html(
+    pc_traj: np.ndarray,
+    pc_rand: np.ndarray,
+    ep_ids: np.ndarray,
+    t_norm: np.ndarray,
+    thumbs: np.ndarray | None,
+    step: int,
+) -> str:
+    """Self-contained HTML scatter of the RLT embedding that shows the camera view on hover."""
+    import base64
+    import io
+    import json
+
+    from PIL import Image
+
+    # Shared normalization so both sets land in the same [0,1] frame.
+    allpts = np.concatenate([pc_traj, pc_rand], axis=0)
+    lo, hi = allpts.min(0), allpts.max(0)
+    span = np.maximum(hi - lo, 1e-9)
+
+    def norm(p):
+        return (p - lo) / span
+
+    def thumb_b64(i: int) -> str:
+        # JPEG, not PNG: these are camera photos, and the whole set is inlined into one HTML panel
+        # (a few hundred PNG thumbnails would make it several MB).
+        if thumbs is None or i >= len(thumbs):
+            return ""
+        buf = io.BytesIO()
+        Image.fromarray(thumbs[i]).resize((96, 96)).save(buf, format="JPEG", quality=80)
+        return base64.b64encode(buf.getvalue()).decode()
+
+    traj = [
+        {"x": float(x), "y": float(y), "e": int(e), "t": float(tt), "img": thumb_b64(i)}
+        for i, ((x, y), e, tt) in enumerate(zip(norm(pc_traj), ep_ids, t_norm))
+    ]
+    rand = [{"x": float(x), "y": float(y)} for x, y in norm(pc_rand)]
+    # Draw order per episode: by time, so the polyline follows the trajectory.
+    eps = [
+        {"e": int(e), "idx": [int(i) for i in np.flatnonzero(ep_ids == e)[np.argsort(t_norm[ep_ids == e])]]}
+        for e in np.unique(ep_ids)
+    ]
+
+    payload = json.dumps({"traj": traj, "rand": rand, "eps": eps, "step": int(step)})
+    return (
+        """
+<style>
+ #rltwrap{position:relative;font:12px system-ui,sans-serif;color:#333}
+ #rlttip{position:absolute;display:none;pointer-events:none;background:#fff;border:1px solid #bbb;
+   border-radius:6px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.2);z-index:10}
+ #rlttip img{display:block;width:96px;height:96px;image-rendering:pixelated}
+ #rlttip div{text-align:center;margin-top:2px}
+</style>
+<div id="rltwrap"><svg id="rltsvg" width="760" height="540"></svg><div id="rlttip"></div></div>
+<script>
+const D = """
+        + payload
+        + """;
+const svg=document.getElementById('rltsvg'), tip=document.getElementById('rlttip');
+const W=760,H=540,P=34, NS='http://www.w3.org/2000/svg';
+const X=p=>P+p*(W-2*P), Y=p=>H-P-p*(H-2*P);
+const COL=['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;}
+svg.appendChild(el('rect',{x:0,y:0,width:W,height:H,fill:'#fff'}));
+D.rand.forEach(p=>svg.appendChild(el('circle',{cx:X(p.x),cy:Y(p.y),r:3,fill:'#dcdfe4'})));
+D.eps.forEach((ep,j)=>{
+  const c=COL[j%10];
+  const pts=ep.idx.map(i=>X(D.traj[i].x)+','+Y(D.traj[i].y)).join(' ');
+  svg.appendChild(el('polyline',{points:pts,fill:'none',stroke:c,'stroke-width':1.6,opacity:.85}));
+  ep.idx.forEach((i,k)=>{
+    const d=D.traj[i];
+    const dot=el('circle',{cx:X(d.x),cy:Y(d.y),r:k===0?7:(k===ep.idx.length-1?7:4.5),
+      fill:k===0?'#fff':c,stroke:c,'stroke-width':k===0?2.5:1});
+    dot.style.cursor='pointer';
+    dot.addEventListener('mousemove',ev=>{
+      tip.innerHTML=(d.img?'<img src="data:image/jpeg;base64,'+d.img+'">':'')
+        +'<div>ep '+d.e+' &middot; t='+d.t.toFixed(2)+'</div>';
+      tip.style.display='block';
+      tip.style.left=Math.min(ev.offsetX+14,W-120)+'px';
+      tip.style.top=Math.max(ev.offsetY-110,0)+'px';
+    });
+    dot.addEventListener('mouseleave',()=>{tip.style.display='none';});
+    svg.appendChild(dot);
+  });
+});
+svg.appendChild(el('text',{x:P,y:20,'font-size':13,'font-family':'system-ui',fill:'#222'}))
+  .textContent='RLT z_rl \\u2014 PCA (step '+D.step.toLocaleString()+') \\u2014 hover a point for its wrist view';
+</script>
+"""
+    )
 
 
 def main(config: _config.TrainConfig):

@@ -1,4 +1,24 @@
 <style>
+.lede{max-width:78ch;margin:0 0 14px;color:var(--muted);line-height:1.62}
+.note{max-width:88ch;margin:10px 0 0;font-size:12.5px;color:var(--muted);line-height:1.6}
+.mtable{width:100%;border-collapse:collapse;margin-top:4px;font-size:13px}
+.mtable th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);padding:0 10px 7px 0;border-bottom:1px solid var(--hairline)}
+.mtable td{padding:9px 10px 9px 0;border-bottom:1px solid var(--hairline);vertical-align:top;line-height:1.55}
+.mtable tr:last-child td{border-bottom:0}
+.mtable td:nth-child(2){white-space:nowrap}
+.chip-step{background:var(--teal-bg);color:var(--teal)}
+.chip-monitor{background:var(--amber-bg);color:var(--amber)}
+.chip-viz{background:var(--surface2);color:var(--muted)}
+.combos{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:8px}
+.combo{display:grid;grid-template-columns:minmax(210px,auto) 1fr;gap:12px;align-items:baseline;
+  padding:9px 12px;border-radius:8px;background:var(--surface2);border-left:3px solid var(--hairline)}
+.combo-good{border-left-color:var(--green)}
+.combo-bad{border-left-color:#c0392b}
+.combo-warn{border-left-color:var(--amber)}
+.combo-p{font-size:12.5px;color:var(--ink)}
+.combo-t{font-size:13px;color:var(--muted);line-height:1.55}
+@media(max-width:680px){.combo{grid-template-columns:1fr}}
 :root{
   --bg:#f4f6f8; --surface:#ffffff; --surface2:#eef1f5; --ink:#141a22; --muted:#5c6672;
   --hairline:#dde3ea; --amber:#c06914; --amber-bg:#f6ead9; --teal:#0f7d86; --teal-bg:#dff0f1;
@@ -221,6 +241,38 @@ footer{border-top:1px solid var(--hairline);color:var(--muted);font-size:13px;
 <tr><td class="mono">11:12</td><td>gripper (close)</td></tr></tbody></table>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>RLT · the RL token</h2>
+      <span class="count">compact state representation, trained alongside the BC fine-tune</span></div>
+    <div class="rule"></div>
+    <p class="lede">A small encoder–decoder bottleneck on top of π0.5 compresses the VLA's image-token embeddings into ONE compact vector per frame (the “RL token”), which a downstream RL critic consumes instead of pixels. Implements the representation stage of RL Token (arXiv:2604.23073, Eq. 1–2). Here it is trained JOINTLY with the BC fine-tune: a single backbone forward produces both the flow-matching loss and the RLT loss, and the token is language-conditioned (it reads the image-token hidden states of the full image+language prefix, so it can tell the per-task instructions apart).</p>
+    <div class="ds-facts"><div class="fact"><span class="fact-v mono">1 × 2048-d</span><span class="fact-l">RL token</span></div><div class="fact"><span class="fact-v mono">768 × 2048</span><span class="fact-l">Reconstructs</span></div><div class="fact"><span class="fact-v mono">4 + 4 layers</span><span class="fact-l">Encoder / decoder</span></div><div class="fact"><span class="fact-v mono">1024</span><span class="fact-l">Width</span></div><div class="fact"><span class="fact-v mono">≈ 1.12×</span><span class="fact-l">Step cost vs BC</span></div></div>
+    <p class="note">Two different tensors are both 2048-wide, which is easy to confuse: <b>z_rl</b> is the <b>[b, 2048]</b> bottleneck — one vector per frame — while the reconstruction target <b>z̄</b> is <b>[b, 768, 2048]</b>, the 768 image-token embeddings (3 cameras × 256 SigLIP tokens), each 2048-wide because that is PaliGemma's hidden width.</p>
+
+    <div class="ds-block">
+      <h3>Ablation switches <span class="dim mono">examples/robocasa/run_train_rlt.sh &lt;Task&gt; [flags]</span></h3>
+      <table class="mtable"><thead><tr><th>flag</th><th>default</th><th>effect</th></tr></thead>
+        <tbody><tr><td class="mono">--backbone-grad</td><td class="mono dim">off</td><td>Lets the RLT loss reshape the VLM backbone. Off = the token is a pure readout head and BC alone shapes the VLM (the paper&#x27;s setting). BC always flows into the backbone either way.</td></tr><tr><td class="mono">--no-target-sg</td><td class="mono dim">off</td><td>Stops stop-gradient&#x27;ing the reconstruction target. Collapse-prone — try --backbone-grad alone first.</td></tr><tr><td class="mono">--parallel-decoder</td><td class="mono dim">off</td><td>Decodes every token from z_rl alone, with no teacher forcing, so the bottleneck cannot be bypassed via neighbouring-token context. Deviates from the paper&#x27;s Eq. 2 — check rlt/bypass_ratio before reaching for it.</td></tr><tr><td class="mono">--loss-weight F</td><td class="mono dim">1.0</td><td>Weight of the RLT loss relative to the BC loss.</td></tr></tbody></table>
+      <p class="note">Each switch tags the experiment name (<span class="mono">_bbgrad</span>,
+        <span class="mono">_pardec</span>, …) so ablations never share a checkpoint directory.</p>
+    </div>
+
+    <div class="ds-block">
+      <h3>Reading the metrics <span class="dim mono">wandb · project acrft</span></h3>
+      <table class="mtable"><thead><tr><th>when</th><th>metric</th><th>what it is</th><th>how to read it</th></tr></thead>
+        <tbody><tr><td><span class="chip chip-step">every step</span></td><td class="mono">rlt/bc_loss</td><td>π0.5 flow-matching loss on its own.</td><td>Compare across runs instead of the top-level <span class='mono'>loss</span>, which for an RLT config is BC + λ·RLT and so is not comparable to a BC run. Persistently higher than the BC baseline ⇒ RLT is costing you policy quality.</td></tr><tr><td><span class="chip chip-step">every step</span></td><td class="mono">rlt/loss_recon</td><td>Autoregressive reconstruction MSE of z̄ (paper Eq. 2).</td><td>Judge it against the target's own variance: with mean|z̄| ≈ 0.5 a “predict the mean” baseline sits near 0.4, so it must fall well below that to mean anything. A very low value is NOT by itself proof the token is carrying information — check bypass_ratio.</td></tr><tr><td><span class="chip chip-step">every step</span></td><td class="mono">rlt/loss_proprio</td><td>Proprio reconstructed from z_rl.</td><td>Usually the first term to drop. Falling alone, while recon stalls, means the bottleneck is memorising proprio and discarding vision.</td></tr><tr><td><span class="chip chip-step">every step</span></td><td class="mono">rlt/z_batch_std</td><td>Spread of z_rl across the batch.</td><td>Must stay clearly above 0. → 0 is token collapse: every state maps to the same vector.</td></tr><tr><td><span class="chip chip-step">every step</span></td><td class="mono">rlt/target_abs_mean</td><td>Scale of the reconstruction target, mean|z̄|.</td><td>Mostly the yardstick for reading loss_recon. Sudden moves mean the backbone representation is shifting under the bottleneck.</td></tr><tr><td><span class="chip chip-monitor">every 1k</span></td><td class="mono">rlt/bypass_ratio</td><td>recon with ANOTHER sample&#x27;s z_rl ÷ recon with the true one.</td><td>The decoder is teacher-forced on the true previous embeddings, and adjacent SigLIP tokens are highly correlated, so it can score well while ignoring the token. ≈1 ⇒ the token is being bypassed and a low recon loss is an illusion. ≫1 ⇒ the token really carries what the decoder depends on.</td></tr><tr><td><span class="chip chip-monitor">every 1k</span></td><td class="mono">rlt/participation_ratio</td><td>Effective dimensionality (Σλ)²/Σλ² of the token covariance.</td><td>Should rise as the representation gets richer. Near 1 = collapsed onto a single direction. Capped by the batch size.</td></tr><tr><td><span class="chip chip-viz">every 10k</span></td><td class="mono">rlt/probe_progress_r2</td><td>Held-out-EPISODE linear probe, z_rl → task progress.</td><td>The headline representation-quality number: it is scored on episodes the probe never saw, so it measures whether progress is linearly decodable AND generalises — exactly what the downstream critic needs. Rising is what you want.</td></tr><tr><td><span class="chip chip-viz">every 10k</span></td><td class="mono">rlt/progress_spearman</td><td>Within-episode monotonicity of PC1 against time.</td><td>Fit-free companion. A curved trajectory legitimately lowers it, so a low value with a high probe R² is fine — trust the probe first.</td></tr><tr><td><span class="chip chip-viz">every 10k</span></td><td class="mono">rlt/embedding_hover</td><td>PCA scatter with the wrist view shown on hover.</td><td>Hover a point to see which scene that region of embedding space corresponds to. Healthy: smooth ordered paths; unhealthy: tangled blobs.</td></tr><tr><td><span class="chip chip-viz">every 10k</span></td><td class="mono">rlt/embedding_structure</td><td>Distance-to-final-token curves + a cosine-similarity matrix.</td><td>Projection-free, so it stays readable before PCA does. Curves falling monotonically ⇒ the token tracks progress. In the matrix, bright diagonal blocks only ⇒ it encodes WHICH episode; gradients inside blocks and bands across them ⇒ it encodes the task PHASE.</td></tr></tbody></table>
+    </div>
+
+    <div class="ds-block">
+      <h3>Patterns worth recognising</h3>
+      <ul class="combos"><li class="combo combo-good"><span class="combo-p mono">recon ↓ · participation ↑ · probe R² ↑</span><span class="combo-t">Learning a genuinely useful compression.</span></li><li class="combo combo-bad"><span class="combo-p mono">recon ↓ · bypass_ratio ≈ 1</span><span class="combo-t">The decoder is reconstructing from context and ignoring the token — the low loss is empty.</span></li><li class="combo combo-bad"><span class="combo-p mono">recon ↓ · participation flat · probe R² flat</span><span class="combo-t">Compressing into something easy to reconstruct but not useful.</span></li><li class="combo combo-bad"><span class="combo-p mono">z_batch_std → 0</span><span class="combo-t">Token collapse.</span></li><li class="combo combo-warn"><span class="combo-p mono">bc_loss above the BC baseline</span><span class="combo-t">RLT is trading away policy quality — lower --loss-weight.</span></li></ul>
+      <p class="note">Judge a run on <span class="mono">bc_loss</span> +
+        <span class="mono">probe_progress_r2</span>, not on <span class="mono">loss_recon</span>:
+        reconstruction improves whenever the decoder gets an easier job, which is not the same as the
+        token becoming useful.</p>
     </div>
   </section>
 

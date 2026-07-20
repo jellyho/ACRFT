@@ -22,9 +22,6 @@
 #     --no-backbone-grad       force the default off                          (BACKBONE_GRAD=0)
 #     --no-target-sg           do not stop-gradient the reconstruction target (NO_TARGET_SG=1)
 #                              (collapse-prone; try --backbone-grad alone first)
-#     --parallel-decoder       decode every token from z_rl alone, no teacher forcing, so the
-#                              bottleneck cannot be bypassed via neighbouring-token context.
-#                              Deviates from the paper's Eq. 2 — check rlt/bypass_ratio first.
 #     --loss-weight FLOAT      weight of the RLT loss vs the BC loss          (RLT_LOSS_WEIGHT=)
 #
 #   Monitoring:
@@ -72,7 +69,6 @@ while [ "$#" -gt 0 ]; do
     --backbone-grad)     BACKBONE_GRAD=1 ;;
     --no-backbone-grad)  BACKBONE_GRAD=0 ;;
     --no-target-sg)      NO_TARGET_SG=1 ;;
-    --parallel-decoder)  PARALLEL_DECODER=1 ;;
     --loss-weight)       RLT_LOSS_WEIGHT="$2"; shift ;;
     --monitor-interval)  MONITOR_INTERVAL="$2"; shift ;;
     --vis-interval)      VIS_INTERVAL="$2"; shift ;;
@@ -100,9 +96,6 @@ if [ "$BACKBONE_GRAD" = "1" ]; then
 fi
 if [ "$NO_TARGET_SG" = "1" ]; then
   RLT_FLAGS+=(--model.no-rlt-target-stop-gradient); VARIANT_TAG="${VARIANT_TAG}_notgtsg"
-fi
-if [ "${PARALLEL_DECODER:-0}" = "1" ]; then
-  RLT_FLAGS+=(--model.rlt-decoder-mode parallel); VARIANT_TAG="${VARIANT_TAG}_pardec"
 fi
 if [ -n "${RLT_LOSS_WEIGHT:-}" ]; then
   RLT_FLAGS+=(--model.rlt-loss-weight "$RLT_LOSS_WEIGHT"); VARIANT_TAG="${VARIANT_TAG}_w${RLT_LOSS_WEIGHT}"

@@ -85,6 +85,96 @@ DATASET = {
     ],
 }
 
+# --- RLT ("RL Token") stage: architecture, ablation switches, and how to read the metrics. ---
+# The RL token is a single compact vector per frame that a downstream RL critic consumes instead of
+# raw pixels. Trained jointly with the BC fine-tune, from one backbone forward.
+
+RLT = {
+    "blurb": (
+        "A small encoder–decoder bottleneck on top of π0.5 compresses the VLA's image-token "
+        "embeddings into ONE compact vector per frame (the “RL token”), which a downstream RL "
+        "critic consumes instead of pixels. Implements the representation stage of "
+        "RL Token (arXiv:2604.23073, Eq. 1–2). Here it is trained JOINTLY with the BC fine-tune: "
+        "a single backbone forward produces both the flow-matching loss and the RLT loss, and the "
+        "token is language-conditioned (it reads the image-token hidden states of the full "
+        "image+language prefix, so it can tell the per-task instructions apart)."
+    ),
+    "facts": [
+        ("RL token", "1 × 2048-d"),
+        ("Reconstructs", "768 × 2048"),
+        ("Encoder / decoder", "4 + 4 layers"),
+        ("Width", "1024"),
+        ("Step cost vs BC", "≈ 1.12×"),
+    ],
+    "shape_note": (
+        "Two different tensors are both 2048-wide, which is easy to confuse: <b>z_rl</b> is the "
+        "<b>[b, 2048]</b> bottleneck — one vector per frame — while the reconstruction target "
+        "<b>z̄</b> is <b>[b, 768, 2048]</b>, the 768 image-token embeddings (3 cameras × 256 SigLIP "
+        "tokens), each 2048-wide because that is PaliGemma's hidden width."
+    ),
+    "switches": [
+        ("--backbone-grad", "off",
+         "Lets the RLT loss reshape the VLM backbone. Off = the token is a pure readout head and BC "
+         "alone shapes the VLM (the paper's setting). BC always flows into the backbone either way."),
+        ("--no-target-sg", "off",
+         "Stops stop-gradient'ing the reconstruction target. Collapse-prone — try --backbone-grad alone first."),
+        ("--parallel-decoder", "off",
+         "Decodes every token from z_rl alone, with no teacher forcing, so the bottleneck cannot be "
+         "bypassed via neighbouring-token context. Deviates from the paper's Eq. 2 — check "
+         "rlt/bypass_ratio before reaching for it."),
+        ("--loss-weight F", "1.0", "Weight of the RLT loss relative to the BC loss."),
+    ],
+    "metrics": [
+        ("step", "rlt/bc_loss", "π0.5 flow-matching loss on its own.",
+         "Compare across runs instead of the top-level <span class='mono'>loss</span>, which for an "
+         "RLT config is BC + λ·RLT and so is not comparable to a BC run. Persistently higher than "
+         "the BC baseline ⇒ RLT is costing you policy quality."),
+        ("step", "rlt/loss_recon", "Autoregressive reconstruction MSE of z̄ (paper Eq. 2).",
+         "Judge it against the target's own variance: with mean|z̄| ≈ 0.5 a “predict the mean” "
+         "baseline sits near 0.4, so it must fall well below that to mean anything. A very low value "
+         "is NOT by itself proof the token is carrying information — check bypass_ratio."),
+        ("step", "rlt/loss_proprio", "Proprio reconstructed from z_rl.",
+         "Usually the first term to drop. Falling alone, while recon stalls, means the bottleneck is "
+         "memorising proprio and discarding vision."),
+        ("step", "rlt/z_batch_std", "Spread of z_rl across the batch.",
+         "Must stay clearly above 0. → 0 is token collapse: every state maps to the same vector."),
+        ("step", "rlt/target_abs_mean", "Scale of the reconstruction target, mean|z̄|.",
+         "Mostly the yardstick for reading loss_recon. Sudden moves mean the backbone representation "
+         "is shifting under the bottleneck."),
+        ("monitor", "rlt/bypass_ratio", "recon with ANOTHER sample's z_rl ÷ recon with the true one.",
+         "The decoder is teacher-forced on the true previous embeddings, and adjacent SigLIP tokens "
+         "are highly correlated, so it can score well while ignoring the token. ≈1 ⇒ the token is "
+         "being bypassed and a low recon loss is an illusion. ≫1 ⇒ the token really carries what the "
+         "decoder depends on."),
+        ("monitor", "rlt/participation_ratio", "Effective dimensionality (Σλ)²/Σλ² of the token covariance.",
+         "Should rise as the representation gets richer. Near 1 = collapsed onto a single direction. "
+         "Capped by the batch size."),
+        ("viz", "rlt/probe_progress_r2", "Held-out-EPISODE linear probe, z_rl → task progress.",
+         "The headline representation-quality number: it is scored on episodes the probe never saw, "
+         "so it measures whether progress is linearly decodable AND generalises — exactly what the "
+         "downstream critic needs. Rising is what you want."),
+        ("viz", "rlt/progress_spearman", "Within-episode monotonicity of PC1 against time.",
+         "Fit-free companion. A curved trajectory legitimately lowers it, so a low value with a high "
+         "probe R² is fine — trust the probe first."),
+        ("viz", "rlt/embedding_hover", "PCA scatter with the wrist view shown on hover.",
+         "Hover a point to see which scene that region of embedding space corresponds to. Healthy: "
+         "smooth ordered paths; unhealthy: tangled blobs."),
+        ("viz", "rlt/embedding_structure", "Distance-to-final-token curves + a cosine-similarity matrix.",
+         "Projection-free, so it stays readable before PCA does. Curves falling monotonically ⇒ the "
+         "token tracks progress. In the matrix, bright diagonal blocks only ⇒ it encodes WHICH "
+         "episode; gradients inside blocks and bands across them ⇒ it encodes the task PHASE."),
+    ],
+    "combos": [
+        ("recon ↓ · participation ↑ · probe R² ↑", "good", "Learning a genuinely useful compression."),
+        ("recon ↓ · bypass_ratio ≈ 1", "bad",
+         "The decoder is reconstructing from context and ignoring the token — the low loss is empty."),
+        ("recon ↓ · participation flat · probe R² flat", "bad",
+         "Compressing into something easy to reconstruct but not useful."),
+        ("z_batch_std → 0", "bad", "Token collapse."),
+        ("bc_loss above the BC baseline", "warn", "RLT is trading away policy quality — lower --loss-weight."),
+    ],
+}
+
 # --- Task metadata: (name, category, horizon, description). ---------------------------------
 # Descriptions marked from RoboCasa's canonical task language where available, else concise.
 
@@ -278,6 +368,26 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
     n_single = sum(1 for name, *_ in TASKS if _instruction_count(name) <= 1)
     n_multi = len(TASKS) - n_single
 
+    rlt_facts = "".join(
+        f'<div class="fact"><span class="fact-v mono">{_esc(v)}</span><span class="fact-l">{_esc(k)}</span></div>'
+        for k, v in RLT["facts"]
+    )
+    rlt_switches = "".join(
+        f'<tr><td class="mono">{_esc(flag)}</td><td class="mono dim">{_esc(default)}</td><td>{_esc(effect)}</td></tr>'
+        for flag, default, effect in RLT["switches"]
+    )
+    _GROUP = {"step": "every step", "monitor": "every 1k", "viz": "every 10k"}
+    rlt_metrics = "".join(
+        f'<tr><td><span class="chip chip-{g}">{_GROUP[g]}</span></td>'
+        f'<td class="mono">{_esc(name)}</td><td>{_esc(what)}</td><td>{read}</td></tr>'
+        for g, name, what, read in RLT["metrics"]
+    )
+    rlt_combos = "".join(
+        f'<li class="combo combo-{kind}"><span class="combo-p mono">{_esc(pattern)}</span>'
+        f'<span class="combo-t">{_esc(text)}</span></li>'
+        for pattern, kind, text in RLT["combos"]
+    )
+
     return _TEMPLATE.format(
         title=_esc(PROJECT["title"]),
         tagline=_esc(PROJECT["tagline"]),
@@ -288,6 +398,12 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
         ds_cams=ds_cams,
         ds_state=ds_state,
         ds_action=ds_action,
+        rlt_blurb=RLT["blurb"],
+        rlt_shape_note=RLT["shape_note"],
+        rlt_facts=rlt_facts,
+        rlt_switches=rlt_switches,
+        rlt_metrics=rlt_metrics,
+        rlt_combos=rlt_combos,
         cards=cards_html,
         n_total=len(TASKS),
         n_atomic=n_atomic,
@@ -301,6 +417,26 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
 
 
 _CSS = """
+.lede{max-width:78ch;margin:0 0 14px;color:var(--muted);line-height:1.62}
+.note{max-width:88ch;margin:10px 0 0;font-size:12.5px;color:var(--muted);line-height:1.6}
+.mtable{width:100%;border-collapse:collapse;margin-top:4px;font-size:13px}
+.mtable th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);padding:0 10px 7px 0;border-bottom:1px solid var(--hairline)}
+.mtable td{padding:9px 10px 9px 0;border-bottom:1px solid var(--hairline);vertical-align:top;line-height:1.55}
+.mtable tr:last-child td{border-bottom:0}
+.mtable td:nth-child(2){white-space:nowrap}
+.chip-step{background:var(--teal-bg);color:var(--teal)}
+.chip-monitor{background:var(--amber-bg);color:var(--amber)}
+.chip-viz{background:var(--surface2);color:var(--muted)}
+.combos{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:8px}
+.combo{display:grid;grid-template-columns:minmax(210px,auto) 1fr;gap:12px;align-items:baseline;
+  padding:9px 12px;border-radius:8px;background:var(--surface2);border-left:3px solid var(--hairline)}
+.combo-good{border-left-color:var(--green)}
+.combo-bad{border-left-color:#c0392b}
+.combo-warn{border-left-color:var(--amber)}
+.combo-p{font-size:12.5px;color:var(--ink)}
+.combo-t{font-size:13px;color:var(--muted);line-height:1.55}
+@media(max-width:680px){.combo{grid-template-columns:1fr}}
 :root{
   --bg:#f4f6f8; --surface:#ffffff; --surface2:#eef1f5; --ink:#141a22; --muted:#5c6672;
   --hairline:#dde3ea; --amber:#c06914; --amber-bg:#f6ead9; --teal:#0f7d86; --teal-bg:#dff0f1;
@@ -531,6 +667,38 @@ _TEMPLATE = """<style>{css}</style>
           <table class="schema"><tbody>{ds_action}</tbody></table>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>RLT · the RL token</h2>
+      <span class="count">compact state representation, trained alongside the BC fine-tune</span></div>
+    <div class="rule"></div>
+    <p class="lede">{rlt_blurb}</p>
+    <div class="ds-facts">{rlt_facts}</div>
+    <p class="note">{rlt_shape_note}</p>
+
+    <div class="ds-block">
+      <h3>Ablation switches <span class="dim mono">examples/robocasa/run_train_rlt.sh &lt;Task&gt; [flags]</span></h3>
+      <table class="mtable"><thead><tr><th>flag</th><th>default</th><th>effect</th></tr></thead>
+        <tbody>{rlt_switches}</tbody></table>
+      <p class="note">Each switch tags the experiment name (<span class="mono">_bbgrad</span>,
+        <span class="mono">_pardec</span>, …) so ablations never share a checkpoint directory.</p>
+    </div>
+
+    <div class="ds-block">
+      <h3>Reading the metrics <span class="dim mono">wandb · project acrft</span></h3>
+      <table class="mtable"><thead><tr><th>when</th><th>metric</th><th>what it is</th><th>how to read it</th></tr></thead>
+        <tbody>{rlt_metrics}</tbody></table>
+    </div>
+
+    <div class="ds-block">
+      <h3>Patterns worth recognising</h3>
+      <ul class="combos">{rlt_combos}</ul>
+      <p class="note">Judge a run on <span class="mono">bc_loss</span> +
+        <span class="mono">probe_progress_r2</span>, not on <span class="mono">loss_recon</span>:
+        reconstruction improves whenever the decoder gets an easier job, which is not the same as the
+        token becoming useful.</p>
     </div>
   </section>
 
