@@ -94,9 +94,7 @@ class ARQCritic(nn.Module):
         causal = jnp.tril(jnp.ones((1 + mh, 1 + mh), dtype=bool))
         for _ in range(self.num_layers):
             h = nn.LayerNorm()(x)
-            x = x + nn.MultiHeadDotProductAttention(num_heads=self.num_heads, qkv_features=d)(
-                h, h, mask=causal
-            )
+            x = x + nn.MultiHeadDotProductAttention(num_heads=self.num_heads, qkv_features=d)(h, h, mask=causal)
             h = nn.LayerNorm()(x)
             x = x + nn.Dense(d)(nn.gelu(nn.Dense(self.mlp_dim)(h)))
         x = nn.LayerNorm()(x)[..., 1:, :]  # drop the state position: [..., mh, d]

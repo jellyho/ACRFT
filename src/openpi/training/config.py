@@ -654,9 +654,7 @@ class TrainConfig:
 # Only the RLT configs point here. The BC configs keep asset_id=<repo_id>: serving reads norm stats
 # from the checkpoint's own assets dir keyed by asset_id, so changing it would break the already
 # trained pi05_robocasa_<Task> checkpoints.
-_ROBOCASA_SHARED_ASSETS = AssetsConfig(
-    assets_dir="./examples/robocasa/norm_stats", asset_id="robocasa365_shared"
-)
+_ROBOCASA_SHARED_ASSETS = AssetsConfig(assets_dir="./examples/robocasa/norm_stats", asset_id="robocasa365_shared")
 
 _CONFIGS = [
     #
@@ -1137,6 +1135,8 @@ _CONFIGS = [
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")
+
+
 def _robocasa_task_config(task: str) -> TrainConfig:
     """A pi05 fine-tune config for a single RoboCasa 365 target task (same recipe as pi05_robocasa).
 
@@ -1164,18 +1164,56 @@ def _robocasa_task_config(task: str) -> TrainConfig:
 
 # The 50 published RoboCasa 365 target tasks (atomic + composite).
 _ROBOCASA_TARGET_TASKS = (
-    "ArrangeBreadBasket", "ArrangeTea", "BreadSelection", "CategorizeCondiments", "CloseBlenderLid",
-    "CloseFridge", "CloseToasterOvenDoor", "CoffeeSetupMug", "CuttingToolSelection", "DeliverStraw",
-    "GarnishPancake", "GatherTableware", "GetToastedBread", "HeatKebabSandwich", "KettleBoiling",
-    "LoadDishwasher", "MakeIceLemonade", "NavigateKitchen", "OpenCabinet", "OpenDrawer",
-    "OpenStandMixerHead", "PackIdenticalLunches", "PanTransfer", "PickPlaceCounterToCabinet",
-    "PickPlaceCounterToStove", "PickPlaceDrawerToCounter", "PickPlaceSinkToCounter",
-    "PickPlaceToasterToCounter", "PortionHotDogs", "PreSoakPan", "PrepareCoffee",
-    "RecycleBottlesByType", "RinseSinkBasin", "ScrubCuttingBoard", "SearingMeat",
-    "SeparateFreezerRack", "SetUpCuttingStation", "SlideDishwasherRack", "StackBowlsCabinet",
-    "SteamInMicrowave", "StirVegetables", "StoreLeftoversInBowl", "TurnOffStove",
-    "TurnOnElectricKettle", "TurnOnMicrowave", "TurnOnSinkFaucet", "WaffleReheat",
-    "WashFruitColander", "WashLettuce", "WeighIngredients",
+    "ArrangeBreadBasket",
+    "ArrangeTea",
+    "BreadSelection",
+    "CategorizeCondiments",
+    "CloseBlenderLid",
+    "CloseFridge",
+    "CloseToasterOvenDoor",
+    "CoffeeSetupMug",
+    "CuttingToolSelection",
+    "DeliverStraw",
+    "GarnishPancake",
+    "GatherTableware",
+    "GetToastedBread",
+    "HeatKebabSandwich",
+    "KettleBoiling",
+    "LoadDishwasher",
+    "MakeIceLemonade",
+    "NavigateKitchen",
+    "OpenCabinet",
+    "OpenDrawer",
+    "OpenStandMixerHead",
+    "PackIdenticalLunches",
+    "PanTransfer",
+    "PickPlaceCounterToCabinet",
+    "PickPlaceCounterToStove",
+    "PickPlaceDrawerToCounter",
+    "PickPlaceSinkToCounter",
+    "PickPlaceToasterToCounter",
+    "PortionHotDogs",
+    "PreSoakPan",
+    "PrepareCoffee",
+    "RecycleBottlesByType",
+    "RinseSinkBasin",
+    "ScrubCuttingBoard",
+    "SearingMeat",
+    "SeparateFreezerRack",
+    "SetUpCuttingStation",
+    "SlideDishwasherRack",
+    "StackBowlsCabinet",
+    "SteamInMicrowave",
+    "StirVegetables",
+    "StoreLeftoversInBowl",
+    "TurnOffStove",
+    "TurnOnElectricKettle",
+    "TurnOnMicrowave",
+    "TurnOnSinkFaucet",
+    "WaffleReheat",
+    "WashFruitColander",
+    "WashLettuce",
+    "WeighIngredients",
 )
 _CONFIGS.extend(_robocasa_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
 

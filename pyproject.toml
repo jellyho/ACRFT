@@ -136,6 +136,10 @@ ignore = [
     "PD008",  # Lots of false positives.
     "ISC001", # Disabling to support ruff format.
     "LOG015", # Use logger.info.
+    "N806",   # Capitalised locals (M, N, T, ...) are standard for matrix/tensor dims in ML code.
+    "RUF001", # We use unicode math (≈, ≫, →, ...) in comments/docstrings/wandb descriptions.
+    "RUF002", # Same, in docstrings.
+    "SLF001", # We deliberately call framework internals (e.g. env._check_success()).
 ]
 unfixable = [
     "B905", # Fix defaults to strict=False, which is not what we want.

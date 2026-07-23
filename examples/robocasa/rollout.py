@@ -70,8 +70,17 @@ def obs_to_element(obs: dict, prompt: str) -> dict:
     }
 
 
-def run_trials(env, policy_fn, *, task: str, num_trials: int, seed: int = 0, replan_steps: int = 5,
-               max_steps: int | None = None, on_trial=None) -> dict:
+def run_trials(
+    env,
+    policy_fn,
+    *,
+    task: str,
+    num_trials: int,
+    seed: int = 0,
+    replan_steps: int = 5,
+    max_steps: int | None = None,
+    on_trial=None,
+) -> dict:
     """Roll out ``policy_fn`` for ``num_trials`` and return {successes, num_trials, success_rate, trials}.
 
     ``policy_fn(element) -> action_chunk`` (np array [chunk, 12], raw LeRobot action space).
@@ -91,7 +100,7 @@ def run_trials(env, policy_fn, *, task: str, num_trials: int, seed: int = 0, rep
             for action in chunk[:replan_steps]:
                 obs, _, _, _ = env.step(lerobot_action_to_env(np.asarray(action)))
                 step += 1
-                if env._check_success():  # noqa: SLF001 - robosuite's success hook
+                if env._check_success():
                     success = True
                     break
                 if step >= max_steps:

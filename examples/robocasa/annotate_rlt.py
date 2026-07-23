@@ -136,7 +136,7 @@ def main() -> None:
     frame_of = np.zeros(meta.total_frames, dtype=np.int32)
     mc_all = np.zeros(meta.total_frames, dtype=np.float32)
     done_all = np.zeros(meta.total_frames, dtype=np.int8)
-    for e, (a, b) in enumerate(zip(lo, hi)):
+    for e, (a, b) in enumerate(zip(lo, hi, strict=True)):
         ep_of[a:b] = e
         frame_of[a:b] = np.arange(b - a)
         done_all[b - 1] = 1
@@ -188,8 +188,14 @@ def main() -> None:
     act_mm = _mm("base_action", (n_keep, args.num_samples, H, raw_dim))
     scalars = {
         k: _mm(k, (n_keep,), dt)
-        for k, dt in [("reward", np.float32), ("mc_return", np.float32), ("progress", np.float32),
-                      ("episode_index", np.int32), ("frame_index", np.int32), ("done", np.int8)]
+        for k, dt in [
+            ("reward", np.float32),
+            ("mc_return", np.float32),
+            ("progress", np.float32),
+            ("episode_index", np.int32),
+            ("frame_index", np.int32),
+            ("done", np.int8),
+        ]
     }
     done_path = args.out / "_progress.json"
     start = json.loads(done_path.read_text())["done"] if (args.resume and done_path.exists()) else 0

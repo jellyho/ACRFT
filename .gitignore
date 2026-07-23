@@ -170,3 +170,7 @@ cython_debug/
 #.idea/
 
 .scratch/
+
+# NFS temp files
+.nfs*
+**/.nfs*

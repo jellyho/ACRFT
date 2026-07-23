@@ -91,7 +91,7 @@ def compute_progress_labels(repo_id: str, *, mode: str = "per_episode", use_cach
 
     onsets = np.empty(len(lo), dtype=np.int32)
     n_no_success = 0
-    for i, (a, b) in enumerate(zip(lo, hi)):
+    for i, (a, b) in enumerate(zip(lo, hi, strict=True)):
         fired = np.flatnonzero(reward[a:b])
         if len(fired):
             onsets[i] = int(fired[0])

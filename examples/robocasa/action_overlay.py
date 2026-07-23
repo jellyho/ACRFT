@@ -76,8 +76,15 @@ def _adaptive_scale(chunk, target_len: float) -> float:
     return target_len / max(raw_len, 1e-6)
 
 
-def draw_overlay(frame: np.ndarray, projector: CameraProjector, ee_world, base_quat, candidate_chunks,
-                 executed_idx: int = 0, target_len: float = 0.25) -> np.ndarray:
+def draw_overlay(
+    frame: np.ndarray,
+    projector: CameraProjector,
+    ee_world,
+    base_quat,
+    candidate_chunks,
+    executed_idx: int = 0,
+    target_len: float = 0.25,
+) -> np.ndarray:
     """Draw the N predicted EE paths on ``frame`` (uint8 HxWx3), anchored at ``ee_world``.
 
     Each candidate is a translucent line ending in a dot (so the spread reads even when the lines are
@@ -85,7 +92,8 @@ def draw_overlay(frame: np.ndarray, projector: CameraProjector, ee_world, base_q
     chunk so its path spans ~``target_len`` world metres (see module docstring); all candidates share
     it, so their relative spread is faithful while absolute magnitude is not to scale.
     """
-    from PIL import Image, ImageDraw
+    from PIL import Image
+    from PIL import ImageDraw
 
     scale = _adaptive_scale(candidate_chunks[executed_idx], target_len)
     base = Image.fromarray(np.ascontiguousarray(frame)).convert("RGBA")

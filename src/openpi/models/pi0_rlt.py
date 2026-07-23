@@ -48,12 +48,13 @@ import jax
 import jax.numpy as jnp
 from typing_extensions import override
 
-import openpi.models.gemma as _gemma
 from openpi.models import model as _model
 from openpi.models import pi0_config
-from openpi.models.pi0 import Pi0, make_attn_mask, posemb_sincos
+import openpi.models.gemma as _gemma
+from openpi.models.pi0 import Pi0
+from openpi.models.pi0 import make_attn_mask
+from openpi.models.pi0 import posemb_sincos
 from openpi.shared import array_typing as at
-
 
 # ---------------------------------------------------------------------------
 # Small standalone transformer blocks (separate from the Gemma backbone)
@@ -92,8 +93,7 @@ class _Block(nnx.Module):
     def __call__(self, x, mask):
         # mask: bool, broadcastable to [b, num_heads, q, kv]; True = attend.
         x = x + self.attn(self.norm1(x), mask=mask)
-        x = x + self.mlp(self.norm2(x))
-        return x
+        return x + self.mlp(self.norm2(x))
 
 
 # ---------------------------------------------------------------------------

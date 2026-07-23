@@ -16,8 +16,8 @@ with `gen_dashboard.py --mode site` to build a page that plays them.
 
 import argparse
 import glob
-import subprocess
 from pathlib import Path
+import subprocess
 
 import pyarrow.parquet as pq
 
@@ -68,9 +68,12 @@ def main() -> None:
     ap.add_argument("--output-dir", type=Path, default=Path("/data5/jellyho/robocasa365"))
     ap.add_argument("--only", type=str, nargs="+", default=None, help="Only these task names.")
     ap.add_argument("--overwrite", action="store_true", help="Re-extract even if outputs exist.")
-    ap.add_argument("--instruction-counts", action="store_true",
-                    help="Instead of extracting media, scan each task's distinct language instructions "
-                         "and write assets/instruction_counts.json (used by the dashboard).")
+    ap.add_argument(
+        "--instruction-counts",
+        action="store_true",
+        help="Instead of extracting media, scan each task's distinct language instructions "
+        "and write assets/instruction_counts.json (used by the dashboard).",
+    )
     args = ap.parse_args()
 
     _HERE.joinpath("assets").mkdir(parents=True, exist_ok=True)
@@ -98,21 +101,57 @@ def main() -> None:
 
         out_mp4 = videos_dir / f"{task}.mp4"
         if args.overwrite or not out_mp4.exists():
-            ok = run([
-                "ffmpeg", "-y", "-loglevel", "error", "-ss", f"{frm}", "-t", f"{dur}",
-                "-i", str(video), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-                "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out_mp4),
-            ])
+            ok = run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{frm}",
+                    "-t",
+                    f"{dur}",
+                    "-i",
+                    str(video),
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "28",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(out_mp4),
+                ]
+            )
             n_vid += ok
             print(f"[{task}] video {'ok' if ok else 'FAILED'} ({dur:.1f}s)")
 
         out_jpg = assets_dir / f"{task}.jpg"
         if args.overwrite or not out_jpg.exists():
             # Poster from ~35% into the episode (usually mid-manipulation).
-            ok = run([
-                "ffmpeg", "-y", "-loglevel", "error", "-ss", f"{frm + 0.35 * dur}",
-                "-i", str(video), "-frames:v", "1", "-vf", "scale=400:-1", "-q:v", "4", str(out_jpg),
-            ])
+            ok = run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{frm + 0.35 * dur}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=400:-1",
+                    "-q:v",
+                    "4",
+                    str(out_jpg),
+                ]
+            )
             n_img += ok
 
     print(f"Done. {n_vid} videos, {n_img} posters -> {videos_dir} , {assets_dir}")

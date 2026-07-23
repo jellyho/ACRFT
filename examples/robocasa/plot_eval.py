@@ -1,16 +1,16 @@
 """Plot the checkpoint-sweep success rates written by run_eval.sh (summary.csv).
 
-    uv run examples/robocasa/plot_eval.py --task PrepareCoffee
-    uv run examples/robocasa/plot_eval.py --summary eval/.../summary.csv --out /tmp/eval.png
+uv run examples/robocasa/plot_eval.py --task PrepareCoffee
+uv run examples/robocasa/plot_eval.py --summary eval/.../summary.csv --out /tmp/eval.png
 """
 
 import argparse
 import csv
 from pathlib import Path
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,27 +51,43 @@ def main() -> None:
     ax.plot(steps, rates, "-o", color=accent, lw=2, ms=6, mfc="white", mec=accent, zorder=3)
     # highlight the best checkpoint
     ax.scatter([steps[best]], [rates[best]], s=140, facecolor=accent, edgecolor="white", zorder=4, lw=1.5)
-    ax.annotate(f"best: {rates[best]:.0f}% @ {steps[best]:,}",
-                (steps[best], rates[best]), textcoords="offset points", xytext=(0, 12),
-                ha="center", fontsize=9, color=ink, weight="bold")
-    for x, y in zip(steps, rates):
-        ax.annotate(f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, -14),
-                    ha="center", fontsize=7.5, color=muted)
+    ax.annotate(
+        f"best: {rates[best]:.0f}% @ {steps[best]:,}",
+        (steps[best], rates[best]),
+        textcoords="offset points",
+        xytext=(0, 12),
+        ha="center",
+        fontsize=9,
+        color=ink,
+        weight="bold",
+    )
+    for x, y in zip(steps, rates, strict=True):
+        ax.annotate(
+            f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, -14), ha="center", fontsize=7.5, color=muted
+        )
 
     ax.set_title(f"RoboCasa · {task} — success rate vs checkpoint", fontsize=12, weight="bold", color=ink, pad=12)
     ax.set_xlabel("training step", fontsize=10, color=muted)
     ax.set_ylabel("success rate (%)", fontsize=10, color=muted)
     ax.set_ylim(0, max(100, max(rates) + 12))
-    ax.grid(True, color=grid, lw=1)
+    ax.grid(visible=True, color=grid, lw=1)
     ax.set_axisbelow(True)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
     for s in ("left", "bottom"):
         ax.spines[s].set_color(grid)
     ax.tick_params(colors=muted, labelsize=9)
-    n = int(sum(1 for _ in open(summary)) - 1)
-    ax.text(0.99, -0.16, f"{n} checkpoints · 50 trials each · fixed seeds", transform=ax.transAxes,
-            ha="right", va="top", fontsize=8, color=muted)
+    n = len(Path(summary).read_text().splitlines()) - 1
+    ax.text(
+        0.99,
+        -0.16,
+        f"{n} checkpoints · 50 trials each · fixed seeds",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8,
+        color=muted,
+    )
     fig.tight_layout()
 
     out = args.out or summary.with_suffix(".png")
