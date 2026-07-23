@@ -12,6 +12,8 @@
 #
 # Env overrides:
 #   EXP_SUFFIX=run     exp name suffix -> checkpoints/pi05_robocasa_<Task>/<Task>_<EXP_SUFFIX>
+#   CONFIG=...         override the train-config name (e.g. pi05_robocasa_<Task>_rlt)
+#   EXP=...            override the experiment dir name outright
 #   NUM_TRIALS=50      rollouts per checkpoint
 #   NUM_VIDEOS=5       sample videos saved per checkpoint
 #   SEED=0             base seed; trial i uses seed+i, fixed across checkpoints so every
@@ -38,8 +40,11 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"   # headless offscreen rendering for the si
 # Persistent JAX compile cache so only the first checkpoint's server pays the full compile cost.
 export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$REPO_ROOT/.jax_cache}"
 EVAL_PYTHON="${EVAL_PYTHON:-$REPO_ROOT/.venv/bin/python}"
-CONFIG="pi05_robocasa_${TASK}"
-EXP="${TASK}_${EXP_SUFFIX}"
+# CONFIG/EXP default to the plain BC run but can be overridden, which is how the RLT variants get
+# evaluated: they live under a different config name and several exp dirs share it.
+#   CONFIG=pi05_robocasa_PrepareCoffee_rlt EXP=PrepareCoffee_rlt_bbgrad run_eval.sh PrepareCoffee
+CONFIG="${CONFIG:-pi05_robocasa_${TASK}}"
+EXP="${EXP:-${TASK}_${EXP_SUFFIX}}"
 CKPT_BASE="$REPO_ROOT/checkpoints/$CONFIG/$EXP"
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/eval/$CONFIG/$EXP}"
 

@@ -28,6 +28,7 @@ import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.polaris_config as polaris_config
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
+import openpi.training.robocasa_progress as robocasa_progress
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
@@ -369,23 +370,29 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
     # no delta conversion is applied by default. Set True only if your data uses absolute actions.
     extra_delta_transform: bool = False
 
+    # Inject a scalar `progress` label (time-to-success, from the sparse reward) into every sample.
+    # Needed by Pi0RLT's progress objective; harmless but wasted work otherwise.
+    include_progress: bool = False
+
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         # Remap the LeRobot dataset keys onto the ``observation/*`` keys read by RoboCasaInputs.
-        repack_transform = _transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(
-                    {
-                        "observation/image": "observation.images.robot0_agentview_left",
-                        "observation/wrist_image": "observation.images.robot0_eye_in_hand",
-                        "observation/image_right": "observation.images.robot0_agentview_right",
-                        "observation/state": "observation.state",
-                        "actions": "action",
-                        "prompt": "prompt",
-                    }
-                )
-            ]
-        )
+        # RepackTransform DROPS anything not listed here, so `progress` has to be mapped explicitly
+        # (and produced by AddProgress, which runs first, while the raw LeRobot keys still exist).
+        structure = {
+            "observation/image": "observation.images.robot0_agentview_left",
+            "observation/wrist_image": "observation.images.robot0_eye_in_hand",
+            "observation/image_right": "observation.images.robot0_agentview_right",
+            "observation/state": "observation.state",
+            "actions": "action",
+            "prompt": "prompt",
+        }
+        repack_inputs = []
+        if self.include_progress:
+            structure["progress"] = "progress"
+            repack_inputs.append(robocasa_progress.AddProgress(robocasa_progress.compute_progress_labels(self.repo_id)))
+        repack_inputs.append(_transforms.RepackTransform(structure))
+        repack_transform = _transforms.Group(inputs=repack_inputs)
 
         data_transforms = _transforms.Group(
             inputs=[robocasa_policy.RoboCasaInputs(model_type=model_config.model_type)],
@@ -526,6 +533,8 @@ class TrainConfig:
     name: tyro.conf.Suppress[str]
     # Project name. Used as the wandb project for every run unless overridden with --project-name.
     project_name: str = "acrft"
+    # Optional wandb entity (team/user). None -> your default wandb entity.
+    wandb_entity: str | None = None
     # Experiment name. Will be used to name the metadata and checkpoint directories.
     exp_name: str = tyro.MISSING
 
@@ -581,6 +590,11 @@ class TrainConfig:
     # How often (in steps) to log the RLT embedding visualization (PCA trajectory paths + held-out
     # linear-probe R^2, host-side). 0 disables it.
     rlt_vis_interval: int = 0
+    # How often (in steps) to run an in-process RoboCasa sim eval of BOTH the full VLA policy and the
+    # latent BC-probe head (Pi0RLT with rlt_bc_probe=True). Headless, no video. 0 disables it.
+    rlt_probe_eval_interval: int = 0
+    # Rollouts per policy per probe eval.
+    rlt_probe_eval_trials: int = 20
     # Number of episodes drawn as trajectory paths in the RLT embedding visualization. Also sets the
     # held-out-episode probe split (half fit / half scored), so keep it >= 4.
     rlt_vis_num_trajectories: int = 8
@@ -895,6 +909,7 @@ _CONFIGS = [
             # Repo-checked-in shared stats (see _ROBOCASA_SHARED_ASSETS): no recomputation, and no
             # dataset download needed just to normalize.
             assets=_ROBOCASA_SHARED_ASSETS,
+            include_progress=True,
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
@@ -1179,11 +1194,14 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
     return TrainConfig(
         name=f"pi05_robocasa_{task}_rlt",
         model=pi0_rlt.Pi0RLTConfig(
-            pi05=True, action_horizon=10, discrete_state_input=False, rlt_backbone_gradient=False
+            pi05=True, action_horizon=10, discrete_state_input=False, rlt_backbone_gradient=False, rlt_bc_probe=True
         ),
         data=LeRobotRoboCasaDataConfig(
             repo_id=f"jellyho/robocasa365-{task}",
             assets=_ROBOCASA_SHARED_ASSETS,
+            # Cheap, and lets --model.rlt-objective switch to a progress objective without a
+            # second data config.
+            include_progress=True,
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
@@ -1199,6 +1217,8 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
         action_dist_interval=1_000,
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
+        rlt_probe_eval_interval=10_000,
+        rlt_probe_eval_trials=20,
     )
 
 

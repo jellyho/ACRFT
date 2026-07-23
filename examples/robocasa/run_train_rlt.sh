@@ -25,6 +25,16 @@
 #     --parallel-decoder       decode every token from z_rl alone, no teacher forcing, so the
 #                              bottleneck cannot be bypassed via neighbouring-token context.
 #                              Deviates from the paper's Eq. 2 — check rlt/bypass_ratio first.
+#     --no-proprio             build the token from image+language only: no proprio token into the
+#                              encoder and no proprio reconstruction term. This is the paper's own
+#                              setup, where the critic takes (z_rl, s^p) and gets proprio directly,
+#                              so whatever consumes z_rl must supply proprio itself. (NO_PROPRIO=1)
+#     --objective STR          reconstruction | progress | reconstruction+progress (RLT_OBJECTIVE=)
+#                              anything with "progress" regresses time-to-success, derived from the
+#                              sparse success reward (see training/robocasa_progress.py)
+#     --scalar-head            progress head = MSE regression instead of the default HL-Gauss
+#                              histogram + cross-entropy                     (SCALAR_HEAD=1)
+#     --progress-bins INT      histogram bins for the distributional head    (PROGRESS_BINS=)
 #     --loss-weight FLOAT      weight of the RLT loss vs the BC loss          (RLT_LOSS_WEIGHT=)
 #
 #   Monitoring:
@@ -33,6 +43,8 @@
 #
 #   Run control:
 #     --exp-suffix STR         exp name is "<Task>_<suffix>" (default: rlt)   (EXP_SUFFIX=)
+#     --project STR            wandb project name (default: acrft)            (PROJECT=)
+#     --entity STR             wandb entity / team (default: your wandb user)  (ENTITY=)
 #     --resume                 resume from the last checkpoint                (RESUME=1)
 #     --overwrite              wipe the checkpoint dir and start fresh        (OVERWRITE=1)
 #     --skip-norm-stats        never compute norm stats                       (SKIP_NORM_STATS=1)
@@ -73,10 +85,16 @@ while [ "$#" -gt 0 ]; do
     --no-backbone-grad)  BACKBONE_GRAD=0 ;;
     --no-target-sg)      NO_TARGET_SG=1 ;;
     --parallel-decoder)  PARALLEL_DECODER=1 ;;
+    --no-proprio)        NO_PROPRIO=1 ;;
+    --objective)         RLT_OBJECTIVE="$2"; shift ;;
+    --scalar-head)       SCALAR_HEAD=1 ;;
+    --progress-bins)     PROGRESS_BINS="$2"; shift ;;
     --loss-weight)       RLT_LOSS_WEIGHT="$2"; shift ;;
     --monitor-interval)  MONITOR_INTERVAL="$2"; shift ;;
     --vis-interval)      VIS_INTERVAL="$2"; shift ;;
     --exp-suffix)        EXP_SUFFIX="$2"; shift ;;
+    --project)           PROJECT="$2"; shift ;;
+    --entity)            ENTITY="$2"; shift ;;
     --resume)            RESUME=1 ;;
     --overwrite)         OVERWRITE=1 ;;
     --skip-norm-stats)   SKIP_NORM_STATS=1 ;;
@@ -104,9 +122,31 @@ fi
 if [ "${PARALLEL_DECODER:-0}" = "1" ]; then
   RLT_FLAGS+=(--model.rlt-decoder-mode parallel); VARIANT_TAG="${VARIANT_TAG}_pardec"
 fi
+if [ "${NO_PROPRIO:-0}" = "1" ]; then
+  RLT_FLAGS+=(--model.no-rlt-include-proprio); VARIANT_TAG="${VARIANT_TAG}_noprop"
+fi
+if [ -n "${RLT_OBJECTIVE:-}" ]; then
+  # Explicit tags: truncating the objective string would collide "reconstruction" with
+  # "reconstruction+progress" and silently point two ablations at the same checkpoint dir.
+  case "$RLT_OBJECTIVE" in
+    reconstruction)          OBJ_TAG="_recon" ;;
+    progress)                OBJ_TAG="_prog" ;;
+    reconstruction+progress) OBJ_TAG="_reconprog" ;;
+    *) echo "Unknown --objective: $RLT_OBJECTIVE (reconstruction | progress | reconstruction+progress)"; exit 1 ;;
+  esac
+  RLT_FLAGS+=(--model.rlt-objective "$RLT_OBJECTIVE"); VARIANT_TAG="${VARIANT_TAG}${OBJ_TAG}"
+fi
+if [ "${SCALAR_HEAD:-0}" = "1" ]; then
+  RLT_FLAGS+=(--model.rlt-progress-head regression); VARIANT_TAG="${VARIANT_TAG}_scalar"
+fi
+if [ -n "${PROGRESS_BINS:-}" ]; then
+  RLT_FLAGS+=(--model.rlt-progress-bins "$PROGRESS_BINS")
+fi
 if [ -n "${RLT_LOSS_WEIGHT:-}" ]; then
   RLT_FLAGS+=(--model.rlt-loss-weight "$RLT_LOSS_WEIGHT"); VARIANT_TAG="${VARIANT_TAG}_w${RLT_LOSS_WEIGHT}"
 fi
+[ -n "${PROJECT:robocasa-pi05}" ] && RLT_FLAGS+=(--project-name "$PROJECT")
+[ -n "${ENTITY:RSS-PFT_RLLAB}" ] && RLT_FLAGS+=(--wandb-entity "$ENTITY")
 [ -n "${MONITOR_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-monitor-interval "$MONITOR_INTERVAL")
 [ -n "${VIS_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-vis-interval "$VIS_INTERVAL")
 [ -n "$VARIANT_TAG" ] && echo "RLT variant: ${RLT_FLAGS[*]}   (exp-name tag: $VARIANT_TAG)"

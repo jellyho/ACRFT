@@ -2,6 +2,7 @@ import dataclasses
 import functools
 import logging
 import platform
+import time
 from typing import Any
 
 import etils.epath as epath
@@ -26,6 +27,7 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+import openpi.transforms as _transforms
 
 
 def init_logging():
@@ -57,12 +59,13 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        wandb.init(id=run_id, resume="must", project=config.project_name, entity=config.wandb_entity)
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
+            entity=config.wandb_entity,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
@@ -189,6 +192,10 @@ def train_step(
     )
     info = {
         "loss": loss,
+        # Emitted by every config so BC and RLT runs are directly comparable on one chart: for a
+        # plain BC model this is the whole loss, while for Pi0RLT the top-level `loss` also carries
+        # the RLT term and only this key isolates the policy objective.
+        "bc_loss": aux.pop("bc_loss", loss),
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
         **aux,
@@ -264,15 +271,18 @@ def compute_rlt_metrics(
     tr_c = jnp.sum(zc * zc) / b
     frob2_c = jnp.sum(gram * gram) / (b * b)
     part_ratio = (tr_c * tr_c) / (frob2_c + 1e-12)
-    return {
+    metrics = {
+        # Depends only on the token itself, so it stays meaningful for every objective — and matters
+        # most when the objective is progress-only, where a single scalar target makes collapse the
+        # main risk.
         "rlt/participation_ratio": part_ratio,
-        "rlt/eval_z_batch_std": jnp.mean(jnp.std(z, axis=0)),
-        "rlt/eval_z_norm_mean": jnp.mean(jnp.linalg.norm(z, axis=-1)),
+    }
+    if "recon_real" in diag:
         # ~1 means the decoder reconstructs fine with somebody else's RL token, i.e. it is ignoring
         # the bottleneck and a low recon loss is NOT evidence the token carries anything.
-        "rlt/bypass_ratio": diag["recon_shuffled"] / (diag["recon_real"] + 1e-9),
-        "rlt/recon_shuffled_token": diag["recon_shuffled"],
-    }
+        metrics["rlt/bypass_ratio"] = diag["recon_shuffled"] / (diag["recon_real"] + 1e-9)
+        metrics["rlt/target_abs_mean"] = diag["target_abs_mean"]
+    return metrics
 
 
 def extract_rlt_embeddings(
@@ -398,19 +408,74 @@ def log_rlt_embedding_vis(
     t_norm = np.asarray(t_norm, dtype=np.float64)
     ep_ids = np.asarray(ep_ids)
 
-    # Shared basis over both sets so the two overlays live in the same 2-D frame.
+    # Two projections, answering two different questions — neither alone is trustworthy:
+    #   PCA        : unbiased. "What dominates the representation?" Used for every metric, because a
+    #                metric read off a supervised axis would be circular.
+    #   progress   : targeted. "Is progress in there at all?" Fit to the label, so it flatters by
+    #                construction — a clean left-to-right march here proves much less than it looks.
+    # Both are recomputed per call, so neither is strictly comparable across steps (the basis rotates
+    # as the embedding moves); they are snapshots of structure, not a fixed coordinate system.
     z_all = np.concatenate([z_traj, z_rand], axis=0)
     mean = z_all.mean(0, keepdims=True)
-    _, _, vt = np.linalg.svd(z_all - mean, full_matrices=False)
+    _, sv, vt = np.linalg.svd(z_all - mean, full_matrices=False)
+    evr = float((sv[:2] ** 2).sum() / ((sv**2).sum() + 1e-12))
+    zc_traj, zc_rand = z_traj - mean, z_rand - mean
 
-    # Sign convention: PC1 increases with progress; PC2's largest loading is positive.
-    pc_traj = (z_traj - mean) @ vt[:2].T
-    if np.corrcoef(pc_traj[:, 0], t_norm)[0, 1] < 0:
-        vt[0] = -vt[0]
-    if vt[1][np.argmax(np.abs(vt[1]))] < 0:
-        vt[1] = -vt[1]
-    pc_traj = (z_traj - mean) @ vt[:2].T
-    pc_rand = (z_rand - mean) @ vt[:2].T
+    axes_pca = vt[:2].copy()
+    if np.corrcoef(zc_traj @ axes_pca[0], t_norm)[0, 1] < 0:
+        axes_pca[0] = -axes_pca[0]
+    pca_traj, pca_rand = zc_traj @ axes_pca.T, zc_rand @ axes_pca.T
+
+    k = int(min(64, max(2, len(z_traj) - 1)))
+    feats = zc_traj @ vt[:k].T
+    w = np.linalg.solve(feats.T @ feats + 1e-2 * np.eye(k), feats.T @ (t_norm - t_norm.mean()))
+    ax1 = vt[:k].T @ w
+    if np.linalg.norm(ax1) < 1e-9:
+        axes_prog = axes_pca
+    else:
+        ax1 = ax1 / np.linalg.norm(ax1)
+        resid = vt[:2] - np.outer(vt[:2] @ ax1, ax1)
+        j2 = int(np.argmax(np.linalg.norm(resid, axis=1)))
+        ax2 = resid[j2] / (np.linalg.norm(resid[j2]) + 1e-12)
+        axes_prog = np.stack([ax1, ax2])
+        if np.corrcoef(zc_traj @ axes_prog[0], t_norm)[0, 1] < 0:
+            axes_prog[0] = -axes_prog[0]
+    prog_traj, prog_rand = zc_traj @ axes_prog.T, zc_rand @ axes_prog.T
+
+    # Metrics and the hover panel default to the UNBIASED projection.
+    pc_traj, pc_rand = pca_traj, pca_rand
+
+    # Nonlinear projections. They can expose structure a linear map folds away, but they are read
+    # differently: distances between far-apart points are not meaningful, and the layout is redrawn
+    # from scratch each call, so they show shape WITHIN a snapshot rather than movement across steps.
+    projections = {"PCA": (pca_traj, pca_rand), "progress-aligned": (prog_traj, prog_rand)}
+    n_all = len(z_all)
+    try:
+        from sklearn.manifold import TSNE
+
+        emb = TSNE(
+            n_components=2,
+            # Larger perplexity keeps a continuous path continuous; small values shatter it
+            # into false islands, which is exactly the artefact that would mislead here.
+            perplexity=float(max(10, min(50, (n_all - 1) // 3))),
+            init="pca",  # far more stable than random init, and keeps some global structure
+            random_state=0,
+        ).fit_transform(z_all)
+        projections["t-SNE"] = (emb[: len(z_traj)], emb[len(z_traj) :])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import umap
+
+        emb = umap.UMAP(
+            n_components=2,
+            n_neighbors=int(max(5, min(40, n_all - 1))),  # higher = more global/continuous
+            min_dist=0.1,
+            random_state=0,
+        ).fit_transform(z_all)
+        projections["UMAP"] = (emb[: len(z_traj)], emb[len(z_traj) :])
+    except Exception:  # noqa: BLE001
+        pass
 
     def _heldout_r2(target: np.ndarray) -> float:
         """Ridge on top-k PCs, fit on half the episodes and scored on the held-out half.
@@ -451,32 +516,47 @@ def log_rlt_embedding_vis(
     per_ep_rho = [_spearman(pc_traj[ep_ids == e, 0], t_norm[ep_ids == e]) for e in np.unique(ep_ids)]
     progress_spearman = float(np.nanmean(per_ep_rho)) if len(per_ep_rho) else float("nan")
 
-    # --- static figure: trajectory paths over the random-batch cloud ---
-    fig, ax = plt.subplots(figsize=(6.2, 5.2), dpi=130)
-    ax.scatter(pc_rand[:, 0], pc_rand[:, 1], c="#d9dce1", s=14, linewidth=0, zorder=1, label="random batch")
+    # --- static figure: the same trajectories under both projections ------------------------------
     cmap = plt.get_cmap("tab10")
+
+    def _draw(ax, tr, rnd, title, xlabel):
+        ax.scatter(rnd[:, 0], rnd[:, 1], c="#d9dce1", s=14, linewidth=0, zorder=1, label="random batch")
+        sc = None
+        for j, e in enumerate(np.unique(ep_ids)):
+            m = ep_ids == e
+            p, tt = tr[m], t_norm[m]
+            o = np.argsort(tt)
+            p, tt = p[o], tt[o]
+            ax.plot(p[:, 0], p[:, 1], "-", color=cmap(j % 10), lw=1.4, alpha=0.85, zorder=2)
+            sc = ax.scatter(p[:, 0], p[:, 1], c=tt, cmap="viridis", s=24, vmin=0, vmax=1, zorder=3,
+                            edgecolor="white", linewidth=0.3)
+            ax.scatter(p[0, 0], p[0, 1], marker="o", s=90, facecolor="none", edgecolor=cmap(j % 10), lw=1.8, zorder=4)
+            ax.scatter(p[-1, 0], p[-1, 1], marker="*", s=160, color=cmap(j % 10), zorder=4)
+        ax.set_title(title, fontsize=9)
+        ax.set_xlabel(xlabel)
+        return sc
+
+    out_cont = {}
+    n_p = len(projections)
+    fig, axes_f = plt.subplots(1, n_p, figsize=(5.6 * n_p, 5.0), dpi=130, squeeze=False)
+    _NOTE = {
+        "PCA": "unbiased · distances faithful",
+        "progress-aligned": "SUPERVISED axis (flatters by construction)",
+        "t-SNE": "local neighbourhoods faithful · far-apart distances are not",
+        "UMAP": "local neighbourhoods faithful · far-apart distances are not",
+    }
     sc = None
-    for j, e in enumerate(np.unique(ep_ids)):
-        m = ep_ids == e
-        p, tt = pc_traj[m], t_norm[m]
-        order = np.argsort(tt)
-        p, tt = p[order], tt[order]
-        ax.plot(p[:, 0], p[:, 1], "-", color=cmap(j % 10), lw=1.4, alpha=0.85, zorder=2, label=f"ep {e}")
-        sc = ax.scatter(p[:, 0], p[:, 1], c=tt, cmap="viridis", s=26, vmin=0, vmax=1, zorder=3,
-                        edgecolor="white", linewidth=0.3)
-        ax.scatter(p[0, 0], p[0, 1], marker="o", s=95, facecolor="none", edgecolor=cmap(j % 10), lw=1.8, zorder=4)
-        ax.scatter(p[-1, 0], p[-1, 1], marker="*", s=170, color=cmap(j % 10), zorder=4)
+    for ax_i, (name, (tr, rnd)) in zip(axes_f[0], projections.items()):
+        cont = _temporal_continuity(tr, ep_ids, t_norm)
+        sc = _draw(ax_i, tr, rnd, f"{name}   (temporal continuity {cont:.2f})\n{_NOTE.get(name, '')}", name)
+        out_cont[name] = cont
     if sc is not None:
-        fig.colorbar(sc, ax=ax, label="normalized time t (0=start, 1=end)")
-    ax.set_title(
-        f"RLT z_rl — PCA-2D trajectories (step {step:,})\n"
-        f"progress ρ={progress_spearman:.2f}  ·  held-out-episode probe R²={progress_r2:.2f}"
-        f"   (○ start, ★ end)",
+        fig.colorbar(sc, ax=axes_f[0][-1], label="normalized time t")
+    fig.suptitle(
+        f"RLT z_rl (step {step:,})   progress ρ={progress_spearman:.2f} (on PC1)  ·  "
+        f"held-out probe R²={progress_r2:.2f}  ·  top-2 PCs = {evr:.1%} of variance   (○ start, ★ end)",
         fontsize=10,
     )
-    ax.set_xlabel("PC1 (oriented with progress)")
-    ax.set_ylabel("PC2")
-    ax.legend(fontsize=7, loc="best", framealpha=0.7)
     fig.tight_layout()
     img = wandb.Image(fig)
     plt.close(fig)
@@ -521,12 +601,12 @@ def log_rlt_embedding_vis(
     plt.close(fig2)
 
     out = {
+        # One continuity number, on the unbiased projection. The per-projection values are still
+        # printed in the panel titles, which is where they are actually compared.
+        "rlt/continuity": out_cont.get("PCA", float("nan")),
         "rlt/embedding_structure": structure_img,
         "rlt/embedding_pca": img,
-        "rlt/progress_spearman": progress_spearman,
         "rlt/probe_progress_r2": progress_r2,
-        # Same held-out-episode split, but predicting proprio instead of progress.
-        "rlt/probe_proprio_r2": _heldout_r2(np.asarray(proprio_traj, dtype=np.float64)),
     }
 
     # --- interactive: a wandb.Table is queryable/chartable in the UI without extra deps ---
@@ -561,7 +641,7 @@ def log_rlt_embedding_vis(
     # of embedding space corresponds to.
     try:
         out["rlt/embedding_hover"] = wandb.Html(
-            _embedding_hover_html(pc_traj, pc_rand, ep_ids, t_norm, thumbs, step), inject=False
+            _embedding_hover_html(projections, ep_ids, t_norm, thumbs, step), inject=False
         )
     except Exception:  # noqa: BLE001
         pass
@@ -569,50 +649,62 @@ def log_rlt_embedding_vis(
     return out
 
 
-def _embedding_hover_html(
-    pc_traj: np.ndarray,
-    pc_rand: np.ndarray,
-    ep_ids: np.ndarray,
-    t_norm: np.ndarray,
-    thumbs: np.ndarray | None,
-    step: int,
-) -> str:
-    """Self-contained HTML scatter of the RLT embedding that shows the camera view on hover."""
+
+def _temporal_continuity(xy: np.ndarray, ep_ids: np.ndarray, t_norm: np.ndarray, k: int = 3) -> float:
+    """How often a frame's next-in-time frame lands among its k nearest neighbours in the projection.
+
+    This is the "does the trajectory trace a smooth path?" question stated as a number, and it is
+    exactly the property t-SNE/UMAP do preserve (local neighbourhoods), so it is comparable across
+    linear and nonlinear projections even though their distances are not. 1.0 = every step lands next
+    to its predecessor; ~k/n = no better than chance.
+    """
+    d = np.linalg.norm(xy[:, None, :] - xy[None, :, :], axis=-1)
+    np.fill_diagonal(d, np.inf)
+    knn = np.argsort(d, axis=1)[:, :k]
+    hits = tot = 0
+    for e in np.unique(ep_ids):
+        idx = np.flatnonzero(ep_ids == e)[np.argsort(t_norm[ep_ids == e])]
+        for a, b in zip(idx[:-1], idx[1:]):
+            hits += int(b in knn[a])
+            tot += 1
+    return float(hits / max(tot, 1))
+
+def _embedding_hover_html(projections, ep_ids, t_norm, thumbs, step: int) -> str:
+    """Self-contained interactive scatter: switch projection, hover a point to see its camera view.
+
+    Plotly (and W&B's plotly panel) can only put text in a hover label, so this is hand-rolled HTML:
+    the wrist view for each frame is inlined as base64 and shown next to the cursor. Every projection
+    is embedded, so PCA / progress-aligned / t-SNE / UMAP can be compared without re-logging.
+    """
     import base64
     import io
     import json
 
     from PIL import Image
 
-    # Shared normalization so both sets land in the same [0,1] frame.
-    allpts = np.concatenate([pc_traj, pc_rand], axis=0)
-    lo, hi = allpts.min(0), allpts.max(0)
-    span = np.maximum(hi - lo, 1e-9)
-
-    def norm(p):
-        return (p - lo) / span
-
     def thumb_b64(i: int) -> str:
-        # JPEG, not PNG: these are camera photos, and the whole set is inlined into one HTML panel
-        # (a few hundred PNG thumbnails would make it several MB).
+        # JPEG, not PNG: these are camera photos and the whole set is inlined into one HTML panel.
         if thumbs is None or i >= len(thumbs):
             return ""
         buf = io.BytesIO()
         Image.fromarray(thumbs[i]).resize((96, 96)).save(buf, format="JPEG", quality=80)
         return base64.b64encode(buf.getvalue()).decode()
 
-    traj = [
-        {"x": float(x), "y": float(y), "e": int(e), "t": float(tt), "img": thumb_b64(i)}
-        for i, ((x, y), e, tt) in enumerate(zip(norm(pc_traj), ep_ids, t_norm))
-    ]
-    rand = [{"x": float(x), "y": float(y)} for x, y in norm(pc_rand)]
-    # Draw order per episode: by time, so the polyline follows the trajectory.
-    eps = [
+    views = {}
+    for name, (tr, rnd) in projections.items():
+        allp = np.concatenate([tr, rnd], axis=0)
+        lo, hi = allp.min(0), allp.max(0)
+        span = np.maximum(hi - lo, 1e-9)
+        views[name] = {
+            "traj": [[float(x), float(y)] for x, y in (tr - lo) / span],
+            "rand": [[float(x), float(y)] for x, y in (rnd - lo) / span],
+        }
+    meta = [{"e": int(e), "t": float(tt), "img": thumb_b64(i)} for i, (e, tt) in enumerate(zip(ep_ids, t_norm))]
+    order = [
         {"e": int(e), "idx": [int(i) for i in np.flatnonzero(ep_ids == e)[np.argsort(t_norm[ep_ids == e])]]}
         for e in np.unique(ep_ids)
     ]
-
-    payload = json.dumps({"traj": traj, "rand": rand, "eps": eps, "step": int(step)})
+    payload = json.dumps({"views": views, "meta": meta, "eps": order, "step": int(step)})
     return (
         """
 <style>
@@ -621,44 +713,154 @@ def _embedding_hover_html(
    border-radius:6px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.2);z-index:10}
  #rlttip img{display:block;width:96px;height:96px;image-rendering:pixelated}
  #rlttip div{text-align:center;margin-top:2px}
+ #rltbar{margin-bottom:6px}
+ #rltbar button{font:12px system-ui;padding:4px 10px;margin-right:6px;border:1px solid #ccc;
+   background:#f6f7f9;border-radius:6px;cursor:pointer}
+ #rltbar button.on{background:#2f6df0;color:#fff;border-color:#2f6df0}
 </style>
-<div id="rltwrap"><svg id="rltsvg" width="760" height="540"></svg><div id="rlttip"></div></div>
+<div id="rltwrap"><div id="rltbar"></div><svg id="rltsvg" width="760" height="520"></svg>
+<div id="rlttip"></div></div>
 <script>
 const D = """
         + payload
         + """;
-const svg=document.getElementById('rltsvg'), tip=document.getElementById('rlttip');
-const W=760,H=540,P=34, NS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('rltsvg'), tip=document.getElementById('rlttip'), bar=document.getElementById('rltbar');
+const W=760,H=520,P=34, NS='http://www.w3.org/2000/svg';
 const X=p=>P+p*(W-2*P), Y=p=>H-P-p*(H-2*P);
 const COL=['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
 function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;}
-svg.appendChild(el('rect',{x:0,y:0,width:W,height:H,fill:'#fff'}));
-D.rand.forEach(p=>svg.appendChild(el('circle',{cx:X(p.x),cy:Y(p.y),r:3,fill:'#dcdfe4'})));
-D.eps.forEach((ep,j)=>{
-  const c=COL[j%10];
-  const pts=ep.idx.map(i=>X(D.traj[i].x)+','+Y(D.traj[i].y)).join(' ');
-  svg.appendChild(el('polyline',{points:pts,fill:'none',stroke:c,'stroke-width':1.6,opacity:.85}));
-  ep.idx.forEach((i,k)=>{
-    const d=D.traj[i];
-    const dot=el('circle',{cx:X(d.x),cy:Y(d.y),r:k===0?7:(k===ep.idx.length-1?7:4.5),
-      fill:k===0?'#fff':c,stroke:c,'stroke-width':k===0?2.5:1});
-    dot.style.cursor='pointer';
-    dot.addEventListener('mousemove',ev=>{
-      tip.innerHTML=(d.img?'<img src="data:image/jpeg;base64,'+d.img+'">':'')
-        +'<div>ep '+d.e+' &middot; t='+d.t.toFixed(2)+'</div>';
-      tip.style.display='block';
-      tip.style.left=Math.min(ev.offsetX+14,W-120)+'px';
-      tip.style.top=Math.max(ev.offsetY-110,0)+'px';
+function draw(name){
+  svg.innerHTML='';
+  const V=D.views[name];
+  svg.appendChild(el('rect',{x:0,y:0,width:W,height:H,fill:'#fff'}));
+  V.rand.forEach(p=>svg.appendChild(el('circle',{cx:X(p[0]),cy:Y(p[1]),r:3,fill:'#dcdfe4'})));
+  D.eps.forEach((ep,j)=>{
+    const c=COL[j%10];
+    svg.appendChild(el('polyline',{points:ep.idx.map(i=>X(V.traj[i][0])+','+Y(V.traj[i][1])).join(' '),
+      fill:'none',stroke:c,'stroke-width':1.6,opacity:.85}));
+    ep.idx.forEach((i,k)=>{
+      const m=D.meta[i], last=k===ep.idx.length-1;
+      const dot=el('circle',{cx:X(V.traj[i][0]),cy:Y(V.traj[i][1]),r:(k===0||last)?7:4.5,
+        fill:k===0?'#fff':c,stroke:c,'stroke-width':k===0?2.5:1});
+      dot.style.cursor='pointer';
+      dot.addEventListener('mousemove',ev=>{
+        tip.innerHTML=(m.img?'<img src="data:image/jpeg;base64,'+m.img+'">':'')
+          +'<div>ep '+m.e+' &middot; t='+m.t.toFixed(2)+'</div>';
+        tip.style.display='block';
+        tip.style.left=Math.min(ev.offsetX+14,W-120)+'px';
+        tip.style.top=Math.max(ev.offsetY-110,0)+'px';
+      });
+      dot.addEventListener('mouseleave',()=>{tip.style.display='none';});
+      svg.appendChild(dot);
     });
-    dot.addEventListener('mouseleave',()=>{tip.style.display='none';});
-    svg.appendChild(dot);
   });
+  const t=el('text',{x:P,y:20,'font-size':13,'font-family':'system-ui',fill:'#222'});
+  t.textContent=name+' \u2014 step '+D.step.toLocaleString()+' \u2014 hover a point for its wrist view';
+  svg.appendChild(t);
+}
+Object.keys(D.views).forEach((name,i)=>{
+  const b=document.createElement('button'); b.textContent=name;
+  b.onclick=()=>{[...bar.children].forEach(c=>c.className=''); b.className='on'; draw(name);};
+  if(i===0) b.className='on';
+  bar.appendChild(b);
 });
-svg.appendChild(el('text',{x:P,y:20,'font-size':13,'font-family':'system-ui',fill:'#222'}))
-  .textContent='RLT z_rl \\u2014 PCA (step '+D.step.toLocaleString()+') \\u2014 hover a point for its wrist view';
+draw(Object.keys(D.views)[0]);
 </script>
 """
     )
+
+
+def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
+    """Build an in-process RoboCasa sim eval of the full VLA policy AND the latent BC-probe head.
+
+    Returns ``eval_fn(train_state, seed) -> {"eval/vla_success":.., "eval/probe_success":..}`` or None
+    if unavailable (not a RoboCasa RLT config, or the sim deps are missing). The env is created once
+    and reused; rollouts run headless (no video). Any failure disables the eval rather than the run.
+    """
+    import functools as _ft
+
+    try:
+        import examples.robocasa.rollout as _ro
+    except Exception as e:  # noqa: BLE001
+        logging.warning(f"probe eval unavailable (rollout import): {e}")
+        return None
+
+    task = getattr(config, "_task_name", None) or _infer_robocasa_task(config)
+    if task is None:
+        logging.warning("probe eval: could not infer RoboCasa task from config; disabled.")
+        return None
+
+    data_config = config.data.create(config.assets_dirs, config.model)
+    norm_stats = data_config.norm_stats
+    # NO repack here: repack maps raw LeRobot keys -> observation/* for training, but the rollout
+    # element (from examples/robocasa/rollout.py) is already in observation/* form — exactly what
+    # serving does (create_trained_policy defaults repack to an empty Group).
+    input_tf = _transforms.compose(
+        [
+            _transforms.InjectDefaultPrompt(None),
+            *data_config.data_transforms.inputs,
+            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            *data_config.model_transforms.inputs,
+        ]
+    )
+    output_tf = _transforms.compose(
+        [
+            *data_config.model_transforms.outputs,
+            _transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            *data_config.data_transforms.outputs,
+        ]
+    )
+
+    # One compiled sampler per mode; reused across evals (params change, shapes don't). Shardings are
+    # applied only when provided (the training path passes them; a single-device smoke may not).
+    _jit_kw = {"static_argnames": ("mode",)}
+    if train_state_sharding is not None:
+        _jit_kw |= {
+            "in_shardings": (train_state_sharding, replicated_sharding),
+            "out_shardings": replicated_sharding,
+        }
+
+    @_ft.partial(jax.jit, **_jit_kw)
+    def _sample(state, rng, obs, *, mode):
+        params = state.ema_params if state.ema_params is not None else state.params
+        model = nnx.merge(state.model_def, params)
+        model.eval()
+        if mode == "probe":
+            return model.probe_sample_actions(rng, obs)
+        return model.sample_actions(rng, obs)
+
+    env_box = {}  # lazily create the env on first use (heavy import + scene build)
+
+    def _policy_fn(state, mode):
+        def fn(element):
+            inp = input_tf(element)
+            inp = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inp)
+            obs = _model.Observation.from_dict(inp)
+            rng = jax.random.key(0)
+            with sharding.set_mesh(mesh):
+                actions = _sample(state, rng, obs, mode=mode)
+            out = output_tf({"state": np.asarray(inp["state"][0]), "actions": np.asarray(actions[0])})
+            return np.asarray(out["actions"])
+        return fn
+
+    def eval_fn(train_state, seed):
+        if "env" not in env_box:
+            env_box["env"] = _ro.make_env(task, camera_size=256, seed=seed)
+        env = env_box["env"]
+        n = config.rlt_probe_eval_trials
+        vla = _ro.run_trials(env, _policy_fn(train_state, "vla"), task=task, num_trials=n, seed=seed)
+        probe = _ro.run_trials(env, _policy_fn(train_state, "probe"), task=task, num_trials=n, seed=seed)
+        return {"eval/vla_success": vla["success_rate"], "eval/probe_success": probe["success_rate"]}
+
+    return eval_fn
+
+
+def _infer_robocasa_task(config) -> str | None:
+    """Recover the RoboCasa task name from the data repo_id (…/robocasa365-<Task>)."""
+    repo = getattr(config.data, "repo_id", "") or ""
+    if "robocasa365-" in repo:
+        return repo.split("robocasa365-")[-1]
+    return None
 
 
 def main(config: _config.TrainConfig):
@@ -756,6 +958,13 @@ def main(config: _config.TrainConfig):
             logging.warning(f"Could not build the RLT trajectory probe; embedding vis disabled. ({e})")
             pextract_rlt = None
 
+    probe_eval_fn = None
+    if config.rlt_probe_eval_interval > 0:
+        try:
+            probe_eval_fn = build_probe_eval(config, mesh, replicated_sharding, train_state_sharding)
+        except Exception as e:  # noqa: BLE001
+            logging.warning(f"Could not set up probe eval; disabled. ({e})")
+
     start_step = int(train_state.step)
     # Iterate one step past num_train_steps so the run ends ON a round step (100_000, not 99_999).
     # That final step is a multiple of the save/log/diagnostic intervals, so the last checkpoint gets
@@ -816,6 +1025,21 @@ def main(config: _config.TrainConfig):
             except Exception as e:  # noqa: BLE001
                 logging.warning(f"rlt embedding vis failed at step {step}; disabling it. ({e})")
                 pextract_rlt = None
+
+        # In-process sim eval of the VLA + latent-probe policies (headless). Heavier than the other
+        # monitors (spins the sim), so it is guarded and disabled on failure like the rest.
+        if probe_eval_fn is not None and step % config.rlt_probe_eval_interval == 0:
+            try:
+                t_ev = time.perf_counter()
+                res = probe_eval_fn(train_state, seed=0)
+                diag_info.update(res)
+                logging.info(
+                    f"probe eval @ {step}: vla={res['eval/vla_success']:.0%} "
+                    f"probe={res['eval/probe_success']:.0%} ({time.perf_counter() - t_ev:.0f}s)"
+                )
+            except Exception as e:  # noqa: BLE001
+                logging.warning(f"probe eval failed at step {step}; disabling it. ({e})")
+                probe_eval_fn = None
 
         diag_now = bool(diag_info)
         if step % config.log_interval == 0:
