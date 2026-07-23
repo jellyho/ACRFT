@@ -16,6 +16,8 @@
 #   EXP=...            override the experiment dir name outright
 #   NUM_TRIALS=50      rollouts per checkpoint
 #   NUM_VIDEOS=5       sample videos saved per checkpoint
+#   ACTION_DIST_SAMPLES=0  overlay the policy's action distribution on saved videos: sample this
+#                      many extra chunks per replan and draw their predicted EE paths (0 = off)
 #   SEED=0             base seed; trial i uses seed+i, fixed across checkpoints so every
 #                      checkpoint is evaluated on the identical set of scenes (fair comparison)
 #   PORT=8000          policy server port (auto-bumped to the next free port if busy, so several
@@ -150,6 +152,7 @@ PY
   echo "  running $NUM_TRIALS rollouts (saving up to $NUM_VIDEOS videos) ..."
   "$EVAL_PYTHON" examples/robocasa/main.py --task "$TASK" --host 127.0.0.1 --port "$PORT" \
       --num-trials "$NUM_TRIALS" --num-videos "$NUM_VIDEOS" --seed "$SEED" \
+      --action-dist-samples "${ACTION_DIST_SAMPLES:-0}" \
       --video-dir "$STEP_OUT/videos" --output-json "$STEP_OUT/results.json" \
       2>&1 | tee "$STEP_OUT/client.log" || echo "  !! rollouts failed for $STEP"
 
