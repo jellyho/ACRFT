@@ -29,28 +29,29 @@ _ASSETS = _HERE / "assets"
 # --- Project status: edit these as the work evolves; the page regenerates from them. ---------
 
 PROJECT = {
-    "title": "openpi × RoboCasa 365",
-    "tagline": "Fine-tuning π-models on RoboCasa 365 kitchen demos, on the LeRobot v3.0 data stack.",
+    "title": "ACRFT · RL Tokens + Adaptive Q-Chunking on π₀.₅",
+    "tagline": "An openpi fork: learn a compact RL-token state representation on a frozen VLA, then "
+    "train an offline value critic on it — RoboCasa 365 is the evaluation environment.",
     "stats": [
-        {"label": "LeRobot", "value": "0.4.4", "note": "dataset format v3.0"},
-        {"label": "Target tasks", "value": "50", "note": "human demos, 500 ea."},
-        {"label": "Base model", "value": "π0 / π0.5", "note": "transformers 4.53.2"},
-        {"label": "Sim source", "value": "RoboCasa", "note": "robocasa365_release"},
+        {"label": "RL token", "value": "2048-d", "note": "1 vector / frame"},
+        {"label": "Step cost", "value": "≈1.12×", "note": "vs plain BC"},
+        {"label": "Best (RLT sg)", "value": "78%", "note": "PrepareCoffee, vs BC 62%"},
+        {"label": "Critic", "value": "QC / ARQ", "note": "scalar or HL-Gauss"},
     ],
+    # Pipeline stages, shown as the "Implemented" column.
     "implemented": [
-        ("RoboCasa vendored", "Added `robocasa` (branch `robocasa365_release`) as a git submodule under `third_party/`; removed the unused aloha / libero submodules."),
-        ("LeRobot v3.0 migration", "Moved openpi from a pinned lerobot v2.1 rev to `lerobot==0.4.4` (CODEBASE_VERSION v3.0). Updated the dataset module path and normalized the v3.0 `meta.tasks` DataFrame back into the `{task_index: task}` prompt map."),
-        ("Dependency stack", "Bumped numpy to 2.x (required by lerobot→rerun-sdk) across openpi + openpi-client; kept transformers 4.53.2 (pi0/pi0.5 vendored patches). Regenerated uv.lock. Retired the DROID/RLDS group (TF 2.15 pins numpy<2)."),
-        ("Dataset pipeline", "`prepare_robocasa365.py`: download the 50 target/human LeRobot tars from the public NVIDIA mirror, extract, and upgrade v2.1 → v3.0. Resumable — finished tasks are skipped."),
-        ("Hub upload", "`--push-to-hub`: publish each converted dataset as `<user>/robocasa365-<Task>` (tagged v3.0) and gather them into a HF collection."),
-        ("Training config", "Added `robocasa_policy.py` (3 cameras → base/left-wrist/right-wrist, 16-d state, 12-d action) plus `LeRobotRoboCasaDataConfig` and the `pi05_robocasa` / `pi05_robocasa_low_mem_finetune` train configs."),
-        ("Sim eval client", "`main.py`: server/client rollout in the RoboCasa sim — builds the model input from live obs, reorders the 12-d action into the env's order, steps to success, reports success rate + optional videos."),
+        ("Stage 1 · Pi0RLT training", "`models/pi0_rlt.py` + `run_train_rlt.sh`: a language-conditioned RL-token bottleneck learned JOINTLY with the BC (flow-matching) fine-tune, from one backbone forward (≈1.12× BC cost). Objectives: reconstruction / progress / both. Stop-gradient readout by default (backbone-grad breaks the policy)."),
+        ("Latent BC probe + inline eval", "An optional flow-matching head on the FROZEN token (`rlt_bc_probe`) measures how much policy the latent alone recovers. Every 10k steps an in-process headless sim eval rolls out both the VLA and the probe policy — no separate server."),
+        ("Stage 2 · Annotation", "`annotate_rlt.py`: run the trained VLA over every demo frame ONCE (shared prefix forward) and write flat memmap arrays — rl_token, executed chunk, N base-policy candidates, reward, per-episode progress. Critic training then never touches the VLA or video."),
+        ("Stage 3 · Critic", "`rlt_critic/critic.py` + `train_rlt_critic.py`: QC (flat per-chunk Q) or ARQ (per-prefix Q, causal transformer for adaptive chunk-length), scalar or distributional, ensembled. Data is GPU-resident; updates fused with lax.scan."),
+        ("Progress labels", "`robocasa_progress.py`: task progress = per-episode time-to-success (0 at start → 1 at success), derived from the sparse success reward. Normalized per demo, NOT a discounted value — the discount is left to the critic."),
+        ("Monitoring & viz", "wandb project `acrft`: loss components, participation-ratio / bypass-ratio, and an embedding visualization (PCA + t-SNE/UMAP trajectories, camera view on hover). See the RLT metrics guide below."),
     ],
     "roadmap": [
-        ("Norm stats + training", "Compute norm stats over a chosen task and run a first π0.5 fine-tune from the base checkpoint."),
-        ("Task selection", "Pick the target task(s) to train/evaluate on from the gallery below."),
-        ("Run evaluation", "Serve the trained checkpoint and roll out with `main.py`; confirm camera orientation against a dataset frame."),
-        ("Multi-task training", "Merge tasks into one LeRobot dataset (or add multi-repo loading) to train across the target set at once."),
+        ("Ablation sweep", "Re-run recon / progress / recon+progress × {with, without proprio}, all stop-grad, with the latent-probe sim eval, on the fixed per-episode progress labels."),
+        ("Critic on real tokens", "Annotate PrepareCoffee, train QC and ARQ critics, and read the value curves against the demo returns."),
+        ("Deployment policy", "Score the N candidate chunks with the critic and pick (chunk, commit-length); plug the adaptive-chunk policy into the sim eval."),
+        ("Scale out", "Extend beyond PrepareCoffee to more of the 50 target tasks / a generalist critic."),
     ],
 }
 
@@ -116,6 +117,13 @@ RLT = {
         ("--backbone-grad", "off",
          "Lets the RLT loss reshape the VLM backbone. Off = the token is a pure readout head and BC "
          "alone shapes the VLM (the paper's setting). BC always flows into the backbone either way."),
+        ("--no-proprio", "keep",
+         "Build the token from image+language only (no proprio token, no proprio reconstruction). "
+         "Paper-faithful: the critic then takes (z_rl, proprio) and supplies proprio itself."),
+        ("--objective STR", "reconstruction",
+         "reconstruction / progress / reconstruction+progress. Progress = per-episode time-to-success."),
+        ("--scalar-head", "distributional",
+         "Progress head = MSE regression instead of the HL-Gauss histogram."),
         ("--no-target-sg", "off",
          "Stops stop-gradient'ing the reconstruction target. Collapse-prone — try --backbone-grad alone first."),
         ("--parallel-decoder", "off",
@@ -125,7 +133,7 @@ RLT = {
         ("--loss-weight F", "1.0", "Weight of the RLT loss relative to the BC loss."),
     ],
     "metrics": [
-        ("step", "rlt/bc_loss", "π0.5 flow-matching loss on its own.",
+        ("step", "bc_loss", "π0.5 flow-matching loss on its own (every config emits it).",
          "Compare across runs instead of the top-level <span class='mono'>loss</span>, which for an "
          "RLT config is BC + λ·RLT and so is not comparable to a BC run. Persistently higher than "
          "the BC baseline ⇒ RLT is costing you policy quality."),
@@ -138,9 +146,17 @@ RLT = {
          "memorising proprio and discarding vision."),
         ("step", "rlt/z_batch_std", "Spread of z_rl across the batch.",
          "Must stay clearly above 0. → 0 is token collapse: every state maps to the same vector."),
-        ("step", "rlt/target_abs_mean", "Scale of the reconstruction target, mean|z̄|.",
-         "Mostly the yardstick for reading loss_recon. Sudden moves mean the backbone representation "
-         "is shifting under the bottleneck."),
+        ("step", "rlt/loss_progress", "Progress head loss (HL-Gauss cross-entropy, or MSE).",
+         "Only present when the objective includes progress. For the distributional head the floor is "
+         "the target's own entropy, not 0."),
+        ("step", "rlt/progress_mae", "Mean absolute progress error, in progress units.",
+         "The interpretable one: 0.1 ≈ 10% of the success horizon (~87 frames here). Falling is good."),
+        ("step", "rlt/progress_entropy", "Spread of the predicted progress distribution.",
+         "Distributional head only. Should narrow as the token gets more certain about how far away "
+         "success is; staying at log(bins) means the head is not learning."),
+        ("monitor", "rlt/target_abs_mean", "Scale of the reconstruction target, mean|z̄|.",
+         "The yardstick for reading loss_recon. Sudden moves mean the backbone representation is "
+         "shifting under the bottleneck."),
         ("monitor", "rlt/bypass_ratio", "recon with ANOTHER sample's z_rl ÷ recon with the true one.",
          "The decoder is teacher-forced on the true previous embeddings, and adjacent SigLIP tokens "
          "are highly correlated, so it can score well while ignoring the token. ≈1 ⇒ the token is "
@@ -626,7 +642,7 @@ _JS = """
 _TEMPLATE = """<style>{css}</style>
 <header><div class="wrap head">
   <div>
-    <p class="eyebrow">Project dashboard</p>
+    <p class="eyebrow">Research fork of openpi · living dashboard</p>
     <h1>{title}</h1>
     <p class="tagline">{tagline}</p>
   </div>
@@ -638,7 +654,7 @@ _TEMPLATE = """<style>{css}</style>
 
   <div class="cols">
     <div>
-      <h2>Implemented</h2>
+      <h2>Pipeline</h2>
       <ul class="list">{implemented}</ul>
     </div>
     <div>
@@ -648,8 +664,8 @@ _TEMPLATE = """<style>{css}</style>
   </div>
 
   <section>
-    <div class="section-head"><h2>Dataset schema</h2>
-      <span class="count">what each converted LeRobot v3.0 task contains</span></div>
+    <div class="section-head"><h2>RoboCasa 365 · environment</h2>
+      <span class="count">the eval env &amp; dataset — one section, not the focus. what each converted LeRobot v3.0 task contains</span></div>
     <div class="rule"></div>
     <div class="ds">
       <div class="ds-facts">{ds_facts}</div>
