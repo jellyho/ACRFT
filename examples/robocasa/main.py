@@ -78,6 +78,15 @@ def main() -> None:
                     help="If set, save mp4 rollouts here (needs imageio).")
     ap.add_argument("--num-videos", type=int, default=5,
                     help="Max number of rollout videos to save when --video-dir is set (0 = none).")
+    ap.add_argument("--action-dist-samples", type=int, default=0,
+                    help="On saved videos, overlay the policy's action distribution: at each replan, "
+                         "sample this many extra action chunks and draw their predicted EE paths "
+                         "(translucent) plus the executed one (bright). 0 = off. Adds N inferences "
+                         "per replan on video trials only.")
+    ap.add_argument("--action-dist-scale", type=float, default=0.25,
+                    help="Target world length (metres) of the executed chunk's drawn path in the "
+                         "action-distribution overlay; the draw scale is derived from it and shared "
+                         "by all candidates, so their relative spread stays faithful. Tune for size.")
     ap.add_argument("--output-json", type=pathlib.Path, default=None,
                     help="If set, write a JSON summary (success rate + per-trial results) here.")
     args = ap.parse_args()
@@ -110,6 +119,13 @@ def main() -> None:
         record = args.video_dir is not None and trial < args.num_videos
         print(f"[trial {trial + 1}/{args.num_trials}] prompt: {prompt!r}")
 
+        overlay_on = record and args.action_dist_samples > 0
+        projector = None
+        if overlay_on:
+            import action_overlay as _ov
+
+            projector = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
+
         frames = []
         success = False
         step = 0
@@ -123,11 +139,25 @@ def main() -> None:
             }
             action_chunk = np.asarray(client.infer(element)["actions"])
 
+            # Action-distribution overlay: sample extra chunks (the distribution at THIS replan) and,
+            # on every frame of the chunk, draw their predicted EE paths anchored at the LIVE EE so
+            # the spray stays attached to the moving gripper.
+            candidates = None
+            if overlay_on:
+                extras = [np.asarray(client.infer(element)["actions"]) for _ in range(args.action_dist_samples)]
+                candidates = [action_chunk, *extras]  # executed chunk is index 0
+
             for action in action_chunk[: args.replan_steps]:
                 obs, _, _, _ = env.step(_lerobot_action_to_env(np.asarray(action)))
                 step += 1
                 if record:
-                    frames.append(_image(obs, _CAMERAS["observation/image"]))
+                    frame = _image(obs, _CAMERAS["observation/image"])
+                    if overlay_on:
+                        frame = _ov.draw_overlay(
+                            frame, projector, np.asarray(obs["robot0_eef_pos"]),
+                            np.asarray(obs["robot0_base_quat"]), candidates,
+                            executed_idx=0, target_len=args.action_dist_scale)
+                    frames.append(frame)
                 if env._check_success():  # noqa: SLF001 - robosuite's success hook
                     success = True
                     break
