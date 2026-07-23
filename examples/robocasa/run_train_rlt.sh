@@ -70,6 +70,8 @@ BACKBONE_GRAD="${BACKBONE_GRAD:-0}"
 NO_TARGET_SG="${NO_TARGET_SG:-0}"
 RESUME="${RESUME:-0}"
 OVERWRITE="${OVERWRITE:-0}"
+PROJECT="${PROJECT:-robocasa-pi05}"
+ENTITY="${ENTITY:-RSS-PFT_RLLAB}"
 HF_USER="${HF_USER:-jellyho}"
 ROBOCASA_LOCAL_DIR="${ROBOCASA_LOCAL_DIR:-/data5/jellyho/robocasa365}"
 # Match lerobot's cache resolution: HF_LEROBOT_HOME, else $HF_HOME/lerobot, else ~/.cache/...
@@ -145,8 +147,8 @@ fi
 if [ -n "${RLT_LOSS_WEIGHT:-}" ]; then
   RLT_FLAGS+=(--model.rlt-loss-weight "$RLT_LOSS_WEIGHT"); VARIANT_TAG="${VARIANT_TAG}_w${RLT_LOSS_WEIGHT}"
 fi
-[ -n "${PROJECT:robocasa-pi05}" ] && RLT_FLAGS+=(--project-name "$PROJECT")
-[ -n "${ENTITY:RSS-PFT_RLLAB}" ] && RLT_FLAGS+=(--wandb-entity "$ENTITY")
+RLT_FLAGS+=(--project-name "$PROJECT")
+RLT_FLAGS+=(--wandb-entity "$ENTITY")
 [ -n "${MONITOR_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-monitor-interval "$MONITOR_INTERVAL")
 [ -n "${VIS_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-vis-interval "$VIS_INTERVAL")
 [ -n "$VARIANT_TAG" ] && echo "RLT variant: ${RLT_FLAGS[*]}   (exp-name tag: $VARIANT_TAG)"
