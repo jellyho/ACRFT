@@ -106,6 +106,12 @@ class Observation(Generic[ArrayT]):
     # Token loss mask (for FAST autoregressive model).
     token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
 
+    # Pi0RLT specific fields.
+
+    # Scalar task progress in [0, 1] (1 = task succeeded), used as an auxiliary target for the RL
+    # token. Only populated when the data config injects it; see training/robocasa_progress.py.
+    progress: at.Float[ArrayT, "*b"] | None = None
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -126,6 +132,7 @@ class Observation(Generic[ArrayT]):
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
+            progress=data.get("progress"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -205,6 +212,7 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
+        progress=observation.progress,
     )
 
 

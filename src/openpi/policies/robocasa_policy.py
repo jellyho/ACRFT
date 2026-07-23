@@ -75,6 +75,10 @@ class RoboCasaInputs(transforms.DataTransformFn):
         if "prompt" in data:
             inputs["prompt"] = data["prompt"]
 
+        # Auxiliary task-progress target for Pi0RLT; only present when the data config injects it.
+        if "progress" in data:
+            inputs["progress"] = data["progress"]
+
         return inputs
 
 
