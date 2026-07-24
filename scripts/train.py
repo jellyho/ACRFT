@@ -516,7 +516,7 @@ def log_rlt_embedding_vis(
     # Fit-free companion: within each episode, does PC1 advance monotonically with time? This is the
     # robust signal (no tiny-sample regression), and is what the trajectory paths show visually.
     per_ep_rho = [_spearman(pc_traj[ep_ids == e, 0], t_norm[ep_ids == e]) for e in np.unique(ep_ids)]
-    progress_spearman = float(np.nanmean(per_ep_rho)) if len(per_ep_rho) else float("nan")
+    progress_spearman = float(np.nanmean(per_ep_rho)) if per_ep_rho else float("nan")
 
     # --- static figure: the same trajectories under both projections ------------------------------
     cmap = plt.get_cmap("tab10")
@@ -597,7 +597,7 @@ def log_rlt_embedding_vis(
         ax_b.axhline(bnd - 0.5, color="#5cf", lw=0.6)
         ax_b.axvline(bnd - 0.5, color="#5cf", lw=0.6)
     ax_b.set_title(
-        "token cosine similarity, ordered by (episode, t)\n(blocks = episode identity, " "bands = shared phase)",
+        "token cosine similarity, ordered by (episode, t)\n(blocks = episode identity, bands = shared phase)",
         fontsize=9,
     )
     ax_b.set_xlabel("frame (episode, then time)")
@@ -816,23 +816,31 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
         ]
     )
 
-    # One compiled sampler per mode; reused across evals (params change, shapes don't). Shardings are
-    # applied only when provided (the training path passes them; a single-device smoke may not).
-    _jit_kw = {"static_argnames": ("mode",)}
+    # One compiled sampler per mode; reused across evals (params change, shapes don't). `mode` is
+    # closed over rather than passed as an argument: with `in_shardings` specified, jax.jit rejects
+    # *all* keyword args (even static ones), so a `mode=` kwarg raised "pjit does not support kwargs".
+    # Shardings are applied only when provided (the training path passes them; a single-device smoke
+    # may not); when provided they must cover all three positional args (state, rng, obs).
+    _jit_kw = {}
     if train_state_sharding is not None:
-        _jit_kw |= {
-            "in_shardings": (train_state_sharding, replicated_sharding),
+        _jit_kw = {
+            "in_shardings": (train_state_sharding, replicated_sharding, replicated_sharding),
             "out_shardings": replicated_sharding,
         }
 
-    @_ft.partial(jax.jit, **_jit_kw)
-    def _sample(state, rng, obs, *, mode):
-        params = state.ema_params if state.ema_params is not None else state.params
-        model = nnx.merge(state.model_def, params)
-        model.eval()
-        if mode == "probe":
-            return model.probe_sample_actions(rng, obs)
-        return model.sample_actions(rng, obs)
+    def _make_sampler(mode):
+        @_ft.partial(jax.jit, **_jit_kw)
+        def _sample(state, rng, obs):
+            params = state.ema_params if state.ema_params is not None else state.params
+            model = nnx.merge(state.model_def, params)
+            model.eval()
+            if mode == "probe":
+                return model.probe_sample_actions(rng, obs)
+            return model.sample_actions(rng, obs)
+
+        return _sample
+
+    _samplers = {"vla": _make_sampler("vla"), "probe": _make_sampler("probe")}
 
     env_box = {}  # lazily create the env on first use (heavy import + scene build)
 
@@ -843,7 +851,7 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
             obs = _model.Observation.from_dict(inp)
             rng = jax.random.key(0)
             with sharding.set_mesh(mesh):
-                actions = _sample(state, rng, obs, mode=mode)
+                actions = _samplers[mode](state, rng, obs)
             out = output_tf({"state": np.asarray(inp["state"][0]), "actions": np.asarray(actions[0])})
             return np.asarray(out["actions"])
 
