@@ -786,11 +786,14 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
     import sys as _sys
 
     # `uv run scripts/train.py` puts scripts/ on sys.path but not the repo root, so `examples` (not
-    # part of the installed openpi package) is not importable by default. Add the repo root here so
-    # the probe eval works regardless of how training was launched (no PYTHONPATH needed).
-    _repo_root = str(epath.Path(__file__).parent.parent)
-    if _repo_root not in _sys.path:
-        _sys.path.insert(0, _repo_root)
+    # part of the installed openpi package) is not importable, and `robocasa` lives unbuilt under
+    # third_party/ (only robosuite is installed in the venv). Add both here so the probe eval works
+    # regardless of how training was launched (no PYTHONPATH needed) — mirroring the eval client,
+    # which runs with PYTHONPATH=third_party/robocasa.
+    _repo_root = epath.Path(__file__).parent.parent
+    for _p in (str(_repo_root), str(_repo_root / "third_party" / "robocasa")):
+        if _p not in _sys.path:
+            _sys.path.insert(0, _p)
 
     try:
         import examples.robocasa.rollout as _ro
