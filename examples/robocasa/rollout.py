@@ -77,7 +77,7 @@ def run_trials(
     task: str,
     num_trials: int,
     seed: int = 0,
-    replan_steps: int = 5,
+    replan_steps: int = 10,  # = the model's action_horizon (chunk size); execute a full chunk per replan
     max_steps: int | None = None,
     on_trial=None,
 ) -> dict:

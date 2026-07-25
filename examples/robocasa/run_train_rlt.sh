@@ -45,6 +45,7 @@
 #     --exp-suffix STR         exp name is "<Task>_<suffix>" (default: rlt)   (EXP_SUFFIX=)
 #     --project STR            wandb project name (default: acrft)            (PROJECT=)
 #     --entity STR             wandb entity / team (default: your wandb user)  (ENTITY=)
+#     --group STR              wandb group: bucket related runs (e.g. a sweep) (GROUP=)
 #     --resume                 resume from the last checkpoint                (RESUME=1)
 #     --overwrite              wipe the checkpoint dir and start fresh        (OVERWRITE=1)
 #     --skip-norm-stats        never compute norm stats                       (SKIP_NORM_STATS=1)
@@ -72,6 +73,7 @@ RESUME="${RESUME:-0}"
 OVERWRITE="${OVERWRITE:-0}"
 PROJECT="${PROJECT:-robocasa-pi05}"
 ENTITY="${ENTITY:-RSS-PFT_RLLAB}"
+GROUP="${GROUP:-RLT_DEBUG}"
 HF_USER="${HF_USER:-jellyho}"
 ROBOCASA_LOCAL_DIR="${ROBOCASA_LOCAL_DIR:-/data5/jellyho/robocasa365}"
 # Match lerobot's cache resolution: HF_LEROBOT_HOME, else $HF_HOME/lerobot, else ~/.cache/...
@@ -97,6 +99,7 @@ while [ "$#" -gt 0 ]; do
     --exp-suffix)        EXP_SUFFIX="$2"; shift ;;
     --project)           PROJECT="$2"; shift ;;
     --entity)            ENTITY="$2"; shift ;;
+    --group)             GROUP="$2"; shift ;;
     --resume)            RESUME=1 ;;
     --overwrite)         OVERWRITE=1 ;;
     --skip-norm-stats)   SKIP_NORM_STATS=1 ;;
@@ -149,6 +152,7 @@ if [ -n "${RLT_LOSS_WEIGHT:-}" ]; then
 fi
 RLT_FLAGS+=(--project-name "$PROJECT")
 RLT_FLAGS+=(--wandb-entity "$ENTITY")
+[ -n "$GROUP" ] && RLT_FLAGS+=(--wandb-group "$GROUP")
 [ -n "${MONITOR_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-monitor-interval "$MONITOR_INTERVAL")
 [ -n "${VIS_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-vis-interval "$VIS_INTERVAL")
 [ -n "$VARIANT_TAG" ] && echo "RLT variant: ${RLT_FLAGS[*]}   (exp-name tag: $VARIANT_TAG)"

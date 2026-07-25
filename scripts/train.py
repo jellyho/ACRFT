@@ -61,13 +61,16 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name, entity=config.wandb_entity)
+        wandb.init(
+            id=run_id, resume="must", project=config.project_name, entity=config.wandb_entity, group=config.wandb_group
+        )
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
             entity=config.wandb_entity,
+            group=config.wandb_group,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
@@ -856,13 +859,18 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
     env_box = {}  # lazily create the env on first use (heavy import + scene build)
 
     def _policy_fn(state, mode):
+        # Advance the sampling rng each call, exactly like serving (Policy.infer splits self._rng per
+        # infer). A fixed key gives the same flow-matching noise every replan, which biases long
+        # rollouts and tanks success — the eval must mirror deployment's fresh-noise-per-chunk.
+        rng_holder = [jax.random.key(0)]
+
         def fn(element):
             inp = input_tf(element)
             inp = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inp)
             obs = _model.Observation.from_dict(inp)
-            rng = jax.random.key(0)
+            rng_holder[0], sample_rng = jax.random.split(rng_holder[0])
             with sharding.set_mesh(mesh):
-                actions = _samplers[mode](state, rng, obs)
+                actions = _samplers[mode](state, sample_rng, obs)
             out = output_tf({"state": np.asarray(inp["state"][0]), "actions": np.asarray(actions[0])})
             return np.asarray(out["actions"])
 
@@ -873,8 +881,13 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
             env_box["env"] = _ro.make_env(task, camera_size=256, seed=seed)
         env = env_box["env"]
         n = config.rlt_probe_eval_trials
-        vla = _ro.run_trials(env, _policy_fn(train_state, "vla"), task=task, num_trials=n, seed=seed)
-        probe = _ro.run_trials(env, _policy_fn(train_state, "probe"), task=task, num_trials=n, seed=seed)
+        replan = config.model.action_horizon  # execute a full predicted chunk before re-querying
+        vla = _ro.run_trials(
+            env, _policy_fn(train_state, "vla"), task=task, num_trials=n, seed=seed, replan_steps=replan
+        )
+        probe = _ro.run_trials(
+            env, _policy_fn(train_state, "probe"), task=task, num_trials=n, seed=seed, replan_steps=replan
+        )
         return {"eval/vla_success": vla["success_rate"], "eval/probe_success": probe["success_rate"]}
 
     return eval_fn

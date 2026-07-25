@@ -73,8 +73,10 @@ def main() -> None:
     ap.add_argument(
         "--replan-steps",
         type=int,
-        default=10,
-        help="How many actions of each returned chunk to execute before re-querying.",
+        default=None,
+        help="How many actions of each returned chunk to execute before re-querying. Default (None) "
+        "executes the FULL returned chunk (= the model's action_horizon), matching training/serving; "
+        "this policy degrades badly on partial-chunk execution.",
     )
     ap.add_argument("--camera-size", type=int, default=256, help="Camera height/width for the env.")
     ap.add_argument("--seed", type=int, default=0)
@@ -168,7 +170,10 @@ def main() -> None:
                 extras = [np.asarray(client.infer(element)["actions"]) for _ in range(args.action_dist_samples)]
                 candidates = [action_chunk, *extras]  # executed chunk is index 0
 
-            for action in action_chunk[: args.replan_steps]:
+            # None -> execute the full returned chunk (= the model's action_horizon). Deriving it from
+            # the chunk length keeps the client config-free: no hardcoded horizon here.
+            replan = args.replan_steps if args.replan_steps is not None else len(action_chunk)
+            for action in action_chunk[:replan]:
                 obs, _, _, _ = env.step(_lerobot_action_to_env(np.asarray(action)))
                 step += 1
                 if record:

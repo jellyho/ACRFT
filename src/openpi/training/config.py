@@ -535,6 +535,8 @@ class TrainConfig:
     project_name: str = "acrft"
     # Optional wandb entity (team/user). None -> your default wandb entity.
     wandb_entity: str | None = None
+    # Optional wandb group: groups related runs (e.g. one sweep) together in the wandb UI. None -> ungrouped.
+    wandb_group: str | None = None
     # Experiment name. Will be used to name the metadata and checkpoint directories.
     exp_name: str = tyro.MISSING
 
@@ -872,7 +874,7 @@ _CONFIGS = [
     TrainConfig(
         name="pi05_robocasa",
         # action_horizon is the predicted action-chunk length (RoboCasa runs at 20 fps); tune as needed.
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
         data=LeRobotRoboCasaDataConfig(
             repo_id="jellyho/robocasa365-PrepareCoffee",
             base_config=DataConfig(prompt_from_task=True),
@@ -885,7 +887,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     ),
     # RLT ("RL Token") variant of pi05_robocasa: learns the compact RL-token bottleneck jointly with
     # the BC finetune (language-conditioned token, single forward). Same data/optimizer as pi05_robocasa;
@@ -896,7 +898,7 @@ _CONFIGS = [
         name="pi05_robocasa_rlt",
         model=pi0_rlt.Pi0RLTConfig(
             pi05=True,
-            action_horizon=10,
+            action_horizon=16,
             discrete_state_input=False,
             # readout head by default: RLT loss does not reshape the backbone (BC does). Flip to True to
             # let the RLT loss flow into the VLM features.
@@ -920,7 +922,7 @@ _CONFIGS = [
         ),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
     ),
@@ -1145,7 +1147,7 @@ def _robocasa_task_config(task: str) -> TrainConfig:
     """
     return TrainConfig(
         name=f"pi05_robocasa_{task}",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
         data=LeRobotRoboCasaDataConfig(
             repo_id=f"jellyho/robocasa365-{task}",
             base_config=DataConfig(prompt_from_task=True),
@@ -1158,7 +1160,7 @@ def _robocasa_task_config(task: str) -> TrainConfig:
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     )
 
 
@@ -1232,7 +1234,7 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
     return TrainConfig(
         name=f"pi05_robocasa_{task}_rlt",
         model=pi0_rlt.Pi0RLTConfig(
-            pi05=True, action_horizon=10, discrete_state_input=False, rlt_backbone_gradient=False, rlt_bc_probe=True
+            pi05=True, action_horizon=16, discrete_state_input=False, rlt_backbone_gradient=False, rlt_bc_probe=True
         ),
         data=LeRobotRoboCasaDataConfig(
             repo_id=f"jellyho/robocasa365-{task}",
@@ -1252,7 +1254,7 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
         ),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
         rlt_probe_eval_interval=10_000,
