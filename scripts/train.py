@@ -1050,8 +1050,10 @@ def main(config: _config.TrainConfig):
                 pextract_rlt = None
 
         # In-process sim eval of the VLA + latent-probe policies (headless). Heavier than the other
-        # monitors (spins the sim), so it is guarded and disabled on failure like the rest.
-        if probe_eval_fn is not None and step % config.rlt_probe_eval_interval == 0:
+        # monitors (spins the sim), so it is guarded and disabled on failure like the rest. Skip
+        # step 0: the probe head is freshly initialized and the policy is untrained, so it is a
+        # guaranteed 0% that just burns ~40 min of rollouts.
+        if probe_eval_fn is not None and step > 0 and step % config.rlt_probe_eval_interval == 0:
             try:
                 t_ev = time.perf_counter()
                 res = probe_eval_fn(train_state, seed=0)
