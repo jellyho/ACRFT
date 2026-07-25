@@ -31,7 +31,7 @@
 #                              so whatever consumes z_rl must supply proprio itself. (NO_PROPRIO=1)
 #     --objective STR          reconstruction | progress | reconstruction+progress (RLT_OBJECTIVE=)
 #                              anything with "progress" regresses time-to-success, derived from the
-#                              sparse success reward (see training/robocasa_progress.py)
+#                              sparse success reward (see training/progress.py)
 #     --scalar-head            progress head = MSE regression instead of the default HL-Gauss
 #                              histogram + cross-entropy                     (SCALAR_HEAD=1)
 #     --progress-bins INT      histogram bins for the distributional head    (PROGRESS_BINS=)

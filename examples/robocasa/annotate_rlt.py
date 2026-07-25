@@ -9,7 +9,7 @@ Runs a trained Pi0RLT checkpoint over every frame of a RoboCasa task and writes,
                                             (the `a'` candidates the bootstrap maximises over)
     reward       ()               float32   sparse success reward, from the dataset
     mc_return    ()               float32   discounted return-to-go (the critic's MC target)
-    progress     ()               float32   1 - time-to-success / horizon (see robocasa_progress.py)
+    progress     ()               float32   1 - time-to-success / horizon (see training/progress.py)
     episode/frame index, done
 
 The whole point is that critic training then never touches the VLA or any video: it reads these
@@ -48,7 +48,7 @@ import openpi.models.model as _model
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
-import openpi.training.robocasa_progress as _progress
+import openpi.training.progress as _progress
 import openpi.transforms as _transforms
 
 logger = logging.getLogger(__name__)
@@ -129,7 +129,9 @@ def main() -> None:
     from lerobot.datasets import lerobot_dataset
 
     meta = lerobot_dataset.LeRobotDatasetMetadata(data_config.repo_id)
-    reward_all = _progress._read_reward_column(pathlib.Path(meta.root), meta.total_frames)
+    reward_all = _progress.read_reward_column(pathlib.Path(meta.root), meta.total_frames)
+    if reward_all is None:  # no success column: the sparse reward is all zeros
+        reward_all = np.zeros(meta.total_frames, dtype=np.float32)
     lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
     hi = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
     ep_of = np.zeros(meta.total_frames, dtype=np.int32)

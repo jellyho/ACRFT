@@ -109,7 +109,7 @@ class Observation(Generic[ArrayT]):
     # Pi0RLT specific fields.
 
     # Scalar task progress in [0, 1] (1 = task succeeded), used as an auxiliary target for the RL
-    # token. Only populated when the data config injects it; see training/robocasa_progress.py.
+    # token. Only populated when the data config injects it; see training/progress.py.
     progress: at.Float[ArrayT, "*b"] | None = None
 
     @classmethod

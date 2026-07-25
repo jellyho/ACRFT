@@ -54,7 +54,7 @@ Key design choices, and where they live:
 | Language-conditioned RL token | `models/pi0_rlt.py` | token reads the image-token hidden states of the full image+language prefix |
 | Joint BC + RLT, one forward | `Pi0RLT.compute_loss` | RLT reuses the BC forward's prefix output; ≈1.12× BC step cost |
 | Stop-gradient readout (default) | `rlt_backbone_gradient=False` | RLT loss never reshapes the VLM; BC alone shapes it. **Backbone-grad fails** (see results) |
-| Progress = per-episode time-to-success | `training/robocasa_progress.py` | 0 at start → 1 at success, normalized per demo (not a discounted value) |
+| Progress = per-episode time-to-success | `training/progress.py` | 0 at start → 1 at success, normalized per demo (not a discounted value) |
 | Latent BC probe | `rlt_bc_probe=True` | a small flow-matching head on the *frozen* token; measures how much policy the latent alone recovers |
 | QC vs ARQ critic | `rlt_critic/critic.py` | ARQ returns a value per prefix length → adaptive chunk commit at deploy |
 
@@ -189,7 +189,7 @@ backbone-gradient is a clear negative. Critic and deployment results are in prog
 
 ```
 src/openpi/models/pi0_rlt.py             Pi0RLT: RL-token bottleneck, progress head, latent BC probe
-src/openpi/training/robocasa_progress.py per-episode time-to-success progress labels
+src/openpi/training/progress.py per-episode time-to-success progress labels
 src/openpi/rlt_critic/critic.py          QC / ARQ critics (scalar + HL-Gauss), ensemble
 scripts/train_rlt_critic.py              Stage 3 critic training (GPU-resident, lax.scan)
 scripts/train.py                         Stage 1 training loop (+ RLT monitors, probe sim eval)

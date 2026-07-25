@@ -29,7 +29,7 @@ Differences from the reference frozen-VLA stage — chosen for the RoboCasa port
         stop-gradient'd (default True; disabling risks feature collapse).
       - ``rlt_objective``: "reconstruction", "progress", or both.  The progress
         target is time-to-success derived from the sparse success reward (see
-        training/robocasa_progress.py); its head is HL-Gauss distributional by
+        training/progress.py); its head is HL-Gauss distributional by
         default, or plain regression.
       - ``rlt_decoder_mode``: "autoregressive" (the paper's Eq. 2) or "parallel"
         (no teacher forcing, so the token cannot be bypassed via context).
@@ -138,7 +138,7 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
     rlt_include_proprio: bool = True
     # Objective for the bottleneck: "reconstruction", "progress", or "reconstruction+progress".
     # Anything with "progress" needs the data config to inject a `progress` label
-    # (LeRobotRoboCasaDataConfig(include_progress=True); see training/robocasa_progress.py).
+    # (LeRobotRoboCasaDataConfig(include_progress=True); see training/progress.py).
     rlt_objective: str = "reconstruction"
     # Progress head: "distributional" (HL-Gauss histogram + cross-entropy) or "regression" (MSE).
     # Distributional gives the token a K-dim target instead of a single scalar, and can represent the

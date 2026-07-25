@@ -58,7 +58,7 @@ PROJECT = {
         ),
         (
             "Progress labels",
-            "`robocasa_progress.py`: task progress = per-episode time-to-success (0 at start → 1 at success), derived from the sparse success reward. Normalized per demo, NOT a discounted value — the discount is left to the critic.",
+            "`progress.py`: task progress = per-episode time-to-success (0 at start → 1 at success), derived from the sparse success reward. Normalized per demo, NOT a discounted value — the discount is left to the critic.",
         ),
         (
             "Monitoring & viz",

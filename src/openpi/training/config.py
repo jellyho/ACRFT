@@ -28,7 +28,7 @@ import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.polaris_config as polaris_config
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
-import openpi.training.robocasa_progress as robocasa_progress
+import openpi.training.progress as _progress
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
@@ -373,6 +373,9 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
     # Inject a scalar `progress` label (time-to-success, from the sparse reward) into every sample.
     # Needed by Pi0RLT's progress objective; harmless but wasted work otherwise.
     include_progress: bool = False
+    # Dataset column holding the sparse success signal that defines "task done" for `progress`.
+    # Defaults to the LeRobot convention; a dataset without it falls back to episode-end-is-the-goal.
+    reward_key: str = "next.reward"
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -390,7 +393,9 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
         repack_inputs = []
         if self.include_progress:
             structure["progress"] = "progress"
-            repack_inputs.append(robocasa_progress.AddProgress(robocasa_progress.compute_progress_labels(self.repo_id)))
+            repack_inputs.append(
+                _progress.AddProgress(_progress.compute_progress_labels(self.repo_id, reward_key=self.reward_key))
+            )
         repack_inputs.append(_transforms.RepackTransform(structure))
         repack_transform = _transforms.Group(inputs=repack_inputs)
 
