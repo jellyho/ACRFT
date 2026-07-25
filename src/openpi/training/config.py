@@ -597,6 +597,11 @@ class TrainConfig:
     rlt_probe_eval_interval: int = 0
     # Rollouts per policy per probe eval.
     rlt_probe_eval_trials: int = 20
+    # Base seed for the probe eval. Trial i always runs scene `seed + i` and the policy always starts
+    # from the same sampling noise, so every eval — at every step, and across every run that keeps
+    # this value — is scored on an identical set of episodes. Change it only to draw a different
+    # (still fixed) eval set; the numbers are then not comparable to runs using the old value.
+    rlt_probe_eval_seed: int = 0
     # Number of episodes drawn as trajectory paths in the RLT embedding visualization. Also sets the
     # held-out-episode probe split (half fit / half scored), so keep it >= 4.
     rlt_vis_num_trajectories: int = 8

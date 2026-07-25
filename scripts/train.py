@@ -880,6 +880,12 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
         if "env" not in env_box:
             env_box["env"] = _ro.make_env(task, camera_size=256, seed=seed)
         env = env_box["env"]
+        # Every eval must score the SAME episodes so the 10k/20k/... curve is a like-for-like
+        # comparison (and so two runs with the same seed are directly comparable). run_trials already
+        # reseeds env.rng per trial and each _policy_fn starts from a fresh key, but some robosuite
+        # placement samplers draw from the global numpy RNG — pin that here too, since the env object
+        # is reused across evals and would otherwise carry state forward.
+        np.random.seed(seed)  # robosuite reads the legacy global RNG
         n = config.rlt_probe_eval_trials
         replan = config.model.action_horizon  # execute a full predicted chunk before re-querying
         vla = _ro.run_trials(
@@ -1069,7 +1075,7 @@ def main(config: _config.TrainConfig):
         if probe_eval_fn is not None and step > 0 and step % config.rlt_probe_eval_interval == 0:
             try:
                 t_ev = time.perf_counter()
-                res = probe_eval_fn(train_state, seed=0)
+                res = probe_eval_fn(train_state, seed=config.rlt_probe_eval_seed)
                 diag_info.update(res)
                 logging.info(
                     f"probe eval @ {step}: vla={res['eval/vla_success']:.0%} "
