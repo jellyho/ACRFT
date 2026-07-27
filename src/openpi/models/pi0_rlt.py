@@ -186,6 +186,18 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
     rlt_progress_sigma_frac: float = 0.75
     # Weight of the progress term inside the RLT loss.
     progress_loss_weight: float = 1.0
+    # Where the auxiliary heads (progress, proprio) read their features from.
+    #   "decoder" (default): the decoder's position-0 output, a NONLINEAR function of z_rl alone
+    #       (position 0 attends only to itself, and its input is the projected token, so no
+    #       teacher-forced context can leak in - progress/proprio cannot be bypassed either).
+    #   "token": a linear map straight off z_rl - the original design, kept for ablation.
+    # A linear head forces its low-dimensional target to be linearly decodable from the WHOLE 2048-d
+    # token, which drags the representation onto that direction; a scalar target can then collapse
+    # the bottleneck (observed as a pretty progress-coloured UMAP with bypass_ratio ~ 1 and a low
+    # participation ratio). Reading through the decoder instead only asks that the information be
+    # RECOVERABLE, and shares the trunk that reconstruction already needs, so collapse costs
+    # reconstruction and is self-limiting.
+    rlt_aux_head_source: str = "decoder"
     # How the reconstruction is decoded from z_rl. "autoregressive" is the paper's Eq. 2 (teacher
     # forced on the true previous embeddings); "parallel" decodes every position from z_rl alone, so
     # the token cannot be bypassed via context. See Pi0RLT._decode.
@@ -218,6 +230,8 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
             raise ValueError("Pi0RLTConfig requires pi05=True")
         if self.rlt_width % 2 != 0:
             raise ValueError(f"rlt_width must be even (sincos posemb), got {self.rlt_width}")
+        if self.rlt_aux_head_source not in ("decoder", "token"):
+            raise ValueError(f"rlt_aux_head_source must be decoder|token, got {self.rlt_aux_head_source!r}")
         if self.rlt_decoder_mode not in ("autoregressive", "parallel"):
             raise ValueError(f"rlt_decoder_mode must be 'autoregressive' or 'parallel', got {self.rlt_decoder_mode!r}")
         if self.rlt_objective not in ("reconstruction", "progress", "reconstruction+progress"):
@@ -284,10 +298,15 @@ class Pi0RLT(Pi0):
             {f"blk_{i}": _Block(d, config.rlt_num_heads, mlp_hidden, rngs=rngs) for i in range(self._dec_depth)}
         )
         self.rlt_dec_out_proj = nnx.Linear(d, vlm_width, rngs=rngs)  # d → W (reconstruction h_φ)
-        # Proprio reconstruction head straight off the bottleneck: forces proprio into z_rl, which is
-        # only needed when whatever consumes z_rl downstream cannot see proprio on its own.
+        # Auxiliary heads (proprio, progress) read either the decoder's position-0 output (nonlinear
+        # in z_rl, default) or z_rl itself (the original linear design). See rlt_aux_head_source.
+        self.rlt_aux_head_source = config.rlt_aux_head_source
+        # `_decode` returns the projected reconstruction, so its position-0 output is vlm_width wide.
+        aux_in = vlm_width if config.rlt_aux_head_source == "decoder" else config.rlt_token_dim
+        # Proprio reconstruction head: forces proprio into z_rl, which is only needed when whatever
+        # consumes z_rl downstream cannot see proprio on its own.
         if self.rlt_include_proprio:
-            self.rlt_proprio_out_proj = nnx.Linear(config.rlt_token_dim, config.action_dim, rngs=rngs)
+            self.rlt_proprio_out_proj = nnx.Linear(aux_in, config.action_dim, rngs=rngs)
 
         # ── Task-progress head ──────────────────────────────────────────────
         # Distributional: logits over `bins` buckets of progress in [0, 1]. Regression: one scalar.
@@ -304,7 +323,7 @@ class Pi0RLT(Pi0):
         self._prog_sigma = config.rlt_progress_sigma_frac / config.rlt_progress_bins
         if "progress" in config.rlt_objective:
             n_out = config.rlt_progress_bins if config.rlt_progress_head == "distributional" else 1
-            self.rlt_progress_out_proj = nnx.Linear(config.rlt_token_dim, n_out, rngs=rngs)
+            self.rlt_progress_out_proj = nnx.Linear(aux_in, n_out, rngs=rngs)
 
         # ── Latent BC probe (flow-matching action head on the frozen z_rl) ──
         # Built only when enabled, so a non-probe checkpoint keeps its old param structure.
@@ -434,8 +453,11 @@ class Pi0RLT(Pi0):
         img_mask = prefix_mask[:, :num_img]  # [b, M]
         return z, img_mask
 
-    def _progress_loss(self, z_rl, target):
+    def _progress_loss(self, feat, target):
         """Progress loss + diagnostics. ``target`` is the scalar label in [0, 1], shape [b].
+
+        ``feat`` is whatever ``rlt_aux_head_source`` selects: the decoder's position-0 output
+        (nonlinear in z_rl) or z_rl itself.
 
         Distributional (HL-Gauss): the scalar target becomes a Gaussian smeared over the bins, via
         differences of its CDF at the bin edges, and the head is trained with cross-entropy. That
@@ -443,7 +465,7 @@ class Pi0RLT(Pi0):
         express genuine ambiguity about how far away success is (the same frame can be followed by a
         fast or a slow finish) instead of being forced onto a conditional mean.
         """
-        out = self.rlt_progress_out_proj(z_rl)  # [b, bins] or [b, 1]
+        out = self.rlt_progress_out_proj(feat)  # [b, bins] or [b, 1]
         target = jnp.clip(target, 0.0, 1.0)
 
         if self.rlt_progress_head == "regression":
@@ -478,29 +500,38 @@ class Pi0RLT(Pi0):
         zeros = jnp.zeros(z_rl.shape[0], dtype=jnp.float32)
         aux = {}
 
-        if "reconstruction" in self.rlt_objective:
-            recon = self._decode(z_rl, z_tgt, img_mask)  # [b, M, W]
+        # The decoder is needed for reconstruction, and also to feed the auxiliary heads when they
+        # read its position-0 output. Run it at most once and share the result.
+        has_recon = "reconstruction" in self.rlt_objective
+        has_progress = "progress" in self.rlt_objective
+        wants_aux = self.rlt_aux_head_source == "decoder" and (has_progress or self.rlt_include_proprio)
+        dec_out = self._decode(z_rl, z_tgt, img_mask) if (has_recon or wants_aux) else None
+        # Position 0 attends only to itself and its input is the projected token, so this is a
+        # nonlinear function of z_rl ALONE - no teacher-forced context can leak into the aux heads.
+        aux_feat = dec_out[:, 0] if self.rlt_aux_head_source == "decoder" else z_rl
+
+        if has_recon:
             # Masked reconstruction MSE (mean over feature dim, masked mean over tokens).
-            err = jnp.mean(jnp.square(recon - z_tgt), axis=-1)  # [b, M]
+            err = jnp.mean(jnp.square(dec_out - z_tgt), axis=-1)  # [b, M]
             m = img_mask.astype(jnp.float32)
             recon_loss = jnp.sum(err * m, axis=-1) / (jnp.sum(m, axis=-1) + 1e-6)  # [b]
             rlt_loss = recon_loss
             aux |= {"rlt/loss_recon": jnp.mean(recon_loss)}
             if self.rlt_include_proprio:
-                proprio_recon = self.rlt_proprio_out_proj(z_rl)  # [b, ad]
+                proprio_recon = self.rlt_proprio_out_proj(aux_feat)  # [b, ad]
                 proprio_loss = jnp.mean(jnp.square(proprio_recon - state), axis=-1)  # [b]
                 rlt_loss = rlt_loss + self.proprio_loss_weight * proprio_loss
                 aux |= {"rlt/loss_proprio": jnp.mean(proprio_loss)}
         else:
             rlt_loss = zeros
 
-        if "progress" in self.rlt_objective:
+        if has_progress:
             if progress is None:
                 raise ValueError(
                     f"rlt_objective={self.rlt_objective!r} needs a `progress` label on the observation. "
                     "Set include_progress=True on LeRobotRoboCasaDataConfig."
                 )
-            prog_loss, prog_pred, prog_entropy = self._progress_loss(z_rl, progress)
+            prog_loss, prog_pred, prog_entropy = self._progress_loss(aux_feat, progress)
             rlt_loss = rlt_loss + self.progress_loss_weight * prog_loss
             aux |= {
                 "rlt/loss_progress": jnp.mean(prog_loss),
