@@ -1244,7 +1244,14 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
     return TrainConfig(
         name=f"pi05_robocasa_{task}_rlt",
         model=pi0_rlt.Pi0RLTConfig(
-            pi05=True, action_horizon=16, discrete_state_input=False, rlt_backbone_gradient=False, rlt_bc_probe=True
+            pi05=True,
+            action_horizon=16,
+            discrete_state_input=False,
+            rlt_backbone_gradient=False,
+            rlt_bc_probe=True,
+            # RoboCasa actions are 12-d; the rest of the model's 32-d action space is zero padding
+            # that the probe should not waste itself regressing (see rlt_probe_action_dim).
+            rlt_probe_action_dim=12,
         ),
         data=LeRobotRoboCasaDataConfig(
             repo_id=f"jellyho/robocasa365-{task}",

@@ -96,6 +96,42 @@ class _Block(nnx.Module):
         return x + self.mlp(self.norm2(x))
 
 
+class _DiTBlock(nnx.Module):
+    """DiT block: self-attention + MLP, both modulated by a conditioning vector via adaLN-Zero.
+
+    The conditioning vector produces per-block (shift, scale, gate) for each sub-layer. Because the
+    modulation projection is zero-initialized, every block starts as the identity and the network
+    learns how much conditioning to apply - the standard adaLN-Zero recipe (Peebles & Xie), which is
+    what makes a small DiT train stably. The multiplicative scale/gate is also what lets the head
+    represent time-dependent rescalings (e.g. the x_t/t target on constant action dims) that a
+    concatenated time embedding cannot.
+    """
+
+    def __init__(self, dim: int, num_heads: int, mlp_hidden: int, *, rngs: nnx.Rngs):
+        # No learned affine in the norms: adaLN supplies scale/shift from the conditioning instead.
+        self.norm1 = nnx.LayerNorm(dim, use_scale=False, use_bias=False, rngs=rngs)
+        self.attn = nnx.MultiHeadAttention(
+            num_heads=num_heads, in_features=dim, decode=False, dropout_rate=0.0, rngs=rngs
+        )
+        self.norm2 = nnx.LayerNorm(dim, use_scale=False, use_bias=False, rngs=rngs)
+        self.mlp = _Mlp(dim, mlp_hidden, rngs=rngs)
+        self.ada = nnx.Linear(
+            dim,
+            6 * dim,
+            kernel_init=nnx.initializers.zeros_init(),
+            bias_init=nnx.initializers.zeros_init(),
+            rngs=rngs,
+        )
+
+    def __call__(self, x, cond):
+        # x: [b, T, dim];  cond: [b, dim]
+        shift1, scale1, gate1, shift2, scale2, gate2 = jnp.split(self.ada(nnx.swish(cond))[:, None, :], 6, axis=-1)
+        h = self.norm1(x) * (1 + scale1) + shift1
+        x = x + gate1 * self.attn(h)
+        h = self.norm2(x) * (1 + scale2) + shift2
+        return x + gate2 * self.mlp(h)
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -159,9 +195,22 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
     # objective. It measures how much of the policy is recoverable from the frozen latent ALONE: its
     # gradient never reaches z_rl or the backbone, so it changes nothing about RLT/BC training. At eval
     # its rollout success rate is compared against the full VLA's.
+    # The head is a small DiT: the action chunk is a sequence of H tokens with self-attention, and
+    # time + z_rl + proprio condition it through adaLN-Zero. That mirrors how the VLA's action expert
+    # is conditioned (adaRMS), so a probe/VLA gap is evidence about the LATENT rather than about the
+    # head being weaker. A flat MLP with concatenated time cannot represent the multiplicative
+    # x_t/t interaction the flow-matching target needs, which showed up as a large loss floor.
     rlt_bc_probe: bool = False
-    rlt_probe_width: int = 1024
+    rlt_probe_width: int = 512
     rlt_probe_depth: int = 4
+    rlt_probe_heads: int = 8
+    rlt_probe_mlp_ratio: int = 4
+    # Number of LEADING action dims the probe models. Actions are padded out to `action_dim` (32) to
+    # fit the pretrained pi05 projections, but the padding is a constant 0 whose flow-matching target
+    # is exactly x_t/t - an artificial regression problem that dominated the probe loss (20 of 32
+    # dims). The probe is our own head with no pretrained constraint, so it models only the real dims
+    # and pads back to `action_dim` when sampling. None = model everything.
+    rlt_probe_action_dim: int | None = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -260,20 +309,46 @@ class Pi0RLT(Pi0):
         # ── Latent BC probe (flow-matching action head on the frozen z_rl) ──
         # Built only when enabled, so a non-probe checkpoint keeps its old param structure.
         self.rlt_bc_probe = config.rlt_bc_probe
+        # Real action dims the probe models; the rest of `action_dim` is constant padding.
+        self.probe_action_dim = config.rlt_probe_action_dim or self.action_dim
         if config.rlt_bc_probe:
+            if not 0 < self.probe_action_dim <= self.action_dim:
+                raise ValueError(f"rlt_probe_action_dim must be in (0, {self.action_dim}]")
             pw = config.rlt_probe_width
-            act_flat = self.action_horizon * self.action_dim
-            # velocity(x_t, t, z_rl, proprio): [flatten(x_t), time_emb, z_rl, proprio] -> flatten(v_t).
+            self._probe_depth = config.rlt_probe_depth
+            # Chunk as a sequence of H tokens (not a flat vector), so the head shares structure across
+            # timesteps the way the VLA's action expert does.
+            self.rlt_probe_in = nnx.Linear(self.probe_action_dim, pw, rngs=rngs)
+            self.rlt_probe_pos = nnx.Param(_sincos_posemb(self.action_horizon, pw))
+            # Conditioning: time + z_rl + proprio, summed into one vector that drives every adaLN.
             # Proprio is fed in ALWAYS (even with rlt_include_proprio) so the probe is a fair test of
             # the token's control value: with --no-proprio the token carries no proprio, and the
             # downstream critic gets proprio separately, so the probe must too.
-            self.rlt_probe_in = nnx.Linear(act_flat + pw + config.rlt_token_dim + config.action_dim, pw, rngs=rngs)
             self.rlt_probe_time = nnx.Linear(pw, pw, rngs=rngs)  # maps sincos(t) -> width
-            self._probe_depth = config.rlt_probe_depth
-            self.rlt_probe_hidden = nnx.Dict(
-                {f"fc_{i}": nnx.Linear(pw, pw, rngs=rngs) for i in range(config.rlt_probe_depth)}
+            self.rlt_probe_tok = nnx.Linear(config.rlt_token_dim, pw, rngs=rngs)
+            self.rlt_probe_state = nnx.Linear(config.action_dim, pw, rngs=rngs)
+            self.rlt_probe_blocks = nnx.Dict(
+                {
+                    f"blk_{i}": _DiTBlock(pw, config.rlt_probe_heads, pw * config.rlt_probe_mlp_ratio, rngs=rngs)
+                    for i in range(config.rlt_probe_depth)
+                }
             )
-            self.rlt_probe_out = nnx.Linear(pw, act_flat, rngs=rngs)
+            # Zero-init final layer (adaLN-Zero): the head starts predicting v=0 and grows from there.
+            self.rlt_probe_out_norm = nnx.LayerNorm(pw, use_scale=False, use_bias=False, rngs=rngs)
+            self.rlt_probe_out_ada = nnx.Linear(
+                pw,
+                2 * pw,
+                kernel_init=nnx.initializers.zeros_init(),
+                bias_init=nnx.initializers.zeros_init(),
+                rngs=rngs,
+            )
+            self.rlt_probe_out = nnx.Linear(
+                pw,
+                self.probe_action_dim,
+                kernel_init=nnx.initializers.zeros_init(),
+                bias_init=nnx.initializers.zeros_init(),
+                rngs=rngs,
+            )
 
     # ------------------------------------------------------------------
     # Encoder g_φ : (z_img, proprio, <rl>) → z_rl bottleneck
@@ -565,22 +640,29 @@ class Pi0RLT(Pi0):
     # ------------------------------------------------------------------
 
     def _probe_velocity(self, x_t, time, z_rl, state):
-        """Flow-matching velocity from (noisy action chunk, time, RL token, proprio). z_rl is used
-        as-is; callers pass a stop-gradient'd token during training so the probe never shapes it."""
-        b = x_t.shape[0]
-        xf = x_t.reshape(b, -1)  # [b, H*A]
-        t_emb = posemb_sincos(time, self.rlt_probe_time.in_features, min_period=4e-3, max_period=4.0)
-        t_emb = nnx.swish(self.rlt_probe_time(t_emb))
-        h = nnx.swish(self.rlt_probe_in(jnp.concatenate([xf, t_emb, z_rl, state], axis=-1)))
+        """Flow-matching velocity over the REAL action dims, from (noisy chunk, time, z_rl, proprio).
+
+        x_t is [b, H, probe_action_dim] and the output matches. z_rl is used as-is; callers pass a
+        stop-gradient'd token during training so the probe never shapes it.
+        """
+        pw = self.rlt_probe_time.in_features
+        t_emb = posemb_sincos(time, pw, min_period=4e-3, max_period=4.0)
+        # One conditioning vector drives adaLN in every block: time + latent + proprio.
+        cond = nnx.swish(self.rlt_probe_time(t_emb)) + self.rlt_probe_tok(z_rl) + self.rlt_probe_state(state)
+        h = self.rlt_probe_in(x_t) + self.rlt_probe_pos.value  # [b, H, pw]
         for i in range(self._probe_depth):
-            h = h + nnx.swish(self.rlt_probe_hidden[f"fc_{i}"](h))  # residual MLP
-        return self.rlt_probe_out(h).reshape(x_t.shape)  # [b, H, A]
+            h = self.rlt_probe_blocks[f"blk_{i}"](h, cond)
+        shift, scale = jnp.split(self.rlt_probe_out_ada(nnx.swish(cond))[:, None, :], 2, axis=-1)
+        return self.rlt_probe_out(self.rlt_probe_out_norm(h) * (1 + scale) + shift)
 
     def _probe_loss(self, x_t, time, u_t, z_rl, state):
+        # Only the real action dims: the padded ones are a constant whose target is exactly x_t/t,
+        # an artificial regression problem that would otherwise dominate this loss.
+        ad = self.probe_action_dim
         # proprio is a plain conditioning input, not part of the latent — no stop-gradient needed
         # (it does not touch z_rl), but the token itself is detached so the probe stays a pure probe.
-        v = self._probe_velocity(x_t, time, jax.lax.stop_gradient(z_rl), state)
-        return jnp.mean(jnp.square(v - u_t), axis=(-1, -2))  # [b]
+        v = self._probe_velocity(x_t[..., :ad], time, jax.lax.stop_gradient(z_rl), state)
+        return jnp.mean(jnp.square(v - u_t[..., :ad]), axis=(-1, -2))  # [b]
 
     def probe_sample_actions(
         self, rng: at.KeyArrayLike, observation: _model.Observation, *, num_steps: int = 10
@@ -589,6 +671,7 @@ class Pi0RLT(Pi0):
         z_rl = self.extract_rl_token(observation)  # preprocesses internally
         state = observation.state  # preprocess leaves state unchanged
         b = z_rl.shape[0]
+        ad = self.probe_action_dim
         dt = -1.0 / num_steps
 
         def step(carry):
@@ -596,8 +679,12 @@ class Pi0RLT(Pi0):
             v = self._probe_velocity(x_t, jnp.broadcast_to(t, b), z_rl, state)
             return x_t + dt * v, t + dt
 
-        noise = jax.random.normal(rng, (b, self.action_horizon, self.action_dim))
+        noise = jax.random.normal(rng, (b, self.action_horizon, ad))
         x_0, _ = jax.lax.while_loop(lambda c: c[1] >= -dt / 2, step, (noise, 1.0))
+        # Pad the modelled dims back out to action_dim so the output transform chain (which expects
+        # the model's padded action space, then slices) is identical to the VLA's.
+        if ad < self.action_dim:
+            x_0 = jnp.pad(x_0, ((0, 0), (0, 0), (0, self.action_dim - ad)))
         return x_0
 
     # ------------------------------------------------------------------
