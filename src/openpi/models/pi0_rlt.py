@@ -301,8 +301,16 @@ class Pi0RLT(Pi0):
         # Auxiliary heads (proprio, progress) read either the decoder's position-0 output (nonlinear
         # in z_rl, default) or z_rl itself (the original linear design). See rlt_aux_head_source.
         self.rlt_aux_head_source = config.rlt_aux_head_source
-        # `_decode` returns the projected reconstruction, so its position-0 output is vlm_width wide.
-        aux_in = vlm_width if config.rlt_aux_head_source == "decoder" else config.rlt_token_dim
+        # A dedicated decoder query is only worth building when some aux head actually reads it; with
+        # no aux head the model is then byte-identical to one that never had this feature, which keeps
+        # "reconstruction only, no proprio" a clean baseline across code versions.
+        self._dec_has_aux = config.rlt_aux_head_source == "decoder" and (
+            config.rlt_include_proprio or "progress" in config.rlt_objective
+        )
+        if self._dec_has_aux:
+            self.rlt_dec_aux_embed = nnx.Param(jax.random.normal(rngs.params(), (d,)) * 0.02)
+        # Aux heads read the decoder's hidden state at that query (width d), or z_rl directly.
+        aux_in = d if config.rlt_aux_head_source == "decoder" else config.rlt_token_dim
         # Proprio reconstruction head: forces proprio into z_rl, which is only needed when whatever
         # consumes z_rl downstream cannot see proprio on its own.
         if self.rlt_include_proprio:
@@ -403,7 +411,7 @@ class Pi0RLT(Pi0):
     # ------------------------------------------------------------------
 
     def _decode(self, z_rl, z_tgt, img_mask):
-        """Reconstruct z̄_{1:M} [b, M, W] from the single RL token z_rl [b, rlt_token_dim].
+        """Decode from the single RL token z_rl. Returns ``(recon [b, M, W], aux_feat [b, d] | None)``.
 
         ``autoregressive`` (default) is the paper's Eq. 2: teacher-forced over the sequence
         [z_rl, z̄_1, ..., z̄_{M-1}] with a causal mask, so position j predicts z̄_{j+1} having seen
@@ -415,31 +423,50 @@ class Pi0RLT(Pi0):
         decoder can score well while ignoring z_rl (see ``rlt_bypass_diagnostics``); this mode makes
         that impossible, at the cost of a much harder reconstruction task (expect a higher loss —
         what matters is what ends up inside z_rl, not the loss value).
+
+        When the auxiliary heads read from the decoder, a DEDICATED query token is appended whose
+        attention row allows only z_rl (position 0) and itself. That keeps the aux features a
+        function of z_rl alone - reading them off the last position instead would let them see the
+        teacher-forced targets, so progress/proprio could be predicted from the true embeddings
+        without the token, exactly the bypass this design exists to prevent. A dedicated query also
+        avoids overloading position 0, which already has to reconstruct z̄_1.
         """
         b, M, _ = z_tgt.shape
         d = self.rlt_width
         start = self.rlt_dec_rl_proj(z_rl)[:, None, :]  # [b, 1, d]
+        parallel = self.rlt_decoder_mode == "parallel"
 
-        if self.rlt_decoder_mode == "parallel":
+        if parallel:
             # Broadcast the token to every position; positions differ only by the positional code.
-            x = jnp.broadcast_to(start, (b, M, d)) + _sincos_posemb(M, d)[None]
-            mask = jnp.ones((b, 1, 1, M), dtype=jnp.bool_)  # full attention, nothing to hide
+            x = jnp.broadcast_to(start, (b, M, d))
+            base = jnp.ones((b, 1, M, M), dtype=jnp.bool_)  # full attention, nothing to hide
+        else:
+            shifted = self.rlt_dec_tgt_proj(z_tgt[:, : M - 1])  # [b, M-1, d]
+            x = jnp.concatenate([start, shifted], axis=1)  # [b, M, d]
+            causal = jnp.tril(jnp.ones((M, M), dtype=jnp.bool_))  # [M, M]
+            # Key validity: position 0 (z_rl) always valid; position j (z̄_j) valid iff image token j is.
+            kv_valid = jnp.concatenate([jnp.ones((b, 1), dtype=jnp.bool_), img_mask[:, : M - 1]], axis=1)
+            base = causal[None, None] & kv_valid[:, None, None, :]  # [b, 1, M, M]
+
+        if not self._dec_has_aux:
+            x = x + _sincos_posemb(M, d)[None]
             for i in range(self._dec_depth):
-                x = self.rlt_decoder[f"blk_{i}"](x, mask)
-            return self.rlt_dec_out_proj(x)  # [b, M, W]
+                x = self.rlt_decoder[f"blk_{i}"](x, base)
+            return self.rlt_dec_out_proj(x), None
 
-        shifted = self.rlt_dec_tgt_proj(z_tgt[:, : M - 1])  # [b, M-1, d]
-        x = jnp.concatenate([start, shifted], axis=1)  # [b, M, d]
-        x = x + _sincos_posemb(M, d)[None]
-
-        causal = jnp.tril(jnp.ones((M, M), dtype=jnp.bool_))  # [M, M]
-        # Key validity: position 0 (z_rl) always valid; position j (z̄_j) valid iff image token j valid.
-        kv_valid = jnp.concatenate([jnp.ones((b, 1), dtype=jnp.bool_), img_mask[:, : M - 1]], axis=1)  # [b, M]
-        mask = causal[None, None] & kv_valid[:, None, None, :]  # [b, 1, M, M]
+        q = jnp.broadcast_to(self.rlt_dec_aux_embed.value[None, None], (b, 1, d))
+        x = jnp.concatenate([x, q], axis=1) + _sincos_posemb(M + 1, d)[None]  # [b, M+1, d]
+        # Reconstruction rows cannot see the aux query; the aux row sees ONLY z_rl and itself.
+        recon_rows = jnp.concatenate([base, jnp.zeros((b, 1, M, 1), dtype=jnp.bool_)], axis=-1)
+        cols = jnp.arange(M + 1)
+        aux_row = jnp.broadcast_to(((cols == 0) | (cols == M))[None, None, None, :], (b, 1, 1, M + 1))
+        mask = jnp.concatenate([recon_rows, aux_row], axis=2)  # [b, 1, M+1, M+1]
 
         for i in range(self._dec_depth):
             x = self.rlt_decoder[f"blk_{i}"](x, mask)
-        return self.rlt_dec_out_proj(x)  # [b, M, W]
+        # The aux heads read the decoder's HIDDEN state at the query, not the reconstruction
+        # projection (whose output space is shaped to be an image embedding).
+        return self.rlt_dec_out_proj(x[:, :M]), x[:, M]
 
     # ------------------------------------------------------------------
     # Image-token embeddings from the (language-conditioned) prefix
@@ -504,15 +531,14 @@ class Pi0RLT(Pi0):
         # read its position-0 output. Run it at most once and share the result.
         has_recon = "reconstruction" in self.rlt_objective
         has_progress = "progress" in self.rlt_objective
-        wants_aux = self.rlt_aux_head_source == "decoder" and (has_progress or self.rlt_include_proprio)
-        dec_out = self._decode(z_rl, z_tgt, img_mask) if (has_recon or wants_aux) else None
-        # Position 0 attends only to itself and its input is the projected token, so this is a
-        # nonlinear function of z_rl ALONE - no teacher-forced context can leak into the aux heads.
-        aux_feat = dec_out[:, 0] if self.rlt_aux_head_source == "decoder" else z_rl
+        recon, dec_aux = self._decode(z_rl, z_tgt, img_mask) if (has_recon or self._dec_has_aux) else (None, None)
+        # The aux query attends only to z_rl and itself, so this is a nonlinear function of z_rl
+        # ALONE - no teacher-forced context can leak into the aux heads.
+        aux_feat = dec_aux if self.rlt_aux_head_source == "decoder" else z_rl
 
         if has_recon:
             # Masked reconstruction MSE (mean over feature dim, masked mean over tokens).
-            err = jnp.mean(jnp.square(dec_out - z_tgt), axis=-1)  # [b, M]
+            err = jnp.mean(jnp.square(recon - z_tgt), axis=-1)  # [b, M]
             m = img_mask.astype(jnp.float32)
             recon_loss = jnp.sum(err * m, axis=-1) / (jnp.sum(m, axis=-1) + 1e-6)  # [b]
             rlt_loss = recon_loss
@@ -578,7 +604,7 @@ class Pi0RLT(Pi0):
         m = img_mask.astype(jnp.float32)
 
         def _recon_loss(token):
-            recon = self._decode(token, z, img_mask)
+            recon, _ = self._decode(token, z, img_mask)
             err = jnp.mean(jnp.square(recon - z), axis=-1)
             return jnp.sum(err * m, axis=-1) / (jnp.sum(m, axis=-1) + 1e-6)
 
