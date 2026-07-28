@@ -246,40 +246,67 @@ def main() -> None:
     def extract(rng, obs):
         return model.extract_token_and_base_actions(rng, obs, num_samples=n_cand, num_steps=args.num_flow_steps)
 
+    # Decode ahead of the GPU. Frame decoding and the backbone forward are both slow; run serially
+    # they simply add, and the accelerator idles through every decode. A worker pool filling a bounded
+    # queue keeps the next batch ready before the current one finishes, so the wall clock is whichever
+    # of the two is slower rather than their sum.
     rng = jax.random.key(args.seed)
     t0 = time.perf_counter()
-    for s in range(start, n_keep, args.batch_size):
-        idx = keep[s : s + args.batch_size]
-        items = [dataset[int(i)] for i in idx]
-        batch = jax.tree.map(lambda *xs: np.stack(xs), *items)
-        obs = _model.Observation.from_dict(batch)
 
-        z_rl, base = extract(jax.random.fold_in(rng, s), obs)
-        z_rl = np.asarray(z_rl, np.float32)
-        base = np.asarray(base, np.float32)  # [b, N, H, model_dim]
-        b = len(idx)
-        raw = decode_actions(base.reshape(b * n_cand, H, -1)).reshape(b, n_cand, H, raw_dim)
+    def fetch(ix):
+        items = [dataset[int(i)] for i in ix]
+        return jax.tree.map(lambda *xs: np.stack(xs), *items)
 
-        tok_mm[s : s + b] = z_rl
+    # Overlap decoding with the GPU WITHOUT threads. The video decoders underneath the dataset are
+    # not thread-safe (decoding one from several threads segfaults), but jax dispatch is already
+    # asynchronous: `extract` returns as soon as the work is queued. So decode the next batch while
+    # the accelerator is still busy with the previous one, and only block when writing results out.
+    pending = None
+    n_written = 0
+
+    def _write_scalars(s0, ix, nb):
+        nonlocal n_written
+        scalars["reward"][s0 : s0 + nb] = reward_all[ix]
+        scalars["mc_return"][s0 : s0 + nb] = mc_all[ix]
+        scalars["progress"][s0 : s0 + nb] = progress_all[ix]
+        scalars["episode_index"][s0 : s0 + nb] = ep_of[ix]
+        scalars["frame_index"][s0 : s0 + nb] = frame_of[ix]
+        scalars["done"][s0 : s0 + nb] = done_all[ix]
+        n_written = s0 + nb
+        if (s0 // args.batch_size) % 20 == 0:
+            el = time.perf_counter() - t0
+            rate = (n_written - start) / max(el, 1e-6)
+            logger.info(
+                f"{n_written}/{n_keep}  {rate:.1f} frames/s  eta {(n_keep - n_written) / max(rate, 1e-6) / 60:.1f} min"
+            )
+            done_path.write_text(json.dumps({"done": int(n_written)}))
+
+    def flush(p):
+        s0, ix, bat, z_dev, base_dev = p
+        z_rl = np.asarray(z_dev, np.float32)  # blocks here, once, on work queued an iteration ago
+        base = np.asarray(base_dev, np.float32)  # [b, N, H, model_dim]
+        nb = len(ix)
+        raw = decode_actions(base.reshape(nb * n_cand, H, -1)).reshape(nb, n_cand, H, raw_dim)
+        tok_mm[s0 : s0 + nb] = z_rl
         # The demo's own chunk, decoded through the same chain so it lives in the same space as the
         # candidates -- without it there is no `a` to evaluate Q(s, a) on.
-        chunk_mm[s : s + b] = decode_actions(np.asarray(batch["actions"], np.float32))
-        act_mm[s : s + b] = raw[:, : args.num_samples]
+        chunk_mm[s0 : s0 + nb] = decode_actions(np.asarray(bat["actions"], np.float32))
+        act_mm[s0 : s0 + nb] = raw[:, : args.num_samples]
         if held_mm is not None:
-            held_mm[s : s + b] = raw[:, args.num_samples :]
-        scalars["reward"][s : s + b] = reward_all[idx]
-        scalars["mc_return"][s : s + b] = mc_all[idx]
-        scalars["progress"][s : s + b] = progress_all[idx]
-        scalars["episode_index"][s : s + b] = ep_of[idx]
-        scalars["frame_index"][s : s + b] = frame_of[idx]
-        scalars["done"][s : s + b] = done_all[idx]
+            held_mm[s0 : s0 + nb] = raw[:, args.num_samples :]
+        return s0, ix, nb
 
-        if (s // args.batch_size) % 20 == 0:
-            el = time.perf_counter() - t0
-            rate = (s - start + b) / max(el, 1e-6)
-            eta = (n_keep - s - b) / max(rate, 1e-6)
-            logger.info(f"{s + b}/{n_keep}  {rate:.1f} frames/s  eta {eta / 60:.1f} min")
-            done_path.write_text(json.dumps({"done": int(s + b)}))
+    for s in range(start, n_keep, args.batch_size):
+        idx = keep[s : s + args.batch_size]
+        batch = fetch(idx)  # CPU decode, concurrent with the previous batch's GPU work
+        z_dev, base_dev = extract(jax.random.fold_in(rng, s), _model.Observation.from_dict(batch))
+        if pending is not None:
+            ps, pidx, pb = flush(pending)
+            _write_scalars(ps, pidx, pb)
+        pending = (s, idx, batch, z_dev, base_dev)
+
+    if pending is not None:
+        _write_scalars(*flush(pending))
 
     for m in (tok_mm, chunk_mm, act_mm, *scalars.values()):
         m.flush()
