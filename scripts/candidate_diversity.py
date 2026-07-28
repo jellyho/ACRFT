@@ -54,7 +54,9 @@ def main() -> None:
     dt = {"float32": np.float32, "float16": np.float16, "bfloat16": ml_dtypes.bfloat16}[meta.get("dtype", "float32")]
     cand = np.memmap(args.data / "base_action.dat", dtype=dt, mode="r", shape=(T, N, H, A))
     demo = np.memmap(args.data / "action_chunk.dat", dtype=dt, mode="r", shape=(T, H, A))
-    done = json.loads((args.data / "_progress.json").read_text())["done"] if (args.data / "_progress.json").exists() else T
+    done = (
+        json.loads((args.data / "_progress.json").read_text())["done"] if (args.data / "_progress.json").exists() else T
+    )
     print(f"{done:,}/{T:,} frames annotated, N={N}, chunk {H}x{A}")
 
     rng = np.random.default_rng(args.seed)
@@ -105,7 +107,9 @@ def main() -> None:
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.2), dpi=140)
     axes[0].plot(ms, modes, "-o", color="tab:blue")
-    axes[0].set_title(f"distinct modes (eps={args.mode_eps} x median dist)\nsaturation = extra draws are copies", fontsize=9)
+    axes[0].set_title(
+        f"distinct modes (eps={args.mode_eps} x median dist)\nsaturation = extra draws are copies", fontsize=9
+    )
     axes[0].set_ylabel("modes")
     axes[1].plot(ms, nn, "-o", color="tab:orange")
     axes[1].set_title("mean nearest-neighbour distance\nstill falling = under-sampled", fontsize=9)
