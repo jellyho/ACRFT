@@ -35,6 +35,7 @@ Usage (single task):
 """
 
 import argparse
+import dataclasses
 import json
 import logging
 import pathlib
@@ -88,6 +89,21 @@ def main() -> None:
     ap.add_argument("--checkpoint", required=True, type=pathlib.Path, help="Checkpoint dir (…/<step>).")
     ap.add_argument("--out", required=True, type=pathlib.Path, help="Output directory for the arrays.")
     ap.add_argument("--num-samples", type=int, default=32, help="Action chunks sampled per frame (N).")
+    ap.add_argument(
+        "--num-heldout",
+        type=int,
+        default=8,
+        help="Extra candidates per frame, written to `base_action_heldout` and never used by the "
+        "bootstrap. Scoring these measures whether the critic's ranking generalises to chunks the "
+        "policy could have drawn but did not - the max over a finite candidate set is biased upward, "
+        "and this is how we see it. They cost one extra sampler pass, not an extra backbone forward.",
+    )
+    # The registered config carries the DEFAULT model variant; a checkpoint trained with a different
+    # objective or decoder has a different parameter structure and will not load without these.
+    ap.add_argument("--objective", default=None, help="Override rlt_objective to match the checkpoint.")
+    ap.add_argument("--decoder-mode", default=None, help="Override rlt_decoder_mode (autoregressive|parallel).")
+    ap.add_argument("--no-proprio", action="store_true", help="Checkpoint was trained with --no-proprio.")
+    ap.add_argument("--token-dim", type=int, default=None, help="Override rlt_token_dim.")
     ap.add_argument("--num-flow-steps", type=int, default=10, help="Flow-matching denoising steps.")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--num-workers", type=int, default=8, help="Frame-decoding workers.")
@@ -108,6 +124,18 @@ def main() -> None:
     args = ap.parse_args()
 
     train_config = _config.get_config(args.config)
+    overrides = {}
+    if args.objective:
+        overrides["rlt_objective"] = args.objective
+    if args.decoder_mode:
+        overrides["rlt_decoder_mode"] = args.decoder_mode
+    if args.no_proprio:
+        overrides["rlt_include_proprio"] = False
+    if args.token_dim:
+        overrides["rlt_token_dim"] = args.token_dim
+    if overrides:
+        train_config = dataclasses.replace(train_config, model=dataclasses.replace(train_config.model, **overrides))
+        logger.info(f"model overrides: {overrides}")
     model_config = train_config.model
     if not hasattr(model_config, "rlt_token_dim"):
         raise ValueError(f"{args.config} is not a Pi0RLT config (no rlt_token_dim).")
@@ -164,6 +192,7 @@ def main() -> None:
         "horizon": H,
         "action_dim": raw_dim,
         "num_samples": args.num_samples,
+        "num_heldout": args.num_heldout,
         "stride": args.stride,
         "discount": args.discount,
         "dtype": args.dtype,
@@ -188,6 +217,7 @@ def main() -> None:
     tok_mm = _mm("rl_token", (n_keep, D))
     chunk_mm = _mm("action_chunk", (n_keep, H, raw_dim))
     act_mm = _mm("base_action", (n_keep, args.num_samples, H, raw_dim))
+    held_mm = _mm("base_action_heldout", (n_keep, args.num_heldout, H, raw_dim)) if args.num_heldout else None
     scalars = {
         k: _mm(k, (n_keep,), dt)
         for k, dt in [
@@ -208,11 +238,13 @@ def main() -> None:
     model = model_config.load(_model.restore_params(args.checkpoint / "params", dtype=jnp.bfloat16))
     model.eval()
 
+    # Draw train and held-out candidates in ONE call: the expensive part is the 3B prefix forward,
+    # which is shared, so the extra chunks cost only additional flow-matching passes.
+    n_cand = args.num_samples + args.num_heldout
+
     @jax.jit
     def extract(rng, obs):
-        return model.extract_token_and_base_actions(
-            rng, obs, num_samples=args.num_samples, num_steps=args.num_flow_steps
-        )
+        return model.extract_token_and_base_actions(rng, obs, num_samples=n_cand, num_steps=args.num_flow_steps)
 
     rng = jax.random.key(args.seed)
     t0 = time.perf_counter()
@@ -226,13 +258,15 @@ def main() -> None:
         z_rl = np.asarray(z_rl, np.float32)
         base = np.asarray(base, np.float32)  # [b, N, H, model_dim]
         b = len(idx)
-        raw = decode_actions(base.reshape(b * args.num_samples, H, -1)).reshape(b, args.num_samples, H, raw_dim)
+        raw = decode_actions(base.reshape(b * n_cand, H, -1)).reshape(b, n_cand, H, raw_dim)
 
         tok_mm[s : s + b] = z_rl
         # The demo's own chunk, decoded through the same chain so it lives in the same space as the
         # candidates -- without it there is no `a` to evaluate Q(s, a) on.
         chunk_mm[s : s + b] = decode_actions(np.asarray(batch["actions"], np.float32))
-        act_mm[s : s + b] = raw
+        act_mm[s : s + b] = raw[:, : args.num_samples]
+        if held_mm is not None:
+            held_mm[s : s + b] = raw[:, args.num_samples :]
         scalars["reward"][s : s + b] = reward_all[idx]
         scalars["mc_return"][s : s + b] = mc_all[idx]
         scalars["progress"][s : s + b] = progress_all[idx]

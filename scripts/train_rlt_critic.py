@@ -91,7 +91,7 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
     return d
 
 
-def make_update(data: Data, cfg, net, hl):
+def make_update(data: Data, cfg, net, hl, act_scale):
     """One jitted critic update, written so it can be scanned over many steps."""
     T = data.token.shape[0]
     H, g = data.horizon, cfg.macro_group_size
@@ -113,14 +113,38 @@ def make_update(data: Data, cfg, net, hl):
         nxt = jnp.clip(idx[:, None] + prefixes[None, :], 0, T - 1)  # [B, P]
         valid = (data.episode[nxt] == ep[:, None]) & (idx[:, None] + prefixes[None, :] < T)
 
-        # V(s') = max over candidates (and prefixes, for ARQ) of the ensemble-min target Q.
+        # V(s') aggregates the target Q over candidates (and prefixes, for ARQ). Both reductions are
+        # configurable because a hard max over K*N*P noisy estimates is biased upward, and this method
+        # maxes over far more items than ordinary actor-critic (N*H rather than one actor action).
         z_next = data.token[nxt]  # [B, P, D]
         a_next = data.cand[nxt]  # [B, P, N, H, A]
         B, P, N = a_next.shape[0], a_next.shape[1], a_next.shape[2]
+        if cfg.target_noise > 0:
+            # Temporally COHERENT perturbation (constant offset + linear drift), scaled per action
+            # dim. Per-step iid noise would make the chunk jitter into a trajectory the policy would
+            # never emit; this keeps it a plausible neighbour of the candidate, which is the point -
+            # it smooths Q locally so a lone spurious peak cannot win the arg-max.
+            kr = jax.random.fold_in(jax.random.key(0), idx[0])
+            k1, k2 = jax.random.split(kr)
+            ramp = jnp.linspace(-1.0, 1.0, a_next.shape[-2])[:, None]
+            off = jax.random.normal(k1, (*a_next.shape[:-2], 1, a_next.shape[-1]))
+            drift = jax.random.normal(k2, (*a_next.shape[:-2], 1, a_next.shape[-1])) * ramp
+            eps = jnp.clip(off + drift, -cfg.target_noise_clip, cfg.target_noise_clip)
+            a_next = a_next + cfg.target_noise * act_scale * eps
         q = net.apply(tgt_params, jnp.repeat(z_next[:, :, None], N, axis=2), a_next)
         q = hl.from_logits(q) if cfg.num_atoms > 1 else q  # [K, B, P, N(, prefix)]
-        q = jnp.min(q, axis=0)  # ensemble min -> [B, P, N(, prefix)]
-        v_next = jnp.max(q.reshape(B, P, -1), axis=-1)  # joint max over candidates (+prefixes)
+        # Across the ensemble: `min` is the most pessimistic member; `lcb` is mean - beta*std, which
+        # degrades gracefully as K grows and exposes the same uncertainty the online phase can use.
+        q = jnp.mean(q, 0) - cfg.lcb_beta * jnp.std(q, 0) if cfg.ens_agg == "lcb" else jnp.min(q, 0)
+        flat = q.reshape(B, P, -1)  # candidates (+ prefixes) flattened
+        if cfg.v_agg == "topm":
+            m = min(cfg.top_m, flat.shape[-1])
+            v_next = jnp.mean(jax.lax.top_k(flat, m)[0], axis=-1)
+        elif cfg.v_agg == "soft":
+            w = jax.nn.softmax(flat / cfg.soft_tau, axis=-1)
+            v_next = jnp.sum(w * flat, axis=-1)
+        else:
+            v_next = jnp.max(flat, axis=-1)
 
         gam = cfg.discount ** prefixes.astype(jnp.float32)  # [P]
         y = cum + gam[None, :] * valid * v_next
@@ -170,6 +194,23 @@ def main() -> None:
     ap.add_argument("--discount", type=float, default=0.99)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--num-critics", type=int, default=2)
+    # --- bootstrap aggregation ---------------------------------------------------------------
+    # The joint arg-max runs over N candidates x P prefixes, an order of magnitude more items than
+    # ordinary actor-critic maxes over, so the upward bias of max-over-noisy-estimates is amplified
+    # here by design. These knobs trade that bias against how sharply the target tracks the best.
+    ap.add_argument("--ens-agg", choices=["min", "lcb"], default="min", help="Across ensemble members.")
+    ap.add_argument("--lcb-beta", type=float, default=1.0, help="ens-agg=lcb: mean - beta*std.")
+    ap.add_argument("--v-agg", choices=["max", "topm", "soft"], default="max", help="Across candidates/prefixes.")
+    ap.add_argument("--top-m", type=int, default=3, help="v-agg=topm: average the m best.")
+    ap.add_argument("--soft-tau", type=float, default=0.1, help="v-agg=soft: softmax temperature.")
+    ap.add_argument(
+        "--target-noise",
+        type=float,
+        default=0.0,
+        help="Target policy smoothing: perturb the bootstrap candidates by this many action-std "
+        "(temporally coherent offset+drift, so the chunk stays plausible). 0 = off.",
+    )
+    ap.add_argument("--target-noise-clip", type=float, default=2.0)
     ap.add_argument("--num-atoms", type=int, default=1, help="1 = scalar Q; >1 = HL-Gauss distributional")
     ap.add_argument("--v-min", type=float, default=0.0)
     ap.add_argument("--v-max", type=float, default=1.0)
@@ -219,7 +260,10 @@ def main() -> None:
     n_param = sum(x.size for x in jax.tree.leaves(params))
     logger.info(f"{cfg.kind.upper()} critic: {n_param / 1e6:.2f}M params, {cfg.num_critics} ensemble members")
 
-    step_fn, tx = make_update(data, cfg, net, hl)
+    # Noise scale from the data itself: one std per action dim, so the smoothing means the same
+    # thing regardless of task or units, and no magic constant has to be guessed.
+    act_scale = jnp.std(data.cand.reshape(-1, data.cand.shape[-1]), axis=0)[None, None, None, None, :]
+    step_fn, tx = make_update(data, cfg, net, hl, act_scale)
     opt_state = tx.init(params)
     tgt_params = params
 
