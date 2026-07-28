@@ -36,6 +36,8 @@
 #                              histogram + cross-entropy                     (SCALAR_HEAD=1)
 #     --progress-bins INT      histogram bins for the distributional head    (PROGRESS_BINS=)
 #     --loss-weight FLOAT      weight of the RLT loss vs the BC loss          (RLT_LOSS_WEIGHT=)
+#     --token-dim INT          bottleneck size of the RL token (default 2048)  (TOKEN_DIM=)
+#                              smaller = cheaper critic queries; tags the exp name _d<N>
 #
 #   Monitoring:
 #     --monitor-interval INT   steps between RLT embedding diagnostics, 0 off (MONITOR_INTERVAL=)
@@ -94,6 +96,7 @@ while [ "$#" -gt 0 ]; do
     --scalar-head)       SCALAR_HEAD=1 ;;
     --progress-bins)     PROGRESS_BINS="$2"; shift ;;
     --loss-weight)       RLT_LOSS_WEIGHT="$2"; shift ;;
+    --token-dim)         TOKEN_DIM="$2"; shift ;;
     --monitor-interval)  MONITOR_INTERVAL="$2"; shift ;;
     --vis-interval)      VIS_INTERVAL="$2"; shift ;;
     --exp-suffix)        EXP_SUFFIX="$2"; shift ;;
@@ -146,6 +149,9 @@ if [ "${SCALAR_HEAD:-0}" = "1" ]; then
 fi
 if [ -n "${PROGRESS_BINS:-}" ]; then
   RLT_FLAGS+=(--model.rlt-progress-bins "$PROGRESS_BINS")
+fi
+if [ -n "${TOKEN_DIM:-}" ]; then
+  RLT_FLAGS+=(--model.rlt-token-dim "$TOKEN_DIM"); VARIANT_TAG="${VARIANT_TAG}_d${TOKEN_DIM}"
 fi
 if [ -n "${RLT_LOSS_WEIGHT:-}" ]; then
   RLT_FLAGS+=(--model.rlt-loss-weight "$RLT_LOSS_WEIGHT"); VARIANT_TAG="${VARIANT_TAG}_w${RLT_LOSS_WEIGHT}"

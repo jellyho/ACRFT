@@ -70,6 +70,19 @@ def _sincos_posemb(length: int, dim: int) -> jax.Array:
     return jnp.concatenate([jnp.sin(ang), jnp.cos(ang)], axis=-1)  # [length, dim]
 
 
+def _layernorm(x):
+    """Parameter-free layer norm, matching nnx.LayerNorm(use_scale=False, use_bias=False).
+
+    Deliberately a function, not a module: a parameterless nnx.LayerNorm contributes an EMPTY subtree
+    to the model state, which orbax does not write, so the checkpoint ends up with fewer children than
+    the model expects and `BaseModel.load` fails the structure check (it can drop extra params but not
+    invent missing ones). Every load path — serving included — would break on such a checkpoint.
+    """
+    m = jnp.mean(x, axis=-1, keepdims=True)
+    v = jnp.mean(jnp.square(x - m), axis=-1, keepdims=True)
+    return (x - m) * jax.lax.rsqrt(v + 1e-6)
+
+
 class _Mlp(nnx.Module):
     def __init__(self, dim: int, hidden: int, *, rngs: nnx.Rngs):
         self.fc1 = nnx.Linear(dim, hidden, rngs=rngs)
@@ -108,12 +121,10 @@ class _DiTBlock(nnx.Module):
     """
 
     def __init__(self, dim: int, num_heads: int, mlp_hidden: int, *, rngs: nnx.Rngs):
-        # No learned affine in the norms: adaLN supplies scale/shift from the conditioning instead.
-        self.norm1 = nnx.LayerNorm(dim, use_scale=False, use_bias=False, rngs=rngs)
+        # No learned affine in the norms (adaLN supplies scale/shift), so they are functions.
         self.attn = nnx.MultiHeadAttention(
             num_heads=num_heads, in_features=dim, decode=False, dropout_rate=0.0, rngs=rngs
         )
-        self.norm2 = nnx.LayerNorm(dim, use_scale=False, use_bias=False, rngs=rngs)
         self.mlp = _Mlp(dim, mlp_hidden, rngs=rngs)
         self.ada = nnx.Linear(
             dim,
@@ -126,9 +137,9 @@ class _DiTBlock(nnx.Module):
     def __call__(self, x, cond):
         # x: [b, T, dim];  cond: [b, dim]
         shift1, scale1, gate1, shift2, scale2, gate2 = jnp.split(self.ada(nnx.swish(cond))[:, None, :], 6, axis=-1)
-        h = self.norm1(x) * (1 + scale1) + shift1
+        h = _layernorm(x) * (1 + scale1) + shift1
         x = x + gate1 * self.attn(h)
-        h = self.norm2(x) * (1 + scale2) + shift2
+        h = _layernorm(x) * (1 + scale2) + shift2
         return x + gate2 * self.mlp(h)
 
 
@@ -361,7 +372,6 @@ class Pi0RLT(Pi0):
                 }
             )
             # Zero-init final layer (adaLN-Zero): the head starts predicting v=0 and grows from there.
-            self.rlt_probe_out_norm = nnx.LayerNorm(pw, use_scale=False, use_bias=False, rngs=rngs)
             self.rlt_probe_out_ada = nnx.Linear(
                 pw,
                 2 * pw,
@@ -710,7 +720,7 @@ class Pi0RLT(Pi0):
         for i in range(self._probe_depth):
             h = self.rlt_probe_blocks[f"blk_{i}"](h, cond)
         shift, scale = jnp.split(self.rlt_probe_out_ada(nnx.swish(cond))[:, None, :], 2, axis=-1)
-        return self.rlt_probe_out(self.rlt_probe_out_norm(h) * (1 + scale) + shift)
+        return self.rlt_probe_out(_layernorm(h) * (1 + scale) + shift)
 
     def _probe_loss(self, x_t, time, u_t, z_rl, state):
         # Only the real action dims: the padded ones are a constant whose target is exactly x_t/t,
