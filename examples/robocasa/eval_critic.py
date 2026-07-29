@@ -149,7 +149,10 @@ def build_policy(config_name, checkpoint, critic_path, *, mode, num_samples, flo
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # force=True: robosuite configures the root logger at import time, which turns a plain
+    # basicConfig into a no-op and swallows every progress line - a multi-hour eval then looks
+    # identical to a hung one until it prints its final table.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", required=True)
     ap.add_argument("--checkpoint", required=True, type=pathlib.Path)
