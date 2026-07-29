@@ -50,9 +50,35 @@ class Data:
     cand: jax.Array  # [T, N, H, A] VLA candidates (the `a'` the bootstrap maximises over)
     reward: jax.Array  # [T]
     episode: jax.Array  # [T]
+    mc_return: jax.Array  # [T]  discounted return the behaviour policy actually collected
+    done: jax.Array  # [T]  1 at a terminal (task achieved, or the episode's last frame)
+    done_cum: jax.Array  # [T]  running count of terminals, for "how many fall inside [t, t+h]"
+    alive: jax.Array  # [T]  frame is at or before its episode's terminal (a real decision point)
     horizon: int
     action_dim: int
     num_samples: int
+
+
+def _terminals(done, episode):
+    """Precompute the two terminal lookups the target needs.
+
+    A prefix that steps over a terminal must not bootstrap past it, and a frame that lies after its
+    episode's terminal is not a decision point at all - with success made terminal in the annotation
+    those frames still sit in the arrays, paying nothing, and training on them would teach the critic
+    that the task's goal state is worth continuing from.
+    """
+    done = np.asarray(done, np.int64)
+    alive = np.ones(len(done), np.float32)
+    for e in np.unique(episode):
+        w = np.flatnonzero(episode == e)
+        fired = w[done[w] > 0]
+        if len(fired):
+            alive[fired[0] + 1 :][: w[-1] - fired[0]] = 0.0
+    return {
+        "done": jnp.asarray(done.astype(np.int32)),
+        "done_cum": jnp.asarray(np.cumsum(done, dtype=np.int32)),
+        "alive": jnp.asarray(alive),
+    }
 
 
 def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
@@ -82,6 +108,8 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
         cand=jnp.asarray(rd("base_action", (full, N, H, A))),
         reward=jnp.asarray(rd("reward", (full,))),
         episode=jnp.asarray(rd("episode_index", (full,), np.int32)),
+        mc_return=jnp.asarray(rd("mc_return", (full,), np.float32)),
+        **_terminals(rd("done", (full,), np.int8), rd("episode_index", (full,), np.int32)),
         horizon=H,
         action_dim=A,
         num_samples=N,
@@ -91,13 +119,23 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
     return d
 
 
-def make_update(data: Data, cfg, net, hl, act_scale):
+def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
     """One jitted critic update, written so it can be scanned over many steps."""
     T = data.token.shape[0]
     H, g = data.horizon, cfg.macro_group_size
     # Prefix lengths in real steps: ARQ trains all of them, QC only the full chunk.
     prefixes = jnp.arange(g, H + 1, g) if cfg.kind == "arq" else jnp.array([H])
     disc = cfg.discount ** jnp.arange(H, dtype=jnp.float32)  # [H]
+
+    # Bound the target to the value support. Bootstrapped over-estimation is amplified here far more
+    # than in ordinary actor-critic: the fixed point of a per-backup bias b under a prefix of h steps
+    # is b*gamma^h/(1-gamma^h), which is 49x at the shortest prefix, so a bias too small to see in one
+    # backup becomes many times the value range. Narrowing the arg-max cannot fix that - 128 to 32
+    # candidates shrinks E[max of noise] by sqrt(ln128/ln32) = 1.18 - but the support caps the fixed
+    # point directly. With success terminal and a 0/1 reward the support is [0, 1] whatever the task.
+    sup = meta_support if cfg.v_clip == "auto" else (0.0, float(cfg.v_clip or 0.0))
+    v_lo, v_hi = float(sup[0]), float(sup[1])
+    logger.info(f"value support [{v_lo:.3f}, {v_hi:.3f}] ({cfg.v_clip})" if v_hi > v_lo else "value clip OFF")
 
     def targets(idx, tgt_params, rng):
         """Per-prefix (cum_reward, next_value, valid) for the sampled transitions."""
@@ -111,7 +149,19 @@ def make_update(data: Data, cfg, net, hl, act_scale):
         cum = cum_all[:, prefixes - 1]  # [B, P]
 
         nxt = jnp.clip(idx[:, None] + prefixes[None, :], 0, T - 1)  # [B, P]
-        valid = (data.episode[nxt] == ep[:, None]) & (idx[:, None] + prefixes[None, :] < T)
+        # Terminal handling follows the reference (vla_aqc.py): what matters is the state the prefix
+        # LANDS on, not whether a terminal sits somewhere inside the window.
+        #   terminals in [idx, idx+h] == 0                  -> ordinary transition, bootstrap
+        #   == 1 and it is exactly the landing state        -> terminal transition, no bootstrap
+        #   otherwise                                       -> the prefix runs past the terminal,
+        #                                                      so the transition does not exist
+        # Counting only up to idx+h-1 (the obvious reading) gets the third case right and the second
+        # one wrong: landing exactly on the goal would bootstrap a value from the terminal state,
+        # and every transition that reaches the goal is of that kind.
+        crossed = data.done_cum[nxt] - jnp.where(idx > 0, data.done_cum[idx - 1], 0)[:, None]
+        lands_on_term = (crossed == 1) & (data.done[nxt] > 0)
+        boot = (crossed == 0) & (idx[:, None] + prefixes[None, :] < T)
+        valid = (boot | lands_on_term) & (data.alive[idx][:, None] > 0)
 
         # V(s') aggregates the target Q over candidates (and prefixes, for ARQ). Both reductions are
         # configurable because a hard max over K*N*P noisy estimates is biased upward, and this method
@@ -157,11 +207,28 @@ def make_update(data: Data, cfg, net, hl, act_scale):
             v_next = jnp.max(flat, axis=-1)
 
         gam = cfg.discount ** prefixes.astype(jnp.float32)  # [P]
-        y = cum + gam[None, :] * valid * v_next
-        return y, valid
+        if v_hi > v_lo:
+            v_next = jnp.clip(v_next, v_lo, v_hi)
+        # At a terminal the critic has nothing to say, and the return from there is known exactly.
+        if cfg.terminal_uses_mc:
+            v_next = jnp.where(lands_on_term, data.mc_return[nxt], v_next)
+            y = cum + gam[None, :] * (boot | lands_on_term) * v_next
+        else:
+            y = cum + gam[None, :] * boot * v_next
+        floor_gap = jnp.maximum(data.mc_return[idx][:, None] - y, 0.0)
+        if cfg.mc_lower_bound:
+            # The behaviour policy demonstrably obtained mc_return from this state, so the optimal
+            # value cannot be below it. Unlike the ceiling this rarely binds once the critic is
+            # inflated; it matters early, and it stops a pessimistic aggregation from settling below
+            # what the data proves is achievable.
+            y = jnp.maximum(y, data.mc_return[idx][:, None])
+        if v_hi > v_lo:
+            y = jnp.clip(y, v_lo, v_hi)
+        return y, valid, {"term_frac": lands_on_term, "floor_gap": floor_gap}
 
     def loss_fn(params, tgt_params, idx, rng):
-        y, valid = targets(idx, tgt_params, rng)
+        # `tgt_params` is whatever --bootstrap selected; stop_gradient makes the online choice safe.
+        y, valid, tinfo = targets(idx, jax.lax.stop_gradient(tgt_params), rng)
         y = jax.lax.stop_gradient(y)
         pred = net.apply(params, data.token[idx], data.chunk[idx])  # [K, B(, P)(, atoms)]
         if cfg.kind == "qc":
@@ -176,7 +243,19 @@ def make_update(data: Data, cfg, net, hl, act_scale):
             per = jnp.square(pred - y[None])
             q_mean = jnp.mean(pred)
         loss = jnp.sum(per * w) / (jnp.sum(w) * pred.shape[0] + 1e-8)
-        return loss, {"loss": loss, "q_mean": q_mean, "target_mean": jnp.mean(y * valid), "valid": jnp.mean(w)}
+        vs = jnp.maximum(jnp.sum(valid), 1.0)
+        return loss, {
+            "loss": loss,
+            "q_mean": q_mean,
+            "target_mean": jnp.sum(y * valid) / vs,
+            "valid": jnp.mean(w),
+            # How often the transition lands on the goal, how often the MC floor lifts the target and
+            # by how much, and whether the target left the support the histogram can represent.
+            "term_frac": jnp.mean(tinfo["term_frac"]),
+            "mc_floor_frac": jnp.sum((tinfo["floor_gap"] > 0) * valid) / vs,
+            "mc_floor_gap": jnp.sum(tinfo["floor_gap"] * valid) / vs,
+            "target_oob": jnp.sum(((y < v_lo) | (y > v_hi)) * valid) / vs,
+        }
 
     tx = optax.adam(cfg.lr)
 
@@ -184,7 +263,8 @@ def make_update(data: Data, cfg, net, hl, act_scale):
         params, tgt_params, opt_state = carry
         k_idx, k_tgt = jax.random.split(rng)
         idx = jax.random.randint(k_idx, (cfg.batch_size,), 0, T)
-        (_, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, tgt_params, idx, k_tgt)
+        boot_params = params if cfg.bootstrap == "online" else tgt_params
+        (_, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, boot_params, idx, k_tgt)
         updates, opt_state = tx.update(grads, opt_state)
         params = optax.apply_updates(params, updates)
         tgt_params = optax.incremental_update(params, tgt_params, cfg.target_tau)
@@ -204,6 +284,14 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--discount", type=float, default=0.99)
     ap.add_argument("--target-tau", type=float, default=0.005)
+    ap.add_argument(
+        "--bootstrap",
+        choices=["target", "online"],
+        default="target",
+        help="Which parameters score the bootstrap candidates. 'online' is the reference default "
+        "(vla_aqc.py: the online critic under stop_gradient, no target network); 'target' uses the "
+        "Polyak copy, which is the usual stabiliser but adds a second timescale to the fixed point.",
+    )
     ap.add_argument("--num-critics", type=int, default=2)
     # --- bootstrap aggregation ---------------------------------------------------------------
     # The joint arg-max runs over N candidates x P prefixes, an order of magnitude more items than
@@ -230,6 +318,28 @@ def main() -> None:
         "(temporally coherent offset+drift, so the chunk stays plausible). 0 = off.",
     )
     ap.add_argument("--target-noise-clip", type=float, default=2.0)
+    ap.add_argument(
+        "--v-clip",
+        default="auto",
+        help="Ceiling on the bootstrap target and the backed-up value. 'auto' = the largest return "
+        "present in the data (for a terminal success window that is also the largest obtainable); "
+        "'off' disables it; a number sets it explicitly. This is a correctness constraint, not a "
+        "tuning knob: without it the max-over-candidates fixed point sits far above any achievable "
+        "return (measured: 26.5 against a ceiling of 15.7).",
+    )
+    ap.add_argument(
+        "--terminal-uses-mc",
+        action="store_true",
+        help="At a transition that lands on a terminal, take the value from mc_return instead of "
+        "dropping the bootstrap. The return from a terminal is known exactly, so this is the "
+        "reference's choice (vla_aqc.py, terminal_uses_mc).",
+    )
+    ap.add_argument(
+        "--mc-lower-bound",
+        action="store_true",
+        help="Floor the target at the return the behaviour policy actually collected from this "
+        "state. Sound by definition (that return is achievable), and free.",
+    )
     ap.add_argument("--num-atoms", type=int, default=1, help="1 = scalar Q; >1 = HL-Gauss distributional")
     ap.add_argument("--v-min", type=float, default=0.0)
     ap.add_argument("--v-max", type=float, default=1.0)
@@ -248,6 +358,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     cfg = ap.parse_args()
 
+    cfg.v_clip = 0.0 if str(cfg.v_clip).lower() in ("off", "none", "0") else cfg.v_clip
+    meta_support = json.loads((cfg.data / "meta.json").read_text()).get("value_support", [0.0, 1.0])
     data = load_data(cfg.data, max_frames=cfg.max_frames)
     if data.horizon % cfg.macro_group_size:
         raise ValueError(f"macro_group_size {cfg.macro_group_size} must divide horizon {data.horizon}")
@@ -282,7 +394,7 @@ def main() -> None:
     # Noise scale from the data itself: one std per action dim, so the smoothing means the same
     # thing regardless of task or units, and no magic constant has to be guessed.
     act_scale = jnp.std(data.cand.reshape(-1, data.cand.shape[-1]), axis=0)[None, None, None, None, :]
-    step_fn, tx = make_update(data, cfg, net, hl, act_scale)
+    step_fn, tx = make_update(data, cfg, net, hl, act_scale, meta_support)
     opt_state = tx.init(params)
     tgt_params = params
 

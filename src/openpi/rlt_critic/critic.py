@@ -166,3 +166,46 @@ def make_critic(kind: str, *, action_dim: int, horizon: int, num_atoms: int, **k
     if kind == "arq":
         return ARQCritic(action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **kw)
     raise ValueError(f"critic kind must be 'qc' or 'arq', got {kind!r}")
+
+
+def load_trained(params_path, *, action_dim: int, horizon: int):
+    """Rebuild a trained critic from the params and the config train_rlt_critic.py saved beside them.
+
+    The architecture has to match the checkpoint exactly, and re-declaring it at every call site is
+    how that goes wrong silently. Returns ``(apply_fn, params, macro_group_size)`` where ``apply_fn``
+    takes ``(obs [S, D], actions [S, M, H, A])`` and returns expected scalar values ``[K, S, M, P]``.
+    """
+    import json
+    import pathlib
+
+    import flax.serialization
+
+    params_path = pathlib.Path(params_path)
+    cfg = json.loads((params_path.parent / "config.json").read_text())
+    g = cfg.get("macro_group_size", 2)
+    num_atoms = cfg.get("num_atoms", 1)
+    arch = (
+        {
+            "macro_group_size": g,
+            "num_layers": cfg.get("num_layers", 3),
+            "num_heads": cfg.get("num_heads", 8),
+            "head_dim": cfg.get("head_dim", 48),
+            "mlp_dim": cfg.get("mlp_dim", 1024),
+        }
+        if cfg.get("kind", "arq") == "arq"
+        else {"hidden_dims": tuple(cfg.get("hidden_dims", [512, 512, 512]))}
+    )
+    net = Ensemble(
+        make_critic=lambda: make_critic(
+            cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch
+        ),
+        num_critics=cfg.get("num_critics", 2),
+    )
+    hl = HLGauss(v_min=cfg.get("v_min", 0.0), v_max=cfg.get("v_max", 1.0), num_atoms=max(num_atoms, 2))
+    params = flax.serialization.msgpack_restore(params_path.read_bytes())
+
+    def apply_fn(obs, actions):
+        out = net.apply(params, obs, actions)
+        return hl.from_logits(out) if num_atoms > 1 else out
+
+    return apply_fn, params, g

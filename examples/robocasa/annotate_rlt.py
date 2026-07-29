@@ -109,6 +109,15 @@ def main() -> None:
     ap.add_argument("--num-workers", type=int, default=8, help="Frame-decoding workers.")
     ap.add_argument("--stride", type=int, default=1, help="Keep every k-th frame (1 = all frames).")
     ap.add_argument("--discount", type=float, default=0.99, help="Discount for mc_return.")
+    ap.add_argument(
+        "--no-terminal-success",
+        action="store_true",
+        help="Keep the raw reward column instead of cutting each episode at its first success. The "
+        "raw column pays 1 for every frame success is held (16 of them on RoboCasa) and only then "
+        "ends the episode, which makes the return measure how long the environment lingered as well "
+        "as how fast the policy got there, and leaves the value ceiling depending on which episodes "
+        "were annotated. Only for reproducing older runs.",
+    )
     ap.add_argument("--max-frames", type=int, default=0, help="Debug: only annotate this many frames.")
     ap.add_argument(
         "--frame-start",
@@ -176,6 +185,24 @@ def main() -> None:
         reward_all = np.zeros(meta.total_frames, dtype=np.float32)
     lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
     hi = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
+
+    if not args.no_terminal_success:
+        # Success is terminal: the first frame the reward fires pays 1 and nothing after it pays
+        # anything. The raw column instead pays 1 on every frame success is held - 16 of them here -
+        # and only then ends the episode, so the return conflates "how fast did the policy succeed"
+        # with "how long did the simulator keep the flag up", which is no part of the policy's doing.
+        # It also leaves the reachable value depending on which episodes were annotated (14.85 under
+        # the usual 16-frame hold, 20.01 for one episode where success flickered and re-fired). With
+        # success terminal, V*(s) = gamma^(steps to success), bounded by exactly 1.
+        cut = 0
+        for a, b in zip(lo, hi, strict=True):
+            fired = np.flatnonzero(reward_all[a:b])
+            if len(fired) == 0:
+                continue
+            first = a + int(fired[0])
+            reward_all[first + 1 : b] = 0.0
+            cut += b - 1 - first
+        logger.info(f"success is terminal: {cut} post-success frames pay nothing; value ceiling is 1.0")
     ep_of = np.zeros(meta.total_frames, dtype=np.int32)
     frame_of = np.zeros(meta.total_frames, dtype=np.int32)
     mc_all = np.zeros(meta.total_frames, dtype=np.float32)
@@ -183,7 +210,11 @@ def main() -> None:
     for e, (a, b) in enumerate(zip(lo, hi, strict=True)):
         ep_of[a:b] = e
         frame_of[a:b] = np.arange(b - a)
+        # Done at the episode's last frame, and at a terminal success so nothing bootstraps past it.
         done_all[b - 1] = 1
+        fired = np.flatnonzero(reward_all[a:b])
+        if len(fired):
+            done_all[a + int(fired[0])] = 1
         # Discounted return-to-go of the sparse reward, computed backwards within the episode.
         g = 0.0
         seg = reward_all[a:b]

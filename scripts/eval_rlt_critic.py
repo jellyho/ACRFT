@@ -75,6 +75,7 @@ def main() -> None:
     tok = _load(args.data, "rl_token", (T, D), dt)
     chunk = _load(args.data, "action_chunk", (T, H, A), dt)
     cand = _load(args.data, "base_action", (T, N, H, A), dt)
+    mc = _load(args.data, "mc_return", (T,), np.float32)
     nh = meta.get("num_heldout", 0)
     held = _load(args.data, "base_action_heldout", (T, nh, H, A), dt) if nh else None
     logger.info(f"{T} frames, N={N} candidates, {nh} held-out, horizon {H}, token {D}")
@@ -127,6 +128,30 @@ def main() -> None:
     q_demo = q_demo[:, 0]
 
     res = {}
+
+    # --- calibration against the return that was actually obtained --------------------------------
+    # mc_return is the discounted return the behaviour policy collected from this very frame, so it
+    # and Q(z, demonstrated chunk) are two estimates of the same state, measured the same way. Q
+    # should sit ABOVE it - taking the best of N candidates is an improvement on what the data did -
+    # but the size of that gap is the claim the critic is making, and a gap past the best outcome
+    # anywhere in the data is the arg-max inflating rather than the policy improving. The ordering is
+    # reported separately, because an inflated critic can still rank states correctly and the
+    # ordering is the only part best-of-N consumes.
+    if mc is not None:
+        mc_s = np.asarray(mc[idx], np.float32)
+        mc_all = np.asarray(mc[:], np.float32)
+        res["mc_return_mean"] = float(mc_all.mean())
+        res["mc_return_max"] = float(mc_all.max())
+        res["q_demo_mean"] = float(q_demo.mean())
+        res["q_demo_minus_mc_mean"] = float((q_demo - mc_s).mean())
+        res["frac_q_demo_above_data_max"] = float((q_demo > mc_all.max()).mean())
+
+        def _spearman(a, b):
+            ra = np.argsort(np.argsort(a)).astype(np.float64)
+            rb = np.argsort(np.argsort(b)).astype(np.float64)
+            return float(np.corrcoef(ra, rb)[0, 1])
+
+        res["spearman_q_demo_vs_mc"] = _spearman(q_demo, mc_s)
 
     # --- necessary conditions -------------------------------------------------------------------
     within = float(np.mean(np.var(q_full, axis=1)))
