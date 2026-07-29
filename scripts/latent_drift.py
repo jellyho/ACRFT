@@ -51,7 +51,13 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--checkpoint-root", required=True, type=pathlib.Path, help="Dir holding step subdirs.")
     ap.add_argument("--num-frames", type=int, default=512, help="Fixed probe set, identical for every step.")
-    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Frames per backbone forward. The sampler allocates for the whole batch at once, so this "
+        "is what decides peak memory - 32 needs more than an L40S has.",
+    )
     ap.add_argument("--knn", type=int, default=16)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("latent_drift.png"))

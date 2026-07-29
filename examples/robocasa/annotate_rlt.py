@@ -183,8 +183,9 @@ def main() -> None:
     reward_all = _progress.read_reward_column(pathlib.Path(meta.root), meta.total_frames)
     if reward_all is None:  # no success column: the sparse reward is all zeros
         reward_all = np.zeros(meta.total_frames, dtype=np.float32)
-    lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
-    hi = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
+    # NOT lo/hi: those name the frame range this process owns, a few lines up.
+    ep_lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
+    ep_hi = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
 
     if not args.no_terminal_success:
         # Success is terminal: the first frame the reward fires pays 1 and nothing after it pays
@@ -195,7 +196,7 @@ def main() -> None:
         # the usual 16-frame hold, 20.01 for one episode where success flickered and re-fired). With
         # success terminal, V*(s) = gamma^(steps to success), bounded by exactly 1.
         cut = 0
-        for a, b in zip(lo, hi, strict=True):
+        for a, b in zip(ep_lo, ep_hi, strict=True):
             fired = np.flatnonzero(reward_all[a:b])
             if len(fired) == 0:
                 continue
@@ -207,7 +208,7 @@ def main() -> None:
     frame_of = np.zeros(meta.total_frames, dtype=np.int32)
     mc_all = np.zeros(meta.total_frames, dtype=np.float32)
     done_all = np.zeros(meta.total_frames, dtype=np.int8)
-    for e, (a, b) in enumerate(zip(lo, hi, strict=True)):
+    for e, (a, b) in enumerate(zip(ep_lo, ep_hi, strict=True)):
         ep_of[a:b] = e
         frame_of[a:b] = np.arange(b - a)
         # Done at the episode's last frame, and at a terminal success so nothing bootstraps past it.
