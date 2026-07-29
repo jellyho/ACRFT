@@ -282,7 +282,13 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=200_000)
     ap.add_argument("--batch-size", type=int, default=1024)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--discount", type=float, default=0.99)
+    ap.add_argument(
+        "--discount",
+        type=float,
+        default=None,
+        help="Defaults to the discount the annotation's returns were accumulated with. Setting it by "
+        "hand to something else makes the bootstrap and mc_return disagree about what a step costs.",
+    )
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument(
         "--bootstrap",
@@ -341,8 +347,10 @@ def main() -> None:
         "state. Sound by definition (that return is achievable), and free.",
     )
     ap.add_argument("--num-atoms", type=int, default=1, help="1 = scalar Q; >1 = HL-Gauss distributional")
-    ap.add_argument("--v-min", type=float, default=0.0)
-    ap.add_argument("--v-max", type=float, default=1.0)
+    # The histogram's support has to be the value support, or the targets sit on its edge atoms and
+    # the critic cannot represent them. Both default to whatever the re-labelling recorded.
+    ap.add_argument("--v-min", type=float, default=None)
+    ap.add_argument("--v-max", type=float, default=None)
     ap.add_argument("--macro-group-size", type=int, default=2, help="ARQ: steps per macro token")
     # Capacity. Defaults follow the reference ACSAC critic (3 layers, 8 heads x 48 = 384 wide) and a
     # standard 3x512 MLP for QC. The input is already a learned 2048-d token, so the critic only has
@@ -359,7 +367,19 @@ def main() -> None:
     cfg = ap.parse_args()
 
     cfg.v_clip = 0.0 if str(cfg.v_clip).lower() in ("off", "none", "0") else cfg.v_clip
-    meta_support = json.loads((cfg.data / "meta.json").read_text()).get("value_support", [0.0, 1.0])
+    # The reward scheme decides the discount and the value support together (sparse terminal 0/1 with
+    # gamma 0.99 lands in [0, 1]; the reference living-cost scheme with gamma 0.9999 lands in [-1, 0]),
+    # and relabel_reward.py records both. Taking them from the data rather than from flags is what
+    # keeps a re-labelled dataset from being trained against the previous scheme's constants.
+    _meta = json.loads((cfg.data / "meta.json").read_text())
+    meta_support = _meta.get("value_support", [0.0, 1.0])
+    if cfg.discount is None:
+        cfg.discount = _meta.get("discount", 0.99)
+    if cfg.v_min is None:
+        cfg.v_min = meta_support[0]
+    if cfg.v_max is None:
+        cfg.v_max = meta_support[1]
+    logger.info(f"reward scheme {_meta.get('reward_scheme', 'raw')!r}: discount {cfg.discount}, support {meta_support}")
     data = load_data(cfg.data, max_frames=cfg.max_frames)
     if data.horizon % cfg.macro_group_size:
         raise ValueError(f"macro_group_size {cfg.macro_group_size} must divide horizon {data.horizon}")
