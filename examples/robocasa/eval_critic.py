@@ -5,11 +5,16 @@ same backbone forward, and the critic scores every (candidate, prefix) pair. The
 WHICH chunk to run and HOW FAR to commit to it, so the executed length varies per replan - that is
 the whole method, and it is why this cannot reuse a fixed ``replan_steps``.
 
-Three baselines share the loop so the comparison is like-for-like on the same scenes:
+The critic makes two decisions - which chunk, and how far to commit - and they are separable, so
+the modes form a 2x2 and any gain can be attributed to one of them rather than to "the method":
 
-    critic    arg-max over candidates x prefixes            (the method)
-    bon       arg-max over candidates, always the full chunk (best-of-N without adaptive chunking)
-    vla       the first sample, full chunk                   (the policy on its own)
+                     full chunk        critic picks the prefix
+    first sample     vla               prefix
+    best of N        bon               critic
+
+`vla` is the policy alone. If `bon` ~ `vla` the candidates are not rankable and best-of-N is a coin
+flip; if `prefix` ~ `vla` adaptive chunking is buying nothing. All four share the loop, the scenes
+and the seed, so the four numbers are directly comparable.
 
 Videos are optional and carry a HUD: the value of every candidate, which one won, how far it
 committed, and the value trace so far. What the critic believed is not recoverable from the frames
@@ -133,6 +138,8 @@ def build_policy(config_name, checkpoint, critic_path, *, mode, num_samples, flo
         q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
         if mode == "bon":  # choose the chunk, but always run all of it
             i, p = int(np.argmax(q[:, -1])), q.shape[1] - 1
+        elif mode == "prefix":  # keep the chunk the policy would have emitted, choose how far to run
+            i, p = 0, int(np.argmax(q[0]))
         else:
             i, p = np.unravel_index(int(np.argmax(q)), q.shape)
         n_exec = int((p + 1) * macro)
@@ -148,7 +155,9 @@ def main() -> None:
     ap.add_argument("--checkpoint", required=True, type=pathlib.Path)
     ap.add_argument("--critic", type=pathlib.Path, default=None, help="Trained critic params.msgpack.")
     ap.add_argument("--task", default="PrepareCoffee")
-    ap.add_argument("--modes", nargs="+", default=["critic", "bon", "vla"], choices=["critic", "bon", "vla"])
+    ap.add_argument(
+        "--modes", nargs="+", default=["critic", "bon", "prefix", "vla"], choices=["critic", "bon", "prefix", "vla"]
+    )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
     ap.add_argument("--num-flow-steps", type=int, default=10)

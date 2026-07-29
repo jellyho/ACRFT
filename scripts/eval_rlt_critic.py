@@ -166,6 +166,43 @@ def main() -> None:
     q_other = (q_other[..., -1] if q_other.ndim == 3 else q_other)[:, 0]
     res["ranking_accuracy_demo_vs_other"] = float(np.mean(q_demo > q_other))
 
+    # --- the decisive within-state test ----------------------------------------------------------
+    # demo-vs-other is too easy: the two chunks come from different states, so telling them apart
+    # only needs the critic to know where it is. The question best-of-N actually asks is whether it
+    # can rank chunks the POLICY would emit HERE, which are all plausible and all similar.
+    #
+    #   demo vs candidate      chance is 0.5. The demonstration is what the data executed and what
+    #                          mc_return was collected under, so it is the one chunk at this state
+    #                          with a known outcome.
+    #   Q vs distance to demo  within each state, rank the candidates by value and by how far they
+    #                          sit from the executed chunk. A critic with real action knowledge
+    #                          prefers the ones closer to what worked; the shuffled control says how
+    #                          much of any such correlation is an artifact of the sample size.
+    #
+    # A near-zero result on BOTH, with a candidate set that is genuinely diverse, means the failure
+    # is not the critic's: chunks the policy draws at one state are worth the same, and best-of-N has
+    # nothing to select. That is a statement about the task and the reward, not about this network.
+    def _rank(a, axis=-1):
+        return np.argsort(np.argsort(a, axis=axis), axis=axis).astype(np.float64)
+
+    res["ranking_accuracy_demo_vs_candidate"] = float(np.mean(q_demo[:, None] > q_full))
+    dist = np.linalg.norm(
+        np.asarray(cand[idx], np.float32).reshape(len(idx), N, -1)
+        - np.asarray(chunk[idx], np.float32).reshape(len(idx), 1, -1),
+        axis=-1,
+    )  # [S, N]
+    rq, rd = _rank(q_full), _rank(-dist)
+    rq -= rq.mean(-1, keepdims=True)
+    rd -= rd.mean(-1, keepdims=True)
+    rho = (rq * rd).sum(-1) / np.sqrt((rq**2).sum(-1) * (rd**2).sum(-1) + 1e-12)
+    res["spearman_q_vs_closeness_to_demo"] = float(rho.mean())
+    perm = rng.permuted(np.tile(np.arange(N), (len(idx), 1)), axis=1)
+    rqs = np.take_along_axis(rq, perm, axis=1)
+    res["spearman_shuffled_control"] = float(
+        (rqs * rd).sum(-1).mean() / np.sqrt(((rq**2).sum(-1) * (rd**2).sum(-1)).mean() + 1e-12)
+    )
+    res["within_state_q_range"] = float(np.mean(q_full.max(1) - q_full.min(1)))
+
     # --- prefix behaviour (ARQ only) --------------------------------------------------------------
     if q_cand.ndim == 3:
         best_k = np.argmax(q_cand.max(axis=1), axis=-1)  # per state, best prefix of the best candidate
@@ -216,6 +253,10 @@ def main() -> None:
     if res["ranking_accuracy_demo_vs_other"] < 0.55:
         print("  FAIL  cannot tell the demonstrated chunk from an unrelated one at the same state")
         ok = False
+    if abs(res["spearman_q_vs_closeness_to_demo"]) < 0.05 and res["ranking_accuracy_demo_vs_candidate"] < 0.55:
+        print("  NOTE  no within-state ranking signal at all. Check the candidate spread before")
+        print("        blaming the critic: if the chunks the policy draws here are worth the same,")
+        print("        best-of-N has nothing to select and the reward is what needs changing.")
     if "prefix_argmax_entropy" in res and res["prefix_argmax_entropy"] < 0.1:
         print("  WARN  prefix arg-max is nearly constant: adaptive chunking degenerates to fixed k")
     if ok:
