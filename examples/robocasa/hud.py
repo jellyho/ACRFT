@@ -195,6 +195,38 @@ class Dashboard:
         )
         return _render(fig)
 
+    def _draw_paths(self, img, paths, chosen):
+        """Overlay the candidate end-effector paths on the (already upscaled) agent view.
+
+        The projector returns (row, col); PIL wants (x=col, y=row), and getting that backwards
+        transposes every path into a diagonal streak across the frame. The unchosen candidates are
+        drawn translucent, which needs an RGBA layer - alpha is ignored when drawing straight onto
+        an RGB image.
+        """
+        from PIL import Image
+        from PIL import ImageDraw
+
+        k = _W_MAIN / self.cam
+        base = img.convert("RGBA")
+        layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        for i, path in enumerate(paths):
+            pts = [(float(c) * k, float(r) * k) for r, c in np.asarray(path)]
+            if len(pts) < 2:
+                continue
+            if i == chosen:
+                continue  # drawn last, on top
+            d.line(pts, fill=(150, 175, 200, 120), width=2)
+            d.ellipse(
+                [pts[-1][0] - 2.5, pts[-1][1] - 2.5, pts[-1][0] + 2.5, pts[-1][1] + 2.5], fill=(150, 175, 200, 170)
+            )
+        if 0 <= chosen < len(paths):
+            pts = [(float(c) * k, float(r) * k) for r, c in np.asarray(paths[chosen])]
+            if len(pts) >= 2:
+                d.line(pts, fill=(49, 196, 141, 255), width=4, joint="curve")
+                d.ellipse([pts[-1][0] - 5, pts[-1][1] - 5, pts[-1][0] + 5, pts[-1][1] + 5], fill=(49, 196, 141, 255))
+        return Image.alpha_composite(base, layer).convert("RGB")
+
     # ---------------------------------------------------------------- frame
     def frame(self, agent_rgb, wrist_rgb, info, step, *, paths=None, chosen=0, success=False):
         """One composed frame. `paths` is an optional list of projected 2-D candidate EE paths."""
@@ -211,6 +243,8 @@ class Dashboard:
 
         canvas = Image.new("RGB", (WIDTH, HEIGHT), _BG)
         main = Image.fromarray(np.ascontiguousarray(agent_rgb)).resize((_W_MAIN, _H_TOP), Image.LANCZOS)
+        if paths is not None:
+            main = self._draw_paths(main, paths, chosen)
         canvas.paste(main, (0, 0))
         if wrist_rgb is not None:
             wr = Image.fromarray(np.ascontiguousarray(wrist_rgb)).resize((_W_SIDE, _W_SIDE - 22), Image.LANCZOS)
@@ -221,19 +255,6 @@ class Dashboard:
             canvas.paste(Image.fromarray(self._trace_png), (0, _H_TOP))
 
         d = ImageDraw.Draw(canvas)
-        # Candidate paths, scaled from the 256-px camera render to the 512-px panel.
-        if paths is not None:
-            k = _W_MAIN / self.cam
-            for i, path in enumerate(paths):
-                pts = [(float(px) * k, float(py) * k) for px, py in np.asarray(path)]
-                if len(pts) < 2:
-                    continue
-                if i == chosen:
-                    d.line(pts, fill=_WIN, width=4, joint="curve")
-                    d.ellipse([pts[-1][0] - 5, pts[-1][1] - 5, pts[-1][0] + 5, pts[-1][1] + 5], fill=_WIN)
-                else:
-                    d.line(pts, fill=(150, 160, 158), width=1)
-
         d.rectangle([0, 0, _W_MAIN, 30], fill=(10, 13, 12))
         d.text((10, 7), self.mode, font=self._f_lg, fill=_INK)
         d.text((_W_MAIN - 150, 9), f"step {step:4d}", font=self._f_sm, fill=_INK2)
