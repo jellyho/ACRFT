@@ -52,6 +52,7 @@ class Replan:
     """What the policy decided at one replan, kept for the HUD and the per-trial trace."""
 
     q: np.ndarray  # [N, P] value of every candidate at every prefix length
+    cand: np.ndarray  # [N, H, A] the candidate chunks themselves, for the path overlay
     best_cand: int
     best_prefix: int  # 0-indexed macro prefix
     n_exec: int  # real steps committed to
@@ -132,7 +133,7 @@ def build_policy(config_name, checkpoint, critic_path, *, mode, num_samples, flo
         else:
             i, p = np.unravel_index(int(np.argmax(q)), q.shape)
         n_exec = int((p + 1) * macro)
-        return cand[i], n_exec, Replan(q, int(i), int(p), n_exec, float(q[i, p]))
+        return cand[i], n_exec, Replan(q, cand, int(i), int(p), n_exec, float(q[i, p]))
 
     return fn, H, macro
 
@@ -152,6 +153,15 @@ def main() -> None:
     ap.add_argument("--camera-size", type=int, default=256)
     ap.add_argument("--video-dir", type=pathlib.Path, default=None)
     ap.add_argument("--num-videos", type=int, default=4)
+    ap.add_argument("--fps", type=int, default=20)
+    ap.add_argument(
+        "--path-scale",
+        type=float,
+        default=0.12,
+        help="Metres the drawn candidate paths should span. The raw chunk deltas are in normalised "
+        "control units, so a fixed scale would make the fan invisible on some replans and fill the "
+        "frame on others; this fixes the executed chunk's span and scales the rest to match.",
+    )
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
     args = ap.parse_args()
 
@@ -170,25 +180,46 @@ def main() -> None:
             flow_steps=args.num_flow_steps,
             seed=args.seed,
         )
-        trace, frames, box = [], [], {"trial": 0}
+        trace, frames, box = [], [], {"trial": 0, "dash": None}
         record = args.video_dir is not None
+        projector = None
+        if record:
+            import action_overlay as _ov
 
-        def on_step(obs, info, step, _trace=trace, _frames=frames, _box=box, _mode=mode, _rec=record):
+            projector = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
+
+        def on_step(
+            obs, info, step, *, _trace=trace, _frames=frames, _box=box, _mode=mode, _rec=record, _proj=projector, _hz=H
+        ):
             if info is not None:
                 _trace.append({"step": step, "value": info.value, "n_exec": info.n_exec, "prefix": info.best_prefix})
-            if _rec and _box["trial"] < args.num_videos:
-                import hud as _hud
+            if not (_rec and _box["trial"] < args.num_videos):
+                return
+            import action_overlay as _ov
+            import hud as _hud
 
-                _frames.append(
-                    _hud.draw(
-                        _ro.image_from_obs(obs, _ro.CAMERAS["observation/image"]),
-                        info,
-                        [t["value"] for t in _trace],
-                        mode=_mode,
-                    )
+            if _box["dash"] is None:
+                _box["dash"] = _hud.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size)
+            paths = None
+            if info is not None:
+                # Anchor every candidate at the LIVE end-effector so the fan stays attached to the
+                # gripper as it moves, rather than to wherever the replan happened.
+                ee, bq = np.asarray(obs["robot0_eef_pos"]), np.asarray(obs["robot0_base_quat"])
+                sc = _ov._adaptive_scale(info.cand[info.best_cand], args.path_scale)
+                paths = [_proj.project(_ov.predict_path(ee, bq, c, sc)) for c in info.cand]
+            _frames.append(
+                _box["dash"].frame(
+                    _ro.image_from_obs(obs, _ro.CAMERAS["observation/image"]),
+                    _ro.image_from_obs(obs, _ro.CAMERAS["observation/wrist_image"]),
+                    info,
+                    step,
+                    paths=paths,
+                    chosen=(info.best_cand if info is not None else 0),
+                    success=bool(env._check_success()),
                 )
+            )
 
-        def on_trial(trial, success, steps, _frames=frames, _box=box, _mode=mode, _rec=record):
+        def on_trial(trial, success, steps, *, _frames=frames, _box=box, _mode=mode, _rec=record):
             logger.info(
                 f"[{_mode}] trial {trial + 1}/{args.num_trials}: {'SUCCESS' if success else 'failure'} in {steps} steps"
             )
@@ -197,10 +228,11 @@ def main() -> None:
 
                 args.video_dir.mkdir(parents=True, exist_ok=True)
                 out = args.video_dir / f"{args.task}_{_mode}_t{trial:02d}_{'succ' if success else 'fail'}.mp4"
-                imageio.mimwrite(out, _frames, fps=20)
-                logger.info(f"  saved {out}")
+                imageio.mimwrite(out, _frames, fps=args.fps, quality=9)
+                logger.info(f"  saved {out}  ({len(_frames)} frames)")
             _frames.clear()
             _box["trial"] = trial + 1
+            _box["dash"] = None
 
         np.random.seed(args.seed)  # robosuite placement samplers read the legacy global RNG
         res = _ro.run_trials(
