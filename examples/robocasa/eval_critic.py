@@ -126,7 +126,10 @@ def build_policy(config_name, checkpoint, critic_path, *, mode, num_samples, flo
         if mode == "vla":
             return cand[0], H, None
 
-        q = np.asarray(score(jnp.asarray(np.asarray(z, np.float32)), jnp.asarray(cand)[None]))
+        # The critic scores one (state, chunk) pair per slot, so the state is broadcast along the
+        # candidate axis: obs [1, N, D] against actions [1, N, H, A].
+        zc = jnp.repeat(jnp.asarray(np.asarray(z, np.float32))[:, None], cand.shape[0], axis=1)
+        q = np.asarray(score(zc, jnp.asarray(cand)[None]))
         q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
         if mode == "bon":  # choose the chunk, but always run all of it
             i, p = int(np.argmax(q[:, -1])), q.shape[1] - 1
@@ -180,17 +183,10 @@ def main() -> None:
             flow_steps=args.num_flow_steps,
             seed=args.seed,
         )
-        trace, frames, box = [], [], {"trial": 0, "dash": None}
+        trace, frames, box = [], [], {"trial": 0, "dash": None, "proj": None}
         record = args.video_dir is not None
-        projector = None
-        if record:
-            import action_overlay as _ov
 
-            projector = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
-
-        def on_step(
-            obs, info, step, *, _trace=trace, _frames=frames, _box=box, _mode=mode, _rec=record, _proj=projector, _hz=H
-        ):
+        def on_step(obs, info, step, *, _trace=trace, _frames=frames, _box=box, _mode=mode, _rec=record, _hz=H):
             if info is not None:
                 _trace.append({"step": step, "value": info.value, "n_exec": info.n_exec, "prefix": info.best_prefix})
             if not (_rec and _box["trial"] < args.num_videos):
@@ -198,6 +194,10 @@ def main() -> None:
             import action_overlay as _ov
             import hud as _hud
 
+            if _box["proj"] is None:
+                # env.sim is only populated by the first reset, so the projector cannot be built
+                # alongside the env - it is built on the first recorded frame instead.
+                _box["proj"] = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
             if _box["dash"] is None:
                 _box["dash"] = _hud.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size)
             paths = None
@@ -206,7 +206,7 @@ def main() -> None:
                 # gripper as it moves, rather than to wherever the replan happened.
                 ee, bq = np.asarray(obs["robot0_eef_pos"]), np.asarray(obs["robot0_base_quat"])
                 sc = _ov._adaptive_scale(info.cand[info.best_cand], args.path_scale)
-                paths = [_proj.project(_ov.predict_path(ee, bq, c, sc)) for c in info.cand]
+                paths = [_box["proj"].project(_ov.predict_path(ee, bq, c, sc)) for c in info.cand]
             _frames.append(
                 _box["dash"].frame(
                     _ro.image_from_obs(obs, _ro.CAMERAS["observation/image"]),
