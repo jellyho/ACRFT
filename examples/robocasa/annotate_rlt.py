@@ -109,7 +109,17 @@ def main() -> None:
     ap.add_argument("--num-workers", type=int, default=8, help="Frame-decoding workers.")
     ap.add_argument("--stride", type=int, default=1, help="Keep every k-th frame (1 = all frames).")
     ap.add_argument("--discount", type=float, default=0.99, help="Discount for mc_return.")
-    ap.add_argument("--max-frames", type=int, default=0, help="Debug: stop after this many frames.")
+    ap.add_argument("--max-frames", type=int, default=0, help="Debug: only annotate this many frames.")
+    ap.add_argument(
+        "--frame-start",
+        type=int,
+        default=0,
+        help="First kept-frame index this process is responsible for. The arrays are always sized for "
+        "the whole dataset, so several processes can annotate disjoint ranges into the same output "
+        "directory on different GPUs and no merge step is needed - the sampler dominates the cost, so "
+        "this scales close to linearly.",
+    )
+    ap.add_argument("--frame-end", type=int, default=0, help="One past the last index (0 = to the end).")
     ap.add_argument(
         "--dtype",
         choices=["float32", "float16", "bfloat16"],
@@ -149,7 +159,11 @@ def main() -> None:
     keep = np.arange(0, n_total, args.stride)
     if args.max_frames:
         keep = keep[: args.max_frames]
-    n_keep = len(keep)
+    n_keep = len(keep)  # arrays are always this size, whatever range this process handles
+    lo = max(0, args.frame_start)
+    hi = min(n_keep, args.frame_end or n_keep)
+    if lo >= hi:
+        raise ValueError(f"empty range [{lo}, {hi})")
     logger.info(f"{args.config}: {n_total} frames, keeping {n_keep} (stride {args.stride})")
 
     # --- reward / mc_return / progress, straight from the dataset's sparse success reward ---
@@ -210,7 +224,8 @@ def main() -> None:
         return np.memmap(
             args.out / f"{name}.dat",
             dtype=store_dtype if dtype is None else dtype,
-            mode="r+" if args.resume else "w+",
+            # Existing files are opened in place so shards do not clobber each other.
+            mode="r+" if (args.resume or lo or (args.out / f"{name}.dat").exists()) else "w+",
             shape=shape,
         )
 
@@ -229,8 +244,8 @@ def main() -> None:
             ("done", np.int8),
         ]
     }
-    done_path = args.out / "_progress.json"
-    start = json.loads(done_path.read_text())["done"] if (args.resume and done_path.exists()) else 0
+    done_path = args.out / (f"_progress_{lo}.json" if (lo or hi != n_keep) else "_progress.json")
+    start = json.loads(done_path.read_text())["done"] if (args.resume and done_path.exists()) else lo
     if start:
         logger.info(f"resuming at frame {start}/{n_keep}")
 
@@ -276,9 +291,7 @@ def main() -> None:
         if (s0 // args.batch_size) % 20 == 0:
             el = time.perf_counter() - t0
             rate = (n_written - start) / max(el, 1e-6)
-            logger.info(
-                f"{n_written}/{n_keep}  {rate:.1f} frames/s  eta {(n_keep - n_written) / max(rate, 1e-6) / 60:.1f} min"
-            )
+            logger.info(f"{n_written}/{hi}  {rate:.1f} frames/s  eta {(hi - n_written) / max(rate, 1e-6) / 60:.1f} min")
             done_path.write_text(json.dumps({"done": int(n_written)}))
 
     def flush(p):
@@ -296,8 +309,8 @@ def main() -> None:
             held_mm[s0 : s0 + nb] = raw[:, args.num_samples :]
         return s0, ix, nb
 
-    for s in range(start, n_keep, args.batch_size):
-        idx = keep[s : s + args.batch_size]
+    for s in range(start, hi, args.batch_size):
+        idx = keep[s : min(s + args.batch_size, hi)]
         batch = fetch(idx)  # CPU decode, concurrent with the previous batch's GPU work
         z_dev, base_dev = extract(jax.random.fold_in(rng, s), _model.Observation.from_dict(batch))
         if pending is not None:
@@ -310,8 +323,8 @@ def main() -> None:
 
     for m in (tok_mm, chunk_mm, act_mm, *scalars.values()):
         m.flush()
-    done_path.write_text(json.dumps({"done": int(n_keep)}))
-    logger.info(f"wrote {n_keep} frames to {args.out} in {(time.perf_counter() - t0) / 60:.1f} min")
+    done_path.write_text(json.dumps({"done": int(hi)}))
+    logger.info(f"wrote frames [{lo}, {hi}) to {args.out} in {(time.perf_counter() - t0) / 60:.1f} min")
 
 
 if __name__ == "__main__":

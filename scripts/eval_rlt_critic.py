@@ -54,6 +54,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True, type=pathlib.Path, help="annotate_rlt.py output dir")
     ap.add_argument("--params", required=True, type=pathlib.Path, help="trained critic params (msgpack)")
+    # Architecture normally comes from the config.json that training saved beside the params; these
+    # are only consulted when that file is missing.
     ap.add_argument("--kind", choices=["qc", "arq"], default="arq")
     ap.add_argument("--num-critics", type=int, default=2)
     ap.add_argument("--num-atoms", type=int, default=1)
@@ -77,15 +79,34 @@ def main() -> None:
     held = _load(args.data, "base_action_heldout", (T, nh, H, A), dt) if nh else None
     logger.info(f"{T} frames, N={N} candidates, {nh} held-out, horizon {H}, token {D}")
 
-    net = _critic.make_critic(
-        kind=args.kind,
-        action_dim=A,
-        horizon=H,
-        macro_group_size=args.macro_group_size,
-        num_atoms=args.num_atoms,
-        num_critics=args.num_critics,
+    # The network built here has to match the checkpoint exactly, and train_rlt_critic.py already
+    # writes the settings it used next to the params. Read those instead of re-declaring them on the
+    # command line, where one stale flag silently builds a different network. The CLI values remain
+    # as fallbacks for params saved before that file existed.
+    cfg_path = args.params.parent / "config.json"
+    tcfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    logger.info(f"architecture from {cfg_path}" if tcfg else f"no {cfg_path}; using command-line architecture")
+
+    kind = tcfg.get("kind", args.kind)
+    num_atoms = tcfg.get("num_atoms", args.num_atoms)
+    arch = (
+        {
+            "macro_group_size": tcfg.get("macro_group_size", args.macro_group_size),
+            "num_layers": tcfg.get("num_layers", 3),
+            "num_heads": tcfg.get("num_heads", 8),
+            "head_dim": tcfg.get("head_dim", 48),
+            "mlp_dim": tcfg.get("mlp_dim", 1024),
+        }
+        if kind == "arq"
+        else {"hidden_dims": tuple(tcfg.get("hidden_dims", [512, 512, 512]))}
     )
-    hl = _critic.HLGauss(v_min=args.v_min, v_max=args.v_max, num_atoms=max(args.num_atoms, 2))
+    net = _critic.Ensemble(
+        make_critic=lambda: _critic.make_critic(kind, action_dim=A, horizon=H, num_atoms=num_atoms, **arch),
+        num_critics=tcfg.get("num_critics", args.num_critics),
+    )
+    hl = _critic.HLGauss(
+        v_min=tcfg.get("v_min", args.v_min), v_max=tcfg.get("v_max", args.v_max), num_atoms=max(num_atoms, 2)
+    )
     params = flax.serialization.msgpack_restore(args.params.read_bytes())
 
     rng = np.random.default_rng(args.seed)
@@ -96,7 +117,7 @@ def main() -> None:
         """[S, M, H, A] -> ensemble-min Q, reduced over prefixes to the full-chunk value."""
         m = actions.shape[1]
         out = net.apply(params, jnp.repeat(z[:, None], m, axis=1), jnp.asarray(np.asarray(actions, np.float32)))
-        out = hl.from_logits(out) if args.num_atoms > 1 else out
+        out = hl.from_logits(out) if num_atoms > 1 else out
         return jnp.min(out, axis=0)  # ensemble -> [S, M] for qc, [S, M, P] for arq
 
     q_cand = np.asarray(q_of(np.asarray(cand[idx])))

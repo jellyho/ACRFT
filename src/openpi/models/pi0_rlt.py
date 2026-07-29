@@ -27,10 +27,15 @@ Differences from the reference frozen-VLA stage — chosen for the RoboCasa port
         VLM features.  (BC always flows into the backbone regardless.)
       - ``rlt_target_stop_gradient``: whether the reconstruction *target* z̄ is
         stop-gradient'd (default True; disabling risks feature collapse).
-      - ``rlt_objective``: "reconstruction", "progress", or both.  The progress
-        target is time-to-success derived from the sparse success reward (see
-        training/progress.py); its head is HL-Gauss distributional by
-        default, or plain regression.
+      - ``rlt_objective``: "reconstruction" or "reconstruction+progress".
+        Reconstruction is always present: it is the only term that pressures
+        z_rl to retain the observation.  Progress is one scalar per frame, so on
+        its own it lets the bottleneck collapse to ~1 dimension (measured: 10%
+        probe success against 45-50% with reconstruction), which is why it is
+        available as an addition and not as an objective in its own right.  The
+        progress target is time-to-success derived from the sparse success
+        reward (see training/progress.py); its head is HL-Gauss distributional
+        by default, or plain regression.
       - ``rlt_decoder_mode``: "autoregressive" (the paper's Eq. 2) or "parallel"
         (no teacher forcing, so the token cannot be bypassed via context).
 
@@ -183,8 +188,10 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
     # proprio at the critic rather than squeezing it through the bottleneck. Turning this off means
     # whatever consumes z_rl downstream has to supply proprio itself.
     rlt_include_proprio: bool = True
-    # Objective for the bottleneck: "reconstruction", "progress", or "reconstruction+progress".
-    # Anything with "progress" needs the data config to inject a `progress` label
+    # Objective for the bottleneck: "reconstruction" or "reconstruction+progress". Reconstruction is
+    # not optional — it is the only term that makes z_rl keep the observation, and progress alone
+    # (one scalar per frame) leaves the bottleneck free to collapse. "progress" is therefore an
+    # ADDITION, never an objective by itself. It needs the data config to inject a `progress` label
     # (LeRobotRoboCasaDataConfig(include_progress=True); see training/progress.py).
     rlt_objective: str = "reconstruction"
     # Progress head: "distributional" (HL-Gauss histogram + cross-entropy) or "regression" (MSE).
@@ -245,10 +252,11 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
             raise ValueError(f"rlt_aux_head_source must be decoder|token, got {self.rlt_aux_head_source!r}")
         if self.rlt_decoder_mode not in ("autoregressive", "parallel"):
             raise ValueError(f"rlt_decoder_mode must be 'autoregressive' or 'parallel', got {self.rlt_decoder_mode!r}")
-        if self.rlt_objective not in ("reconstruction", "progress", "reconstruction+progress"):
+        if self.rlt_objective not in ("reconstruction", "reconstruction+progress"):
             raise ValueError(
-                "rlt_objective must be 'reconstruction', 'progress' or 'reconstruction+progress', "
-                f"got {self.rlt_objective!r}"
+                "rlt_objective must be 'reconstruction' or 'reconstruction+progress' — progress on "
+                "its own supervises the bottleneck with a single scalar per frame and lets it "
+                f"collapse, so reconstruction is always required. Got {self.rlt_objective!r}"
             )
         if self.rlt_progress_head not in ("distributional", "regression"):
             raise ValueError(
@@ -534,32 +542,28 @@ class Pi0RLT(Pi0):
         z_tgt = jax.lax.stop_gradient(z) if self.rlt_target_stop_gradient else z
 
         z_rl = self._encode_rl_token(z_enc_in, img_mask, state)  # [b, rlt_token_dim]
-        zeros = jnp.zeros(z_rl.shape[0], dtype=jnp.float32)
         aux = {}
 
         # The decoder is needed for reconstruction, and also to feed the auxiliary heads when they
-        # read its position-0 output. Run it at most once and share the result.
-        has_recon = "reconstruction" in self.rlt_objective
+        # read its position-0 output. Run it once and share the result.
         has_progress = "progress" in self.rlt_objective
-        recon, dec_aux = self._decode(z_rl, z_tgt, img_mask) if (has_recon or self._dec_has_aux) else (None, None)
+        recon, dec_aux = self._decode(z_rl, z_tgt, img_mask)
         # The aux query attends only to z_rl and itself, so this is a nonlinear function of z_rl
         # ALONE - no teacher-forced context can leak into the aux heads.
         aux_feat = dec_aux if self.rlt_aux_head_source == "decoder" else z_rl
 
-        if has_recon:
-            # Masked reconstruction MSE (mean over feature dim, masked mean over tokens).
-            err = jnp.mean(jnp.square(recon - z_tgt), axis=-1)  # [b, M]
-            m = img_mask.astype(jnp.float32)
-            recon_loss = jnp.sum(err * m, axis=-1) / (jnp.sum(m, axis=-1) + 1e-6)  # [b]
-            rlt_loss = recon_loss
-            aux |= {"rlt/loss_recon": jnp.mean(recon_loss)}
-            if self.rlt_include_proprio:
-                proprio_recon = self.rlt_proprio_out_proj(aux_feat)  # [b, ad]
-                proprio_loss = jnp.mean(jnp.square(proprio_recon - state), axis=-1)  # [b]
-                rlt_loss = rlt_loss + self.proprio_loss_weight * proprio_loss
-                aux |= {"rlt/loss_proprio": jnp.mean(proprio_loss)}
-        else:
-            rlt_loss = zeros
+        # Reconstruction is always on (see __post_init__): masked MSE, mean over the feature dim and
+        # a masked mean over tokens.
+        err = jnp.mean(jnp.square(recon - z_tgt), axis=-1)  # [b, M]
+        m = img_mask.astype(jnp.float32)
+        recon_loss = jnp.sum(err * m, axis=-1) / (jnp.sum(m, axis=-1) + 1e-6)  # [b]
+        rlt_loss = recon_loss
+        aux |= {"rlt/loss_recon": jnp.mean(recon_loss)}
+        if self.rlt_include_proprio:
+            proprio_recon = self.rlt_proprio_out_proj(aux_feat)  # [b, ad]
+            proprio_loss = jnp.mean(jnp.square(proprio_recon - state), axis=-1)  # [b]
+            rlt_loss = rlt_loss + self.proprio_loss_weight * proprio_loss
+            aux |= {"rlt/loss_proprio": jnp.mean(proprio_loss)}
 
         if has_progress:
             if progress is None:
@@ -605,12 +609,6 @@ class Pi0RLT(Pi0):
         z, img_mask = self._split_image_tokens(observation, outs[0], prefix_mask)
 
         z_rl = self._encode_rl_token(z, img_mask, observation.state)
-        if "reconstruction" not in self.rlt_objective:
-            # No reconstruction term in the objective means the decoder never receives a gradient, so
-            # it stays at its random init. A bypass ratio measured through an untrained decoder says
-            # nothing about the token — and would read near 1.0, i.e. a false "token is ignored"
-            # alarm. Report only what still means something.
-            return {"z_rl": z_rl}
         m = img_mask.astype(jnp.float32)
 
         def _recon_loss(token):

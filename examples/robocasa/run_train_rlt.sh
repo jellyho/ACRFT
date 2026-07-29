@@ -29,9 +29,11 @@
 #                              encoder and no proprio reconstruction term. This is the paper's own
 #                              setup, where the critic takes (z_rl, s^p) and gets proprio directly,
 #                              so whatever consumes z_rl must supply proprio itself. (NO_PROPRIO=1)
-#     --objective STR          reconstruction | progress | reconstruction+progress (RLT_OBJECTIVE=)
-#                              anything with "progress" regresses time-to-success, derived from the
-#                              sparse success reward (see training/progress.py)
+#     --objective STR          reconstruction | reconstruction+progress      (RLT_OBJECTIVE=)
+#                              adding "progress" regresses time-to-success, derived from the sparse
+#                              success reward (see training/progress.py). Reconstruction is always
+#                              present: progress alone is one scalar per frame and lets the
+#                              bottleneck collapse, so it is an addition, not an objective.
 #     --scalar-head            progress head = MSE regression instead of the default HL-Gauss
 #                              histogram + cross-entropy                     (SCALAR_HEAD=1)
 #     --progress-bins INT      histogram bins for the distributional head    (PROGRESS_BINS=)
@@ -138,9 +140,10 @@ if [ -n "${RLT_OBJECTIVE:-}" ]; then
   # "reconstruction+progress" and silently point two ablations at the same checkpoint dir.
   case "$RLT_OBJECTIVE" in
     reconstruction)          OBJ_TAG="_recon" ;;
-    progress)                OBJ_TAG="_prog" ;;
     reconstruction+progress) OBJ_TAG="_reconprog" ;;
-    *) echo "Unknown --objective: $RLT_OBJECTIVE (reconstruction | progress | reconstruction+progress)"; exit 1 ;;
+    progress) echo "--objective progress is no longer supported: progress alone supervises the token
+with a single scalar per frame and lets it collapse. Use reconstruction+progress."; exit 1 ;;
+    *) echo "Unknown --objective: $RLT_OBJECTIVE (reconstruction | reconstruction+progress)"; exit 1 ;;
   esac
   RLT_FLAGS+=(--model.rlt-objective "$RLT_OBJECTIVE"); VARIANT_TAG="${VARIANT_TAG}${OBJ_TAG}"
 fi

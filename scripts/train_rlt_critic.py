@@ -99,7 +99,7 @@ def make_update(data: Data, cfg, net, hl, act_scale):
     prefixes = jnp.arange(g, H + 1, g) if cfg.kind == "arq" else jnp.array([H])
     disc = cfg.discount ** jnp.arange(H, dtype=jnp.float32)  # [H]
 
-    def targets(idx, tgt_params):
+    def targets(idx, tgt_params, rng):
         """Per-prefix (cum_reward, next_value, valid) for the sampled transitions."""
         ep = data.episode[idx]  # [B]
         # Rewards over the chunk, zeroed once the episode ends.
@@ -119,13 +119,23 @@ def make_update(data: Data, cfg, net, hl, act_scale):
         z_next = data.token[nxt]  # [B, P, D]
         a_next = data.cand[nxt]  # [B, P, N, H, A]
         B, P, N = a_next.shape[0], a_next.shape[1], a_next.shape[2]
+        k_sub, k_noise = jax.random.split(rng)
+        if 0 < cfg.bootstrap_candidates < N:
+            # Bootstrap off a fresh random subset of the stored candidates each step rather than all
+            # of them. This is the one knob that helps twice: the target forward is the dominant cost
+            # of an update (it scores B*P*n chunks against the online loss's B), and the arg-max over
+            # fewer items is less biased upward. Resampling every step still visits all N over
+            # training, so nothing is discarded - only the per-step max is narrowed.
+            n = cfg.bootstrap_candidates
+            sel = jnp.argsort(jax.random.uniform(k_sub, (B, P, N)), axis=-1)[..., :n]  # without replacement
+            a_next = jnp.take_along_axis(a_next, sel[..., None, None], axis=2)
+            N = n
         if cfg.target_noise > 0:
             # Temporally COHERENT perturbation (constant offset + linear drift), scaled per action
             # dim. Per-step iid noise would make the chunk jitter into a trajectory the policy would
             # never emit; this keeps it a plausible neighbour of the candidate, which is the point -
             # it smooths Q locally so a lone spurious peak cannot win the arg-max.
-            kr = jax.random.fold_in(jax.random.key(0), idx[0])
-            k1, k2 = jax.random.split(kr)
+            k1, k2 = jax.random.split(k_noise)
             ramp = jnp.linspace(-1.0, 1.0, a_next.shape[-2])[:, None]
             off = jax.random.normal(k1, (*a_next.shape[:-2], 1, a_next.shape[-1]))
             drift = jax.random.normal(k2, (*a_next.shape[:-2], 1, a_next.shape[-1])) * ramp
@@ -150,8 +160,8 @@ def make_update(data: Data, cfg, net, hl, act_scale):
         y = cum + gam[None, :] * valid * v_next
         return y, valid
 
-    def loss_fn(params, tgt_params, idx):
-        y, valid = targets(idx, tgt_params)
+    def loss_fn(params, tgt_params, idx, rng):
+        y, valid = targets(idx, tgt_params, rng)
         y = jax.lax.stop_gradient(y)
         pred = net.apply(params, data.token[idx], data.chunk[idx])  # [K, B(, P)(, atoms)]
         if cfg.kind == "qc":
@@ -172,8 +182,9 @@ def make_update(data: Data, cfg, net, hl, act_scale):
 
     def step(carry, rng):
         params, tgt_params, opt_state = carry
-        idx = jax.random.randint(rng, (cfg.batch_size,), 0, T)
-        (_, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, tgt_params, idx)
+        k_idx, k_tgt = jax.random.split(rng)
+        idx = jax.random.randint(k_idx, (cfg.batch_size,), 0, T)
+        (_, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, tgt_params, idx, k_tgt)
         updates, opt_state = tx.update(grads, opt_state)
         params = optax.apply_updates(params, updates)
         tgt_params = optax.incremental_update(params, tgt_params, cfg.target_tau)
@@ -201,6 +212,14 @@ def main() -> None:
     ap.add_argument("--ens-agg", choices=["min", "lcb"], default="min", help="Across ensemble members.")
     ap.add_argument("--lcb-beta", type=float, default=1.0, help="ens-agg=lcb: mean - beta*std.")
     ap.add_argument("--v-agg", choices=["max", "topm", "soft"], default="max", help="Across candidates/prefixes.")
+    ap.add_argument(
+        "--bootstrap-candidates",
+        type=int,
+        default=0,
+        help="Bootstrap off this many of the N stored candidates, resampled every step (0 = all N). "
+        "Scoring the candidates is the bulk of an update's cost, and a narrower arg-max is also "
+        "less biased upward, so this trades speed and bias against how sharply the target tracks.",
+    )
     ap.add_argument("--top-m", type=int, default=3, help="v-agg=topm: average the m best.")
     ap.add_argument("--soft-tau", type=float, default=0.1, help="v-agg=soft: softmax temperature.")
     ap.add_argument(

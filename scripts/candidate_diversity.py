@@ -105,6 +105,44 @@ def main() -> None:
         gain = "" if i == 0 else f"{to_demo[i - 1] - to_demo[i]:+.4f}"
         print(f"{m:3d}   {modes[i]:12.2f}   {nn[i]:7.3f}   {to_demo[i]:12.4f}   {gain:>10s}")
 
+    # --- is the spread clustered, or one continuous blob? -----------------------------------------
+    # This decides how the distribution should be stored: k cluster centres with their own spreads if
+    # there are genuine modes, or a single low-rank Gaussian if the candidates form one cloud. Fitting
+    # k Gaussians to a cloud invents structure; fitting one to real modes averages them away.
+    def kmeans(pts, k, iters=25):
+        c = pts[:, rng.permutation(pts.shape[1])[:k]]  # [S, k, D]
+        for _ in range(iters):
+            d = np.linalg.norm(pts[:, :, None, :] - c[:, None, :, :], axis=-1)  # [S, N, k]
+            a = d.argmin(-1)
+            for j in range(k):
+                m = a == j
+                cnt = m.sum(1, keepdims=True)
+                c[:, j] = np.where(cnt > 0, (pts * m[..., None]).sum(1) / np.maximum(cnt, 1), c[:, j])
+        d = np.linalg.norm(pts - np.take_along_axis(c, a[..., None], 1), axis=-1)
+        return a, float((d**2).mean())
+
+    print("\n k   within-cluster SSE   drop vs k-1")
+    prev = None
+    for k in (1, 2, 3, 4, 6, 8):
+        if k > N // 2:
+            break
+        _, sse = kmeans(C.copy(), k)
+        print(f"{k:2d}   {sse:18.4f}   {'' if prev is None else f'{(prev - sse) / prev:+.1%}'}")
+        prev = sse
+
+    # Spectrum of the per-state candidate cloud: how many directions carry the variance.
+    sv = np.linalg.svd(np.asarray(C - C.mean(1, keepdims=True), np.float64), compute_uv=False)
+    tot = (sv**2).sum(-1, keepdims=True)
+    ok = tot[:, 0] > 1e-12  # a state whose candidates are identical carries no spectrum
+    ev = (sv[ok] ** 2) / tot[ok]
+    cum = np.cumsum(ev.mean(0))
+    print("\n cumulative variance by rank:", " ".join(f"r{i + 1}:{c:.2f}" for i, c in enumerate(cum[:8])))
+    r90 = int(np.searchsorted(cum, 0.9) + 1)
+    print(f"  -> rank {r90} captures 90% of the within-state spread")
+    print(
+        f"  -> storing centre + rank-{r90} factor = {(1 + r90) * C.shape[-1]:,} floats vs {N * C.shape[-1]:,} for the raw candidates"
+    )
+
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.2), dpi=140)
     axes[0].plot(ms, modes, "-o", color="tab:blue")
     axes[0].set_title(
