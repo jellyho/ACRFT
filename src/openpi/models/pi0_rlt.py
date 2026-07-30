@@ -164,6 +164,13 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
 
     # Bottleneck size of the RL token (paper value: 2048).
     rlt_token_dim: int = 2048
+    # How many RL tokens the encoder emits. The decoder in `parallel` mode conditions on nothing but
+    # these, so one vector is the entire channel between the observation and the reconstruction -
+    # and the effective rank of that vector was measured to contract from ~12 directions to ~6 over
+    # training, which is a bottleneck the task may not fit through. More tokens widen the channel
+    # without widening each vector, so the critic still reads fixed-size slots. Downstream sees them
+    # concatenated, so the consumed dimension is rlt_num_tokens * rlt_token_dim.
+    rlt_num_tokens: int = 1
     # Hidden width of the encoder/decoder transformer (d_model). Must be even (sincos posemb).
     rlt_width: int = 1024
     rlt_encoder_depth: int = 4
@@ -252,6 +259,8 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
             raise ValueError(f"rlt_aux_head_source must be decoder|token, got {self.rlt_aux_head_source!r}")
         if self.rlt_decoder_mode not in ("autoregressive", "parallel"):
             raise ValueError(f"rlt_decoder_mode must be 'autoregressive' or 'parallel', got {self.rlt_decoder_mode!r}")
+        if self.rlt_num_tokens < 1:
+            raise ValueError(f"rlt_num_tokens must be >= 1, got {self.rlt_num_tokens}")
         if self.rlt_objective not in ("reconstruction", "reconstruction+progress"):
             raise ValueError(
                 "rlt_objective must be 'reconstruction' or 'reconstruction+progress' — progress on "
@@ -289,6 +298,9 @@ class Pi0RLT(Pi0):
         self._vlm_width = vlm_width
         self.rlt_width = d
         self.rlt_token_dim = config.rlt_token_dim
+        self.rlt_num_tokens = config.rlt_num_tokens
+        # What everything downstream of the encoder actually receives.
+        self.rlt_token_total = config.rlt_token_dim * config.rlt_num_tokens
         self.rlt_loss_weight = config.rlt_loss_weight
         self.proprio_loss_weight = config.proprio_loss_weight
         self.rlt_backbone_gradient = config.rlt_backbone_gradient
@@ -304,7 +316,12 @@ class Pi0RLT(Pi0):
         self.rlt_include_proprio = config.rlt_include_proprio
         if self.rlt_include_proprio:
             self.rlt_proprio_in_proj = nnx.Linear(config.action_dim, d, rngs=rngs)  # proprio → d
-        self.rlt_token_embed = nnx.Param(jax.random.normal(rngs.params(), (d,)) * 0.02)
+        # One learned query per RL token; identical queries would make the encoder emit K copies of
+        # the same vector. Kept at shape (d,) for a single token rather than (1, d): every existing
+        # checkpoint stores it that way, and BaseModel.load checks structure, so (1, d) would refuse
+        # to load any of them.
+        _emb_shape = (d,) if config.rlt_num_tokens == 1 else (config.rlt_num_tokens, d)
+        self.rlt_token_embed = nnx.Param(jax.random.normal(rngs.params(), _emb_shape) * 0.02)
         self.rlt_encoder = nnx.Dict(
             {f"blk_{i}": _Block(d, config.rlt_num_heads, mlp_hidden, rngs=rngs) for i in range(self._enc_depth)}
         )
@@ -329,7 +346,7 @@ class Pi0RLT(Pi0):
         if self._dec_has_aux:
             self.rlt_dec_aux_embed = nnx.Param(jax.random.normal(rngs.params(), (d,)) * 0.02)
         # Aux heads read the decoder's hidden state at that query (width d), or z_rl directly.
-        aux_in = d if config.rlt_aux_head_source == "decoder" else config.rlt_token_dim
+        aux_in = d if config.rlt_aux_head_source == "decoder" else self.rlt_token_total
         # Proprio reconstruction head: forces proprio into z_rl, which is only needed when whatever
         # consumes z_rl downstream cannot see proprio on its own.
         if self.rlt_include_proprio:
@@ -371,7 +388,7 @@ class Pi0RLT(Pi0):
             # the token's control value: with --no-proprio the token carries no proprio, and the
             # downstream critic gets proprio separately, so the probe must too.
             self.rlt_probe_time = nnx.Linear(pw, pw, rngs=rngs)  # maps sincos(t) -> width
-            self.rlt_probe_tok = nnx.Linear(config.rlt_token_dim, pw, rngs=rngs)
+            self.rlt_probe_tok = nnx.Linear(self.rlt_token_total, pw, rngs=rngs)
             self.rlt_probe_state = nnx.Linear(config.action_dim, pw, rngs=rngs)
             self.rlt_probe_blocks = nnx.Dict(
                 {
@@ -400,15 +417,17 @@ class Pi0RLT(Pi0):
     # ------------------------------------------------------------------
 
     def _encode_rl_token(self, z, img_mask, state):
-        """Compress the VLA image embeddings + proprio into one RL token [b, rlt_token_dim]."""
+        """Compress the VLA image embeddings + proprio into K RL tokens, flattened to [b, K*dim]."""
         b, M, _ = z.shape
         d = self.rlt_width
+        k = self.rlt_num_tokens
 
         zt = self.rlt_enc_in_proj(z)  # [b, M, d]
-        rl = jnp.broadcast_to(self.rlt_token_embed.value[None, None], (b, 1, d))  # [b, 1, d]
+        emb = self.rlt_token_embed.value
+        rl = jnp.broadcast_to(emb.reshape(k, d)[None], (b, k, d))  # [b, K, d]
         # With proprio: [image tokens, proprio, <rl>]. Without: [image tokens, <rl>] — the token is
         # then a pure image+language readout and proprio reaches the critic by another route.
-        extra = 2 if self.rlt_include_proprio else 1
+        extra = k + (1 if self.rlt_include_proprio else 0)
         parts = [zt]
         if self.rlt_include_proprio:
             parts.append(self.rlt_proprio_in_proj(state)[:, None, :])  # [b, 1, d]
@@ -422,7 +441,9 @@ class Pi0RLT(Pi0):
 
         for i in range(self._enc_depth):
             x = self.rlt_encoder[f"blk_{i}"](x, mask)
-        return self.rlt_out_proj(x[:, -1])  # [b, rlt_token_dim]
+        # Flattened at the boundary so every consumer - decoder, probe, annotation, critic - keeps
+        # taking a single vector, of rlt_num_tokens * rlt_token_dim.
+        return self.rlt_out_proj(x[:, -k:]).reshape(b, k * self.rlt_token_dim)
 
     # ------------------------------------------------------------------
     # Decoder d_φ : autoregressive reconstruction of z̄_{1:M} from z_rl
@@ -451,9 +472,58 @@ class Pi0RLT(Pi0):
         """
         b, M, _ = z_tgt.shape
         d = self.rlt_width
-        start = self.rlt_dec_rl_proj(z_rl)[:, None, :]  # [b, 1, d]
+        k = self.rlt_num_tokens
         parallel = self.rlt_decoder_mode == "parallel"
+        tok = self.rlt_dec_rl_proj(z_rl.reshape(b, k, self.rlt_token_dim))  # [b, K, d]
 
+        if k > 1:
+            # With several tokens the decoder gets them as PREFIX KEYS, so a reconstruction query can
+            # attend to each one separately instead of to a single summary. The query content stays
+            # what it is for one token (the projected token, or the teacher-forced target) using the
+            # mean, so the only thing more tokens add is what attention can reach - not a different
+            # kind of conditioning. Token rows attend among themselves; reconstruction rows see every
+            # token plus their usual pattern; nothing sees the aux query.
+            mean = jnp.mean(tok, axis=1, keepdims=True)  # [b, 1, d]
+            if parallel:
+                body = jnp.broadcast_to(mean, (b, M, d))
+                inner = jnp.ones((b, 1, M, M), dtype=jnp.bool_)
+            else:
+                shifted = self.rlt_dec_tgt_proj(z_tgt[:, : M - 1])
+                body = jnp.concatenate([mean, shifted], axis=1)
+                causal = jnp.tril(jnp.ones((M, M), dtype=jnp.bool_))
+                kv_valid = jnp.concatenate([jnp.ones((b, 1), dtype=jnp.bool_), img_mask[:, : M - 1]], axis=1)
+                inner = causal[None, None] & kv_valid[:, None, None, :]
+            n_aux = 1 if self._dec_has_aux else 0
+            total = k + M + n_aux
+            x = jnp.concatenate(
+                [tok, body]
+                + ([jnp.broadcast_to(self.rlt_dec_aux_embed.value[None, None], (b, 1, d))] if n_aux else []),
+                axis=1,
+            )
+            x = x + _sincos_posemb(total, d)[None]
+            cols = jnp.arange(total)
+            is_tok = (cols < k)[None, None, None, :]  # [1,1,1,total]
+            tok_rows = jnp.broadcast_to(is_tok, (b, 1, k, total))
+            rec_rows = jnp.concatenate(
+                [
+                    jnp.broadcast_to(is_tok[:, :, :, :k], (b, 1, M, k)),
+                    inner,
+                    *([jnp.zeros((b, 1, M, 1), dtype=jnp.bool_)] if n_aux else []),
+                ],
+                axis=-1,
+            )
+            parts = [tok_rows, rec_rows]
+            if n_aux:
+                aux_row = jnp.broadcast_to(((cols < k) | (cols == total - 1))[None, None, None, :], (b, 1, 1, total))
+                parts.append(aux_row)
+            mask = jnp.concatenate(parts, axis=2)
+            for i in range(self._dec_depth):
+                x = self.rlt_decoder[f"blk_{i}"](x, mask)
+            recon = self.rlt_dec_out_proj(x[:, k : k + M])
+            return recon, (x[:, -1] if n_aux else None)
+
+        # --- single token: the original path, byte-for-byte, so its checkpoints keep loading -------
+        start = tok  # [b, 1, d]
         if parallel:
             # Broadcast the token to every position; positions differ only by the positional code.
             x = jnp.broadcast_to(start, (b, M, d))

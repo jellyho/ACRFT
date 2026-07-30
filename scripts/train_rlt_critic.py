@@ -244,6 +244,41 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
             q_mean = jnp.mean(pred)
         loss = jnp.sum(per * w) / (jnp.sum(w) * pred.shape[0] + 1e-8)
         vs = jnp.maximum(jnp.sum(valid), 1.0)
+
+        # --- conservatism over the stored candidates (CQL) -----------------------------------------
+        # The loss above is evaluated on ONE action per state - the demonstrated chunk - and the target
+        # is read at the state the demonstration reached, so it carries the same value whichever
+        # candidate is considered. The candidates only ever appear inside the bootstrap max at the NEXT
+        # state, never with a target of their own. Nothing in the objective therefore says that one
+        # action at this state is worth more than another, and within-state ranking has to arrive
+        # through generalisation across states, which measured indistinguishable from noise.
+        #
+        # This term gives every candidate a gradient - downward - and the demonstrated chunk one
+        # upward, which is the standard remedy and the half of Cal-QL that --mc-lower-bound does not
+        # cover (that one calibrates the level; this one creates the ordering). It costs a forward over
+        # B*n chunks at the current state against the bootstrap's B*P*n, so about 1/P of the step.
+        #
+        # What it buys is a critic that prefers demonstration-like chunks, which is a behaviour-cloning
+        # prior rather than an improvement on its own; the gain over BC has to come from the TD term
+        # choosing among near-demonstration chunks by how fast they arrive. Rollouts decide that, not
+        # this loss.
+        cql = jnp.zeros(())
+        cql_gap = jnp.zeros(())
+        if cfg.cql_alpha > 0:
+            n_c = min(cfg.cql_candidates or data.num_samples, data.num_samples)
+            k_c = jax.random.fold_in(rng, 1)
+            sel = jnp.argsort(jax.random.uniform(k_c, (idx.shape[0], data.num_samples)), axis=-1)[:, :n_c]
+            a_c = jnp.take_along_axis(data.cand[idx], sel[..., None, None], axis=1)  # [B, n, H, A]
+            q_c = net.apply(params, jnp.repeat(data.token[idx][:, None], n_c, axis=1), a_c)
+            q_c = hl.from_logits(q_c) if cfg.num_atoms > 1 else q_c  # [K, B, n, P]
+            q_d = hl.from_logits(pred) if cfg.num_atoms > 1 else pred  # [K, B, P]
+            # Per prefix, so the ordering is created at every commitment length rather than only for
+            # the whole chunk - the deployment arg-max ranges over both axes.
+            lse = jax.scipy.special.logsumexp(q_c, axis=2) - jnp.log(n_c)  # [K, B, P]
+            gap = lse - q_d
+            cql = jnp.sum(gap * w) / (jnp.sum(w) * pred.shape[0] + 1e-8)
+            cql_gap = jnp.sum(jnp.mean(lse - q_d, axis=0) * valid) / vs
+            loss = loss + cfg.cql_alpha * cql
         return loss, {
             "loss": loss,
             "q_mean": q_mean,
@@ -255,6 +290,10 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
             "mc_floor_frac": jnp.sum((tinfo["floor_gap"] > 0) * valid) / vs,
             "mc_floor_gap": jnp.sum(tinfo["floor_gap"] * valid) / vs,
             "target_oob": jnp.sum(((y < v_lo) | (y > v_hi)) * valid) / vs,
+            # How much the candidates currently sit ABOVE the demonstrated chunk. Positive means the
+            # critic prefers what the policy sampled to what the data executed, which is the direction
+            # conservatism is meant to close; it going to zero is the term working, not the goal.
+            "cql_gap": cql_gap,
         }
 
     tx = optax.adam(cfg.lr)
@@ -339,6 +378,20 @@ def main() -> None:
         help="At a transition that lands on a terminal, take the value from mc_return instead of "
         "dropping the bootstrap. The return from a terminal is known exactly, so this is the "
         "reference's choice (vla_aqc.py, terminal_uses_mc).",
+    )
+    ap.add_argument(
+        "--cql-alpha",
+        type=float,
+        default=0.0,
+        help="Weight on a CQL conservatism term over the stored candidates at the CURRENT state: it "
+        "pushes their values down and the demonstrated chunk's up, which is the only part of the "
+        "objective that says one action at a given state is worth more than another. 0 = off.",
+    )
+    ap.add_argument(
+        "--cql-candidates",
+        type=int,
+        default=0,
+        help="Candidates in the CQL log-sum-exp, resampled each step (0 = all N).",
     )
     ap.add_argument(
         "--mc-lower-bound",

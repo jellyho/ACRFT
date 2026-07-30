@@ -172,10 +172,10 @@ def main() -> None:
     ap.add_argument(
         "--path-scale",
         type=float,
-        default=0.12,
-        help="Metres the drawn candidate paths should span. The raw chunk deltas are in normalised "
-        "control units, so a fixed scale would make the fan invisible on some replans and fill the "
-        "frame on others; this fixes the executed chunk's span and scales the rest to match.",
+        default=None,
+        help="Metres of end-effector motion per unit of normalised action. Defaults to the value the "
+        "evaluation controller actually uses (0.05 for OSC_POSE on PandaOmron), which makes the drawn "
+        "paths the predicted trajectory rather than a direction indicator at an arbitrary length.",
     )
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
     args = ap.parse_args()
@@ -183,6 +183,10 @@ def main() -> None:
     if "vla" not in args.modes and args.critic is None:
         ap.error("--critic is required unless --modes vla")
 
+    if args.path_scale is None:
+        import action_overlay as _ov0
+
+        args.path_scale = _ov0.EE_METRES_PER_UNIT
     env = _ro.make_env(args.task, camera_size=args.camera_size, seed=args.seed)
     results = {}
     for mode in args.modes:
@@ -217,7 +221,7 @@ def main() -> None:
                 # Anchor every candidate at the LIVE end-effector so the fan stays attached to the
                 # gripper as it moves, rather than to wherever the replan happened.
                 ee, bq = np.asarray(obs["robot0_eef_pos"]), np.asarray(obs["robot0_base_quat"])
-                sc = _ov._adaptive_scale(info.cand[info.best_cand], args.path_scale)
+                sc = args.path_scale
                 paths = [_box["proj"].project(_ov.predict_path(ee, bq, c, sc)) for c in info.cand]
             _frames.append(
                 _box["dash"].frame(

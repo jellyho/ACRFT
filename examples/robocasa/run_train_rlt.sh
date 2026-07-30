@@ -153,6 +153,9 @@ fi
 if [ -n "${PROGRESS_BINS:-}" ]; then
   RLT_FLAGS+=(--model.rlt-progress-bins "$PROGRESS_BINS")
 fi
+if [ -n "${NUM_TOKENS:-}" ]; then
+  RLT_FLAGS+=(--model.rlt-num-tokens "$NUM_TOKENS"); VARIANT_TAG="${VARIANT_TAG}_k${NUM_TOKENS}"
+fi
 if [ -n "${TOKEN_DIM:-}" ]; then
   RLT_FLAGS+=(--model.rlt-token-dim "$TOKEN_DIM"); VARIANT_TAG="${VARIANT_TAG}_d${TOKEN_DIM}"
 fi

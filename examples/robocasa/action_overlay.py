@@ -70,8 +70,21 @@ def predict_path(ee_world, base_quat, chunk, scale: float) -> np.ndarray:
     return np.stack(path)
 
 
+# Metres of end-effector motion per unit of normalised action, read off the controller the
+# evaluation env actually runs: robosuite OSC_POSE for PandaOmron maps input [-1, 1] to
+# output [-0.05, 0.05] m per step (default_pandaomron.json, body_parts.arms.right). With this the
+# drawn path IS the predicted trajectory and lands where the gripper goes.
+EE_METRES_PER_UNIT = 0.05
+
+
 def _adaptive_scale(chunk, target_len: float) -> float:
-    """Scale that makes ``chunk``'s integrated ee-pos path span ~``target_len`` world metres."""
+    """Deprecated: rescaled the path to a fixed on-screen length instead of its true magnitude.
+
+    It divided a target length by the chunk's own integrated displacement, so the drawn path was
+    about 2x too short on average (measured: raw_len 4.73 against a 0.12 m target gives 0.025 against
+    the true 0.05) and its length changed every replan - including a division by ~0 for a chunk that
+    barely moves. Kept only so old call sites do not break; pass EE_METRES_PER_UNIT instead.
+    """
     raw_len = float(np.abs(np.asarray(chunk)[:, _EE_POS_DELTA]).sum(axis=0).max())
     return target_len / max(raw_len, 1e-6)
 

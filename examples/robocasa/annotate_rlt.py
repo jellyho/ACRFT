@@ -104,6 +104,7 @@ def main() -> None:
     ap.add_argument("--decoder-mode", default=None, help="Override rlt_decoder_mode (autoregressive|parallel).")
     ap.add_argument("--no-proprio", action="store_true", help="Checkpoint was trained with --no-proprio.")
     ap.add_argument("--token-dim", type=int, default=None, help="Override rlt_token_dim.")
+    ap.add_argument("--num-tokens", type=int, default=None, help="Override rlt_num_tokens.")
     ap.add_argument("--num-flow-steps", type=int, default=10, help="Flow-matching denoising steps.")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--num-workers", type=int, default=8, help="Frame-decoding workers.")
@@ -152,6 +153,8 @@ def main() -> None:
         overrides["rlt_include_proprio"] = False
     if args.token_dim:
         overrides["rlt_token_dim"] = args.token_dim
+    if args.num_tokens is not None:
+        overrides["rlt_num_tokens"] = args.num_tokens
     if overrides:
         train_config = dataclasses.replace(train_config, model=dataclasses.replace(train_config.model, **overrides))
         logger.info(f"model overrides: {overrides}")
@@ -226,7 +229,8 @@ def main() -> None:
 
     # --- output arrays (memmap, written incrementally so --resume works) ---
     args.out.mkdir(parents=True, exist_ok=True)
-    D = model_config.rlt_token_dim
+    # The encoder emits rlt_num_tokens vectors, concatenated; that product is what lands on disk.
+    D = model_config.rlt_token_dim * getattr(model_config, "rlt_num_tokens", 1)
     H = model_config.action_horizon
     probe = decode_actions(np.zeros((1, H, model_config.action_dim), np.float32))
     raw_dim = int(probe.shape[-1])
