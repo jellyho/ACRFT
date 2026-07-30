@@ -26,6 +26,7 @@ Usage:
 """
 
 import argparse
+import gc
 import json
 import logging
 import pathlib
@@ -99,7 +100,13 @@ def main() -> None:
         zs = [np.asarray(extract(rng, _model.Observation.from_dict(b)), np.float32) for b in batches]
         tokens[step] = np.concatenate(zs, 0)
         logger.info(f"  {step}: {tokens[step].shape}")
-        del model
+        # A fresh jit is compiled per checkpoint and its cache entry holds the closure, which holds
+        # that checkpoint's parameters on the device. Dropping the Python references is not enough -
+        # the cache has to go too, or every checkpoint's parameters stay resident and the run OOMs a
+        # few checkpoints in, on an allocation small enough to look unrelated to the cause.
+        del model, extract, zs
+        jax.clear_caches()
+        gc.collect()
 
     def unit(a):
         return a / (np.linalg.norm(a, axis=-1, keepdims=True) + 1e-9)
