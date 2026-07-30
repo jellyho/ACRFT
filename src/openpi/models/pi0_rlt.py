@@ -171,6 +171,12 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
     # without widening each vector, so the critic still reads fixed-size slots. Downstream sees them
     # concatenated, so the consumed dimension is rlt_num_tokens * rlt_token_dim.
     rlt_num_tokens: int = 1
+    # MAE-style masking. With 0 the encoder sees every image token and the decoder reproduces every
+    # one, which makes the objective compression. With a ratio > 0 the encoder sees only the kept
+    # fraction and the loss is taken on the DROPPED positions, which makes it inference: the token has
+    # to carry enough to predict content it was never shown. Masking applies during training only -
+    # annotation and deployment always encode the full view, as in MAE.
+    rlt_mask_ratio: float = 0.0
     # Hidden width of the encoder/decoder transformer (d_model). Must be even (sincos posemb).
     rlt_width: int = 1024
     rlt_encoder_depth: int = 4
@@ -259,6 +265,8 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
             raise ValueError(f"rlt_aux_head_source must be decoder|token, got {self.rlt_aux_head_source!r}")
         if self.rlt_decoder_mode not in ("autoregressive", "parallel"):
             raise ValueError(f"rlt_decoder_mode must be 'autoregressive' or 'parallel', got {self.rlt_decoder_mode!r}")
+        if not 0.0 <= self.rlt_mask_ratio < 1.0:
+            raise ValueError(f"rlt_mask_ratio must be in [0, 1), got {self.rlt_mask_ratio}")
         if self.rlt_num_tokens < 1:
             raise ValueError(f"rlt_num_tokens must be >= 1, got {self.rlt_num_tokens}")
         if self.rlt_objective not in ("reconstruction", "reconstruction+progress"):
@@ -299,6 +307,7 @@ class Pi0RLT(Pi0):
         self.rlt_width = d
         self.rlt_token_dim = config.rlt_token_dim
         self.rlt_num_tokens = config.rlt_num_tokens
+        self.rlt_mask_ratio = config.rlt_mask_ratio
         # What everything downstream of the encoder actually receives.
         self.rlt_token_total = config.rlt_token_dim * config.rlt_num_tokens
         self.rlt_loss_weight = config.rlt_loss_weight
@@ -416,8 +425,12 @@ class Pi0RLT(Pi0):
     # Encoder g_φ : (z_img, proprio, <rl>) → z_rl bottleneck
     # ------------------------------------------------------------------
 
-    def _encode_rl_token(self, z, img_mask, state):
-        """Compress the VLA image embeddings + proprio into K RL tokens, flattened to [b, K*dim]."""
+    def _encode_rl_token(self, z, img_mask, state, keep=None):
+        """Compress the VLA image embeddings + proprio into K RL tokens, flattened to [b, K*dim].
+
+        ``keep`` optionally hides image tokens from the encoder (MAE): a [b, M] bool where False means
+        the token is not a valid key. It never hides proprio or the RL queries.
+        """
         b, M, _ = z.shape
         d = self.rlt_width
         k = self.rlt_num_tokens
@@ -436,7 +449,8 @@ class Pi0RLT(Pi0):
         x = x + _sincos_posemb(M + extra, d)[None]  # positional
 
         # Bidirectional: every query attends to every valid key. Proprio and <rl> are always valid.
-        valid = jnp.concatenate([img_mask, jnp.ones((b, extra), dtype=jnp.bool_)], axis=1)  # [b, M+extra]
+        vis = img_mask if keep is None else (img_mask & keep)
+        valid = jnp.concatenate([vis, jnp.ones((b, extra), dtype=jnp.bool_)], axis=1)  # [b, M+extra]
         mask = valid[:, None, None, :]  # [b, 1, 1, M+extra]
 
         for i in range(self._enc_depth):
@@ -602,7 +616,7 @@ class Pi0RLT(Pi0):
         entropy = -jnp.sum(p * logp, axis=-1)  # how unsure the token is
         return loss, pred, entropy
 
-    def _rlt_losses(self, z, img_mask, state, progress=None):
+    def _rlt_losses(self, z, img_mask, state, progress=None, rng=None):
         """RLT loss terms + z_rl, from the image embeddings z [b, M, W].
 
         Which terms are active is set by ``rlt_objective``; the reconstruction decoder is only run
@@ -611,7 +625,13 @@ class Pi0RLT(Pi0):
         z_enc_in = z if self.rlt_backbone_gradient else jax.lax.stop_gradient(z)
         z_tgt = jax.lax.stop_gradient(z) if self.rlt_target_stop_gradient else z
 
-        z_rl = self._encode_rl_token(z_enc_in, img_mask, state)  # [b, rlt_token_dim]
+        # MAE: hide a random fraction of image tokens from the encoder and score the reconstruction
+        # on exactly those. Without an rng (diagnostics, annotation, deployment) the full view is used.
+        keep = None
+        if self.rlt_mask_ratio > 0 and rng is not None:
+            u = jax.random.uniform(rng, img_mask.shape)
+            keep = u >= self.rlt_mask_ratio
+        z_rl = self._encode_rl_token(z_enc_in, img_mask, state, keep)  # [b, K*rlt_token_dim]
         aux = {}
 
         # The decoder is needed for reconstruction, and also to feed the auxiliary heads when they
@@ -625,7 +645,13 @@ class Pi0RLT(Pi0):
         # Reconstruction is always on (see __post_init__): masked MSE, mean over the feature dim and
         # a masked mean over tokens.
         err = jnp.mean(jnp.square(recon - z_tgt), axis=-1)  # [b, M]
+        # Score only what the encoder could not see, so the loss measures inference rather than
+        # copying. Rows where the draw happened to keep everything fall back to the full mask so the
+        # denominator can never be zero.
         m = img_mask.astype(jnp.float32)
+        if keep is not None:
+            hidden = (img_mask & ~keep).astype(jnp.float32)
+            m = jnp.where(jnp.sum(hidden, axis=-1, keepdims=True) > 0, hidden, m)
         recon_loss = jnp.sum(err * m, axis=-1) / (jnp.sum(m, axis=-1) + 1e-6)  # [b]
         rlt_loss = recon_loss
         aux |= {"rlt/loss_recon": jnp.mean(recon_loss)}
@@ -863,7 +889,9 @@ class Pi0RLT(Pi0):
 
         # RLT loss from the image-token hidden states of this same forward (language-conditioned).
         z, img_mask = self._split_image_tokens(observation, prefix_out, prefix_mask)
-        rlt_loss, z_rl, z_tgt, rlt_aux = self._rlt_losses(z, img_mask, observation.state, observation.progress)
+        rlt_loss, z_rl, z_tgt, rlt_aux = self._rlt_losses(
+            z, img_mask, observation.state, observation.progress, rng=jax.random.fold_in(rng, 7)
+        )
 
         total = bc_loss + self.rlt_loss_weight * rlt_loss  # [b]
 

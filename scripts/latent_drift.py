@@ -60,6 +60,15 @@ def main() -> None:
         "is what decides peak memory - 32 needs more than an L40S has.",
     )
     ap.add_argument("--knn", type=int, default=16)
+    ap.add_argument(
+        "--num-tokens",
+        type=int,
+        default=None,
+        help="Tokens the encoder emits; defaults to the config's rlt_num_tokens. Every measure is "
+        "computed PER TOKEN and then averaged: on the concatenation, two tokens rotating in opposite "
+        "directions partly cancel and the one with the larger norm sets the metric, so a multi-token "
+        "run would report less drift than it has and could not be compared against a single-token one.",
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("latent_drift.png"))
     args = ap.parse_args()
@@ -108,8 +117,29 @@ def main() -> None:
         jax.clear_caches()
         gc.collect()
 
+    n_tok = args.num_tokens if args.num_tokens is not None else getattr(model_config, "rlt_num_tokens", 1)
+    per_dim = tokens[steps[0]].shape[-1] // n_tok
+    logger.info(f"{n_tok} token(s) of {per_dim} dims each")
+
+    def split(a):
+        return a.reshape(a.shape[0], n_tok, per_dim)
+
     def unit(a):
         return a / (np.linalg.norm(a, axis=-1, keepdims=True) + 1e-9)
+
+    def token_cos(a, b):
+        """Mean cosine between corresponding tokens, not between the concatenations."""
+        return float(np.mean(np.sum(unit(split(a)) * unit(split(b)), axis=-1)))
+
+    def collapse(a):
+        """Mean cosine BETWEEN a frame's own tokens. Near 1 means the extra tokens are copies and the
+        wider bottleneck is doing nothing, which no other diagnostic here would reveal."""
+        if n_tok < 2:
+            return float("nan")
+        u = unit(split(a))  # [N, K, d]
+        sim = np.einsum("nkd,nld->nkl", u, u)
+        iu = np.triu_indices(n_tok, 1)
+        return float(np.mean(sim[:, iu[0], iu[1]]))
 
     def knn_sets(a, k):
         u = unit(a)
@@ -128,15 +158,32 @@ def main() -> None:
         churn = np.nan
         drift = np.nan
         if i:
-            drift = float(1.0 - np.mean(np.sum(unit(z) * unit(tokens[steps[i - 1]]), axis=-1)))
+            drift = float(1.0 - token_cos(z, tokens[steps[i - 1]]))
             churn = float(np.mean([1.0 - len(set(a) & set(b)) / args.knn for a, b in zip(nn, prev_knn, strict=True)]))
         prev_knn = nn
-        rows.append({"step": step, "drift": drift, "knn_churn": churn, "participation_ratio": pr})
-        logger.info(f"{step:>7}  drift {drift:.4f}  knn churn {churn:.3f}  participation {pr:.1f}")
+        rows.append(
+            {"step": step, "drift": drift, "knn_churn": churn, "participation_ratio": pr, "token_collapse": collapse(z)}
+        )
+        logger.info(
+            f"{step:>7}  drift {drift:.4f}  knn churn {churn:.3f}  participation {pr:.1f}"
+            + (f"  inter-token cos {rows[-1]['token_collapse']:+.3f}" if n_tok > 1 else "")
+        )
 
-    print("\n   step     drift   knn churn   participation ratio")
+    hdr = "\n   step     drift   knn churn   participation ratio" + ("   inter-token cos" if n_tok > 1 else "")
+    print(hdr)
     for r in rows:
-        print(f"{r['step']:>7}  {r['drift']:8.4f}  {r['knn_churn']:9.3f}  {r['participation_ratio']:19.1f}")
+        line = f"{r['step']:>7}  {r['drift']:8.4f}  {r['knn_churn']:9.3f}  {r['participation_ratio']:19.1f}"
+        print(line + (f"   {r['token_collapse']:+16.3f}" if n_tok > 1 else ""))
+    if n_tok > 1:
+        last = rows[-1]["token_collapse"]
+        print(
+            f"\n  inter-token cosine {last:+.3f}: "
+            + (
+                "the tokens are near-copies, so the extra capacity is unused"
+                if last > 0.9
+                else "the tokens carry different directions"
+            )
+        )
     tail = [r["drift"] for r in rows[1:]]
     if len(tail) >= 3 and tail[-1] > 0.5 * max(tail):
         print("\n  -> drift has NOT flattened: the encoder is still moving, more steps are still buying something")
