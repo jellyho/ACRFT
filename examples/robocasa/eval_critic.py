@@ -246,7 +246,6 @@ def main() -> None:
             _box["trial"] = trial + 1
             _box["dash"] = None
 
-        np.random.seed(args.seed)  # robosuite placement samplers read the legacy global RNG
         res = _ro.run_trials(
             env,
             policy,

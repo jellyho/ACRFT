@@ -96,9 +96,13 @@ def run_trials(
     max_steps = max_steps or int(getattr(env, "horizon", 500))
     successes, trials = 0, []
     for trial in range(num_trials):
-        # Deterministic per-trial scene: reseed env.rng before reset so trial i is identical across
-        # checkpoints regardless of how the rollout consumed the RNG.
+        # Deterministic per-trial scene: trial i has to depend only on (seed, trial), never on how
+        # much RNG the preceding trials happened to consume - otherwise a mode whose rollouts run
+        # longer sees different scenes, and two policies are no longer compared on the same task.
+        # env.rng covers the samplers that take it explicitly; some robosuite placement samplers read
+        # the legacy global RNG instead, so both are pinned here rather than once per eval.
         env.rng = np.random.default_rng(seed + trial)
+        np.random.seed(seed + trial)
         obs = env.reset()
         prompt = env.get_ep_meta().get("lang", task)
         success, step = False, 0
