@@ -265,6 +265,20 @@ def main() -> None:
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(res, indent=2))
+
+    # If the critic was trained with wandb, log these diagnostics onto the same run rather than a new
+    # one - the training curves and the final numbers then live together. The run id is in config.json.
+    wid = tcfg.get("wandb_id")
+    proj, ent = tcfg.get("wandb_project"), tcfg.get("wandb_entity")
+    if wid and proj:
+        import wandb
+
+        run = wandb.init(project=proj, entity=ent, id=wid, resume="allow")
+        run.summary.update({f"diag/{k}": v for k, v in res.items() if isinstance(v, int | float)})
+        if "prefix_argmax_hist" in res:
+            run.summary["diag/prefix_argmax_hist"] = res["prefix_argmax_hist"]
+        run.finish()
+        logger.info(f"logged diagnostics to wandb run {wid}")
         print(f"\nwrote {args.out}")
 
 

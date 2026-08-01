@@ -244,41 +244,6 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
             q_mean = jnp.mean(pred)
         loss = jnp.sum(per * w) / (jnp.sum(w) * pred.shape[0] + 1e-8)
         vs = jnp.maximum(jnp.sum(valid), 1.0)
-
-        # --- conservatism over the stored candidates (CQL) -----------------------------------------
-        # The loss above is evaluated on ONE action per state - the demonstrated chunk - and the target
-        # is read at the state the demonstration reached, so it carries the same value whichever
-        # candidate is considered. The candidates only ever appear inside the bootstrap max at the NEXT
-        # state, never with a target of their own. Nothing in the objective therefore says that one
-        # action at this state is worth more than another, and within-state ranking has to arrive
-        # through generalisation across states, which measured indistinguishable from noise.
-        #
-        # This term gives every candidate a gradient - downward - and the demonstrated chunk one
-        # upward, which is the standard remedy and the half of Cal-QL that --mc-lower-bound does not
-        # cover (that one calibrates the level; this one creates the ordering). It costs a forward over
-        # B*n chunks at the current state against the bootstrap's B*P*n, so about 1/P of the step.
-        #
-        # What it buys is a critic that prefers demonstration-like chunks, which is a behaviour-cloning
-        # prior rather than an improvement on its own; the gain over BC has to come from the TD term
-        # choosing among near-demonstration chunks by how fast they arrive. Rollouts decide that, not
-        # this loss.
-        cql = jnp.zeros(())
-        cql_gap = jnp.zeros(())
-        if cfg.cql_alpha > 0:
-            n_c = min(cfg.cql_candidates or data.num_samples, data.num_samples)
-            k_c = jax.random.fold_in(rng, 1)
-            sel = jnp.argsort(jax.random.uniform(k_c, (idx.shape[0], data.num_samples)), axis=-1)[:, :n_c]
-            a_c = jnp.take_along_axis(data.cand[idx], sel[..., None, None], axis=1)  # [B, n, H, A]
-            q_c = net.apply(params, jnp.repeat(data.token[idx][:, None], n_c, axis=1), a_c)
-            q_c = hl.from_logits(q_c) if cfg.num_atoms > 1 else q_c  # [K, B, n, P]
-            q_d = hl.from_logits(pred) if cfg.num_atoms > 1 else pred  # [K, B, P]
-            # Per prefix, so the ordering is created at every commitment length rather than only for
-            # the whole chunk - the deployment arg-max ranges over both axes.
-            lse = jax.scipy.special.logsumexp(q_c, axis=2) - jnp.log(n_c)  # [K, B, P]
-            gap = lse - q_d
-            cql = jnp.sum(gap * w) / (jnp.sum(w) * pred.shape[0] + 1e-8)
-            cql_gap = jnp.sum(jnp.mean(lse - q_d, axis=0) * valid) / vs
-            loss = loss + cfg.cql_alpha * cql
         return loss, {
             "loss": loss,
             "q_mean": q_mean,
@@ -290,10 +255,6 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
             "mc_floor_frac": jnp.sum((tinfo["floor_gap"] > 0) * valid) / vs,
             "mc_floor_gap": jnp.sum(tinfo["floor_gap"] * valid) / vs,
             "target_oob": jnp.sum(((y < v_lo) | (y > v_hi)) * valid) / vs,
-            # How much the candidates currently sit ABOVE the demonstrated chunk. Positive means the
-            # critic prefers what the policy sampled to what the data executed, which is the direction
-            # conservatism is meant to close; it going to zero is the term working, not the goal.
-            "cql_gap": cql_gap,
         }
 
     tx = optax.adam(cfg.lr)
@@ -380,20 +341,6 @@ def main() -> None:
         "reference's choice (vla_aqc.py, terminal_uses_mc).",
     )
     ap.add_argument(
-        "--cql-alpha",
-        type=float,
-        default=0.0,
-        help="Weight on a CQL conservatism term over the stored candidates at the CURRENT state: it "
-        "pushes their values down and the demonstrated chunk's up, which is the only part of the "
-        "objective that says one action at a given state is worth more than another. 0 = off.",
-    )
-    ap.add_argument(
-        "--cql-candidates",
-        type=int,
-        default=0,
-        help="Candidates in the CQL log-sum-exp, resampled each step (0 = all N).",
-    )
-    ap.add_argument(
         "--mc-lower-bound",
         action="store_true",
         help="Floor the target at the return the behaviour policy actually collected from this "
@@ -417,6 +364,36 @@ def main() -> None:
     ap.add_argument("--log-interval", type=int, default=1000)
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--save-every",
+        type=int,
+        default=0,
+        help="Also write params_<step>.msgpack every this many steps, so rollout success can later be "
+        "measured against training progress rather than only at the end. 0 = final only.",
+    )
+    ap.add_argument(
+        "--eval-every",
+        type=int,
+        default=0,
+        help="Compute the within-state diagnostics in-process every this many steps and log them (needs "
+        "--wandb-project to be visible as a curve). Cheap: the candidates are already on the GPU.",
+    )
+    ap.add_argument(
+        "--rollout-every",
+        type=int,
+        default=0,
+        help="Run critic-guided rollouts in the RoboCasa sim every this many steps, exactly as VLA "
+        "training evaluates the probe, and log the success rates. This is the actual objective; the "
+        "offline diagnostics are only its proxy. 0 = off. Needs --vla-checkpoint.",
+    )
+    ap.add_argument("--vla-checkpoint", type=pathlib.Path, default=None, help="VLA checkpoint the tokens came from.")
+    ap.add_argument("--vla-config", default=None, help="Registered config for the VLA (defaults to the annotation's).")
+    ap.add_argument("--rollout-trials", type=int, default=20)
+    ap.add_argument("--task", default="PrepareCoffee")
+    ap.add_argument("--wandb-project", default=None, help="Log to this wandb project. Omit to log only to stdout.")
+    ap.add_argument("--wandb-entity", default="RSS-PFT_RLLAB")
+    ap.add_argument("--wandb-group", default=None, help="Bucket related critic runs (e.g. an ablation).")
+    ap.add_argument("--wandb-name", default=None, help="Run name; defaults to the output dir's name.")
     cfg = ap.parse_args()
 
     cfg.v_clip = 0.0 if str(cfg.v_clip).lower() in ("off", "none", "0") else cfg.v_clip
@@ -459,6 +436,19 @@ def main() -> None:
     )
     hl = _critic.HLGauss(v_min=cfg.v_min, v_max=cfg.v_max, num_atoms=max(cfg.num_atoms, 2))
 
+    run = None
+    if cfg.wandb_project:
+        import wandb
+
+        run = wandb.init(
+            project=cfg.wandb_project,
+            entity=cfg.wandb_entity,
+            group=cfg.wandb_group,
+            name=cfg.wandb_name or (cfg.out.name if cfg.out else f"critic_{cfg.kind}"),
+            config=vars(cfg)
+            | {"data": str(cfg.data), "reward_scheme": _meta.get("reward_scheme"), "frames": data.token.shape[0]},
+        )
+
     rng = jax.random.key(cfg.seed)
     params = net.init(rng, data.token[:1], data.chunk[:1])
     n_param = sum(x.size for x in jax.tree.leaves(params))
@@ -475,25 +465,132 @@ def main() -> None:
     def run_chunk(carry, rng):
         return jax.lax.scan(step_fn, carry, jax.random.split(rng, cfg.steps_per_dispatch))
 
+    # A cheap within-state readout computed from resident data, so it can run every --eval-every
+    # steps and trace whether the ranking signal ever appears rather than only measuring it at the end.
+    # These are the make-or-break metrics; the full eval_rlt_critic.py adds the slower ones after.
+    diag_rng = np.random.default_rng(cfg.seed)
+    diag_idx = jnp.asarray(
+        np.sort(diag_rng.choice(data.token.shape[0], size=min(2048, data.token.shape[0]), replace=False))
+    )
+
+    @jax.jit
+    def _diag(p):
+        z = data.token[diag_idx]  # [S, D]
+        qc = net.apply(p, jnp.repeat(z[:, None], data.num_samples, axis=1), data.cand[diag_idx])
+        qc = hl.from_logits(qc) if cfg.num_atoms > 1 else qc
+        qc = jnp.min(qc, axis=0)  # ensemble -> [S, N(, P)]
+        qc = qc[..., -1] if qc.ndim == 3 else qc  # full-chunk value -> [S, N]
+        qd = net.apply(p, z[:, None], data.chunk[diag_idx][:, None])
+        qd = hl.from_logits(qd) if cfg.num_atoms > 1 else qd
+        qd = (qd[..., -1] if qd.ndim == 4 else qd)[:, 0, 0] if qd.ndim >= 3 else qd[:, 0]
+        within = jnp.mean(jnp.std(qc, axis=1))
+        between = jnp.std(jnp.mean(qc, axis=1))
+        return {
+            "diag_step/within_state_std": within,
+            "diag_step/between_state_std": between,
+            "diag_step/action_sensitivity": jnp.mean(jnp.var(qc, axis=1)) / (between**2 + 1e-12),
+            "diag_step/within_state_range": jnp.mean(jnp.max(qc, 1) - jnp.min(qc, 1)),
+            "diag_step/range_over_std": jnp.mean(jnp.max(qc, 1) - jnp.min(qc, 1)) / (within + 1e-9),
+            "diag_step/ranking_demo_vs_cand": jnp.mean(qd[:, None] > qc),
+            "diag_step/q_demo_mean": jnp.mean(qd),
+        }
+
+    # In-process critic-guided rollout, built once so the 3B VLA stays resident and only the critic
+    # params change between evaluations - the same pattern VLA training uses for its probe eval.
+    vla = env = rollout_seed = None
+    if cfg.rollout_every:
+        if cfg.vla_checkpoint is None:
+            raise ValueError("--rollout-every needs --vla-checkpoint (the VLA the tokens were annotated from)")
+        import sys
+
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "examples/robocasa"))
+        import eval_critic as _ec
+        import rollout as _ro
+
+        vla_config = cfg.vla_config or _meta.get("config")
+        vla = _ec.VLA(vla_config, cfg.vla_checkpoint, num_samples=data.num_samples, flow_steps=10, seed=cfg.seed)
+        rollout_seed = cfg.seed
+        env = _ro.make_env(cfg.task, camera_size=256, seed=rollout_seed)
+        logger.info(f"in-process rollout ready: VLA {vla_config} @ {cfg.vla_checkpoint}, {cfg.rollout_trials} trials")
+
+    def _rollout(p_live, step):
+        """Critic-guided and plain-VLA success on the same scenes, using the live critic params."""
+        import sys
+
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "examples/robocasa"))
+        import eval_critic as _ec
+        import rollout as _ro
+
+        macro = cfg.macro_group_size if cfg.kind == "arq" else data.horizon
+
+        def score(obs, actions):  # live critic, current params
+            out = net.apply(p_live, obs, actions)
+            return hl.from_logits(out) if cfg.num_atoms > 1 else out
+
+        score = jax.jit(score)
+        rows = {}
+        for mode in ("critic", "vla"):
+            pol = _ec.make_policy_fn(vla, score, macro, mode=mode)
+            r = _ro.run_trials(
+                env, pol, task=cfg.task, num_trials=cfg.rollout_trials, seed=rollout_seed, replan_steps=vla.H
+            )
+            rows[mode] = r["success_rate"]
+        logger.info(f"  [rollout @ {step}] critic {rows['critic']:.0%}  vla {rows['vla']:.0%}")
+        return {f"rollout/{m}_success": v for m, v in rows.items()}
+
     carry = (params, tgt_params, opt_state)
     t0 = time.perf_counter()
     for s in range(0, cfg.steps, cfg.steps_per_dispatch):
         carry, infos = run_chunk(carry, jax.random.fold_in(rng, s))
         if s % cfg.log_interval == 0:
             info = jax.tree.map(lambda x: float(jnp.mean(x)), infos)
-            rate = (s + cfg.steps_per_dispatch) / max(time.perf_counter() - t0, 1e-6)
+            step = s + cfg.steps_per_dispatch
+            rate = step / max(time.perf_counter() - t0, 1e-6)
             logger.info(
-                f"step {s + cfg.steps_per_dispatch}/{cfg.steps}  {rate:.0f} it/s  "
-                + "  ".join(f"{k}={v:.4f}" for k, v in info.items())
+                f"step {step}/{cfg.steps}  {rate:.0f} it/s  " + "  ".join(f"{k}={v:.4f}" for k, v in info.items())
             )
+            if run is not None:
+                run.log({f"train/{k}": v for k, v in info.items()} | {"it_per_s": rate}, step=step)
+
+        step = s + cfg.steps_per_dispatch
+        if cfg.eval_every and step % cfg.eval_every == 0:
+            d = {k: float(v) for k, v in _diag(carry[0]).items()}
+            logger.info(
+                f"  [diag @ {step}] range/std {d['diag_step/range_over_std']:.2f}  rank {d['diag_step/ranking_demo_vs_cand']:.3f}"
+            )
+            if run is not None:
+                run.log(d, step=step)
+        if cfg.rollout_every and step % cfg.rollout_every == 0:
+            r = _rollout(carry[0], step)
+            if run is not None:
+                run.log(r, step=step)
+        if cfg.save_every and step % cfg.save_every == 0 and step < cfg.steps:
+            out0 = cfg.out or (cfg.data / f"critic_{cfg.kind}")
+            out0.mkdir(parents=True, exist_ok=True)
+            import flax.serialization as _fser
+
+            (out0 / f"params_{step}.msgpack").write_bytes(_fser.to_bytes(carry[0]))
+            logger.info(f"  saved checkpoint params_{step}.msgpack")
 
     out = cfg.out or (cfg.data / f"critic_{cfg.kind}")
     out.mkdir(parents=True, exist_ok=True)
     import flax.serialization as fser
 
     (out / "params.msgpack").write_bytes(fser.to_bytes(carry[0]))
-    (out / "config.json").write_text(json.dumps(vars(cfg) | {"data": str(cfg.data), "out": str(out)}, indent=2))
+    cfg_out = vars(cfg) | {"data": str(cfg.data), "out": str(out)}
+    if run is not None:
+        cfg_out["wandb_id"] = run.id
+    (out / "config.json").write_text(json.dumps(cfg_out, indent=2))
     logger.info(f"saved to {out} ({(time.perf_counter() - t0) / 60:.1f} min)")
+    if run is not None:
+        # eval_rlt_critic.py usually runs right after and writes diag.json next to the params; if it
+        # is already there (e.g. on resume) surface it, otherwise the eval step logs it itself.
+        diag = out / "diag.json"
+        if diag.exists():
+            run.summary.update(
+                {f"diag/{k}": v for k, v in json.loads(diag.read_text()).items() if isinstance(v, int | float)}
+            )
+        run.finish()
 
 
 if __name__ == "__main__":

@@ -64,88 +64,101 @@ class Replan:
     value: float  # the winning value
 
 
-def build_policy(config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed):
-    """A `policy_fn(element) -> (chunk, n_exec, Replan)` for run_trials."""
-    train_config = _config.get_config(config_name)
-    checkpoint = pathlib.Path(_download.maybe_download(str(checkpoint)))
-    model_config = train_config.model
-    data_config = train_config.data.create(train_config.assets_dirs, model_config)
+class VLA:
+    """The frozen policy side of a critic-guided rollout, loaded once and reused across rollouts.
 
-    norm_stats = data_config.norm_stats
-    if norm_stats is None and data_config.asset_id is not None:
-        import openpi.training.checkpoints as _checkpoints
+    Kept separate from the critic so the trainer can hold ONE VLA resident and swap in live critic
+    params every evaluation, instead of reloading the 3B model each time.
+    """
 
-        norm_stats = _checkpoints.load_norm_stats(checkpoint / "assets", data_config.asset_id)
-    input_tf = _transforms.compose(
-        [
-            *data_config.data_transforms.inputs,
-            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.model_transforms.inputs,
-        ]
-    )
-    output_tf = _transforms.compose(
-        [
-            *data_config.model_transforms.outputs,
-            _transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.data_transforms.outputs,
-        ]
-    )
+    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed):
+        train_config = _config.get_config(config_name)
+        checkpoint = pathlib.Path(_download.maybe_download(str(checkpoint)))
+        self.model_config = train_config.model
+        data_config = train_config.data.create(train_config.assets_dirs, self.model_config)
+        norm_stats = data_config.norm_stats
+        if norm_stats is None and data_config.asset_id is not None:
+            import openpi.training.checkpoints as _checkpoints
 
-    model = model_config.load(_model.restore_params(checkpoint / "params", dtype=jnp.bfloat16))
-    model.eval()
-    H = model_config.action_horizon
+            norm_stats = _checkpoints.load_norm_stats(checkpoint / "assets", data_config.asset_id)
+        self._in = _transforms.compose(
+            [
+                *data_config.data_transforms.inputs,
+                _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                *data_config.model_transforms.inputs,
+            ]
+        )
+        self._out = _transforms.compose(
+            [
+                *data_config.model_transforms.outputs,
+                _transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                *data_config.data_transforms.outputs,
+            ]
+        )
+        model = self.model_config.load(_model.restore_params(checkpoint / "params", dtype=jnp.bfloat16))
+        model.eval()
+        self.H = self.model_config.action_horizon
+        self._rng = [jax.random.key(seed)]
 
-    @jax.jit
-    def extract(rng, obs):
-        return model.extract_token_and_base_actions(rng, obs, num_samples=num_samples, num_steps=flow_steps)
+        @jax.jit
+        def _extract(rng, obs):
+            return model.extract_token_and_base_actions(rng, obs, num_samples=num_samples, num_steps=flow_steps)
 
-    score = macro = None
-    if mode != "vla":
-        # The critic was fitted on decoded (raw) chunks, so candidates are decoded before scoring -
-        # feeding it model-space actions would be a silent unit mismatch, not an error.
-        probe = output_tf(
+        self._extract = _extract
+        probe = self._out(
             {
-                "state": np.zeros((1, model_config.action_dim), np.float32),
-                "actions": np.zeros((1, H, model_config.action_dim), np.float32),
+                "state": np.zeros((1, self.model_config.action_dim), np.float32),
+                "actions": np.zeros((1, self.H, self.model_config.action_dim), np.float32),
             }
         )
-        raw_dim = int(np.asarray(probe["actions"]).shape[-1])
-        score, _, macro = _critic.load_trained(critic_path, action_dim=raw_dim, horizon=H)
-        score = jax.jit(score)
+        self.raw_dim = int(np.asarray(probe["actions"]).shape[-1])
 
-    rng_holder = [jax.random.key(seed)]
-
-    def decode(actions):
-        out = output_tf(
-            {"state": np.zeros((actions.shape[0], model_config.action_dim), np.float32), "actions": actions}
+    def _decode(self, actions):
+        out = self._out(
+            {"state": np.zeros((actions.shape[0], self.model_config.action_dim), np.float32), "actions": actions}
         )
         return np.asarray(out["actions"], np.float32)
 
-    def fn(element):
-        inp = input_tf(element)
+    def token_and_candidates(self, element):
+        """One backbone forward -> (rl token [1, D], decoded candidates [N, H, raw])."""
+        inp = self._in(element)
         inp = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inp)
         obs = _model.Observation.from_dict(inp)
-        rng_holder[0], k = jax.random.split(rng_holder[0])
-        z, base = extract(k, obs)  # [1, D], [1, N, H, adim]
-        cand = decode(np.asarray(base[0], np.float32))  # [N, H, raw]
-        if mode == "vla":
-            return cand[0], H, None
+        self._rng[0], k = jax.random.split(self._rng[0])
+        z, base = self._extract(k, obs)
+        return np.asarray(z, np.float32), self._decode(np.asarray(base[0], np.float32))
 
-        # The critic scores one (state, chunk) pair per slot, so the state is broadcast along the
-        # candidate axis: obs [1, N, D] against actions [1, N, H, A].
-        zc = jnp.repeat(jnp.asarray(np.asarray(z, np.float32))[:, None], cand.shape[0], axis=1)
+
+def make_policy_fn(vla, score, macro, *, mode):
+    """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
+    is reused. mode='vla' ignores the critic entirely."""
+
+    def fn(element):
+        z, cand = vla.token_and_candidates(element)
+        if mode == "vla":
+            return cand[0], vla.H, None
+        zc = jnp.repeat(jnp.asarray(z)[:, None], cand.shape[0], axis=1)  # [1, N, D]
         q = np.asarray(score(zc, jnp.asarray(cand)[None]))
         q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
-        if mode == "bon":  # choose the chunk, but always run all of it
+        if mode == "bon":
             i, p = int(np.argmax(q[:, -1])), q.shape[1] - 1
-        elif mode == "prefix":  # keep the chunk the policy would have emitted, choose how far to run
+        elif mode == "prefix":
             i, p = 0, int(np.argmax(q[0]))
         else:
             i, p = np.unravel_index(int(np.argmax(q)), q.shape)
         n_exec = int((p + 1) * macro)
         return cand[i], n_exec, Replan(q, cand, int(i), int(p), n_exec, float(q[i, p]))
 
-    return fn, H, macro
+    return fn
+
+
+def build_policy(config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed):
+    """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro)."""
+    vla = VLA(config_name, checkpoint, num_samples=num_samples, flow_steps=flow_steps, seed=seed)
+    if mode == "vla":
+        return make_policy_fn(vla, None, None, mode=mode), vla.H, None
+    score, _, macro = _critic.load_trained(critic_path, action_dim=vla.raw_dim, horizon=vla.H)
+    return make_policy_fn(vla, jax.jit(score), macro, mode=mode), vla.H, macro
 
 
 def main() -> None:

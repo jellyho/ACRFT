@@ -38,6 +38,9 @@
 #                              histogram + cross-entropy                     (SCALAR_HEAD=1)
 #     --progress-bins INT      histogram bins for the distributional head    (PROGRESS_BINS=)
 #     --loss-weight FLOAT      weight of the RLT loss vs the BC loss          (RLT_LOSS_WEIGHT=)
+#     --mask-ratio FLOAT       MAE: hide this fraction of image tokens from the encoder and score
+#                              the reconstruction on the hidden ones only, so the token has to infer
+#                              content it never saw. 0 = off (compression). Tags _mae<R>. (MASK_RATIO=)
 #     --token-dim INT          bottleneck size of the RL token (default 2048)  (TOKEN_DIM=)
 #                              smaller = cheaper critic queries; tags the exp name _d<N>
 #
@@ -98,6 +101,7 @@ while [ "$#" -gt 0 ]; do
     --scalar-head)       SCALAR_HEAD=1 ;;
     --progress-bins)     PROGRESS_BINS="$2"; shift ;;
     --loss-weight)       RLT_LOSS_WEIGHT="$2"; shift ;;
+    --mask-ratio)        MASK_RATIO="$2"; shift ;;
     --token-dim)         TOKEN_DIM="$2"; shift ;;
     --monitor-interval)  MONITOR_INTERVAL="$2"; shift ;;
     --vis-interval)      VIS_INTERVAL="$2"; shift ;;
@@ -152,6 +156,9 @@ if [ "${SCALAR_HEAD:-0}" = "1" ]; then
 fi
 if [ -n "${PROGRESS_BINS:-}" ]; then
   RLT_FLAGS+=(--model.rlt-progress-bins "$PROGRESS_BINS")
+fi
+if [ -n "${MASK_RATIO:-}" ]; then
+  RLT_FLAGS+=(--model.rlt-mask-ratio "$MASK_RATIO"); VARIANT_TAG="${VARIANT_TAG}_mae${MASK_RATIO}"
 fi
 if [ -n "${NUM_TOKENS:-}" ]; then
   RLT_FLAGS+=(--model.rlt-num-tokens "$NUM_TOKENS"); VARIANT_TAG="${VARIANT_TAG}_k${NUM_TOKENS}"
