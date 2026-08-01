@@ -54,6 +54,7 @@ class Data:
     done: jax.Array  # [T]  1 at a terminal (task achieved, or the episode's last frame)
     done_cum: jax.Array  # [T]  running count of terminals, for "how many fall inside [t, t+h]"
     alive: jax.Array  # [T]  frame is at or before its episode's terminal (a real decision point)
+    borrowed: jax.Array  # [T, N]  per-candidate return borrowed from the nearest executed chunk (or NaN)
     horizon: int
     action_dim: int
     num_samples: int
@@ -109,6 +110,11 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
         reward=jnp.asarray(rd("reward", (full,))),
         episode=jnp.asarray(rd("episode_index", (full,), np.int32)),
         mc_return=jnp.asarray(rd("mc_return", (full,), np.float32)),
+        borrowed=jnp.asarray(
+            rd("borrowed_return", (full, N), np.float32)
+            if (path / "borrowed_return.dat").exists()
+            else np.full((full, N), np.nan, np.float32)
+        ),
         **_terminals(rd("done", (full,), np.int8), rd("episode_index", (full,), np.int32)),
         horizon=H,
         action_dim=A,
@@ -244,8 +250,32 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
             q_mean = jnp.mean(pred)
         loss = jnp.sum(per * w) / (jnp.sum(w) * pred.shape[0] + 1e-8)
         vs = jnp.maximum(jnp.sum(valid), 1.0)
+
+        # --- per-candidate borrowed-return regression -------------------------------------------
+        # The TD loss above scores one action per state (the demo) and reads its target at the state
+        # the demo reached, so it never says one candidate is worth more than another - which is why
+        # a critic trained on it does not extract the within-state ranking signal that IS in the data
+        # (signal_analysis.py: SNR ~ 11, but the critic's within-state Spearman against the true
+        # outcome is 0.03). This term gives every candidate its OWN target: the return of the nearest
+        # executed chunk, validated to recover the demo's known return at 0.86. Unlike CQL it does not
+        # push the candidates down uniformly - it pulls each toward its estimated value, which is what
+        # creates an ordering. The borrowed return is approximate, so this is a small auxiliary weight
+        # and the TD term still carries the level.
+        borrow = jnp.zeros(())
+        if cfg.borrowed_weight > 0:
+            bt = data.borrowed[idx]  # [B, N]
+            ok = jnp.isfinite(bt).astype(jnp.float32)
+            bt = jnp.where(ok > 0, bt, 0.0)
+            qc = net.apply(params, jnp.repeat(data.token[idx][:, None], data.num_samples, axis=1), data.cand[idx])
+            qc = hl.from_logits(qc) if cfg.num_atoms > 1 else qc  # [K, B, N(, P)]
+            qc = qc[..., -1] if qc.ndim == 4 else qc  # full-chunk value [K, B, N]
+            per_b = jnp.square(qc - jax.lax.stop_gradient(bt)[None])  # [K, B, N]
+            borrow = jnp.sum(per_b * ok[None]) / (jnp.sum(ok) * qc.shape[0] + 1e-8)
+            loss = loss + cfg.borrowed_weight * borrow
+
         return loss, {
             "loss": loss,
+            "borrow_loss": borrow,
             "q_mean": q_mean,
             "target_mean": jnp.sum(y * valid) / vs,
             "valid": jnp.mean(w),
@@ -339,6 +369,15 @@ def main() -> None:
         help="At a transition that lands on a terminal, take the value from mc_return instead of "
         "dropping the bootstrap. The return from a terminal is known exactly, so this is the "
         "reference's choice (vla_aqc.py, terminal_uses_mc).",
+    )
+    ap.add_argument(
+        "--borrowed-weight",
+        type=float,
+        default=0.0,
+        help="Weight of a per-candidate regression toward the borrowed return (nearest executed "
+        "chunk's mc_return, precomputed by compute_borrowed_returns.py). This is the only term that "
+        "gives the candidates a target of their own; without it the critic learns V(s) and cannot "
+        "rank actions. Needs borrowed_return.dat in the data dir. 0 = off.",
     )
     ap.add_argument(
         "--mc-lower-bound",
