@@ -42,11 +42,17 @@ class CameraProjector:
         self._h, self._w = height, width
 
     def project(self, points_world: np.ndarray) -> np.ndarray:
-        """[n, 3] world → [n, 2] (row, col) in the flipped display frame."""
+        """[n, 3] world → [n, 2] (row, col) in the upright display frame.
+
+        robosuite's extrinsic matrix already applies the OpenCV axis correction, so
+        project_points_from_world_to_camera returns upright pixels (row 0 at the top, row decreases as
+        world z rises), and image_from_obs also delivers the frame upright — they match, so NO extra
+        flip is applied. A previous `row = h-1-row` here double-flipped it: the arm rose while the
+        overlay fell. Verified empirically (.scratch/check_proj.py): unflipped pixels sit on the
+        gripper, flipped ones fall below it.
+        """
         px = self._cu.project_points_from_world_to_camera(np.asarray(points_world), self._w2p, self._h, self._w)
-        px = np.asarray(px, dtype=np.float64)
-        px[:, 0] = self._h - 1 - px[:, 0]  # flip row to match the flipped display image
-        return px
+        return np.asarray(px, dtype=np.float64)
 
 
 def _base_rotation(base_quat) -> np.ndarray:
