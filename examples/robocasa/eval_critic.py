@@ -129,36 +129,63 @@ class VLA:
         return np.asarray(z, np.float32), self._decode(np.asarray(base[0], np.float32))
 
 
-def make_policy_fn(vla, score, macro, *, mode):
+def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
-    is reused. mode='vla' ignores the critic entirely."""
+    is reused. mode='vla' ignores the critic entirely.
+
+    Two selection knobs, both aimed at the arg-max picking whichever candidate the critic most
+    over-values by noise rather than the best one:
+      query_noise   perturb each candidate chunk before scoring, so a lone spurious peak that depends
+                    on the exact action does not survive; the score is of a neighbourhood, not a point.
+      softmax_temp  sample the candidate from softmax(Q / temp) instead of taking the arg-max, so a
+                    near-tie is not always resolved toward the noisiest estimate. 0 = hard arg-max.
+    """
+    rng = np.random.default_rng(seed)
 
     def fn(element):
         z, cand = vla.token_and_candidates(element)
         if mode == "vla":
             return cand[0], vla.H, None
+        scored = cand
+        if query_noise > 0:
+            # Temporally coherent offset+drift per candidate, scaled by the chunk's own spread, so the
+            # perturbed chunk stays a plausible neighbour rather than jittering into noise.
+            sd = scored.std(axis=(0, 1), keepdims=True) + 1e-6
+            ramp = np.linspace(-1, 1, scored.shape[1])[None, :, None]
+            off = rng.standard_normal((scored.shape[0], 1, scored.shape[2]))
+            drift = rng.standard_normal((scored.shape[0], 1, scored.shape[2])) * ramp
+            scored = scored + query_noise * sd * (off + drift)
         zc = jnp.repeat(jnp.asarray(z)[:, None], cand.shape[0], axis=1)  # [1, N, D]
-        q = np.asarray(score(zc, jnp.asarray(cand)[None]))
+        q = np.asarray(score(zc, jnp.asarray(scored)[None]))
         q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
-        if mode == "bon":
-            i, p = int(np.argmax(q[:, -1])), q.shape[1] - 1
-        elif mode == "prefix":
-            i, p = 0, int(np.argmax(q[0]))
+        flat = q[:, -1] if mode == "bon" else (q[0] if mode == "prefix" else q.reshape(-1))
+        if softmax_temp > 0:  # sample instead of arg-max
+            w = np.exp((flat - flat.max()) / softmax_temp)
+            choice = rng.choice(len(flat), p=w / w.sum())
         else:
-            i, p = np.unravel_index(int(np.argmax(q)), q.shape)
-        n_exec = int((p + 1) * macro)
-        return cand[i], n_exec, Replan(q, cand, int(i), int(p), n_exec, float(q[i, p]))
+            choice = int(np.argmax(flat))
+        if mode == "bon":
+            i, pp = choice, q.shape[1] - 1
+        elif mode == "prefix":
+            i, pp = 0, choice
+        else:
+            i, pp = np.unravel_index(choice, q.shape)
+        n_exec = int((pp + 1) * macro)
+        return cand[i], n_exec, Replan(q, cand, int(i), int(pp), n_exec, float(q[i, pp]))
 
     return fn
 
 
-def build_policy(config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed):
+def build_policy(
+    config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed, query_noise=0.0, softmax_temp=0.0
+):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro)."""
     vla = VLA(config_name, checkpoint, num_samples=num_samples, flow_steps=flow_steps, seed=seed)
+    kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
     if mode == "vla":
-        return make_policy_fn(vla, None, None, mode=mode), vla.H, None
+        return make_policy_fn(vla, None, None, mode=mode, **kw), vla.H, None
     score, _, macro = _critic.load_trained(critic_path, action_dim=vla.raw_dim, horizon=vla.H)
-    return make_policy_fn(vla, jax.jit(score), macro, mode=mode), vla.H, macro
+    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, **kw), vla.H, macro
 
 
 def main() -> None:
@@ -176,6 +203,12 @@ def main() -> None:
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
+    ap.add_argument(
+        "--query-noise", type=float, default=0.0, help="Perturb candidates by this many action-std before scoring."
+    )
+    ap.add_argument(
+        "--softmax-temp", type=float, default=0.0, help="Sample the candidate from softmax(Q/temp); 0 = arg-max."
+    )
     ap.add_argument("--num-flow-steps", type=int, default=10)
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
     ap.add_argument("--camera-size", type=int, default=256)
@@ -211,6 +244,8 @@ def main() -> None:
             num_samples=args.num_samples,
             flow_steps=args.num_flow_steps,
             seed=args.seed,
+            query_noise=args.query_noise,
+            softmax_temp=args.softmax_temp,
         )
         trace, frames, box = [], [], {"trial": 0, "dash": None, "proj": None}
         record = args.video_dir is not None
