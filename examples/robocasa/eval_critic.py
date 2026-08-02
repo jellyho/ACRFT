@@ -177,10 +177,27 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
 
 
 def build_policy(
-    config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed, query_noise=0.0, softmax_temp=0.0
+    config_name,
+    checkpoint,
+    critic_path,
+    *,
+    mode,
+    num_samples,
+    flow_steps,
+    seed,
+    query_noise=0.0,
+    softmax_temp=0.0,
+    model_overrides=None,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro)."""
-    vla = VLA(config_name, checkpoint, num_samples=num_samples, flow_steps=flow_steps, seed=seed)
+    vla = VLA(
+        config_name,
+        checkpoint,
+        num_samples=num_samples,
+        flow_steps=flow_steps,
+        seed=seed,
+        model_overrides=model_overrides,
+    )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
     if mode == "vla":
         return make_policy_fn(vla, None, None, mode=mode, **kw), vla.H, None
