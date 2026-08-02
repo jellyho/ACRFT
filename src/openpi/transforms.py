@@ -245,6 +245,138 @@ class AbsoluteActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class JointDeltaActions(DataTransformFn):
+    """Joint-space delta with a per-dimension reference index into the state.
+
+    DeltaActions assumes action dim i subtracts state dim i, which fails when an arm's joints live at
+    non-adjacent state indices (YAM's right arm is at state 21..). `ref[i]` is the state index action
+    dim i subtracts, or -1 to leave it absolute (grippers). Subtracting the current joint position
+    turns an absolute joint target into a displacement from where the arm is.
+    """
+
+    ref: Sequence[int]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        state, actions = np.asarray(data["state"]), np.asarray(data["actions"], np.float32)
+        ref = np.asarray(self.ref)
+        for i, r in enumerate(ref):
+            if r >= 0:
+                actions[..., i] -= state[..., None, r]
+        data["actions"] = actions
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class JointAbsoluteActions(DataTransformFn):
+    """Inverse of JointDeltaActions (deployment)."""
+
+    ref: Sequence[int]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        state, actions = np.asarray(data["state"]), np.asarray(data["actions"], np.float32)
+        ref = np.asarray(self.ref)
+        for i, r in enumerate(ref):
+            if r >= 0:
+                actions[..., i] += state[..., None, r]
+        data["actions"] = actions
+        return data
+
+
+def _quat_to_mat(q):
+    """[..., 4] wxyz unit quaternion -> [..., 3, 3] rotation matrix."""
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    m = np.stack(
+        [
+            1 - 2 * (y * y + z * z),
+            2 * (x * y - w * z),
+            2 * (x * z + w * y),
+            2 * (x * y + w * z),
+            1 - 2 * (x * x + z * z),
+            2 * (y * z - w * x),
+            2 * (x * z - w * y),
+            2 * (y * z + w * x),
+            1 - 2 * (x * x + y * y),
+        ],
+        axis=-1,
+    )
+    return m.reshape(*q.shape[:-1], 3, 3)
+
+
+def _mat_to_quat(m):
+    """[..., 3, 3] rotation matrix -> [..., 4] wxyz quaternion (w >= 0)."""
+    t = m[..., 0, 0] + m[..., 1, 1] + m[..., 2, 2]
+    w = np.sqrt(np.maximum(0.0, 1.0 + t)) / 2
+    x = np.sqrt(np.maximum(0.0, 1.0 + m[..., 0, 0] - m[..., 1, 1] - m[..., 2, 2])) / 2
+    y = np.sqrt(np.maximum(0.0, 1.0 - m[..., 0, 0] + m[..., 1, 1] - m[..., 2, 2])) / 2
+    z = np.sqrt(np.maximum(0.0, 1.0 - m[..., 0, 0] - m[..., 1, 1] + m[..., 2, 2])) / 2
+    x = np.copysign(x, m[..., 2, 1] - m[..., 1, 2])
+    y = np.copysign(y, m[..., 0, 2] - m[..., 2, 0])
+    z = np.copysign(z, m[..., 1, 0] - m[..., 0, 1])
+    q = np.stack([w, x, y, z], axis=-1)
+    q = q / (np.linalg.norm(q, axis=-1, keepdims=True) + 1e-8)
+    return np.where(q[..., :1] < 0, -q, q)
+
+
+@dataclasses.dataclass(frozen=True)
+class UMIRelativeActions(DataTransformFn):
+    """Frame-relative end-effector actions, as proposed in UMI (Chi et al.).
+
+    A world-frame action is not invariant to where the robot happens to be; UMI expresses each future
+    end-effector pose in the CURRENT end-effector frame, so identical motions look identical wherever
+    they occur. For a per-arm pose block [pos(3), quat(4, wxyz)] at action offsets given by `pos_slices`
+    and `quat_slices`, with the current pose read from `state` at the matching indices:
+
+        pos'  = R_t^{-1} (p_{t+k} - p_t)
+        quat' = R_t^{-1} R_{t+k}
+
+    Any action dim not covered by a pose block is left as-is (e.g. an absolute gripper). The inverse
+    (AbsoluteFromUMIRelative) composes back for deployment. Rotations use wxyz quaternions.
+    """
+
+    # Per pose block: (action_pos_start, state_pos_start, action_quat_start, state_quat_start).
+    blocks: Sequence[tuple[int, int, int, int]]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data or not self.blocks:
+            return data
+        state, actions = np.asarray(data["state"]), np.asarray(data["actions"], np.float32)
+        for ap, sp, aq, sq in self.blocks:
+            p_now = state[..., None, sp : sp + 3]  # [..., 1, 3]
+            R_now = _quat_to_mat(state[..., sq : sq + 4])  # [..., 3, 3]
+            R_now_T = np.swapaxes(R_now, -1, -2)[..., None, :, :]  # [..., 1, 3, 3]
+            dp = actions[..., ap : ap + 3] - p_now
+            actions[..., ap : ap + 3] = np.einsum("...ij,...j->...i", R_now_T, dp)
+            R_fut = _quat_to_mat(actions[..., aq : aq + 4])
+            actions[..., aq : aq + 4] = _mat_to_quat(np.einsum("...ij,...jk->...ik", R_now_T, R_fut))
+        data["actions"] = actions
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class AbsoluteFromUMIRelative(DataTransformFn):
+    """Inverse of UMIRelativeActions: frame-relative back to world (deployment)."""
+
+    blocks: Sequence[tuple[int, int, int, int]]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data or not self.blocks:
+            return data
+        state, actions = np.asarray(data["state"]), np.asarray(data["actions"], np.float32)
+        for ap, sp, aq, sq in self.blocks:
+            p_now = state[..., None, sp : sp + 3]
+            R_now = _quat_to_mat(state[..., sq : sq + 4])[..., None, :, :]
+            actions[..., ap : ap + 3] = np.einsum("...ij,...j->...i", R_now, actions[..., ap : ap + 3]) + p_now
+            R_rel = _quat_to_mat(actions[..., aq : aq + 4])
+            actions[..., aq : aq + 4] = _mat_to_quat(np.einsum("...ij,...jk->...ik", R_now, R_rel))
+        data["actions"] = actions
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False

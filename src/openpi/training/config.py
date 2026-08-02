@@ -22,6 +22,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.robocasa_policy as robocasa_policy
+import openpi.policies.yam_policy as yam_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -421,6 +422,79 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             # RoboCasa's action column is named "action" (singular), unlike the default "actions".
+            action_sequence_keys=("action",),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotYAMDataConfig(DataConfigFactory):
+    """Data config for the YAM bimanual dataset (jellyho/yam_lego_taxi, LeRobot v3).
+
+    Three cameras, a 42-d state, and a 14-d JOINT action (per arm: 6 joints + 1 gripper). The action
+    delta convention is selectable, since it is the thing this dataset exists to ablate:
+
+      none   absolute joint targets, as logged.
+      joint  UMI's idea in joint space: subtract the current joint position, so the target is a
+             displacement from where the arm is. Grippers stay absolute. This is what applies here,
+             because the action is joints, not an end-effector pose.
+      umi    the full frame-relative end-effector form (pos in the current EE frame, rotation
+             composed): only meaningful for a pose action, kept for datasets that log one.
+    """
+
+    delta_mode: str = "none"  # none | joint | umi
+    include_progress: bool = False
+    reward_key: str = "next.reward"
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        structure = {
+            "observation/image": "observation.images.agentview",
+            "observation/wrist_image": "observation.images.wrist_left",
+            "observation/image_right": "observation.images.wrist_right",
+            "observation/state": "observation.state",
+            "actions": "action",
+            "prompt": "prompt",
+        }
+        repack_inputs = []
+        if self.include_progress:
+            structure["progress"] = "progress"
+            repack_inputs.append(
+                _progress.AddProgress(_progress.compute_progress_labels(self.repo_id, reward_key=self.reward_key))
+            )
+        repack_inputs.append(_transforms.RepackTransform(structure))
+        repack_transform = _transforms.Group(inputs=repack_inputs)
+
+        data_transforms = _transforms.Group(
+            inputs=[yam_policy.YAMInputs(model_type=model_config.model_type)],
+            outputs=[yam_policy.YAMOutputs()],
+        )
+
+        if self.delta_mode == "joint":
+            # Subtract the current joint position from each joint action dim; grippers absolute.
+            # The state's joint positions sit at 0..5 (left) and 21..26 (right); DeltaActions reads
+            # state[i] for action dim i, so the mask has to align them - build it explicitly.
+            ref = yam_policy.joint_delta_reference()  # action_dim -> state index, -1 = absolute
+            # DeltaActions subtracts state[..., :dims] where mask is True, i.e. it assumes action dim
+            # i references state dim i. YAM's right joints reference state 21.., so a plain mask does
+            # not line up; a small dedicated transform handles the arbitrary reference.
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.JointDeltaActions(ref)],
+                outputs=[_transforms.JointAbsoluteActions(ref)],
+            )
+        elif self.delta_mode == "umi":
+            # left EE pose at action 0.., state observation.eef 0..; right at 7.. / 7.. (eef layout).
+            blocks = [(0, 0, 3, 3), (7, 7, 10, 10)]
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.UMIRelativeActions(blocks)],
+                outputs=[_transforms.AbsoluteFromUMIRelative(blocks)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
             action_sequence_keys=("action",),
         )
 
@@ -1280,6 +1354,50 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
 
 
 _CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
+
+
+def _yam_rlt_config(delta_mode: str) -> TrainConfig:
+    """Pi0RLT on the YAM bimanual dataset. delta_mode selects the action convention (none|joint|umi)
+    and tags the run so the three do not share a checkpoint dir."""
+    tag = "" if delta_mode == "none" else f"_{delta_mode}"
+    return TrainConfig(
+        name=f"pi05_yam_lego_taxi{tag}_rlt",
+        model=pi0_rlt.Pi0RLTConfig(
+            pi05=True,
+            action_horizon=16,
+            discrete_state_input=False,
+            rlt_backbone_gradient=False,
+            rlt_bc_probe=True,
+            # YAM's action is 14-d (bimanual joints+grippers); the rest of the model action space is
+            # zero padding the probe should not regress.
+            rlt_probe_action_dim=14,
+        ),
+        data=LeRobotYAMDataConfig(
+            repo_id="jellyho/yam_lego_taxi",
+            delta_mode=delta_mode,
+            # No per-frame reward column in this dataset (success is episode-level in outcomes.jsonl),
+            # so the progress objective is off; the RLT bottleneck trains on reconstruction alone.
+            include_progress=False,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=0,
+        rlt_monitor_interval=1_000,
+        rlt_vis_interval=10_000,
+        # No sim for YAM, so no in-loop rollout eval; the probe BC loss is still logged.
+        rlt_probe_eval_interval=0,
+    )
+
+
+_CONFIGS.extend(_yam_rlt_config(_m) for _m in ("none", "joint", "umi"))
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
