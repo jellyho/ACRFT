@@ -441,7 +441,7 @@ class LeRobotYAMDataConfig(DataConfigFactory):
              composed): only meaningful for a pose action, kept for datasets that log one.
     """
 
-    delta_mode: str = "none"  # none | joint | umi
+    delta_mode: str = "joint"  # none | joint | umi
     include_progress: bool = False
     reward_key: str = "next.reward"
 
@@ -1356,10 +1356,20 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
 _CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
 
 
-def _yam_rlt_config(delta_mode: str) -> TrainConfig:
-    """Pi0RLT on the YAM bimanual dataset. delta_mode selects the action convention (none|joint|umi)
-    and tags the run so the three do not share a checkpoint dir."""
-    tag = "" if delta_mode == "none" else f"_{delta_mode}"
+def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
+    """Pi0RLT on the YAM bimanual dataset (real teleop data).
+
+    Defaults chosen for this setting: the parallel decoder and no-proprio token (the best RLT variant
+    on RoboCasa - the decoder cannot bypass the bottleneck via neighbour context, and proprio is left
+    out because a downstream critic sees it directly), and a joint-space delta action - UMI's
+    "relative to the current state" idea applied to a joint action. delta_mode tags the run name so
+    the variants do not share a checkpoint dir; the untagged name is the joint default.
+
+    Because this is real data there is no sim: no rollout / probe-policy evaluation, and no
+    behaviour-cloning probe actor either (it exists only to read out the token for the sim probe).
+    The RLT bottleneck is judged by its reconstruction loss and the BC loss alone.
+    """
+    tag = "" if delta_mode == "joint" else f"_{delta_mode}"
     return TrainConfig(
         name=f"pi05_yam_lego_taxi{tag}_rlt",
         model=pi0_rlt.Pi0RLTConfig(
@@ -1367,17 +1377,15 @@ def _yam_rlt_config(delta_mode: str) -> TrainConfig:
             action_horizon=16,
             discrete_state_input=False,
             rlt_backbone_gradient=False,
-            rlt_bc_probe=True,
-            # YAM's action is 14-d (bimanual joints+grippers); the rest of the model action space is
-            # zero padding the probe should not regress.
+            rlt_decoder_mode="parallel",  # pardec: best on RoboCasa, un-bypassable bottleneck
+            rlt_include_proprio=False,  # noprop: best on RoboCasa; a critic reads proprio directly
+            rlt_bc_probe=False,  # real data, no sim probe to feed - skip the probe actor entirely
             rlt_probe_action_dim=14,
         ),
         data=LeRobotYAMDataConfig(
             repo_id="jellyho/yam_lego_taxi",
             delta_mode=delta_mode,
-            # No per-frame reward column in this dataset (success is episode-level in outcomes.jsonl),
-            # so the progress objective is off; the RLT bottleneck trains on reconstruction alone.
-            include_progress=False,
+            include_progress=False,  # success is episode-level (outcomes.jsonl), no per-frame reward
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
@@ -1392,12 +1400,11 @@ def _yam_rlt_config(delta_mode: str) -> TrainConfig:
         action_dist_interval=0,
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
-        # No sim for YAM, so no in-loop rollout eval; the probe BC loss is still logged.
-        rlt_probe_eval_interval=0,
+        rlt_probe_eval_interval=0,  # no sim: nothing to roll out
     )
 
 
-_CONFIGS.extend(_yam_rlt_config(_m) for _m in ("none", "joint", "umi"))
+_CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none", "umi"))
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
