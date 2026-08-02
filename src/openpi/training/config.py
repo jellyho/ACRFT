@@ -433,15 +433,12 @@ class LeRobotYAMDataConfig(DataConfigFactory):
     Three cameras, a 42-d state, and a 14-d JOINT action (per arm: 6 joints + 1 gripper). The action
     delta convention is selectable, since it is the thing this dataset exists to ablate:
 
+      joint  relative joint action: subtract the current joint position, so the target is a
+             displacement from where the arm is. Grippers stay absolute.
       none   absolute joint targets, as logged.
-      joint  UMI's idea in joint space: subtract the current joint position, so the target is a
-             displacement from where the arm is. Grippers stay absolute. This is what applies here,
-             because the action is joints, not an end-effector pose.
-      umi    the full frame-relative end-effector form (pos in the current EE frame, rotation
-             composed): only meaningful for a pose action, kept for datasets that log one.
     """
 
-    delta_mode: str = "joint"  # none | joint | umi
+    delta_mode: str = "joint"  # joint (relative) | none (absolute)
     include_progress: bool = False
     reward_key: str = "next.reward"
 
@@ -480,13 +477,6 @@ class LeRobotYAMDataConfig(DataConfigFactory):
             data_transforms = data_transforms.push(
                 inputs=[_transforms.JointDeltaActions(ref)],
                 outputs=[_transforms.JointAbsoluteActions(ref)],
-            )
-        elif self.delta_mode == "umi":
-            # left EE pose at action 0.., state observation.eef 0..; right at 7.. / 7.. (eef layout).
-            blocks = [(0, 0, 3, 3), (7, 7, 10, 10)]
-            data_transforms = data_transforms.push(
-                inputs=[_transforms.UMIRelativeActions(blocks)],
-                outputs=[_transforms.AbsoluteFromUMIRelative(blocks)],
             )
 
         model_transforms = ModelTransformFactory()(model_config)
@@ -1361,9 +1351,9 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
 
     Defaults chosen for this setting: the parallel decoder and no-proprio token (the best RLT variant
     on RoboCasa - the decoder cannot bypass the bottleneck via neighbour context, and proprio is left
-    out because a downstream critic sees it directly), and a joint-space delta action - UMI's
-    "relative to the current state" idea applied to a joint action. delta_mode tags the run name so
-    the variants do not share a checkpoint dir; the untagged name is the joint default.
+    out because a downstream critic sees it directly), and a relative joint action (subtract the
+    current joint position). delta_mode is joint (relative) or none (absolute); it tags the run name
+    so the two do not share a checkpoint dir, and the untagged name is the relative-joint default.
 
     Because this is real data there is no sim: no rollout / probe-policy evaluation, and no
     behaviour-cloning probe actor either (it exists only to read out the token for the sim probe).
@@ -1404,7 +1394,7 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
     )
 
 
-_CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none", "umi"))
+_CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none"))
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 

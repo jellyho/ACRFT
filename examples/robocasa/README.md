@@ -370,11 +370,10 @@ Feature schema (from RoboCasa's converter): three video streams
 
 Pi0RLT on the YAM two-arm dataset. Defaults are the RoboCasa-best RLT variant (parallel decoder,
 no-proprio) with a joint-space delta action; no sim, so no rollout/probe eval and no probe actor.
-Three configs differ only in the action delta convention:
+Two configs differ only in the action space:
 
-    pi05_yam_lego_taxi_rlt        joint delta (subtract current joint position; grippers absolute) [default]
+    pi05_yam_lego_taxi_rlt        relative joint (subtract current joint position; grippers absolute) [default]
     pi05_yam_lego_taxi_none_rlt   absolute joint targets
-    pi05_yam_lego_taxi_umi_rlt    frame-relative EEF (UMI), for pose-action data
 
 Train (norm stats are computed on first run, no shared-asset file needed):
 
