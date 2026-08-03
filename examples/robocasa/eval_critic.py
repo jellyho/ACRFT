@@ -71,10 +71,16 @@ class VLA:
     params every evaluation, instead of reloading the 3B model each time.
     """
 
-    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed):
+    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None):
         train_config = _config.get_config(config_name)
         checkpoint = pathlib.Path(_download.maybe_download(str(checkpoint)))
-        self.model_config = train_config.model
+        # The registered config carries the default model variant (proprio on, autoregressive
+        # decoder). A checkpoint trained with --no-proprio / --parallel-decoder has a different
+        # parameter tree, so loading it without the same overrides fails on missing rlt_proprio_* /
+        # rlt_dec_aux_embed. Apply them before load, exactly as annotate_rlt.py does.
+        self.model_config = (
+            dataclasses.replace(train_config.model, **model_overrides) if model_overrides else train_config.model
+        )
         data_config = train_config.data.create(train_config.assets_dirs, self.model_config)
         norm_stats = data_config.norm_stats
         if norm_stats is None and data_config.asset_id is not None:
@@ -241,10 +247,23 @@ def main() -> None:
         "paths the predicted trajectory rather than a direction indicator at an arbitrary length.",
     )
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
+    # Model-variant overrides: must match how the checkpoint was trained, or its parameter tree does
+    # not match the registered config's default and the load fails. Same flags as annotate_rlt.py.
+    ap.add_argument("--no-proprio", action="store_true", help="Checkpoint was trained without the proprio token.")
+    ap.add_argument("--decoder-mode", choices=["parallel", "autoregressive"], default=None)
+    ap.add_argument("--objective", default=None, help="Override rlt_objective (e.g. recon).")
     args = ap.parse_args()
 
     if "vla" not in args.modes and args.critic is None:
         ap.error("--critic is required unless --modes vla")
+
+    model_overrides = {}
+    if args.no_proprio:
+        model_overrides["rlt_include_proprio"] = False
+    if args.decoder_mode is not None:
+        model_overrides["rlt_decoder_mode"] = args.decoder_mode
+    if args.objective is not None:
+        model_overrides["rlt_objective"] = args.objective
 
     if args.path_scale is None:
         import action_overlay as _ov0
@@ -263,6 +282,7 @@ def main() -> None:
             seed=args.seed,
             query_noise=args.query_noise,
             softmax_temp=args.softmax_temp,
+            model_overrides=model_overrides,
         )
         trace, frames, box = [], [], {"trial": 0, "dash": None, "proj": None}
         record = args.video_dir is not None
