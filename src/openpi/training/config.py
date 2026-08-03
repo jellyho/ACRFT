@@ -1364,7 +1364,10 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
         name=f"pi05_yam_lego_taxi{tag}_rlt",
         model=pi0_rlt.Pi0RLTConfig(
             pi05=True,
-            action_horizon=16,
+            # 30 frames at YAM's 30 fps is exactly a one-second window. The 16 this started with was
+            # carried over from the RoboCasa configs and covers only 0.53 s - short for a bimanual
+            # chunk, and it is also the window the RLT bottleneck has to summarise into one token.
+            action_horizon=30,
             discrete_state_input=False,
             rlt_backbone_gradient=False,
             rlt_decoder_mode="parallel",  # pardec: best on RoboCasa, un-bypassable bottleneck
