@@ -31,7 +31,8 @@ def create_torch_dataloader(
 ) -> tuple[_data_loader.Dataset, int]:
     if data_config.repo_id is None:
         raise ValueError("Data config must have a repo_id")
-    dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
+    # Only state/actions are accumulated, so skip decoding the camera videos entirely.
+    dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config, skip_videos=True)
     dataset = _data_loader.TransformedDataset(
         dataset,
         [

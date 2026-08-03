@@ -127,10 +127,34 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+class _StubVideoQuery:
+    """Stands in for ``LeRobotDataset._query_videos``, returning 1x1 placeholders.
+
+    Norm stats only accumulate ``state`` and ``actions``, but ``LeRobotDataset.__getitem__`` decodes
+    every camera's mp4 for every sample - three streams for YAM - and the frames are then carried at
+    full resolution through the transforms, the collate and the host-to-device copy before being
+    thrown away. That decode is essentially the whole runtime. Downstream transforms still index the
+    image keys, so hand back a minimal tensor instead of dropping them.
+
+    A class rather than a closure because the dataset is pickled out to the dataloader workers.
+    """
+
+    def __call__(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict[str, torch.Tensor]:
+        return {key: torch.zeros(3, 1, 1) for key in query_timestamps}
+
+
 def create_torch_dataset(
-    data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    model_config: _model.BaseModelConfig,
+    *,
+    skip_videos: bool = False,
 ) -> Dataset:
-    """Create a dataset for training."""
+    """Create a dataset for training.
+
+    Set ``skip_videos`` when only the low-dimensional fields are needed (norm stats): camera frames
+    are then not decoded, which is a large speedup. Never set it for training.
+    """
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
@@ -143,7 +167,14 @@ def create_torch_dataset(
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
+        # LeRobot defaults tolerance_s to 1e-4, which real-robot data (e.g. YAM at 30fps) violates
+        # because its recorded timestamps jitter by more than 0.1ms around the nominal 1/fps grid.
+        # Use nearly a full frame period as the tolerance - the delta_timestamps grid is built from
+        # 1/fps anyway, so this only relaxes the jitter check, it does not change which frames match.
+        tolerance_s=max(1e-4, 1.0 / dataset_meta.fps - 1e-4),
     )
+    if skip_videos:
+        dataset._query_videos = _StubVideoQuery()
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])
