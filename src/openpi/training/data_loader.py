@@ -143,51 +143,30 @@ class _StubVideoQuery:
         return {key: torch.zeros(3, 1, 1) for key in query_timestamps}
 
 
-class _TolerantVideoQuery:
-    """Wraps ``LeRobotDataset._query_videos`` to survive a video that is a frame or two short.
+def _float32_safe_tolerance(fps: float, max_timestamp_s: float) -> float:
+    """Frame-matching tolerance that survives LeRobot comparing timestamps in float32.
 
-    Some exports encode fewer frames than the parquet claims - see docs/yam_dataset_issues.md, where
-    YAM's agentview stream is 1-2 frames short in 4 of 12 files because the encoder was not flushed.
-    The final frames of the last episode in such a file then decode as
-    ``Invalid frame index=N for streamIndex=0 numFrames=N`` and kill training mid-run, hundreds of
-    steps in, whenever the sampler happens to reach that episode.
+    ``decode_video_frames_*`` checks the match with ``torch.tensor(timestamps)`` on both sides, and
+    a Python list of floats becomes a *float32* tensor. Above a few hundred seconds the float32 ulp
+    alone exceeds LeRobot's 1e-4 default, so a query and the frame it selected can land on adjacent
+    float32 values and fail the check no matter how exact the stored timestamps are. Datasets whose
+    episodes are concatenated into multi-hour files (YAM reaches ~2200 s) trip this routinely.
 
-    Retry those queries one frame period earlier, which substitutes the nearest frame that does
-    exist. This is a workaround for a broken export, not a fix: the right repair is re-encoding. It
-    is deliberately narrow - only a decode failure triggers it, it backs off at most a few frames,
-    and it warns once per episode so the damage stays visible in the logs rather than being silently
-    absorbed.
+    Allow a few ulp at the largest timestamp in the dataset. That is still two orders of magnitude
+    inside half a frame period, so it can never let a neighbouring frame match - unlike relaxing to
+    a whole frame period, which would hide genuine misalignment.
     """
+    ulp = float(np.spacing(np.float32(max(max_timestamp_s, 1.0))))
+    return min(max(1e-4, 4 * ulp), 0.1 / fps)
 
-    _MAX_BACKOFF_FRAMES = 4
 
-    def __init__(self, inner, fps: float):
-        self._inner = inner
-        self._step = 1.0 / fps
-        self._warned: set[int] = set()
-
-    def __call__(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict:
-        try:
-            return self._inner(query_timestamps, ep_idx)
-        except RuntimeError as first_error:
-            for back in range(1, self._MAX_BACKOFF_FRAMES + 1):
-                shifted = {k: [max(0.0, t - back * self._step) for t in ts] for k, ts in query_timestamps.items()}
-                try:
-                    frames = self._inner(shifted, ep_idx)
-                except RuntimeError:
-                    continue
-                if ep_idx not in self._warned:
-                    self._warned.add(ep_idx)
-                    logging.warning(
-                        "episode %d needed a %d-frame backoff to decode: at least one of its videos (%s) is "
-                        "shorter than the parquet declares. The export is missing frames - see "
-                        "docs/yam_dataset_issues.md. Warned once per episode.",
-                        ep_idx,
-                        back,
-                        ", ".join(query_timestamps),
-                    )
-                return frames
-            raise first_error
+def _max_video_timestamp(dataset_meta: lerobot_dataset.LeRobotDatasetMetadata) -> float:
+    """Largest timestamp any frame lookup can ask for, i.e. the end of the longest video file."""
+    episodes = dataset_meta.episodes
+    if episodes is None:
+        return dataset_meta.total_frames / dataset_meta.fps
+    ends = [max(episodes[c]) for c in episodes.column_names if c.endswith("/to_timestamp")]
+    return max(ends, default=dataset_meta.total_frames / dataset_meta.fps)
 
 
 def create_torch_dataset(
@@ -214,16 +193,10 @@ def create_torch_dataset(
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
-        # LeRobot defaults tolerance_s to 1e-4, which real-robot data (e.g. YAM at 30fps) violates
-        # because its recorded timestamps jitter by more than 0.1ms around the nominal 1/fps grid.
-        # Use nearly a full frame period as the tolerance - the delta_timestamps grid is built from
-        # 1/fps anyway, so this only relaxes the jitter check, it does not change which frames match.
-        tolerance_s=max(1e-4, 1.0 / dataset_meta.fps - 1e-4),
+        tolerance_s=_float32_safe_tolerance(dataset_meta.fps, _max_video_timestamp(dataset_meta)),
     )
     if skip_videos:
         dataset._query_videos = _StubVideoQuery()
-    else:
-        dataset._query_videos = _TolerantVideoQuery(dataset._query_videos, dataset_meta.fps)
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])
