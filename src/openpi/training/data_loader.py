@@ -143,6 +143,53 @@ class _StubVideoQuery:
         return {key: torch.zeros(3, 1, 1) for key in query_timestamps}
 
 
+class _TolerantVideoQuery:
+    """Wraps ``LeRobotDataset._query_videos`` to survive a video that is a frame or two short.
+
+    Some exports encode fewer frames than the parquet claims - see docs/yam_dataset_issues.md, where
+    YAM's agentview stream is 1-2 frames short in 4 of 12 files because the encoder was not flushed.
+    The final frames of the last episode in such a file then decode as
+    ``Invalid frame index=N for streamIndex=0 numFrames=N`` and kill training mid-run, hundreds of
+    steps in, whenever the sampler happens to reach that episode.
+
+    Retry those queries one frame period earlier, which substitutes the nearest frame that does
+    exist. This is a workaround for a broken export, not a fix: the right repair is re-encoding. It
+    is deliberately narrow - only a decode failure triggers it, it backs off at most a few frames,
+    and it warns once per episode so the damage stays visible in the logs rather than being silently
+    absorbed.
+    """
+
+    _MAX_BACKOFF_FRAMES = 4
+
+    def __init__(self, inner, fps: float):
+        self._inner = inner
+        self._step = 1.0 / fps
+        self._warned: set[int] = set()
+
+    def __call__(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict:
+        try:
+            return self._inner(query_timestamps, ep_idx)
+        except RuntimeError as first_error:
+            for back in range(1, self._MAX_BACKOFF_FRAMES + 1):
+                shifted = {k: [max(0.0, t - back * self._step) for t in ts] for k, ts in query_timestamps.items()}
+                try:
+                    frames = self._inner(shifted, ep_idx)
+                except RuntimeError:
+                    continue
+                if ep_idx not in self._warned:
+                    self._warned.add(ep_idx)
+                    logging.warning(
+                        "episode %d needed a %d-frame backoff to decode: at least one of its videos (%s) is "
+                        "shorter than the parquet declares. The export is missing frames - see "
+                        "docs/yam_dataset_issues.md. Warned once per episode.",
+                        ep_idx,
+                        back,
+                        ", ".join(query_timestamps),
+                    )
+                return frames
+            raise first_error
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -175,6 +222,8 @@ def create_torch_dataset(
     )
     if skip_videos:
         dataset._query_videos = _StubVideoQuery()
+    else:
+        dataset._query_videos = _TolerantVideoQuery(dataset._query_videos, dataset_meta.fps)
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])
