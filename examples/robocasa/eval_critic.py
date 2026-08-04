@@ -85,13 +85,7 @@ class VLA:
             )
             logger.info(f"VLA model overrides: {model_overrides}")
         checkpoint = pathlib.Path(_download.maybe_download(str(checkpoint)))
-        # The registered config carries the default model variant (proprio on, autoregressive
-        # decoder). A checkpoint trained with --no-proprio / --parallel-decoder has a different
-        # parameter tree, so loading it without the same overrides fails on missing rlt_proprio_* /
-        # rlt_dec_aux_embed. Apply them before load, exactly as annotate_rlt.py does.
-        self.model_config = (
-            dataclasses.replace(train_config.model, **model_overrides) if model_overrides else train_config.model
-        )
+        self.model_config = train_config.model
         data_config = train_config.data.create(train_config.assets_dirs, self.model_config)
         norm_stats = data_config.norm_stats
         if norm_stats is None and data_config.asset_id is not None:
@@ -329,20 +323,10 @@ def main() -> None:
         "paths the predicted trajectory rather than a direction indicator at an arbitrary length.",
     )
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
-    # Model-variant overrides: must match how the checkpoint was trained, or its parameter tree does
-    # not match the registered config's default and the load fails. Same flags as annotate_rlt.py.
-    ap.add_argument("--decoder-mode", choices=["parallel", "autoregressive"], default=None)
-    ap.add_argument("--objective", default=None, help="Override rlt_objective (e.g. recon).")
     args = ap.parse_args()
 
     if "vla" not in args.modes and args.critic is None:
         ap.error("--critic is required unless --modes vla")
-
-    model_overrides = {}
-    if args.decoder_mode is not None:
-        model_overrides["rlt_decoder_mode"] = args.decoder_mode
-    if args.objective is not None:
-        model_overrides["rlt_objective"] = args.objective
 
     if args.path_scale is None:
         import action_overlay as _ov0
@@ -356,17 +340,13 @@ def main() -> None:
     for kv in args.vla_override:
         k, _, v = kv.partition("=")
         _vla_ov[k] = {"true": True, "false": False}.get(v.lower(), v)
-    # Two override sources feed the model config: the convenience rlt flags (--decoder-mode,
-    # --objective) and the generic --vla-override key=value list. Merge them, with the explicit
-    # --vla-override winning on any shared key.
-    model_overrides = {**model_overrides, **_vla_ov}
     shared_vla = VLA(
         args.config,
         args.checkpoint,
         num_samples=args.num_samples,
         flow_steps=args.num_flow_steps,
         seed=args.seed,
-        model_overrides=model_overrides,
+        model_overrides=_vla_ov,
     )
 
     for mode in args.modes:
@@ -379,7 +359,7 @@ def main() -> None:
             flow_steps=args.num_flow_steps,
             seed=args.seed,
             query_noise=args.query_noise,
-            model_overrides=model_overrides,
+            model_overrides=_vla_ov,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
         )
