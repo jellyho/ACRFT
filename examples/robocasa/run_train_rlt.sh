@@ -29,13 +29,32 @@
 #                              encoder and no proprio reconstruction term. This is the paper's own
 #                              setup, where the critic takes (z_rl, s^p) and gets proprio directly,
 #                              so whatever consumes z_rl must supply proprio itself. (NO_PROPRIO=1)
-#     --objective STR          reconstruction | progress | reconstruction+progress (RLT_OBJECTIVE=)
-#                              anything with "progress" regresses time-to-success, derived from the
-#                              sparse success reward (see training/robocasa_progress.py)
+#     --objective STR          reconstruction[+progress][+action][+behsim]   (RLT_OBJECTIVE=)
+#                              Reconstruction is always present: every addition is too
+#                              low-dimensional to hold the bottleneck open on its own, so they are
+#                              additions, not objectives.
+#                                +progress  regress time-to-success, derived from the sparse success
+#                                           reward (see training/progress.py).
+#                                +action    predict the demonstrated action chunk from the token,
+#                                           gradient FLOWING (unlike the rlt_bc_probe, which is the
+#                                           same prediction detached, and stays a pure measurement).
+#                                +behsim    PSE-style contrastive: make token similarity mirror
+#                                           action-chunk similarity. Reconstruction targets SigLIP
+#                                           features, which are a function of appearance, so in
+#                                           RoboCasa (a different kitchen per demo) the token learns
+#                                           "which episode" — measured at 100% linear episode-ID
+#                                           probe accuracy. This is the term that pulls
+#                                           behaviourally-equivalent frames from DIFFERENT demos
+#                                           together, which is what cross-trajectory stitching needs.
 #     --scalar-head            progress head = MSE regression instead of the default HL-Gauss
 #                              histogram + cross-entropy                     (SCALAR_HEAD=1)
 #     --progress-bins INT      histogram bins for the distributional head    (PROGRESS_BINS=)
 #     --loss-weight FLOAT      weight of the RLT loss vs the BC loss          (RLT_LOSS_WEIGHT=)
+#     --mask-ratio FLOAT       MAE: hide this fraction of image tokens from the encoder and score
+#                              the reconstruction on the hidden ones only, so the token has to infer
+#                              content it never saw. 0 = off (compression). Tags _mae<R>. (MASK_RATIO=)
+#     --token-dim INT          bottleneck size of the RL token (default 2048)  (TOKEN_DIM=)
+#                              smaller = cheaper critic queries; tags the exp name _d<N>
 #
 #   Monitoring:
 #     --monitor-interval INT   steps between RLT embedding diagnostics, 0 off (MONITOR_INTERVAL=)
@@ -45,6 +64,7 @@
 #     --exp-suffix STR         exp name is "<Task>_<suffix>" (default: rlt)   (EXP_SUFFIX=)
 #     --project STR            wandb project name (default: acrft)            (PROJECT=)
 #     --entity STR             wandb entity / team (default: your wandb user)  (ENTITY=)
+#     --group STR              wandb group: bucket related runs (e.g. a sweep) (GROUP=)
 #     --resume                 resume from the last checkpoint                (RESUME=1)
 #     --overwrite              wipe the checkpoint dir and start fresh        (OVERWRITE=1)
 #     --skip-norm-stats        never compute norm stats                       (SKIP_NORM_STATS=1)
@@ -72,6 +92,7 @@ RESUME="${RESUME:-0}"
 OVERWRITE="${OVERWRITE:-0}"
 PROJECT="${PROJECT:-robocasa-pi05}"
 ENTITY="${ENTITY:-RSS-PFT_RLLAB}"
+GROUP="${GROUP:-RLT_DEBUG}"
 HF_USER="${HF_USER:-jellyho}"
 ROBOCASA_LOCAL_DIR="${ROBOCASA_LOCAL_DIR:-/data5/jellyho/robocasa365}"
 # Match lerobot's cache resolution: HF_LEROBOT_HOME, else $HF_HOME/lerobot, else ~/.cache/...
@@ -92,11 +113,14 @@ while [ "$#" -gt 0 ]; do
     --scalar-head)       SCALAR_HEAD=1 ;;
     --progress-bins)     PROGRESS_BINS="$2"; shift ;;
     --loss-weight)       RLT_LOSS_WEIGHT="$2"; shift ;;
+    --mask-ratio)        MASK_RATIO="$2"; shift ;;
+    --token-dim)         TOKEN_DIM="$2"; shift ;;
     --monitor-interval)  MONITOR_INTERVAL="$2"; shift ;;
     --vis-interval)      VIS_INTERVAL="$2"; shift ;;
     --exp-suffix)        EXP_SUFFIX="$2"; shift ;;
     --project)           PROJECT="$2"; shift ;;
     --entity)            ENTITY="$2"; shift ;;
+    --group)             GROUP="$2"; shift ;;
     --resume)            RESUME=1 ;;
     --overwrite)         OVERWRITE=1 ;;
     --skip-norm-stats)   SKIP_NORM_STATS=1 ;;
@@ -131,10 +155,20 @@ if [ -n "${RLT_OBJECTIVE:-}" ]; then
   # Explicit tags: truncating the objective string would collide "reconstruction" with
   # "reconstruction+progress" and silently point two ablations at the same checkpoint dir.
   case "$RLT_OBJECTIVE" in
-    reconstruction)          OBJ_TAG="_recon" ;;
-    progress)                OBJ_TAG="_prog" ;;
-    reconstruction+progress) OBJ_TAG="_reconprog" ;;
-    *) echo "Unknown --objective: $RLT_OBJECTIVE (reconstruction | progress | reconstruction+progress)"; exit 1 ;;
+    reconstruction)                 OBJ_TAG="_recon" ;;
+    reconstruction+progress)        OBJ_TAG="_reconprog" ;;
+    reconstruction+action)          OBJ_TAG="_reconact" ;;
+    reconstruction+behsim)          OBJ_TAG="_reconbeh" ;;
+    reconstruction+epadv)           OBJ_TAG="_reconepadv" ;;
+    reconstruction+action+behsim)   OBJ_TAG="_reconactbeh" ;;
+    reconstruction+action+epadv)    OBJ_TAG="_reconactepadv" ;;
+    reconstruction+behsim+epadv)    OBJ_TAG="_reconbehepadv" ;;
+    reconstruction+progress+action) OBJ_TAG="_reconprogact" ;;
+    progress) echo "--objective progress is no longer supported: progress alone supervises the token
+with a single scalar per frame and lets it collapse. Use reconstruction+progress."; exit 1 ;;
+    *) echo "Unknown --objective: $RLT_OBJECTIVE (reconstruction[+progress][+action][+behsim];
+add the tag to this case if you need another combination — truncating the string would let two
+ablations share a checkpoint dir)"; exit 1 ;;
   esac
   RLT_FLAGS+=(--model.rlt-objective "$RLT_OBJECTIVE"); VARIANT_TAG="${VARIANT_TAG}${OBJ_TAG}"
 fi
@@ -144,11 +178,25 @@ fi
 if [ -n "${PROGRESS_BINS:-}" ]; then
   RLT_FLAGS+=(--model.rlt-progress-bins "$PROGRESS_BINS")
 fi
+if [ -n "${MASK_RATIO:-}" ]; then
+  RLT_FLAGS+=(--model.rlt-mask-ratio "$MASK_RATIO"); VARIANT_TAG="${VARIANT_TAG}_mae${MASK_RATIO}"
+fi
+if [ -n "${NUM_TOKENS:-}" ]; then
+  RLT_FLAGS+=(--model.rlt-num-tokens "$NUM_TOKENS"); VARIANT_TAG="${VARIANT_TAG}_k${NUM_TOKENS}"
+fi
+if [ -n "${TOKEN_DIM:-}" ]; then
+  RLT_FLAGS+=(--model.rlt-token-dim "$TOKEN_DIM"); VARIANT_TAG="${VARIANT_TAG}_d${TOKEN_DIM}"
+fi
 if [ -n "${RLT_LOSS_WEIGHT:-}" ]; then
   RLT_FLAGS+=(--model.rlt-loss-weight "$RLT_LOSS_WEIGHT"); VARIANT_TAG="${VARIANT_TAG}_w${RLT_LOSS_WEIGHT}"
 fi
 RLT_FLAGS+=(--project-name "$PROJECT")
 RLT_FLAGS+=(--wandb-entity "$ENTITY")
+# RoboCasa frames are decoded from video, so the loader — not the GPU — sets the step time. The
+# config default is 2 workers, which is what left rlt7_mae075 at 2.1 s/it; pass NUM_WORKERS (the
+# slurm wrapper derives it from --cpus-per-task) to actually use the allocation.
+[ -n "${NUM_WORKERS:-}" ] && RLT_FLAGS+=(--num-workers "$NUM_WORKERS")
+[ -n "$GROUP" ] && RLT_FLAGS+=(--wandb-group "$GROUP")
 [ -n "${MONITOR_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-monitor-interval "$MONITOR_INTERVAL")
 [ -n "${VIS_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-vis-interval "$VIS_INTERVAL")
 [ -n "$VARIANT_TAG" ] && echo "RLT variant: ${RLT_FLAGS[*]}   (exp-name tag: $VARIANT_TAG)"

@@ -127,10 +127,60 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+class _StubVideoQuery:
+    """Stands in for ``LeRobotDataset._query_videos``, returning 1x1 placeholders.
+
+    Norm stats only accumulate ``state`` and ``actions``, but ``LeRobotDataset.__getitem__`` decodes
+    every camera's mp4 for every sample - three streams for YAM - and the frames are then carried at
+    full resolution through the transforms, the collate and the host-to-device copy before being
+    thrown away. That decode is essentially the whole runtime. Downstream transforms still index the
+    image keys, so hand back a minimal tensor instead of dropping them.
+
+    A class rather than a closure because the dataset is pickled out to the dataloader workers.
+    """
+
+    def __call__(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict[str, torch.Tensor]:
+        return {key: torch.zeros(3, 1, 1) for key in query_timestamps}
+
+
+def _float32_safe_tolerance(fps: float, max_timestamp_s: float) -> float:
+    """Frame-matching tolerance that survives LeRobot comparing timestamps in float32.
+
+    ``decode_video_frames_*`` checks the match with ``torch.tensor(timestamps)`` on both sides, and
+    a Python list of floats becomes a *float32* tensor. Above a few hundred seconds the float32 ulp
+    alone exceeds LeRobot's 1e-4 default, so a query and the frame it selected can land on adjacent
+    float32 values and fail the check no matter how exact the stored timestamps are. Datasets whose
+    episodes are concatenated into multi-hour files (YAM reaches ~2200 s) trip this routinely.
+
+    Allow a few ulp at the largest timestamp in the dataset. That is still two orders of magnitude
+    inside half a frame period, so it can never let a neighbouring frame match - unlike relaxing to
+    a whole frame period, which would hide genuine misalignment.
+    """
+    ulp = float(np.spacing(np.float32(max(max_timestamp_s, 1.0))))
+    return min(max(1e-4, 4 * ulp), 0.1 / fps)
+
+
+def _max_video_timestamp(dataset_meta: lerobot_dataset.LeRobotDatasetMetadata) -> float:
+    """Largest timestamp any frame lookup can ask for, i.e. the end of the longest video file."""
+    episodes = dataset_meta.episodes
+    if episodes is None:
+        return dataset_meta.total_frames / dataset_meta.fps
+    ends = [max(episodes[c]) for c in episodes.column_names if c.endswith("/to_timestamp")]
+    return max(ends, default=dataset_meta.total_frames / dataset_meta.fps)
+
+
 def create_torch_dataset(
-    data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    model_config: _model.BaseModelConfig,
+    *,
+    skip_videos: bool = False,
 ) -> Dataset:
-    """Create a dataset for training."""
+    """Create a dataset for training.
+
+    Set ``skip_videos`` when only the low-dimensional fields are needed (norm stats): camera frames
+    are then not decoded, which is a large speedup. Never set it for training.
+    """
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
@@ -140,10 +190,15 @@ def create_torch_dataset(
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
+        # None loads all episodes; a subset (e.g. success-only) is resolved by the data config.
+        episodes=list(data_config.episodes) if data_config.episodes is not None else None,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
+        tolerance_s=_float32_safe_tolerance(dataset_meta.fps, _max_video_timestamp(dataset_meta)),
     )
+    if skip_videos:
+        dataset._query_videos = _StubVideoQuery()
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])

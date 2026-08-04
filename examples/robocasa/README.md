@@ -365,3 +365,20 @@ Feature schema (from RoboCasa's converter): three video streams
 - The `target`-split human demos are the evaluation/fine-tuning set. The much larger `pretrain`
   split (and MimicGen sources) can be fetched by extending this script or using
   `third_party/robocasa/robocasa/scripts/download_datasets.py`.
+
+## YAM bimanual (jellyho/yam_lego_taxi)
+
+Pi0RLT on the YAM two-arm dataset. Defaults are the RoboCasa-best RLT variant (parallel decoder,
+no-proprio) with a joint-space delta action; no sim, so no rollout/probe eval and no probe actor.
+Two configs differ only in the action space:
+
+    pi05_yam_lego_taxi_rlt        relative joint (subtract current joint position; grippers absolute) [default]
+    pi05_yam_lego_taxi_none_rlt   absolute joint targets
+
+Train (norm stats are computed on first run, no shared-asset file needed):
+
+    uv run scripts/compute_norm_stats.py pi05_yam_lego_taxi_rlt
+    XLA_PYTHON_CLIENT_MEM_FRACTION=1.0 uv run scripts/train.py pi05_yam_lego_taxi_rlt --exp-name=yam_joint
+
+The action is 14-d joint space (per arm: 6 joints + 1 gripper); success is episode-level
+(outcomes.jsonl), so there is no per-frame reward and the progress objective is off.

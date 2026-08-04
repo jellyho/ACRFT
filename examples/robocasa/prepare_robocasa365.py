@@ -103,7 +103,7 @@ def discover_tar_paths() -> dict[str, str]:
         base = f"target/{cat}"
         try:
             task_entries = list(api.list_repo_tree(HF_REPO_ID, path_in_repo=base, repo_type="dataset", recursive=False))
-        except Exception as e:  # noqa: BLE001 - a missing category is not fatal
+        except Exception as e:
             logger.warning("could not list %s: %s", base, e)
             continue
         task_dirs = [e.path for e in task_entries if isinstance(e, RepoFolder)]
@@ -139,7 +139,7 @@ def download_and_extract(task: str, tar_path: str, output_dir: Path, *, overwrit
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True, exist_ok=True)
     with tarfile.open(local_tar, "r") as tar:
-        tar.extractall(path=tmp)  # noqa: S202 - trusted first-party archive
+        tar.extractall(path=tmp)
 
     # The tar root is a single `lerobot/` directory holding meta/, data/, videos/.
     lerobot_dir = tmp / "lerobot"
@@ -205,7 +205,7 @@ def push_task_to_hub(task: str, output_dir: Path, repo_id: str, *, private: bool
     # Tag the codebase version so `LeRobotDataset(repo_id)` resolves the v3.0 revision.
     try:
         api.create_tag(repo_id=repo_id, tag="v3.0", repo_type="dataset", exist_ok=True)
-    except Exception as e:  # noqa: BLE001 - a missing tag is non-fatal
+    except Exception as e:
         logger.warning("[%s] could not create v3.0 tag: %s", task, e)
     push_dataset_card(task, output_dir, repo_id)
     logger.info("[%s] pushed.", task)
@@ -246,7 +246,7 @@ def build_collection(title: str, namespace: str, repo_ids: list[str], *, private
     for rid in repo_ids:
         try:
             api.add_collection_item(coll.slug, item_id=rid, item_type="dataset", exists_ok=True)
-        except Exception as e:  # noqa: BLE001 - keep adding the rest
+        except Exception as e:
             logger.warning("could not add %s to collection: %s", rid, e)
     logger.info("Collection ready: https://huggingface.co/collections/%s", coll.slug)
     return coll.slug
@@ -268,9 +268,10 @@ def main() -> None:
         "--push-to-hub", action="store_true", help="After converting, upload each v3.0 dataset to the HF Hub."
     )
     parser.add_argument(
-        "--push-cards-only", action="store_true",
+        "--push-cards-only",
+        action="store_true",
         help="Backfill: only (re)generate and push the LeRobot dataset card to already-uploaded "
-             "repos. Skips download/convert/upload.",
+        "repos. Skips download/convert/upload.",
     )
     parser.add_argument(
         "--hf-user", type=str, default=None, help="HF username/org for repos. Defaults to the logged-in user."
@@ -337,7 +338,7 @@ def main() -> None:
                     download_and_extract(task, tar_paths[task], args.output_dir, overwrite=args.overwrite)
                 if want_convert:
                     upgrade_to_v30(task, args.output_dir, keep_backup=args.keep_backup)
-            except Exception as e:  # noqa: BLE001 - keep going, report at the end
+            except Exception as e:
                 logger.exception("[%s] FAILED: %s", task, e)
                 failures.append((task, str(e)))
 
@@ -367,14 +368,14 @@ def main() -> None:
                 else:
                     push_task_to_hub(task, args.output_dir, repo_id, private=args.private)
                 pushed.append(repo_id)
-            except Exception as e:  # noqa: BLE001 - keep pushing the rest
+            except Exception as e:
                 logger.exception("[%s] PUSH FAILED: %s", task, e)
                 push_failures.append((task, str(e)))
 
         if pushed and not args.no_collection:
             try:
                 build_collection(args.collection_title, user, pushed, private=args.private)
-            except Exception as e:  # noqa: BLE001 - non-fatal
+            except Exception as e:
                 logger.exception("Collection creation FAILED: %s", e)
         logger.info("Push finished. %d uploaded, %d failed.", len(pushed), len(push_failures))
 

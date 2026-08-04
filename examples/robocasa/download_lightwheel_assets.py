@@ -13,11 +13,11 @@ official script targets, producing the identical on-disk layout.
 `download_kitchen_assets.py`.)
 """
 
-import io
-import zipfile
 from pathlib import Path
+import zipfile
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi
+from huggingface_hub import hf_hub_download
 
 REPO = "nvidia/PhysicalAI-Robotics-Manipulation-Objects-Kitchen-MJCF"
 _ROBOCASA_ASSETS = Path(__file__).resolve().parents[2] / "third_party/robocasa/robocasa/models/assets"

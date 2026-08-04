@@ -46,11 +46,21 @@ class QCCritic(nn.Module):
     hidden_dims: tuple[int, ...] = (512, 512, 512)
     num_atoms: int = 1  # 1 -> scalar Q; >1 -> HL-Gauss categorical logits
     layer_norm: bool = True
+    # >0 = the last `proprio_dim` entries of obs are proprioception, to be given their own projection
+    # instead of being 16 raw dims among 2048 token dims (~0.8% of the input, and swamped again by
+    # the LayerNorm that follows).
+    proprio_dim: int = 0
+    proprio_embed: int = 128
 
     @nn.compact
     def __call__(self, obs, actions):
         # obs [..., D], actions [..., H, A] (or already flat [..., H*A])
         a = actions.reshape(*actions.shape[: -2 if actions.ndim > 2 else -1], -1)
+        if self.proprio_dim:
+            z, pro = obs[..., : -self.proprio_dim], obs[..., -self.proprio_dim :]
+            # Widen proprio to a comparable number of features before it meets the token, so the
+            # first Dense sees it as a peer rather than as rounding error.
+            obs = jnp.concatenate([z, nn.gelu(nn.Dense(self.proprio_embed)(pro))], axis=-1)
         x = jnp.concatenate([obs, a], axis=-1)
         if self.layer_norm:
             x = nn.LayerNorm()(x)
@@ -70,6 +80,12 @@ class ARQCritic(nn.Module):
     mlp_dim: int = 1024
     num_atoms: int = 1
     per_position_head: bool = True
+    # >0 = the last `proprio_dim` entries of obs are proprioception, given their OWN sequence
+    # position instead of being concatenated into the state token. Concatenated, 16 proprio dims sit
+    # beside 2048 token dims (0.8% of the input) and are then LayerNorm'd against the token's
+    # statistics, so the single Dense that makes the state token can barely see them. As its own
+    # token it gets its own projection and its own place in attention.
+    proprio_dim: int = 0
 
     @property
     def n_embd(self) -> int:
@@ -84,22 +100,30 @@ class ARQCritic(nn.Module):
         d, mh = self.n_embd, self.macro_h
         a = actions.reshape(*actions.shape[:-2], mh, self.macro_group_size * self.action_dim)
 
-        state_tok = nn.Dense(d)(nn.LayerNorm()(obs))[..., None, :]  # [..., 1, d]
+        if self.proprio_dim:
+            z, pro = obs[..., : -self.proprio_dim], obs[..., -self.proprio_dim :]
+            lead = jnp.concatenate(
+                [nn.Dense(d)(nn.LayerNorm()(z))[..., None, :], nn.Dense(d)(nn.LayerNorm()(pro))[..., None, :]],
+                axis=-2,
+            )  # [..., 2, d]
+        else:
+            lead = nn.Dense(d)(nn.LayerNorm()(obs))[..., None, :]  # [..., 1, d]
+        nl = lead.shape[-2]
         act_tok = nn.Dense(d)(a)  # [..., mh, d]
-        x = jnp.concatenate([state_tok, act_tok], axis=-2)  # [..., 1+mh, d]
-        x = x + self.param("pos", nn.initializers.normal(0.02), (1 + mh, d))
+        x = jnp.concatenate([lead, act_tok], axis=-2)  # [..., nl+mh, d]
+        x = x + self.param("pos", nn.initializers.normal(0.02), (nl + mh, d))
 
         # Causal: prefix h must not see the suffix, otherwise its "value of committing to h steps"
-        # would be contaminated by actions that would never be executed.
-        causal = jnp.tril(jnp.ones((1 + mh, 1 + mh), dtype=bool))
+        # would be contaminated by actions that would never be executed. The leading observation
+        # tokens are visible to every action position.
+        causal = jnp.tril(jnp.ones((nl + mh, nl + mh), dtype=bool))
+        causal = causal.at[:, :nl].set(True)
         for _ in range(self.num_layers):
             h = nn.LayerNorm()(x)
-            x = x + nn.MultiHeadDotProductAttention(num_heads=self.num_heads, qkv_features=d)(
-                h, h, mask=causal
-            )
+            x = x + nn.MultiHeadDotProductAttention(num_heads=self.num_heads, qkv_features=d)(h, h, mask=causal)
             h = nn.LayerNorm()(x)
             x = x + nn.Dense(d)(nn.gelu(nn.Dense(self.mlp_dim)(h)))
-        x = nn.LayerNorm()(x)[..., 1:, :]  # drop the state position: [..., mh, d]
+        x = nn.LayerNorm()(x)[..., nl:, :]  # drop the observation positions: [..., mh, d]
 
         if self.per_position_head:
             # A distinct head per prefix position (ACSAC Prop. G.7).
@@ -109,6 +133,26 @@ class ARQCritic(nn.Module):
         else:
             out = nn.Dense(self.num_atoms)(x)
         return out if self.num_atoms > 1 else jnp.squeeze(out, -1)  # [..., mh(, atoms)]
+
+
+class ValueNet(nn.Module):
+    """State value V(z) — no action input, one scalar per state.
+
+    The IQL half of the critic. Its whole point is that it never sees an action, so learning it needs
+    no candidate chunks and takes no max: the expectile regression in the trainer pushes V toward an
+    upper quantile of Q(z, a) over the actions the DATA contains, which is what stands in for
+    ``max_a Q``. That removes the arg-max over N candidates x P prefixes that the TD objective takes,
+    and with it the upward bias of maxing over that many noisy estimates.
+
+    Scalar even when Q is distributional: expectile regression is defined on a scalar residual, and a
+    histogram head would have to be collapsed to one anyway before the asymmetric weight applies.
+    """
+
+    hidden_dims: tuple[int, ...] = (512, 512, 512)
+
+    @nn.compact
+    def __call__(self, obs):
+        return jnp.squeeze(_mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=1), -1)  # [...]
 
 
 class Ensemble(nn.Module):
@@ -168,3 +212,66 @@ def make_critic(kind: str, *, action_dim: int, horizon: int, num_atoms: int, **k
     if kind == "arq":
         return ARQCritic(action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **kw)
     raise ValueError(f"critic kind must be 'qc' or 'arq', got {kind!r}")
+
+
+def load_trained(params_path, *, action_dim: int, horizon: int):
+    """Rebuild a trained critic from the params and the config train_rlt_critic.py saved beside them.
+
+    The architecture has to match the checkpoint exactly, and re-declaring it at every call site is
+    how that goes wrong silently. Returns ``(apply_fn, params, macro_group_size)`` where ``apply_fn``
+    takes ``(obs [S, D], actions [S, M, H, A])`` and returns expected scalar values ``[K, S, M, P]``.
+    """
+    import json
+    import pathlib
+
+    import flax.serialization
+
+    params_path = pathlib.Path(params_path)
+    cfg = json.loads((params_path.parent / "config.json").read_text())
+    g = cfg.get("macro_group_size", 2)
+    num_atoms = cfg.get("num_atoms", 1)
+    arch = (
+        {
+            "macro_group_size": g,
+            "num_layers": cfg.get("num_layers", 3),
+            "num_heads": cfg.get("num_heads", 8),
+            "head_dim": cfg.get("head_dim", 48),
+            "mlp_dim": cfg.get("mlp_dim", 1024),
+        }
+        if cfg.get("kind", "arq") == "arq"
+        else {"hidden_dims": tuple(cfg.get("hidden_dims", [512, 512, 512]))}
+    )
+    # Only proprio_mode='token' puts proprio inside the module (its own sequence position for ARQ, a
+    # widened embedding for QC); 'concat' leaves it as ordinary input dims. Rebuilding without this
+    # would silently construct a different network from the one the params came from.
+    if cfg.get("use_proprio") and cfg.get("proprio_mode") == "token":
+        import json as _json
+        import pathlib as _pathlib
+
+        arch["proprio_dim"] = _json.loads((_pathlib.Path(cfg["data"]) / "meta.json").read_text())["proprio_dim"]
+    net = Ensemble(
+        make_critic=lambda: make_critic(
+            cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch
+        ),
+        num_critics=cfg.get("num_critics", 2),
+    )
+    hl = HLGauss(v_min=cfg.get("v_min", 0.0), v_max=cfg.get("v_max", 1.0), num_atoms=max(num_atoms, 2))
+    params = flax.serialization.msgpack_restore(params_path.read_bytes())
+
+    if cfg.get("kind", "arq") == "qc":
+        # QC has no prefix head, so the raw output is [K, S, M] and the promised trailing P axis is
+        # missing - which is exactly the shape every caller then unpacks wrong (np.unravel_index over
+        # a 1-tuple killed every QC rollout, silently, in three sweeps). A P=1 axis keeps the
+        # contract; the matching "steps per prefix" is the whole horizon, because committing to QC's
+        # one value IS committing to the full chunk.
+        def apply_fn(obs, actions):
+            out = net.apply(params, obs, actions)
+            return (hl.from_logits(out) if num_atoms > 1 else out)[..., None]
+
+        return apply_fn, params, horizon
+
+    def apply_fn(obs, actions):
+        out = net.apply(params, obs, actions)
+        return hl.from_logits(out) if num_atoms > 1 else out
+
+    return apply_fn, params, g

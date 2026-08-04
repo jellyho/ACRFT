@@ -23,17 +23,16 @@ import pathlib
 
 import numpy as np
 from openpi_client import websocket_client_policy as _websocket_client_policy
-
 from robocasa.utils.env_utils import create_env
 
 # obs keys that make up the 16-d ``observation.state`` (in LeRobot order), from
 # robocasa's LEROBOT_STATE_TO_HDF5_STATE mapping.
 _STATE_KEYS = (
-    "robot0_base_pos",          # 3  base position
-    "robot0_base_quat",         # 4  base rotation
-    "robot0_base_to_eef_pos",   # 3  EE position (relative)
+    "robot0_base_pos",  # 3  base position
+    "robot0_base_quat",  # 4  base rotation
+    "robot0_base_to_eef_pos",  # 3  EE position (relative)
     "robot0_base_to_eef_quat",  # 4  EE rotation (relative)
-    "robot0_gripper_qpos",      # 2  gripper qpos
+    "robot0_gripper_qpos",  # 2  gripper qpos
 )
 
 _CAMERAS = {
@@ -68,27 +67,51 @@ def main() -> None:
     ap.add_argument("--host", default="localhost", help="Policy server host.")
     ap.add_argument("--port", type=int, default=8000, help="Policy server port.")
     ap.add_argument("--num-trials", type=int, default=10, help="Number of rollouts.")
-    ap.add_argument("--max-steps", type=int, default=None,
-                    help="Max env steps per rollout. Defaults to the task horizon.")
-    ap.add_argument("--replan-steps", type=int, default=10,
-                    help="How many actions of each returned chunk to execute before re-querying.")
+    ap.add_argument(
+        "--max-steps", type=int, default=None, help="Max env steps per rollout. Defaults to the task horizon."
+    )
+    ap.add_argument(
+        "--replan-steps",
+        type=int,
+        default=None,
+        help="How many actions of each returned chunk to execute before re-querying. Default (None) "
+        "executes the FULL returned chunk (= the model's action_horizon), matching training/serving; "
+        "this policy degrades badly on partial-chunk execution.",
+    )
     ap.add_argument("--camera-size", type=int, default=256, help="Camera height/width for the env.")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--video-dir", type=pathlib.Path, default=None,
-                    help="If set, save mp4 rollouts here (needs imageio).")
-    ap.add_argument("--num-videos", type=int, default=5,
-                    help="Max number of rollout videos to save when --video-dir is set (0 = none).")
-    ap.add_argument("--action-dist-samples", type=int, default=0,
-                    help="On saved videos, overlay the policy's action distribution: at each replan, "
-                         "sample this many extra action chunks and draw their predicted EE paths "
-                         "(translucent) plus the executed one (bright). 0 = off. Adds N inferences "
-                         "per replan on video trials only.")
-    ap.add_argument("--action-dist-scale", type=float, default=0.25,
-                    help="Target world length (metres) of the executed chunk's drawn path in the "
-                         "action-distribution overlay; the draw scale is derived from it and shared "
-                         "by all candidates, so their relative spread stays faithful. Tune for size.")
-    ap.add_argument("--output-json", type=pathlib.Path, default=None,
-                    help="If set, write a JSON summary (success rate + per-trial results) here.")
+    ap.add_argument(
+        "--video-dir", type=pathlib.Path, default=None, help="If set, save mp4 rollouts here (needs imageio)."
+    )
+    ap.add_argument(
+        "--num-videos",
+        type=int,
+        default=5,
+        help="Max number of rollout videos to save when --video-dir is set (0 = none).",
+    )
+    ap.add_argument(
+        "--action-dist-samples",
+        type=int,
+        default=0,
+        help="On saved videos, overlay the policy's action distribution: at each replan, "
+        "sample this many extra action chunks and draw their predicted EE paths "
+        "(translucent) plus the executed one (bright). 0 = off. Adds N inferences "
+        "per replan on video trials only.",
+    )
+    ap.add_argument(
+        "--action-dist-scale",
+        type=float,
+        default=0.25,
+        help="Target world length (metres) of the executed chunk's drawn path in the "
+        "action-distribution overlay; the draw scale is derived from it and shared "
+        "by all candidates, so their relative spread stays faithful. Tune for size.",
+    )
+    ap.add_argument(
+        "--output-json",
+        type=pathlib.Path,
+        default=None,
+        help="If set, write a JSON summary (success rate + per-trial results) here.",
+    )
     args = ap.parse_args()
 
     env = create_env(
@@ -147,18 +170,26 @@ def main() -> None:
                 extras = [np.asarray(client.infer(element)["actions"]) for _ in range(args.action_dist_samples)]
                 candidates = [action_chunk, *extras]  # executed chunk is index 0
 
-            for action in action_chunk[: args.replan_steps]:
+            # None -> execute the full returned chunk (= the model's action_horizon). Deriving it from
+            # the chunk length keeps the client config-free: no hardcoded horizon here.
+            replan = args.replan_steps if args.replan_steps is not None else len(action_chunk)
+            for action in action_chunk[:replan]:
                 obs, _, _, _ = env.step(_lerobot_action_to_env(np.asarray(action)))
                 step += 1
                 if record:
                     frame = _image(obs, _CAMERAS["observation/image"])
                     if overlay_on:
                         frame = _ov.draw_overlay(
-                            frame, projector, np.asarray(obs["robot0_eef_pos"]),
-                            np.asarray(obs["robot0_base_quat"]), candidates,
-                            executed_idx=0, target_len=args.action_dist_scale)
+                            frame,
+                            projector,
+                            np.asarray(obs["robot0_eef_pos"]),
+                            np.asarray(obs["robot0_base_quat"]),
+                            candidates,
+                            executed_idx=0,
+                            target_len=args.action_dist_scale,
+                        )
                     frames.append(frame)
-                if env._check_success():  # noqa: SLF001 - robosuite's success hook
+                if env._check_success():
                     success = True
                     break
                 if step >= max_steps:

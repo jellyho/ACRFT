@@ -109,8 +109,13 @@ class Observation(Generic[ArrayT]):
     # Pi0RLT specific fields.
 
     # Scalar task progress in [0, 1] (1 = task succeeded), used as an auxiliary target for the RL
-    # token. Only populated when the data config injects it; see training/robocasa_progress.py.
+    # token. Only populated when the data config injects it; see training/progress.py.
     progress: at.Float[ArrayT, "*b"] | None = None
+
+    # Episode index of each frame, a TRAINING-only label used by the RL token's episode-adversarial
+    # term (make z_rl un-decodable into "which demo"). Only populated when the data config injects it
+    # (include_episode_index=True); absent at inference/serving, where there is no episode.
+    episode_index: at.Int[ArrayT, "*b"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
@@ -133,6 +138,7 @@ class Observation(Generic[ArrayT]):
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
             progress=data.get("progress"),
+            episode_index=data.get("episode_index"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -213,6 +219,7 @@ def preprocess_observation(
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
         progress=observation.progress,
+        episode_index=observation.episode_index,
     )
 
 

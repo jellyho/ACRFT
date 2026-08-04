@@ -70,28 +70,57 @@ def obs_to_element(obs: dict, prompt: str) -> dict:
     }
 
 
-def run_trials(env, policy_fn, *, task: str, num_trials: int, seed: int = 0, replan_steps: int = 5,
-               max_steps: int | None = None, on_trial=None) -> dict:
+def run_trials(
+    env,
+    policy_fn,
+    *,
+    task: str,
+    num_trials: int,
+    seed: int = 0,
+    replan_steps: int = 10,  # = the model's action_horizon (chunk size); execute a full chunk per replan
+    max_steps: int | None = None,
+    on_trial=None,
+    on_step=None,
+) -> dict:
     """Roll out ``policy_fn`` for ``num_trials`` and return {successes, num_trials, success_rate, trials}.
 
-    ``policy_fn(element) -> action_chunk`` (np array [chunk, 12], raw LeRobot action space).
-    ``on_trial(trial_index, success, steps)`` is an optional per-trial callback (e.g. logging).
+    ``policy_fn(element)`` returns either an action chunk (np array [chunk, 12], raw LeRobot action
+    space) or ``(chunk, num_to_execute, info)``. The second form is what adaptive chunking needs: a
+    critic that scores every prefix picks how far to commit, so the executed length varies per replan
+    and cannot come from a fixed ``replan_steps``. ``info`` is passed straight through to ``on_step``
+    and is never interpreted here.
+
+    ``on_trial(trial_index, success, steps)`` fires once per trial (e.g. logging).
+    ``on_step(obs, info, step)`` fires after every env step, which is where a caller renders frames.
     """
     max_steps = max_steps or int(getattr(env, "horizon", 500))
     successes, trials = 0, []
     for trial in range(num_trials):
-        # Deterministic per-trial scene: reseed env.rng before reset so trial i is identical across
-        # checkpoints regardless of how the rollout consumed the RNG.
+        # Deterministic per-trial scene: trial i has to depend only on (seed, trial), never on how
+        # much RNG the preceding trials happened to consume - otherwise a mode whose rollouts run
+        # longer sees different scenes, and two policies are no longer compared on the same task.
+        # env.rng covers the samplers that take it explicitly; some robosuite placement samplers read
+        # the legacy global RNG instead, so both are pinned here rather than once per eval.
         env.rng = np.random.default_rng(seed + trial)
+        np.random.seed(seed + trial)
         obs = env.reset()
         prompt = env.get_ep_meta().get("lang", task)
         success, step = False, 0
         while step < max_steps and not success:
-            chunk = np.asarray(policy_fn(obs_to_element(obs, prompt)))
-            for action in chunk[:replan_steps]:
+            out = policy_fn(obs_to_element(obs, prompt))
+            info = None
+            if isinstance(out, tuple):
+                chunk, n_exec, *rest = out
+                info = rest[0] if rest else None
+            else:
+                chunk, n_exec = out, replan_steps
+            chunk = np.asarray(chunk)
+            for action in chunk[: max(int(n_exec), 1)]:
                 obs, _, _, _ = env.step(lerobot_action_to_env(np.asarray(action)))
                 step += 1
-                if env._check_success():  # noqa: SLF001 - robosuite's success hook
+                if on_step is not None:
+                    on_step(obs, info, step)
+                if env._check_success():
                     success = True
                     break
                 if step >= max_steps:

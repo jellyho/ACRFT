@@ -2,8 +2,9 @@ exclude: third_party/
 
 repos:
   - repo: https://github.com/astral-sh/uv-pre-commit
-    # uv version.
-    rev: 0.5.14
+    # uv version. Must emit lockfile revision 3 to match the committed uv.lock (older uv
+    # rewrites it to an earlier schema); keep in step with the uv used to update deps.
+    rev: 0.8.17
     hooks:
       - id: uv-lock
   - repo: https://github.com/astral-sh/ruff-pre-commit

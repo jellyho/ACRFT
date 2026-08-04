@@ -39,11 +39,19 @@ def _target_asset_dirs(tasks: list[str], hf_user: str) -> list[Path]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--output-dir", type=Path, default=Path("/data5/jellyho/robocasa365"),
-                    help="Dir with the converted per-task datasets.")
+    ap.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("/data5/jellyho/robocasa365"),
+        help="Dir with the converted per-task datasets.",
+    )
     ap.add_argument("--hf-user", type=str, default="jellyho", help="Owner used in the repo id / asset path.")
-    ap.add_argument("--max-frames-per-task", type=int, default=None,
-                    help="Optionally subsample this many frames per task (default: use all).")
+    ap.add_argument(
+        "--max-frames-per-task",
+        type=int,
+        default=None,
+        help="Optionally subsample this many frames per task (default: use all).",
+    )
     args = ap.parse_args()
 
     tasks = sorted(p.name for p in args.output_dir.iterdir() if (p / "meta").is_dir())

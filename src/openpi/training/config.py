@@ -22,13 +22,14 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.robocasa_policy as robocasa_policy
+import openpi.policies.yam_policy as yam_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.polaris_config as polaris_config
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
-import openpi.training.robocasa_progress as robocasa_progress
+import openpi.training.progress as _progress
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
@@ -92,6 +93,12 @@ class DataConfig:
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
+
+    # Subset of episode indices to load (LeRobot v3 `episodes=`); None loads every episode. Used to
+    # train on success-only teleop data — the factory resolves the list, so downstream (including the
+    # norm-stats pass, which shares create_torch_dataset) sees exactly the trained-on episodes. The
+    # filtered dataset keeps ORIGINAL episode_index values, so progress labels still line up.
+    episodes: tuple[int, ...] | None = None
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -373,6 +380,12 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
     # Inject a scalar `progress` label (time-to-success, from the sparse reward) into every sample.
     # Needed by Pi0RLT's progress objective; harmless but wasted work otherwise.
     include_progress: bool = False
+    # Dataset column holding the sparse success signal that defines "task done" for `progress`.
+    # Defaults to the LeRobot convention; a dataset without it falls back to episode-end-is-the-goal.
+    reward_key: str = "next.reward"
+    # Carry each frame's `episode_index` through to the model. Needed by Pi0RLT's episode-adversarial
+    # objective (make z_rl un-decodable into "which demo"); train-only, dropped at inference.
+    include_episode_index: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -387,10 +400,15 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             "actions": "action",
             "prompt": "prompt",
         }
+        # `episode_index` is already on the raw LeRobot item, so it only has to survive the repack.
+        if self.include_episode_index:
+            structure["episode_index"] = "episode_index"
         repack_inputs = []
         if self.include_progress:
             structure["progress"] = "progress"
-            repack_inputs.append(robocasa_progress.AddProgress(robocasa_progress.compute_progress_labels(self.repo_id)))
+            repack_inputs.append(
+                _progress.AddProgress(_progress.compute_progress_labels(self.repo_id, reward_key=self.reward_key))
+            )
         repack_inputs.append(_transforms.RepackTransform(structure))
         repack_transform = _transforms.Group(inputs=repack_inputs)
 
@@ -417,6 +435,86 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             # RoboCasa's action column is named "action" (singular), unlike the default "actions".
             action_sequence_keys=("action",),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotYAMDataConfig(DataConfigFactory):
+    """Data config for the YAM bimanual dataset (jellyho/yam_lego_taxi, LeRobot v3).
+
+    Three cameras, a 42-d state, and a 14-d JOINT action (per arm: 6 joints + 1 gripper). The action
+    delta convention is selectable, since it is the thing this dataset exists to ablate:
+
+      joint  relative joint action: subtract the current joint position, so the target is a
+             displacement from where the arm is. Grippers stay absolute.
+      none   absolute joint targets, as logged.
+    """
+
+    delta_mode: str = "joint"  # joint (relative) | none (absolute)
+    include_progress: bool = False
+    reward_key: str = "next.reward"
+    # Train on successful episodes only. The YAM teleop set is 100 success / 19 fail; with this off
+    # (the default) BC clones the failures too, which is what a critic wants as negatives later but
+    # is not what a clean BC policy wants. On, it resolves the success episode list from
+    # outcomes.jsonl and trains (and computes norm stats) on exactly those.
+    success_only: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        structure = {
+            "observation/image": "observation.images.agentview",
+            "observation/wrist_image": "observation.images.wrist_left",
+            "observation/image_right": "observation.images.wrist_right",
+            "observation/state": "observation.state",
+            "actions": "action",
+            "prompt": "prompt",
+        }
+        repack_inputs = []
+        if self.include_progress:
+            structure["progress"] = "progress"
+            repack_inputs.append(
+                _progress.AddProgress(_progress.compute_progress_labels(self.repo_id, reward_key=self.reward_key))
+            )
+        repack_inputs.append(_transforms.RepackTransform(structure))
+        repack_transform = _transforms.Group(inputs=repack_inputs)
+
+        data_transforms = _transforms.Group(
+            inputs=[yam_policy.YAMInputs(model_type=model_config.model_type)],
+            outputs=[yam_policy.YAMOutputs()],
+        )
+
+        if self.delta_mode == "joint":
+            # Subtract the current joint position from each joint action dim; grippers absolute.
+            # The state's joint positions sit at 0..5 (left) and 21..26 (right); DeltaActions reads
+            # state[i] for action dim i, so the mask has to align them - build it explicitly.
+            ref = yam_policy.joint_delta_reference()  # action_dim -> state index, -1 = absolute
+            # DeltaActions subtracts state[..., :dims] where mask is True, i.e. it assumes action dim
+            # i references state dim i. YAM's right joints reference state 21.., so a plain mask does
+            # not line up; a small dedicated transform handles the arbitrary reference.
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.JointDeltaActions(ref)],
+                outputs=[_transforms.JointAbsoluteActions(ref)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+        # Resolve the success-only episode subset now (startup), so both training and the norm-stats
+        # pass see the same episodes. None => train on everything.
+        episodes = None
+        if self.success_only:
+            episodes = _progress.success_episode_indices(self.repo_id, reward_key=self.reward_key)
+            if episodes is None:
+                raise ValueError(
+                    f"success_only=True but {self.repo_id} has no outcomes.jsonl and no "
+                    f"'{self.reward_key}' column to derive success from."
+                )
+            episodes = tuple(episodes)
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=("action",),
+            episodes=episodes,
         )
 
 
@@ -535,6 +633,8 @@ class TrainConfig:
     project_name: str = "acrft"
     # Optional wandb entity (team/user). None -> your default wandb entity.
     wandb_entity: str | None = None
+    # Optional wandb group: groups related runs (e.g. one sweep) together in the wandb UI. None -> ungrouped.
+    wandb_group: str | None = None
     # Experiment name. Will be used to name the metadata and checkpoint directories.
     exp_name: str = tyro.MISSING
 
@@ -595,6 +695,11 @@ class TrainConfig:
     rlt_probe_eval_interval: int = 0
     # Rollouts per policy per probe eval.
     rlt_probe_eval_trials: int = 20
+    # Base seed for the probe eval. Trial i always runs scene `seed + i` and the policy always starts
+    # from the same sampling noise, so every eval — at every step, and across every run that keeps
+    # this value — is scored on an identical set of episodes. Change it only to draw a different
+    # (still fixed) eval set; the numbers are then not comparable to runs using the old value.
+    rlt_probe_eval_seed: int = 0
     # Number of episodes drawn as trajectory paths in the RLT embedding visualization. Also sets the
     # held-out-episode probe split (half fit / half scored), so keep it >= 4.
     rlt_vis_num_trajectories: int = 8
@@ -654,9 +759,7 @@ class TrainConfig:
 # Only the RLT configs point here. The BC configs keep asset_id=<repo_id>: serving reads norm stats
 # from the checkpoint's own assets dir keyed by asset_id, so changing it would break the already
 # trained pi05_robocasa_<Task> checkpoints.
-_ROBOCASA_SHARED_ASSETS = AssetsConfig(
-    assets_dir="./examples/robocasa/norm_stats", asset_id="robocasa365_shared"
-)
+_ROBOCASA_SHARED_ASSETS = AssetsConfig(assets_dir="./examples/robocasa/norm_stats", asset_id="robocasa365_shared")
 
 _CONFIGS = [
     #
@@ -874,7 +977,7 @@ _CONFIGS = [
     TrainConfig(
         name="pi05_robocasa",
         # action_horizon is the predicted action-chunk length (RoboCasa runs at 20 fps); tune as needed.
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
         data=LeRobotRoboCasaDataConfig(
             repo_id="jellyho/robocasa365-PrepareCoffee",
             base_config=DataConfig(prompt_from_task=True),
@@ -887,7 +990,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     ),
     # RLT ("RL Token") variant of pi05_robocasa: learns the compact RL-token bottleneck jointly with
     # the BC finetune (language-conditioned token, single forward). Same data/optimizer as pi05_robocasa;
@@ -898,7 +1001,7 @@ _CONFIGS = [
         name="pi05_robocasa_rlt",
         model=pi0_rlt.Pi0RLTConfig(
             pi05=True,
-            action_horizon=10,
+            action_horizon=16,
             discrete_state_input=False,
             # readout head by default: RLT loss does not reshape the backbone (BC does). Flip to True to
             # let the RLT loss flow into the VLM features.
@@ -922,7 +1025,7 @@ _CONFIGS = [
         ),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
     ),
@@ -1137,6 +1240,8 @@ _CONFIGS = [
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")
+
+
 def _robocasa_task_config(task: str) -> TrainConfig:
     """A pi05 fine-tune config for a single RoboCasa 365 target task (same recipe as pi05_robocasa).
 
@@ -1145,7 +1250,7 @@ def _robocasa_task_config(task: str) -> TrainConfig:
     """
     return TrainConfig(
         name=f"pi05_robocasa_{task}",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
         data=LeRobotRoboCasaDataConfig(
             repo_id=f"jellyho/robocasa365-{task}",
             base_config=DataConfig(prompt_from_task=True),
@@ -1158,24 +1263,62 @@ def _robocasa_task_config(task: str) -> TrainConfig:
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     )
 
 
 # The 50 published RoboCasa 365 target tasks (atomic + composite).
 _ROBOCASA_TARGET_TASKS = (
-    "ArrangeBreadBasket", "ArrangeTea", "BreadSelection", "CategorizeCondiments", "CloseBlenderLid",
-    "CloseFridge", "CloseToasterOvenDoor", "CoffeeSetupMug", "CuttingToolSelection", "DeliverStraw",
-    "GarnishPancake", "GatherTableware", "GetToastedBread", "HeatKebabSandwich", "KettleBoiling",
-    "LoadDishwasher", "MakeIceLemonade", "NavigateKitchen", "OpenCabinet", "OpenDrawer",
-    "OpenStandMixerHead", "PackIdenticalLunches", "PanTransfer", "PickPlaceCounterToCabinet",
-    "PickPlaceCounterToStove", "PickPlaceDrawerToCounter", "PickPlaceSinkToCounter",
-    "PickPlaceToasterToCounter", "PortionHotDogs", "PreSoakPan", "PrepareCoffee",
-    "RecycleBottlesByType", "RinseSinkBasin", "ScrubCuttingBoard", "SearingMeat",
-    "SeparateFreezerRack", "SetUpCuttingStation", "SlideDishwasherRack", "StackBowlsCabinet",
-    "SteamInMicrowave", "StirVegetables", "StoreLeftoversInBowl", "TurnOffStove",
-    "TurnOnElectricKettle", "TurnOnMicrowave", "TurnOnSinkFaucet", "WaffleReheat",
-    "WashFruitColander", "WashLettuce", "WeighIngredients",
+    "ArrangeBreadBasket",
+    "ArrangeTea",
+    "BreadSelection",
+    "CategorizeCondiments",
+    "CloseBlenderLid",
+    "CloseFridge",
+    "CloseToasterOvenDoor",
+    "CoffeeSetupMug",
+    "CuttingToolSelection",
+    "DeliverStraw",
+    "GarnishPancake",
+    "GatherTableware",
+    "GetToastedBread",
+    "HeatKebabSandwich",
+    "KettleBoiling",
+    "LoadDishwasher",
+    "MakeIceLemonade",
+    "NavigateKitchen",
+    "OpenCabinet",
+    "OpenDrawer",
+    "OpenStandMixerHead",
+    "PackIdenticalLunches",
+    "PanTransfer",
+    "PickPlaceCounterToCabinet",
+    "PickPlaceCounterToStove",
+    "PickPlaceDrawerToCounter",
+    "PickPlaceSinkToCounter",
+    "PickPlaceToasterToCounter",
+    "PortionHotDogs",
+    "PreSoakPan",
+    "PrepareCoffee",
+    "RecycleBottlesByType",
+    "RinseSinkBasin",
+    "ScrubCuttingBoard",
+    "SearingMeat",
+    "SeparateFreezerRack",
+    "SetUpCuttingStation",
+    "SlideDishwasherRack",
+    "StackBowlsCabinet",
+    "SteamInMicrowave",
+    "StirVegetables",
+    "StoreLeftoversInBowl",
+    "TurnOffStove",
+    "TurnOnElectricKettle",
+    "TurnOnMicrowave",
+    "TurnOnSinkFaucet",
+    "WaffleReheat",
+    "WashFruitColander",
+    "WashLettuce",
+    "WeighIngredients",
 )
 _CONFIGS.extend(_robocasa_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
 
@@ -1194,7 +1337,14 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
     return TrainConfig(
         name=f"pi05_robocasa_{task}_rlt",
         model=pi0_rlt.Pi0RLTConfig(
-            pi05=True, action_horizon=10, discrete_state_input=False, rlt_backbone_gradient=False, rlt_bc_probe=True
+            pi05=True,
+            action_horizon=16,
+            discrete_state_input=False,
+            rlt_backbone_gradient=False,
+            rlt_bc_probe=True,
+            # RoboCasa actions are 12-d; the rest of the model's 32-d action space is zero padding
+            # that the probe should not waste itself regressing (see rlt_probe_action_dim).
+            rlt_probe_action_dim=12,
         ),
         data=LeRobotRoboCasaDataConfig(
             repo_id=f"jellyho/robocasa365-{task}",
@@ -1202,6 +1352,8 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
             # Cheap, and lets --model.rlt-objective switch to a progress objective without a
             # second data config.
             include_progress=True,
+            # Likewise carry episode_index so --model.rlt-objective can add '+epadv' with no data change.
+            include_episode_index=True,
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
@@ -1214,7 +1366,7 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
         ),
         num_train_steps=100_000,
         save_interval=10_000,
-        action_dist_interval=1_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
         rlt_probe_eval_interval=10_000,
@@ -1223,6 +1375,60 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
 
 
 _CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
+
+
+def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
+    """Pi0RLT on the YAM bimanual dataset (real teleop data).
+
+    Defaults chosen for this setting: the parallel decoder and no-proprio token (the best RLT variant
+    on RoboCasa - the decoder cannot bypass the bottleneck via neighbour context, and proprio is left
+    out because a downstream critic sees it directly), and a relative joint action (subtract the
+    current joint position). delta_mode is joint (relative) or none (absolute); it tags the run name
+    so the two do not share a checkpoint dir, and the untagged name is the relative-joint default.
+
+    Because this is real data there is no sim: no rollout / probe-policy evaluation, and no
+    behaviour-cloning probe actor either (it exists only to read out the token for the sim probe).
+    The RLT bottleneck is judged by its reconstruction loss and the BC loss alone.
+    """
+    tag = "" if delta_mode == "joint" else f"_{delta_mode}"
+    return TrainConfig(
+        name=f"pi05_yam_lego_taxi{tag}_rlt",
+        model=pi0_rlt.Pi0RLTConfig(
+            pi05=True,
+            # 30 frames at YAM's 30 fps is exactly a one-second window. The 16 this started with was
+            # carried over from the RoboCasa configs and covers only 0.53 s - short for a bimanual
+            # chunk, and it is also the window the RLT bottleneck has to summarise into one token.
+            action_horizon=30,
+            discrete_state_input=False,
+            rlt_backbone_gradient=False,
+            rlt_decoder_mode="parallel",  # pardec: best on RoboCasa, un-bypassable bottleneck
+            rlt_include_proprio=False,  # noprop: best on RoboCasa; a critic reads proprio directly
+            rlt_bc_probe=False,  # real data, no sim probe to feed - skip the probe actor entirely
+            rlt_probe_action_dim=14,
+        ),
+        data=LeRobotYAMDataConfig(
+            repo_id="jellyho/yam_lego_taxi",
+            delta_mode=delta_mode,
+            include_progress=False,  # success is episode-level (outcomes.jsonl), no per-frame reward
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=0,
+        rlt_monitor_interval=1_000,
+        rlt_vis_interval=10_000,
+        rlt_probe_eval_interval=0,  # no sim: nothing to roll out
+    )
+
+
+_CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none"))
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 

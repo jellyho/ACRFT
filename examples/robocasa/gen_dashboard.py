@@ -40,17 +40,44 @@ PROJECT = {
     ],
     # Pipeline stages, shown as the "Implemented" column.
     "implemented": [
-        ("Stage 1 · Pi0RLT training", "`models/pi0_rlt.py` + `run_train_rlt.sh`: a language-conditioned RL-token bottleneck learned JOINTLY with the BC (flow-matching) fine-tune, from one backbone forward (≈1.12× BC cost). Objectives: reconstruction / progress / both. Stop-gradient readout by default (backbone-grad breaks the policy)."),
-        ("Latent BC probe + inline eval", "An optional flow-matching head on the FROZEN token (`rlt_bc_probe`) measures how much policy the latent alone recovers. Every 10k steps an in-process headless sim eval rolls out both the VLA and the probe policy — no separate server."),
-        ("Stage 2 · Annotation", "`annotate_rlt.py`: run the trained VLA over every demo frame ONCE (shared prefix forward) and write flat memmap arrays — rl_token, executed chunk, N base-policy candidates, reward, per-episode progress. Critic training then never touches the VLA or video."),
-        ("Stage 3 · Critic", "`rlt_critic/critic.py` + `train_rlt_critic.py`: QC (flat per-chunk Q) or ARQ (per-prefix Q, causal transformer for adaptive chunk-length), scalar or distributional, ensembled. Data is GPU-resident; updates fused with lax.scan."),
-        ("Progress labels", "`robocasa_progress.py`: task progress = per-episode time-to-success (0 at start → 1 at success), derived from the sparse success reward. Normalized per demo, NOT a discounted value — the discount is left to the critic."),
-        ("Monitoring & viz", "wandb project `acrft`: loss components, participation-ratio / bypass-ratio, and an embedding visualization (PCA + t-SNE/UMAP trajectories, camera view on hover). See the RLT metrics guide below."),
+        (
+            "Stage 1 · Pi0RLT training",
+            "`models/pi0_rlt.py` + `run_train_rlt.sh`: a language-conditioned RL-token bottleneck learned JOINTLY with the BC (flow-matching) fine-tune, from one backbone forward (≈1.12× BC cost). Objectives: reconstruction / progress / both. Stop-gradient readout by default (backbone-grad breaks the policy).",
+        ),
+        (
+            "Latent BC probe + inline eval",
+            "An optional flow-matching head on the FROZEN token (`rlt_bc_probe`) measures how much policy the latent alone recovers. Every 10k steps an in-process headless sim eval rolls out both the VLA and the probe policy — no separate server.",
+        ),
+        (
+            "Stage 2 · Annotation",
+            "`annotate_rlt.py`: run the trained VLA over every demo frame ONCE (shared prefix forward) and write flat memmap arrays — rl_token, executed chunk, N base-policy candidates, reward, per-episode progress. Critic training then never touches the VLA or video.",
+        ),
+        (
+            "Stage 3 · Critic",
+            "`rlt_critic/critic.py` + `train_rlt_critic.py`: QC (flat per-chunk Q) or ARQ (per-prefix Q, causal transformer for adaptive chunk-length), scalar or distributional, ensembled. Data is GPU-resident; updates fused with lax.scan.",
+        ),
+        (
+            "Progress labels",
+            "`progress.py`: task progress = per-episode time-to-success (0 at start → 1 at success), derived from the sparse success reward. Normalized per demo, NOT a discounted value — the discount is left to the critic.",
+        ),
+        (
+            "Monitoring & viz",
+            "wandb project `acrft`: loss components, participation-ratio / bypass-ratio, and an embedding visualization (PCA + t-SNE/UMAP trajectories, camera view on hover). See the RLT metrics guide below.",
+        ),
     ],
     "roadmap": [
-        ("Ablation sweep", "Re-run recon / progress / recon+progress × {with, without proprio}, all stop-grad, with the latent-probe sim eval, on the fixed per-episode progress labels."),
-        ("Critic on real tokens", "Annotate PrepareCoffee, train QC and ARQ critics, and read the value curves against the demo returns."),
-        ("Deployment policy", "Score the N candidate chunks with the critic and pick (chunk, commit-length); plug the adaptive-chunk policy into the sim eval."),
+        (
+            "Ablation sweep",
+            "Re-run recon / progress / recon+progress × {with, without proprio}, all stop-grad, with the latent-probe sim eval, on the fixed per-episode progress labels.",
+        ),
+        (
+            "Critic on real tokens",
+            "Annotate PrepareCoffee, train QC and ARQ critics, and read the value curves against the demo returns.",
+        ),
+        (
+            "Deployment policy",
+            "Score the N candidate chunks with the critic and pick (chunk, commit-length); plug the adaptive-chunk policy into the sim eval.",
+        ),
         ("Scale out", "Extend beyond PrepareCoffee to more of the 50 target tasks / a generalist critic."),
     ],
 }
@@ -114,78 +141,154 @@ RLT = {
         "tokens), each 2048-wide because that is PaliGemma's hidden width."
     ),
     "switches": [
-        ("--backbone-grad", "off",
-         "Lets the RLT loss reshape the VLM backbone. Off = the token is a pure readout head and BC "
-         "alone shapes the VLM (the paper's setting). BC always flows into the backbone either way."),
-        ("--no-proprio", "keep",
-         "Build the token from image+language only (no proprio token, no proprio reconstruction). "
-         "Paper-faithful: the critic then takes (z_rl, proprio) and supplies proprio itself."),
-        ("--objective STR", "reconstruction",
-         "reconstruction / progress / reconstruction+progress. Progress = per-episode time-to-success."),
-        ("--scalar-head", "distributional",
-         "Progress head = MSE regression instead of the HL-Gauss histogram."),
-        ("--no-target-sg", "off",
-         "Stops stop-gradient'ing the reconstruction target. Collapse-prone — try --backbone-grad alone first."),
-        ("--parallel-decoder", "off",
-         "Decodes every token from z_rl alone, with no teacher forcing, so the bottleneck cannot be "
-         "bypassed via neighbouring-token context. Deviates from the paper's Eq. 2 — check "
-         "rlt/bypass_ratio before reaching for it."),
+        (
+            "--backbone-grad",
+            "off",
+            "Lets the RLT loss reshape the VLM backbone. Off = the token is a pure readout head and BC "
+            "alone shapes the VLM (the paper's setting). BC always flows into the backbone either way.",
+        ),
+        (
+            "--no-proprio",
+            "keep",
+            "Build the token from image+language only (no proprio token, no proprio reconstruction). "
+            "Paper-faithful: the critic then takes (z_rl, proprio) and supplies proprio itself.",
+        ),
+        (
+            "--objective STR",
+            "reconstruction",
+            "reconstruction / progress / reconstruction+progress. Progress = per-episode time-to-success.",
+        ),
+        ("--scalar-head", "distributional", "Progress head = MSE regression instead of the HL-Gauss histogram."),
+        (
+            "--no-target-sg",
+            "off",
+            "Stops stop-gradient'ing the reconstruction target. Collapse-prone — try --backbone-grad alone first.",
+        ),
+        (
+            "--parallel-decoder",
+            "off",
+            "Decodes every token from z_rl alone, with no teacher forcing, so the bottleneck cannot be "
+            "bypassed via neighbouring-token context. Deviates from the paper's Eq. 2 — check "
+            "rlt/bypass_ratio before reaching for it.",
+        ),
         ("--loss-weight F", "1.0", "Weight of the RLT loss relative to the BC loss."),
     ],
     "metrics": [
-        ("step", "bc_loss", "π0.5 flow-matching loss on its own (every config emits it).",
-         "Compare across runs instead of the top-level <span class='mono'>loss</span>, which for an "
-         "RLT config is BC + λ·RLT and so is not comparable to a BC run. Persistently higher than "
-         "the BC baseline ⇒ RLT is costing you policy quality."),
-        ("step", "rlt/loss_recon", "Autoregressive reconstruction MSE of z̄ (paper Eq. 2).",
-         "Judge it against the target's own variance: with mean|z̄| ≈ 0.5 a “predict the mean” "
-         "baseline sits near 0.4, so it must fall well below that to mean anything. A very low value "
-         "is NOT by itself proof the token is carrying information — check bypass_ratio."),
-        ("step", "rlt/loss_proprio", "Proprio reconstructed from z_rl.",
-         "Usually the first term to drop. Falling alone, while recon stalls, means the bottleneck is "
-         "memorising proprio and discarding vision."),
-        ("step", "rlt/z_batch_std", "Spread of z_rl across the batch.",
-         "Must stay clearly above 0. → 0 is token collapse: every state maps to the same vector."),
-        ("step", "rlt/loss_progress", "Progress head loss (HL-Gauss cross-entropy, or MSE).",
-         "Only present when the objective includes progress. For the distributional head the floor is "
-         "the target's own entropy, not 0."),
-        ("step", "rlt/progress_mae", "Mean absolute progress error, in progress units.",
-         "The interpretable one: 0.1 ≈ 10% of the success horizon (~87 frames here). Falling is good."),
-        ("step", "rlt/progress_entropy", "Spread of the predicted progress distribution.",
-         "Distributional head only. Should narrow as the token gets more certain about how far away "
-         "success is; staying at log(bins) means the head is not learning."),
-        ("monitor", "rlt/target_abs_mean", "Scale of the reconstruction target, mean|z̄|.",
-         "The yardstick for reading loss_recon. Sudden moves mean the backbone representation is "
-         "shifting under the bottleneck."),
-        ("monitor", "rlt/bypass_ratio", "recon with ANOTHER sample's z_rl ÷ recon with the true one.",
-         "The decoder is teacher-forced on the true previous embeddings, and adjacent SigLIP tokens "
-         "are highly correlated, so it can score well while ignoring the token. ≈1 ⇒ the token is "
-         "being bypassed and a low recon loss is an illusion. ≫1 ⇒ the token really carries what the "
-         "decoder depends on."),
-        ("monitor", "rlt/participation_ratio", "Effective dimensionality (Σλ)²/Σλ² of the token covariance.",
-         "Should rise as the representation gets richer. Near 1 = collapsed onto a single direction. "
-         "Capped by the batch size."),
-        ("viz", "rlt/probe_progress_r2", "Held-out-EPISODE linear probe, z_rl → task progress.",
-         "The headline representation-quality number: it is scored on episodes the probe never saw, "
-         "so it measures whether progress is linearly decodable AND generalises — exactly what the "
-         "downstream critic needs. Rising is what you want."),
-        ("viz", "rlt/progress_spearman", "Within-episode monotonicity of PC1 against time.",
-         "Fit-free companion. A curved trajectory legitimately lowers it, so a low value with a high "
-         "probe R² is fine — trust the probe first."),
-        ("viz", "rlt/embedding_hover", "PCA scatter with the wrist view shown on hover.",
-         "Hover a point to see which scene that region of embedding space corresponds to. Healthy: "
-         "smooth ordered paths; unhealthy: tangled blobs."),
-        ("viz", "rlt/embedding_structure", "Distance-to-final-token curves + a cosine-similarity matrix.",
-         "Projection-free, so it stays readable before PCA does. Curves falling monotonically ⇒ the "
-         "token tracks progress. In the matrix, bright diagonal blocks only ⇒ it encodes WHICH "
-         "episode; gradients inside blocks and bands across them ⇒ it encodes the task PHASE."),
+        (
+            "step",
+            "bc_loss",
+            "π0.5 flow-matching loss on its own (every config emits it).",
+            "Compare across runs instead of the top-level <span class='mono'>loss</span>, which for an "
+            "RLT config is BC + λ·RLT and so is not comparable to a BC run. Persistently higher than "
+            "the BC baseline ⇒ RLT is costing you policy quality.",
+        ),
+        (
+            "step",
+            "rlt/loss_recon",
+            "Autoregressive reconstruction MSE of z̄ (paper Eq. 2).",
+            "Judge it against the target's own variance: with mean|z̄| ≈ 0.5 a “predict the mean” "
+            "baseline sits near 0.4, so it must fall well below that to mean anything. A very low value "
+            "is NOT by itself proof the token is carrying information — check bypass_ratio.",
+        ),
+        (
+            "step",
+            "rlt/loss_proprio",
+            "Proprio reconstructed from z_rl.",
+            "Usually the first term to drop. Falling alone, while recon stalls, means the bottleneck is "
+            "memorising proprio and discarding vision.",
+        ),
+        (
+            "step",
+            "rlt/z_batch_std",
+            "Spread of z_rl across the batch.",
+            "Must stay clearly above 0. → 0 is token collapse: every state maps to the same vector.",
+        ),
+        (
+            "step",
+            "rlt/loss_progress",
+            "Progress head loss (HL-Gauss cross-entropy, or MSE).",
+            "Only present when the objective includes progress. For the distributional head the floor is "
+            "the target's own entropy, not 0.",
+        ),
+        (
+            "step",
+            "rlt/progress_mae",
+            "Mean absolute progress error, in progress units.",
+            "The interpretable one: 0.1 ≈ 10% of the success horizon (~87 frames here). Falling is good.",
+        ),
+        (
+            "step",
+            "rlt/progress_entropy",
+            "Spread of the predicted progress distribution.",
+            "Distributional head only. Should narrow as the token gets more certain about how far away "
+            "success is; staying at log(bins) means the head is not learning.",
+        ),
+        (
+            "monitor",
+            "rlt/target_abs_mean",
+            "Scale of the reconstruction target, mean|z̄|.",
+            "The yardstick for reading loss_recon. Sudden moves mean the backbone representation is "
+            "shifting under the bottleneck.",
+        ),
+        (
+            "monitor",
+            "rlt/bypass_ratio",
+            "recon with ANOTHER sample's z_rl ÷ recon with the true one.",
+            "The decoder is teacher-forced on the true previous embeddings, and adjacent SigLIP tokens "
+            "are highly correlated, so it can score well while ignoring the token. ≈1 ⇒ the token is "
+            "being bypassed and a low recon loss is an illusion. ≫1 ⇒ the token really carries what the "
+            "decoder depends on.",
+        ),
+        (
+            "monitor",
+            "rlt/participation_ratio",
+            "Effective dimensionality (Σλ)²/Σλ² of the token covariance.",
+            "Should rise as the representation gets richer. Near 1 = collapsed onto a single direction. "
+            "Capped by the batch size.",
+        ),
+        (
+            "viz",
+            "rlt/probe_progress_r2",
+            "Held-out-EPISODE linear probe, z_rl → task progress.",
+            "The headline representation-quality number: it is scored on episodes the probe never saw, "
+            "so it measures whether progress is linearly decodable AND generalises — exactly what the "
+            "downstream critic needs. Rising is what you want.",
+        ),
+        (
+            "viz",
+            "rlt/progress_spearman",
+            "Within-episode monotonicity of PC1 against time.",
+            "Fit-free companion. A curved trajectory legitimately lowers it, so a low value with a high "
+            "probe R² is fine — trust the probe first.",
+        ),
+        (
+            "viz",
+            "rlt/embedding_hover",
+            "PCA scatter with the wrist view shown on hover.",
+            "Hover a point to see which scene that region of embedding space corresponds to. Healthy: "
+            "smooth ordered paths; unhealthy: tangled blobs.",
+        ),
+        (
+            "viz",
+            "rlt/embedding_structure",
+            "Distance-to-final-token curves + a cosine-similarity matrix.",
+            "Projection-free, so it stays readable before PCA does. Curves falling monotonically ⇒ the "
+            "token tracks progress. In the matrix, bright diagonal blocks only ⇒ it encodes WHICH "
+            "episode; gradients inside blocks and bands across them ⇒ it encodes the task PHASE.",
+        ),
     ],
     "combos": [
         ("recon ↓ · participation ↑ · probe R² ↑", "good", "Learning a genuinely useful compression."),
-        ("recon ↓ · bypass_ratio ≈ 1", "bad",
-         "The decoder is reconstructing from context and ignoring the token — the low loss is empty."),
-        ("recon ↓ · participation flat · probe R² flat", "bad",
-         "Compressing into something easy to reconstruct but not useful."),
+        (
+            "recon ↓ · bypass_ratio ≈ 1",
+            "bad",
+            "The decoder is reconstructing from context and ignoring the token — the low loss is empty.",
+        ),
+        (
+            "recon ↓ · participation flat · probe R² flat",
+            "bad",
+            "Compressing into something easy to reconstruct but not useful.",
+        ),
         ("z_batch_std → 0", "bad", "Token collapse."),
         ("bc_loss above the BC baseline", "warn", "RLT is trading away policy quality — lower --loss-weight."),
     ],
@@ -216,8 +319,18 @@ TASKS = [
     ("TurnOnSinkFaucet", "atomic", 400, "Turn on the sink faucet."),
     # composite
     ("ArrangeBreadBasket", "composite", 2900, "Arrange assorted bread into the serving basket."),
-    ("ArrangeTea", "composite", 1500, "Move the kettle to the tray, add the mug from the cabinet, then close the cabinet doors."),
-    ("BreadSelection", "composite", 1300, "Select a croissant onto the cutting board, then add a jar of jam from the cabinet."),
+    (
+        "ArrangeTea",
+        "composite",
+        1500,
+        "Move the kettle to the tray, add the mug from the cabinet, then close the cabinet doors.",
+    ),
+    (
+        "BreadSelection",
+        "composite",
+        1300,
+        "Select a croissant onto the cutting board, then add a jar of jam from the cabinet.",
+    ),
     ("CategorizeCondiments", "composite", 1100, "Sort the condiment bottles into groups by type."),
     ("CuttingToolSelection", "composite", 800, "Choose the right cutting tool and set it on the cutting board."),
     ("DeliverStraw", "composite", 1700, "Retrieve a straw and deliver it with the drink."),
@@ -256,12 +369,25 @@ _MAX_HORIZON = max(h for _, _, h, _ in TASKS)
 # episode-specific instructions that describe the randomized objects/config. Recompute with:
 #   uv run examples/robocasa/make_previews.py --instruction-counts (writes assets/instruction_counts.json)
 INSTRUCTION_COUNTS = {
-    "SeparateFreezerRack": 409, "StirVegetables": 238, "WashFruitColander": 157,
-    "PickPlaceCounterToCabinet": 105, "PackIdenticalLunches": 51, "PickPlaceSinkToCounter": 34,
-    "SearingMeat": 32, "PickPlaceCounterToStove": 28, "StoreLeftoversInBowl": 17,
-    "SteamInMicrowave": 17, "NavigateKitchen": 13, "PickPlaceDrawerToCounter": 9,
-    "TurnOffStove": 8, "WeighIngredients": 7, "CuttingToolSelection": 7,
-    "SlideDishwasherRack": 2, "OpenDrawer": 2, "OpenCabinet": 2, "CloseFridge": 2,
+    "SeparateFreezerRack": 409,
+    "StirVegetables": 238,
+    "WashFruitColander": 157,
+    "PickPlaceCounterToCabinet": 105,
+    "PackIdenticalLunches": 51,
+    "PickPlaceSinkToCounter": 34,
+    "SearingMeat": 32,
+    "PickPlaceCounterToStove": 28,
+    "StoreLeftoversInBowl": 17,
+    "SteamInMicrowave": 17,
+    "NavigateKitchen": 13,
+    "PickPlaceDrawerToCounter": 9,
+    "TurnOffStove": 8,
+    "WeighIngredients": 7,
+    "CuttingToolSelection": 7,
+    "SlideDishwasherRack": 2,
+    "OpenDrawer": 2,
+    "OpenCabinet": 2,
+    "CloseFridge": 2,
 }
 
 
@@ -312,13 +438,11 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
     )
 
     implemented = "\n".join(
-        f'<li><span class="done-mark" aria-hidden="true">✓</span>'
-        f'<div><h3>{_esc(t)}</h3><p>{_esc(d)}</p></div></li>'
+        f'<li><span class="done-mark" aria-hidden="true">✓</span>' f"<div><h3>{_esc(t)}</h3><p>{_esc(d)}</p></div></li>"
         for t, d in PROJECT["implemented"]
     )
     roadmap = "\n".join(
-        f'<li><span class="next-mark" aria-hidden="true"></span>'
-        f'<div><h3>{_esc(t)}</h3><p>{_esc(d)}</p></div></li>'
+        f'<li><span class="next-mark" aria-hidden="true"></span>' f"<div><h3>{_esc(t)}</h3><p>{_esc(d)}</p></div></li>"
         for t, d in PROJECT["roadmap"]
     )
 
@@ -326,15 +450,9 @@ def render(output_dir: Path, *, mode: str = "artifact") -> str:
         f'<div class="fact"><span class="fact-v mono">{_esc(v)}</span><span class="fact-l">{_esc(k)}</span></div>'
         for k, v in DATASET["facts"]
     )
-    ds_cams = "\n".join(
-        f'<li><code>{_esc(k)}</code><span>{_esc(v)}</span></li>' for k, v in DATASET["cameras"]
-    )
-    ds_state = "\n".join(
-        f'<tr><td class="mono">{_esc(i)}</td><td>{_esc(v)}</td></tr>' for i, v in DATASET["state"]
-    )
-    ds_action = "\n".join(
-        f'<tr><td class="mono">{_esc(i)}</td><td>{_esc(v)}</td></tr>' for i, v in DATASET["action"]
-    )
+    ds_cams = "\n".join(f"<li><code>{_esc(k)}</code><span>{_esc(v)}</span></li>" for k, v in DATASET["cameras"])
+    ds_state = "\n".join(f'<tr><td class="mono">{_esc(i)}</td><td>{_esc(v)}</td></tr>' for i, v in DATASET["state"])
+    ds_action = "\n".join(f'<tr><td class="mono">{_esc(i)}</td><td>{_esc(v)}</td></tr>' for i, v in DATASET["action"])
 
     cards = []
     for name, cat, horizon, desc in TASKS:
@@ -751,14 +869,26 @@ _TEMPLATE = """<style>{css}</style>
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--output-dir", type=Path, default=Path("/data5/jellyho/robocasa365"),
-                    help="Converted-dataset dir, scanned for per-task status.")
-    ap.add_argument("--mode", choices=["site", "artifact"], default="site",
-                    help="'site' (default): the GitHub Pages dashboard; references site/videos/<Task>.mp4 "
-                         "for full-trajectory playback (serve locally or via Pages). "
-                         "'artifact': a self-contained single file with static thumbnails and no videos.")
-    ap.add_argument("--out", type=Path, default=None,
-                    help="Output HTML path. Defaults to dashboard.html (artifact) or site/index.html (site).")
+    ap.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("/data5/jellyho/robocasa365"),
+        help="Converted-dataset dir, scanned for per-task status.",
+    )
+    ap.add_argument(
+        "--mode",
+        choices=["site", "artifact"],
+        default="site",
+        help="'site' (default): the GitHub Pages dashboard; references site/videos/<Task>.mp4 "
+        "for full-trajectory playback (serve locally or via Pages). "
+        "'artifact': a self-contained single file with static thumbnails and no videos.",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Output HTML path. Defaults to dashboard.html (artifact) or site/index.html (site).",
+    )
     args = ap.parse_args()
 
     out = args.out or (_HERE / ("site/index.html" if args.mode == "site" else "dashboard.html"))

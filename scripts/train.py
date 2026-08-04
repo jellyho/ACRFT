@@ -1,5 +1,7 @@
+import contextlib
 import dataclasses
 import functools
+import itertools
 import logging
 import platform
 import time
@@ -59,13 +61,16 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name, entity=config.wandb_entity)
+        wandb.init(
+            id=run_id, resume="must", project=config.project_name, entity=config.wandb_entity, group=config.wandb_group
+        )
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
             entity=config.wandb_entity,
+            group=config.wandb_group,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
@@ -246,7 +251,7 @@ def compute_action_dist_metrics(
 
 def compute_rlt_metrics(
     config: _config.TrainConfig,
-    rng: at.KeyArrayLike,  # noqa: ARG001  (kept for a uniform monitor signature)
+    rng: at.KeyArrayLike,
     state: training_utils.TrainState,
     batch: tuple[_model.Observation, _model.Actions],
 ) -> dict[str, at.Array]:
@@ -398,9 +403,9 @@ def log_rlt_embedding_vis(
 
     Returns a wandb-loggable dict (static image, interactive table, optional interactive plotly, R²s).
     """
-    import matplotlib
+    import matplotlib as mpl
 
-    matplotlib.use("Agg")
+    mpl.use("Agg")
     import matplotlib.pyplot as plt
 
     z_traj = np.asarray(z_traj, dtype=np.float64)
@@ -462,7 +467,7 @@ def log_rlt_embedding_vis(
             random_state=0,
         ).fit_transform(z_all)
         projections["t-SNE"] = (emb[: len(z_traj)], emb[len(z_traj) :])
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     try:
         import umap
@@ -474,7 +479,7 @@ def log_rlt_embedding_vis(
             random_state=0,
         ).fit_transform(z_all)
         projections["UMAP"] = (emb[: len(z_traj)], emb[len(z_traj) :])
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     def _heldout_r2(target: np.ndarray) -> float:
@@ -514,7 +519,7 @@ def log_rlt_embedding_vis(
     # Fit-free companion: within each episode, does PC1 advance monotonically with time? This is the
     # robust signal (no tiny-sample regression), and is what the trajectory paths show visually.
     per_ep_rho = [_spearman(pc_traj[ep_ids == e, 0], t_norm[ep_ids == e]) for e in np.unique(ep_ids)]
-    progress_spearman = float(np.nanmean(per_ep_rho)) if len(per_ep_rho) else float("nan")
+    progress_spearman = float(np.nanmean(per_ep_rho)) if per_ep_rho else float("nan")
 
     # --- static figure: the same trajectories under both projections ------------------------------
     cmap = plt.get_cmap("tab10")
@@ -528,8 +533,9 @@ def log_rlt_embedding_vis(
             o = np.argsort(tt)
             p, tt = p[o], tt[o]
             ax.plot(p[:, 0], p[:, 1], "-", color=cmap(j % 10), lw=1.4, alpha=0.85, zorder=2)
-            sc = ax.scatter(p[:, 0], p[:, 1], c=tt, cmap="viridis", s=24, vmin=0, vmax=1, zorder=3,
-                            edgecolor="white", linewidth=0.3)
+            sc = ax.scatter(
+                p[:, 0], p[:, 1], c=tt, cmap="viridis", s=24, vmin=0, vmax=1, zorder=3, edgecolor="white", linewidth=0.3
+            )
             ax.scatter(p[0, 0], p[0, 1], marker="o", s=90, facecolor="none", edgecolor=cmap(j % 10), lw=1.8, zorder=4)
             ax.scatter(p[-1, 0], p[-1, 1], marker="*", s=160, color=cmap(j % 10), zorder=4)
         ax.set_title(title, fontsize=9)
@@ -546,7 +552,7 @@ def log_rlt_embedding_vis(
         "UMAP": "local neighbourhoods faithful · far-apart distances are not",
     }
     sc = None
-    for ax_i, (name, (tr, rnd)) in zip(axes_f[0], projections.items()):
+    for ax_i, (name, (tr, rnd)) in zip(axes_f[0], projections.items(), strict=False):
         cont = _temporal_continuity(tr, ep_ids, t_norm)
         sc = _draw(ax_i, tr, rnd, f"{name}   (temporal continuity {cont:.2f})\n{_NOTE.get(name, '')}", name)
         out_cont[name] = cont
@@ -578,7 +584,7 @@ def log_rlt_embedding_vis(
     ax_a.set_xlabel("normalized time t")
     ax_a.set_ylabel("‖z_t − z_final‖  (per-episode normalized)")
     ax_a.set_title("distance to the episode's final token\n(monotone ↓ = token tracks progress)", fontsize=9)
-    ax_a.grid(True, lw=0.5, alpha=0.4)
+    ax_a.grid(visible=True, lw=0.5, alpha=0.4)
 
     # (b) Cosine-similarity matrix over all probe frames, ordered by (episode, t). Bright blocks on the
     #     diagonal mean the token mostly encodes WHICH episode; a smooth gradient inside each block
@@ -593,8 +599,10 @@ def log_rlt_embedding_vis(
     for bnd in bounds:
         ax_b.axhline(bnd - 0.5, color="#5cf", lw=0.6)
         ax_b.axvline(bnd - 0.5, color="#5cf", lw=0.6)
-    ax_b.set_title("token cosine similarity, ordered by (episode, t)\n(blocks = episode identity, "
-                   "bands = shared phase)", fontsize=9)
+    ax_b.set_title(
+        "token cosine similarity, ordered by (episode, t)\n(blocks = episode identity, bands = shared phase)",
+        fontsize=9,
+    )
     ax_b.set_xlabel("frame (episode, then time)")
     fig2.tight_layout()
     structure_img = wandb.Image(fig2)
@@ -620,7 +628,7 @@ def log_rlt_embedding_vis(
         if thumbs is not None:
             cols.append("view")
         table = wandb.Table(columns=cols)
-        for i, ((x, y), e, tt) in enumerate(zip(pc_traj, ep_ids, t_norm)):
+        for i, ((x, y), e, tt) in enumerate(zip(pc_traj, ep_ids, t_norm, strict=True)):
             row = [float(x), float(y), "trajectory", int(e), float(tt), z_traj[i].astype(np.float32).tolist()]
             if thumbs is not None:
                 row.append(wandb.Image(thumbs[i]) if i < len(thumbs) else None)
@@ -631,7 +639,7 @@ def log_rlt_embedding_vis(
                 row.append(None)
             table.add_data(*row)
         out["rlt/embedding_table"] = table
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # --- interactive scatter with IMAGE-ON-HOVER -------------------------------------------------
@@ -639,15 +647,12 @@ def log_rlt_embedding_vis(
     # self-contained HTML panel instead: the camera view for each frame is inlined as base64 and
     # shown next to the cursor. That is the whole point of the panel — seeing *which scene* a region
     # of embedding space corresponds to.
-    try:
+    with contextlib.suppress(Exception):
         out["rlt/embedding_hover"] = wandb.Html(
             _embedding_hover_html(projections, ep_ids, t_norm, thumbs, step), inject=False
         )
-    except Exception:  # noqa: BLE001
-        pass
 
     return out
-
 
 
 def _temporal_continuity(xy: np.ndarray, ep_ids: np.ndarray, t_norm: np.ndarray, k: int = 3) -> float:
@@ -664,10 +669,11 @@ def _temporal_continuity(xy: np.ndarray, ep_ids: np.ndarray, t_norm: np.ndarray,
     hits = tot = 0
     for e in np.unique(ep_ids):
         idx = np.flatnonzero(ep_ids == e)[np.argsort(t_norm[ep_ids == e])]
-        for a, b in zip(idx[:-1], idx[1:]):
+        for a, b in itertools.pairwise(idx):
             hits += int(b in knn[a])
             tot += 1
     return float(hits / max(tot, 1))
+
 
 def _embedding_hover_html(projections, ep_ids, t_norm, thumbs, step: int) -> str:
     """Self-contained interactive scatter: switch projection, hover a point to see its camera view.
@@ -699,7 +705,9 @@ def _embedding_hover_html(projections, ep_ids, t_norm, thumbs, step: int) -> str
             "traj": [[float(x), float(y)] for x, y in (tr - lo) / span],
             "rand": [[float(x), float(y)] for x, y in (rnd - lo) / span],
         }
-    meta = [{"e": int(e), "t": float(tt), "img": thumb_b64(i)} for i, (e, tt) in enumerate(zip(ep_ids, t_norm))]
+    meta = [
+        {"e": int(e), "t": float(tt), "img": thumb_b64(i)} for i, (e, tt) in enumerate(zip(ep_ids, t_norm, strict=True))
+    ]
     order = [
         {"e": int(e), "idx": [int(i) for i in np.flatnonzero(ep_ids == e)[np.argsort(t_norm[ep_ids == e])]]}
         for e in np.unique(ep_ids)
@@ -778,10 +786,21 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
     and reused; rollouts run headless (no video). Any failure disables the eval rather than the run.
     """
     import functools as _ft
+    import sys as _sys
+
+    # `uv run scripts/train.py` puts scripts/ on sys.path but not the repo root, so `examples` (not
+    # part of the installed openpi package) is not importable, and `robocasa` lives unbuilt under
+    # third_party/ (only robosuite is installed in the venv). Add both here so the probe eval works
+    # regardless of how training was launched (no PYTHONPATH needed) — mirroring the eval client,
+    # which runs with PYTHONPATH=third_party/robocasa.
+    _repo_root = epath.Path(__file__).parent.parent
+    for _p in (str(_repo_root), str(_repo_root / "third_party" / "robocasa")):
+        if _p not in _sys.path:
+            _sys.path.insert(0, _p)
 
     try:
         import examples.robocasa.rollout as _ro
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logging.warning(f"probe eval unavailable (rollout import): {e}")
         return None
 
@@ -811,45 +830,70 @@ def build_probe_eval(config, mesh, replicated_sharding, train_state_sharding):
         ]
     )
 
-    # One compiled sampler per mode; reused across evals (params change, shapes don't). Shardings are
-    # applied only when provided (the training path passes them; a single-device smoke may not).
-    _jit_kw = {"static_argnames": ("mode",)}
+    # One compiled sampler per mode; reused across evals (params change, shapes don't). `mode` is
+    # closed over rather than passed as an argument: with `in_shardings` specified, jax.jit rejects
+    # *all* keyword args (even static ones), so a `mode=` kwarg raised "pjit does not support kwargs".
+    # Shardings are applied only when provided (the training path passes them; a single-device smoke
+    # may not); when provided they must cover all three positional args (state, rng, obs).
+    _jit_kw = {}
     if train_state_sharding is not None:
-        _jit_kw |= {
-            "in_shardings": (train_state_sharding, replicated_sharding),
+        _jit_kw = {
+            "in_shardings": (train_state_sharding, replicated_sharding, replicated_sharding),
             "out_shardings": replicated_sharding,
         }
 
-    @_ft.partial(jax.jit, **_jit_kw)
-    def _sample(state, rng, obs, *, mode):
-        params = state.ema_params if state.ema_params is not None else state.params
-        model = nnx.merge(state.model_def, params)
-        model.eval()
-        if mode == "probe":
-            return model.probe_sample_actions(rng, obs)
-        return model.sample_actions(rng, obs)
+    def _make_sampler(mode):
+        @_ft.partial(jax.jit, **_jit_kw)
+        def _sample(state, rng, obs):
+            params = state.ema_params if state.ema_params is not None else state.params
+            model = nnx.merge(state.model_def, params)
+            model.eval()
+            if mode == "probe":
+                return model.probe_sample_actions(rng, obs)
+            return model.sample_actions(rng, obs)
+
+        return _sample
+
+    _samplers = {"vla": _make_sampler("vla"), "probe": _make_sampler("probe")}
 
     env_box = {}  # lazily create the env on first use (heavy import + scene build)
 
     def _policy_fn(state, mode):
+        # Advance the sampling rng each call, exactly like serving (Policy.infer splits self._rng per
+        # infer). A fixed key gives the same flow-matching noise every replan, which biases long
+        # rollouts and tanks success — the eval must mirror deployment's fresh-noise-per-chunk.
+        rng_holder = [jax.random.key(0)]
+
         def fn(element):
             inp = input_tf(element)
             inp = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inp)
             obs = _model.Observation.from_dict(inp)
-            rng = jax.random.key(0)
+            rng_holder[0], sample_rng = jax.random.split(rng_holder[0])
             with sharding.set_mesh(mesh):
-                actions = _sample(state, rng, obs, mode=mode)
+                actions = _samplers[mode](state, sample_rng, obs)
             out = output_tf({"state": np.asarray(inp["state"][0]), "actions": np.asarray(actions[0])})
             return np.asarray(out["actions"])
+
         return fn
 
     def eval_fn(train_state, seed):
         if "env" not in env_box:
             env_box["env"] = _ro.make_env(task, camera_size=256, seed=seed)
         env = env_box["env"]
+        # Every eval must score the SAME episodes so the 10k/20k/... curve is a like-for-like
+        # comparison (and so two runs with the same seed are directly comparable). run_trials already
+        # reseeds env.rng per trial and each _policy_fn starts from a fresh key, but some robosuite
+        # placement samplers draw from the global numpy RNG — pin that here too, since the env object
+        # is reused across evals and would otherwise carry state forward.
+        np.random.seed(seed)  # robosuite reads the legacy global RNG
         n = config.rlt_probe_eval_trials
-        vla = _ro.run_trials(env, _policy_fn(train_state, "vla"), task=task, num_trials=n, seed=seed)
-        probe = _ro.run_trials(env, _policy_fn(train_state, "probe"), task=task, num_trials=n, seed=seed)
+        replan = config.model.action_horizon  # execute a full predicted chunk before re-querying
+        vla = _ro.run_trials(
+            env, _policy_fn(train_state, "vla"), task=task, num_trials=n, seed=seed, replan_steps=replan
+        )
+        probe = _ro.run_trials(
+            env, _policy_fn(train_state, "probe"), task=task, num_trials=n, seed=seed, replan_steps=replan
+        )
         return {"eval/vla_success": vla["success_rate"], "eval/probe_success": probe["success_rate"]}
 
     return eval_fn
@@ -954,7 +998,7 @@ def main(config: _config.TrainConfig):
             logging.info(
                 f"Built RLT trajectory probe: {rlt_probe[4]} frames from {len(np.unique(rlt_probe[2]))} episodes."
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logging.warning(f"Could not build the RLT trajectory probe; embedding vis disabled. ({e})")
             pextract_rlt = None
 
@@ -962,7 +1006,7 @@ def main(config: _config.TrainConfig):
     if config.rlt_probe_eval_interval > 0:
         try:
             probe_eval_fn = build_probe_eval(config, mesh, replicated_sharding, train_state_sharding)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logging.warning(f"Could not set up probe eval; disabled. ({e})")
 
     start_step = int(train_state.step)
@@ -989,7 +1033,7 @@ def main(config: _config.TrainConfig):
                 with sharding.set_mesh(mesh):
                     d = pcompute_action_dist(jax.random.fold_in(train_rng, step), train_state, batch)
                 diag_info.update(jax.device_get(d))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logging.warning(f"action-dist diagnostic failed at step {step}; disabling it. ({e})")
                 pcompute_action_dist = None
 
@@ -998,7 +1042,7 @@ def main(config: _config.TrainConfig):
                 with sharding.set_mesh(mesh):
                     d = pcompute_rlt_metrics(jax.random.fold_in(train_rng, step), train_state, batch)
                 diag_info.update(jax.device_get(d))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logging.warning(f"rlt monitor failed at step {step}; disabling it. ({e})")
                 pcompute_rlt_metrics = None
 
@@ -1018,26 +1062,26 @@ def main(config: _config.TrainConfig):
                 with sharding.set_mesh(mesh):
                     z_rand, _ = pextract_rlt(train_state, batch)
                 diag_info.update(
-                    log_rlt_embedding_vis(
-                        z_traj, proprio_traj, ep_ids, t_norm, np.asarray(z_rand), step, probe_thumbs
-                    )
+                    log_rlt_embedding_vis(z_traj, proprio_traj, ep_ids, t_norm, np.asarray(z_rand), step, probe_thumbs)
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logging.warning(f"rlt embedding vis failed at step {step}; disabling it. ({e})")
                 pextract_rlt = None
 
         # In-process sim eval of the VLA + latent-probe policies (headless). Heavier than the other
-        # monitors (spins the sim), so it is guarded and disabled on failure like the rest.
-        if probe_eval_fn is not None and step % config.rlt_probe_eval_interval == 0:
+        # monitors (spins the sim), so it is guarded and disabled on failure like the rest. Skip
+        # step 0: the probe head is freshly initialized and the policy is untrained, so it is a
+        # guaranteed 0% that just burns ~40 min of rollouts.
+        if probe_eval_fn is not None and step > 0 and step % config.rlt_probe_eval_interval == 0:
             try:
                 t_ev = time.perf_counter()
-                res = probe_eval_fn(train_state, seed=0)
+                res = probe_eval_fn(train_state, seed=config.rlt_probe_eval_seed)
                 diag_info.update(res)
                 logging.info(
                     f"probe eval @ {step}: vla={res['eval/vla_success']:.0%} "
                     f"probe={res['eval/probe_success']:.0%} ({time.perf_counter() - t_ev:.0f}s)"
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logging.warning(f"probe eval failed at step {step}; disabling it. ({e})")
                 probe_eval_fn = None
 
@@ -1050,7 +1094,7 @@ def main(config: _config.TrainConfig):
             info_str = ", ".join(
                 f"{k}={float(v):.4f}"
                 for k, v in reduced_info.items()
-                if isinstance(v, (int, float)) or getattr(v, "ndim", None) == 0
+                if isinstance(v, int | float) or getattr(v, "ndim", None) == 0
             )
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)

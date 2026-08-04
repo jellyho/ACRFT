@@ -245,6 +245,48 @@ class AbsoluteActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class JointDeltaActions(DataTransformFn):
+    """Joint-space delta with a per-dimension reference index into the state.
+
+    DeltaActions assumes action dim i subtracts state dim i, which fails when an arm's joints live at
+    non-adjacent state indices (YAM's right arm is at state 21..). `ref[i]` is the state index action
+    dim i subtracts, or -1 to leave it absolute (grippers). Subtracting the current joint position
+    turns an absolute joint target into a displacement from where the arm is.
+    """
+
+    ref: Sequence[int]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        state, actions = np.asarray(data["state"]), np.asarray(data["actions"], np.float32)
+        ref = np.asarray(self.ref)
+        for i, r in enumerate(ref):
+            if r >= 0:
+                actions[..., i] -= state[..., None, r]
+        data["actions"] = actions
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class JointAbsoluteActions(DataTransformFn):
+    """Inverse of JointDeltaActions (deployment)."""
+
+    ref: Sequence[int]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        state, actions = np.asarray(data["state"]), np.asarray(data["actions"], np.float32)
+        ref = np.asarray(self.ref)
+        for i, r in enumerate(ref):
+            if r >= 0:
+                actions[..., i] += state[..., None, r]
+        data["actions"] = actions
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False

@@ -389,7 +389,7 @@ class PI0Pytorch(nn.Module):
 
         # Compute image and language key value cache
         prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
-        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
+        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"
 
         _, past_key_values = self.paligemma_with_expert.forward(
             attention_mask=prefix_att_2d_masks_4d,
@@ -445,7 +445,7 @@ class PI0Pytorch(nn.Module):
 
         # Prepare attention masks
         full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
-        self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
+        self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,
