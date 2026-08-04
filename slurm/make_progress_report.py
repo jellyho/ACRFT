@@ -109,7 +109,7 @@ def load_sweep(root, sweep):
 def diag_table(emit, sweeps, note=""):
     """One combined diagnostics table. Columns are the necessary-condition metrics."""
     emit(
-        "<div class='scroll'><table><thead><tr><th>run</th><th>스윕</th><th>ρ(Q,MC)</th><th>act_sens</th>"
+        "<div class='scroll'><table><thead><tr><th>run</th><th>sweep</th><th>ρ(Q,MC)</th><th>act_sens</th>"
         "<th>rank_c</th><th>rank_o</th><th>pfx_H</th></tr></thead><tbody>"
     )
     for sweep, runs in sweeps:
@@ -130,7 +130,7 @@ def diag_table(emit, sweeps, note=""):
         emit(f"<p class='mut' style='font-size:.9rem'>{note}</p>")
 
 
-def rollout_table(emit, runs, id_prefix=""):
+def rollout_table(emit, runs):
     tot = {m: [0, 0] for m in MODES}
     emit(
         "<div class='scroll'><table><thead><tr><th>run</th>"
@@ -167,7 +167,7 @@ def rollout_table(emit, runs, id_prefix=""):
         emit(f"<tr><td>{html.escape(r)}</td>{cells}</tr>")
     if any(n for _, n in tot.values()):
         emit(
-            "<tr class='total'><td>합계</td>"
+            "<tr class='total'><td>total</td>"
             + "".join(f"<td>{tot[m][0]}/{tot[m][1]}</td>" for m in MODES)
             + "<td colspan='2'></td></tr>"
         )
@@ -195,105 +195,136 @@ def main() -> None:
 
     A = []
     P = A.append
-    P("<h1>ACRFT critic — 이틀간의 실험 일지</h1>")
+    P("<h1>ACRFT critic — a two-day experiment log</h1>")
     P(
-        "<p class='lede'>15종 TD ablation이 전부 같은 자리에 도달한 이유를 측정으로 좁혀 들어가, "
-        "원인(부트스트랩 arg-max)을 확정하고 그것을 제거한 IQL을 구현·검증하기까지.</p>"
+        "<p class='lede'>How fifteen TD ablations that all landed in the same place were narrowed down, by "
+        "measurement, to a single cause — the bootstrap's arg-max — and how IQL, which removes it, was "
+        "implemented and verified.</p>"
     )
     P(
-        f"<p class='stamp'>{html.escape(args.generated)} · RoboCasa PrepareCoffee · 시연 514 에피소드 / "
-        f"279,534 프레임 · γ=0.99 · 상세 조사 리포트: report_bias.html</p>"
+        f"<p class='stamp'>{html.escape(args.generated)} · RoboCasa PrepareCoffee · 514 demo episodes / "
+        f"279,534 frames · γ=0.99 · companion deep-dive: report_bias.html</p>"
     )
 
-    # ---------------------------------------------------------------- 요약
-    P("<h2>요약 — 확정된 것 다섯 가지</h2>")
+    # ---------------------------------------------------------------- summary
+    P("<h2>Summary — six things now settled</h2>")
     P(
         "<ol>"
-        "<li><b>critic은 유해하다.</b> 롤아웃에서 결정권을 줄수록 성공률이 단조 하락 "
-        "(vla 74% → critic 46%, 13런 × 30 trial, 신뢰구간 분리). 후보 선택만 맡겨도 무작위 선택보다 나쁘다.</li>"
-        "<li><b>원인은 부트스트랩의 arg-max.</b> 타깃의 V가 목표에서 먼 상태에서 체계적으로 과대추정된다 "
-        "(250스텝 밖 5.07배). 참값이 γ^d로 알려져 있어 이것은 추정이 아니라 계산이다.</li>"
-        "<li><b>IQL(expectile 회귀)이 그 팽창을 19~38배 줄였다.</b> expectile을 올리면 편향이 단조 복귀하는 "
-        "용량-반응까지 확인 — 인과가 확정됐다.</li>"
-        "<li><b>액션 순위 신호는 여전히 데이터에 없다.</b> 상태당 액션이 하나뿐이라 타깃이 액션·프리픽스 모두에 "
-        "무관하고, 그래서 act_sens ≈ 0은 21개 런 전부에서 유지된다. 유일한 예외 후보는 IQL+QC 조합의 "
-        "rank_c 0.571 (롤아웃 검증 중).</li>"
-        "<li><b>프리픽스 축은 커밋 길이가 아니라 critic 오차를 재고 있었다.</b> 같은 상태의 프리픽스별 타깃은 "
-        "이론상 전부 γ^d로 같아야 하는데, V 편향이 거리에 따라 달라 단조 감소했다 — 영상에서 보인 "
-        "'prefix 값 단조 감소'의 정체.</li></ol>"
+        "<li><b>The critic is harmful, not merely useless.</b> Success falls monotonically with how much "
+        "authority it gets (vla 74% → critic 46%, 13 runs × 30 trials, non-overlapping confidence "
+        "intervals). Candidate selection alone does worse than picking at random.</li>"
+        "<li><b>The cause is the bootstrap's arg-max.</b> The target's V is systematically over-estimated "
+        "far from the goal — 5.07× beyond 250 steps. The true value is known in closed form (γ^d), so "
+        "this is computed, not estimated.</li>"
+        "<li><b>IQL (expectile regression) removes the inflation — by 19–38×.</b> Raising the expectile "
+        "brings the bias back monotonically (e50 ≈ e70 &lt; e90 &lt; e95), a dose-response that settles "
+        "causality.</li>"
+        "<li><b>An action-ranking signal still does not exist in the data.</b> With one action per state, "
+        "the target depends on neither the action nor the prefix; act_sens ≈ 0 holds across all 26 runs. "
+        "The one offline exception (IQL+QC, rank_c 0.571) was rejected in rollout: bon−vla = 0.</li>"
+        "<li><b>The prefix axis was measuring critic error, not commitment length.</b> Per-prefix targets "
+        "at one state should all equal γ^d; the distance-structured V bias tilted them into the monotone "
+        "decline visible in the videos.</li>"
+        "<li><b>IQL cured the prefix axis (rollout verdict).</b> The worst mode under TD — prefix — went "
+        "from 0.528 to <b>0.733, at parity with the raw VLA</b>. Overall critic harm halved (−0.285 → "
+        "−0.142), the expectile dose-response reproduced in success rates (e50 −0.067 &lt; e90 −0.233, "
+        "p=0.016), and what remains is the deployment best-of-N's candidate arg-max — unfixable by "
+        "algorithm while the data carries no action contrast. The safe deployment on this data is "
+        "<b>prefix-only</b>: the IQL critic sets the commitment length, the first sample is executed.</li>"
+        "</ol>"
     )
 
-    # ---------------------------------------------------------------- 타임라인
-    P("<h2>경과 타임라인</h2><ul class='tl'>")
+    # ---------------------------------------------------------------- timeline
+    P("<h2>Timeline</h2><ul class='tl'>")
     for t, ev in [
-        ("어제 오후", "v3_fixedmask 15런 완료. 전 런 act_sens≈0.0003, rank_c≈0.5 — 서열을 매길 축이 없음을 확인."),
         (
-            "어제 저녁",
-            "15런 전부 롤아웃 제출 (30 trial × 5모드). HUD 패널 침범을 수집후렌더로 해결 (1000프레임 전수검사 0건).",
+            "day 1, afternoon",
+            "v3_fixedmask finishes: 15 runs, every one at act_sens≈0.0003 and rank_c≈0.5 — no axis to rank "
+            "methods along.",
         ),
         (
-            "어제 밤",
-            "롤아웃 13런 회수: critic이 유해함이 판명. targets()를 단일 ended 마스크로 재작성 "
-            "(2.2M 셀 비트단위 동치 검증). γ 변형 데이터셋 자동 생성(ensure_discount), proprio를 annotation 단계로 이동.",
+            "day 1, evening",
+            "All 15 runs submitted for rollout (30 trials × 5 modes). HUD panel-corruption solved by deferring "
+            "all rendering to after the episode (1000-frame full scan: zero corrupted frames).",
         ),
         (
-            "오늘 새벽",
-            "프리픽스별 타깃 분해 → y_h = γ^d + γ^h·b, 편향 b가 거리 구조를 가짐을 확인. "
-            "IQL 구현 (ValueNet + expectile, 후보 배열 미사용). v4(HL-Gauss+mcfloor baseline) 재제출.",
+            "day 1, night",
+            "13 rollouts back: the critic is harmful. targets() rewritten around a single `ended` mask "
+            "(verified bitwise-identical on 2.2M valid cells). Discount-variant datasets now build themselves "
+            "(ensure_discount); proprio moved into the annotation stage.",
         ),
         (
-            "오늘 오전",
-            "b(d) 15런 측정: 편향은 실재하나 런 간 성능차는 설명 못 함 (ρ=−0.17) — 원인은 편향 크기가 아니라 "
-            "arg-max가 고르는 오차 산포로 좁혀짐. v5(stability)·v6(IQL)·v7(에피소드 사다리) 제출.",
+            "day 2, early",
+            "Per-prefix target decomposition → y_h = γ^d + γ^h·b with distance-structured bias b. IQL "
+            "implemented (ValueNet + expectile; no candidate array). v4 resubmitted on the HL-Gauss+mcfloor "
+            "baseline.",
         ),
         (
-            "오늘 오후",
-            "v6 완료: IQL이 b(d)를 19~38배 축소, expectile 용량-반응 확인. iql_qc rank_c 0.571 (21런 중 최초로 "
-            "우연 초과). QC 롤아웃이 세 스윕 내내 죽고 있던 버그(load_trained P축 누락) 발견·수정. "
-            "오버레이 월드공간 확대로 재작성. IQL 롤아웃 4건 진행 중.",
+            "day 2, morning",
+            "b(d) measured on all 15 runs: the bias is real but does not explain between-run performance "
+            "(ρ=−0.17) — what matters is the error spread the arg-max picks from, not the bias size. "
+            "v5 (stability), v6 (IQL), v7 (episode ladder) submitted.",
+        ),
+        (
+            "day 2, afternoon",
+            "v6 done: IQL shrinks b(d) 19–38× with a clean expectile dose-response. Found and fixed the bug "
+            "that had silently killed every QC rollout across three sweeps (load_trained dropped the prefix "
+            "axis). Overlay rewritten to magnify in world space. Both machines' work merged and pushed.",
+        ),
+        (
+            "day 2, evening",
+            "IQL rollout verdict: prefix mode 0.528→0.733 (parity with vla — cured), overall critic harm "
+            "halved, dose-response reproduced (e90 p=0.016). iql_qc's offline rank_c 0.571 rejected "
+            "(bon−vla=0 in rollout).",
         ),
     ]:
         P(f"<li><time>{t}</time><span>{ev}</span></li>")
     P("</ul>")
 
-    # ---------------------------------------------------------------- 1. v3 롤아웃
-    P("<h2>1. v3 롤아웃 — critic은 무해하지 않았다 <span class='pill p-done'>완료</span></h2>")
-    P("<h3>프로토콜</h3>")
+    # ---------------------------------------------------------------- 1. v3 rollout
+    P("<h2>1. v3 rollouts — the critic was not harmless <span class='pill p-done'>done</span></h2>")
+    P("<h3>Protocol</h3>")
     P(
-        "<p>15개 critic(200k 스텝, batch 1024) 각각을 다섯 모드로 30 trial씩 평가. 다섯 모드는 같은 seed의 "
-        "같은 장면을 보므로 짝지은 비교가 성립한다. <code>vla</code>=critic 없음(기준), <code>rand</code>=후보 "
-        "무작위(대조군), <code>bon</code>=후보만 critic 선택, <code>prefix</code>=커밋 길이만 critic 선택, "
-        "<code>critic</code>=결합 arg-max(배포 규칙).</p>"
+        "<p>Each of 15 critics (200k steps, batch 1024) is evaluated in five modes, 30 trials each. All five "
+        "modes see the identical scenes (fixed seed), so the comparisons are paired. <code>vla</code> = no "
+        "critic (baseline); <code>rand</code> = a uniformly random candidate (the control); <code>bon</code> "
+        "= critic picks the candidate only; <code>prefix</code> = critic picks the commitment length only; "
+        "<code>critic</code> = the joint arg-max, i.e. the deployment rule.</p>"
     )
     P(
         "<pre>ROLLOUT=0 SWEEP=v3_fixedmask slurm/sweep.sh\n"
         "RUN_DIR=$CACHE_DIR/critic_runs/v3_fixedmask/&lt;run&gt; TRIALS=30 sbatch slurm/eval_rollout.sbatch</pre>"
     )
     P(
-        "<h3>예상</h3><p>오프라인 진단(act_sens≈0, rank_c≈0.5)에 근거해 <b>bon ≈ rand, critic ≈ vla</b> — "
-        "즉 '무해하지만 무용'을 예상했다.</p>"
+        "<h3>Expected</h3><p>From the offline diagnostics (act_sens≈0, rank_c≈0.5) the prediction was "
+        "<b>bon ≈ rand and critic ≈ vla</b> — harmless but useless.</p>"
     )
-    P("<h3>실제</h3>")
+    P("<h3>Observed</h3>")
     tot = rollout_table(P, v3)
     if tot["vla"][1]:
         P(
-            "<div class='key fail'><p>예상이 틀렸다. "
+            "<div class='key fail'><p>The prediction failed. "
             + " · ".join(f"<b>{m}</b> {tot[m][0] / tot[m][1]:.3f}" for m in MODES if tot[m][1])
-            + ". critic 개입이 늘수록 단조 하락하고, bon이 rand보다 나쁘다 — arg-max가 '최선'이 아니라 "
-            "'가장 부풀려진 오차'를 고른다는 뜻. rand≈vla는 후보 재선택 자체는 거의 공짜임을 보인다: "
-            "손실은 선택을 바꿔서가 아니라 critic이 선택해서 생긴다.</p></div>"
+            + ". Success falls monotonically with critic authority, and bon is <i>worse</i> than rand: when "
+            "candidates share the same true value and differ only in estimation error, the arg-max picks "
+            "the most inflated error, while a random draw samples the average one. rand ≈ vla shows that "
+            "re-picking a candidate is nearly free — the loss comes from the critic doing the picking.</p></div>"
         )
 
-    # ---------------------------------------------------------------- 2. 타깃 분해
-    P("<h2>2. 프리픽스별 타깃 분해 — 편향의 구조 <span class='pill p-done'>완료</span></h2>")
+    # ---------------------------------------------------------------- 2. decomposition
     P(
-        "<p>sparse+terminal 보상이라 참 가치가 <code>γ^d</code>(d=목표까지 스텝)로 정확히 계산된다. "
-        "타깃을 전개하면 <code>y_h = γ^d + γ^h·b</code>: V̂가 정확하면 프리픽스 8개의 타깃이 전부 같아야 한다.</p>"
+        "<h2>2. Per-prefix target decomposition — the structure of the bias "
+        "<span class='pill p-done'>done</span></h2>"
+    )
+    P(
+        "<p>The reward is sparse and terminal, so the true value is exactly <code>γ^d</code> (d = steps to "
+        "goal). Expanding the target: <code>y_h = γ^d + γ^h·b</code> — if V̂ were exact, all eight per-prefix "
+        "targets would be equal.</p>"
     )
     if pfx.get("buckets"):
         pl = pfx.get("pfx", [2, 4, 6, 8, 10, 12, 14, 16])
         P(
-            "<div class='scroll'><table><thead><tr><th>거리 구간</th><th>n</th>"
+            "<div class='scroll'><table><thead><tr><th>distance band</th><th>n</th>"
             + "".join(f"<th>h={h}</th>" for h in pl)
             + "</tr></thead><tbody>"
         )
@@ -303,55 +334,64 @@ def main() -> None:
             )
             P(f"<tr><td>{b['lo']}–{b['hi']}</td><td class='mut'>{b['n']}</td>{cells}</tr>")
         P("</tbody></table></div>")
-        P("<p class='mut' style='font-size:.9rem'>값 = y_h / γ^d (1.0=정확). TD base critic, 구간당 400상태.</p>")
+        P(
+            "<p class='mut' style='font-size:.9rem'>Values are <code>y_h / γ^d</code> (1.0 = exact). "
+            "TD base critic, 400 states per band.</p>"
+        )
     P(
-        "<p>모든 거리에서 h에 대해 단조 감소 — 영상의 'prefix 값이 단조 감소'는 critic이 목표에서 먼 후속 상태를 "
-        "더 과대평가한 것의 직접 반영이다. 250스텝 밖에서는 타깃이 참값의 <b>5배</b>.</p>"
+        "<p>Monotone decline in h within every band — the 'prefix values fall monotonically' seen in the "
+        "videos is the direct image of the critic over-valuing far-from-goal successor states. Beyond 250 "
+        "steps the target is <b>5× the truth</b>.</p>"
     )
     P(
-        "<div class='note'><p><b>부수 확인 — 편향 크기는 런 간 성능차를 설명 못 한다.</b> 13런에서 b 평균과 "
-        "critic 성공률의 순위상관 −0.17. 일정한 편향은 arg-max를 바꾸지 않으므로(전부 같이 부풀면 순위 불변), "
-        "성능을 가르는 것은 후보 간 오차의 <b>산포</b>다. soft(유일한 음수 편향)가 최고, tn03(최대 편향)이 "
-        "최악인 극단만 맞는다.</p></div>"
+        "<div class='note'><p><b>Side finding — the bias size does not explain between-run performance.</b> "
+        "Across 13 runs, mean b vs critic success rate has rank correlation −0.17. A uniform bias leaves the "
+        "arg-max unchanged (inflate everything equally and the ranking survives); what decides performance "
+        "is the <b>spread</b> of per-candidate errors, which a mean bias cannot see. Only the extremes fit: "
+        "soft (the sole negative bias) is best, tn03 (the largest bias) is worst.</p></div>"
     )
 
     # ---------------------------------------------------------------- 3. v4
-    P("<h2>3. v4 — baseline을 HL-Gauss+mcfloor로 <span class='pill p-done'>완료</span></h2>")
+    P("<h2>3. v4 — HL-Gauss + mc-floor promoted to baseline <span class='pill p-done'>done</span></h2>")
     P(
-        "<p>사용자 결정으로 분포형 head(51 atoms)와 mc_return 하한을 기본값으로 승격, 같은 15 arm을 재실행. "
-        "스칼라·무하한으로 되돌리는 <code>scalarq</code>/<code>nofloor</code> arm이 방향을 뒤집어 대신한다.</p>"
+        "<p>By decision, the distributional head (51 atoms) and the mc_return floor became the defaults and "
+        "the same 15 arms were rerun; <code>scalarq</code>/<code>nofloor</code> now ablate in the reverse "
+        "direction.</p>"
     )
     P(
-        "<h3>예상</h3><p>act_sens는 그대로 0일 것(타깃의 문제이므로). mg4/mg8의 ρ 이득(0.92/0.91)이 유지되는지가 "
-        "관전 포인트.</p>"
+        "<h3>Expected</h3><p>act_sens stays at 0 (it is a property of the target, not the head). The open "
+        "question was whether mg4/mg8's ρ gain (0.92/0.91) would survive.</p>"
     )
-    P("<h3>실제</h3>")
+    P("<h3>Observed</h3>")
     diag_table(
         P,
         [("v4", v4)],
-        "v3 대비: act_sens 여전히 ≤0.0014 (예상대로). mg4/mg8의 ρ 이득은 <b>사라짐</b> (0.92/0.91 → "
-        "0.82/0.82; v4는 전 런 0.81–0.83으로 평평) — 그 이득은 스칼라 회귀와의 조합 특이 효과였다. "
-        "v3에서의 'mg가 최대 효과' 결론은 baseline 의존적이었던 것으로 정정.",
+        "Versus v3: act_sens still ≤0.0014, as expected. The mg4/mg8 ρ gain <b>vanished</b> (0.92/0.91 → "
+        "0.82/0.82; every v4 run sits flat at 0.81–0.83) — that gain was specific to the scalar-regression "
+        "combination. The v3 conclusion 'macro grouping is the largest positive effect' is hereby corrected "
+        "as baseline-dependent.",
     )
 
     # ---------------------------------------------------------------- 4. IQL
-    P("<h2>4. IQL — arg-max를 제거한다 <span class='pill p-run'>롤아웃 진행 중</span></h2>")
-    P("<h3>설계</h3>")
+    P("<h2>4. IQL — remove the arg-max <span class='pill p-done'>rollout verdict in</span></h2>")
+    P("<h3>Design</h3>")
     P(
         "<pre>L_V = E[ |τ − 1(u&lt;0)| · u² ],   u = Q_tgt(z, a_demo, h) − V(z)\n"
         "L_Q = E[ (Q(z, a_demo, h) − y_h)² ],  y_h = cum_h + γ^h · ¬ended · V(z_{t+h})</pre>"
     )
     P(
-        "<p>후보 배열을 학습에서 아예 쓰지 않는다. τ=0.5는 최소자승(V→평균 Q, 개선 없음), τ↑일수록 max_a Q에 "
-        "접근. 후보 forward가 사라져 학습 ~2.5배 고속. τ ∈ {0.5, 0.7, 0.9, 0.95} + QC 변형(<code>iql_qc</code>, "
-        "프리픽스 head 없음 — 'IQL이 좋다'와 '프리픽스 축이 문제'를 분리).</p>"
+        "<p>The candidate array is not used in training at all. τ=0.5 is plain least squares (V → mean Q, no "
+        "improvement); higher τ weights over-shoots more and approaches max_a Q. Without the candidate "
+        "forward the step is ~2.5× faster. Arms: τ ∈ {0.5, 0.7, 0.9, 0.95} plus <code>iql_qc</code> (no "
+        "prefix head — separates 'IQL helps' from 'the prefix axis was the problem').</p>"
     )
     P("<pre>ROLLOUT=0 AXES=iql SWEEP=v6_iql slurm/sweep.sh</pre>")
     P(
-        "<h3>예상</h3><p>b(d)가 0 근처로 내려가고, τ가 클수록 max에 접근하므로 편향이 되돌아올 것. 롤아웃에서는 "
-        "'vla를 이긴다'가 아니라 '<b>덜 해친다</b>'가 성공 기준 — 액션 순위 신호 자체는 IQL도 못 만든다.</p>"
+        "<h3>Expected</h3><p>b(d) collapses toward 0 and returns as τ → 1. In rollout the success criterion "
+        "is not 'beats vla' but '<b>hurts less</b>' — IQL cannot create an action-ranking signal the data "
+        "does not contain.</p>"
     )
-    P("<h3>실제 — V 편향</h3>")
+    P("<h3>Observed — value bias</h3>")
     if vb6:
         P(
             "<div class='scroll'><table><thead><tr><th>run</th>"
@@ -361,7 +401,7 @@ def main() -> None:
         base_row = vb3.get("base", {}).get("rows")
         if base_row:
             cells = "".join(f"<td class='bad'>{x['b']:+.4f}</td>" if x else "<td>—</td>" for x in base_row)
-            P(f"<tr><td>TD base (참고)</td>{cells}</tr>")
+            P(f"<tr><td>TD base (reference)</td>{cells}</tr>")
         for r in sorted(vb6):
             cells = ""
             for x in vb6[r]["rows"]:
@@ -373,125 +413,163 @@ def main() -> None:
             P(f"<tr><td>{html.escape(r)}</td>{cells}</tr>")
         P("</tbody></table></div>")
         P(
-            "<p class='mut' style='font-size:.9rem'>b(d) = V̂(s) − γ^d. V̂는 배포와 동일하게 후보 16개 max로 계산 "
-            "— 즉 배포가 실제로 읽는 양의 편향이다. 최종(200k) 체크포인트.</p>"
+            "<p class='mut' style='font-size:.9rem'>b(d) = V̂(s) − γ^d, with V̂ computed exactly as deployment "
+            "reads it (max over the 16 candidates) — i.e. the inflation deployment actually sees. Final "
+            "(200k) checkpoints.</p>"
         )
     P(
-        "<div class='key win'><p><b>60–120 구간: TD +0.100 → iql_e50 +0.003 / e70 +0.005 — 19~38배 축소.</b> "
-        "그리고 e50 ≈ e70 &lt; e90 &lt; e95의 단조 용량-반응: expectile이 max에 접근할수록 max의 편향이 "
-        "되돌아온다. 다섯 런이 같은 학습 단계이므로 시점 교란이 아니다 — <b>'팽창의 원인은 arg-max'가 인과로 "
-        "확정</b>됐다. TD와 달리 학습이 길어져도(100k→200k) 편향이 자라지 않는다.</p></div>"
+        "<div class='key win'><p><b>At 60–120 steps from the goal: TD +0.100 → iql_e50 +0.003 / e70 +0.005 "
+        "— a 19–38× reduction.</b> And a monotone dose-response, e50 ≈ e70 &lt; e90 &lt; e95: the closer the "
+        "expectile gets to a max, the more of the max's bias returns. All five runs are at the same training "
+        "stage, so this is not a checkpoint confound — <b>the inflation is causally pinned on the "
+        "arg-max</b>. Unlike TD, the bias does not grow with more training (100k → 200k).</p></div>"
     )
-    P("<h3>실제 — 진단</h3>")
+    P("<h3>Observed — diagnostics</h3>")
     diag_table(
         P,
         [("v6", v6)],
-        "iql_qc의 rank_c 0.571은 21개 런 중 유일하게 우연(0.5) 대역을 벗어난 값. 같은 τ의 ARQ(iql_e70 "
-        "0.523)에서는 나지 않으므로 IQL 단독도 QC 단독도 아닌 <b>조합</b> 효과 — ARQ는 트렁크를 프리픽스 "
-        "head 8개가 나눠 쓰지만 QC는 head 하나가 concat(z,a)를 직접 본다는 가설. 롤아웃이 판정한다.",
+        "iql_qc's rank_c 0.571 was the only value outside the chance band in 26 runs; the same τ under ARQ "
+        "(iql_e70, 0.523) does not show it, so it was a property of the IQL+QC combination. The rollout "
+        "below rejects it as a real ranking ability.",
     )
     ir = {r: e for r, e in v6.items() if "rollout" in e}
     if ir:
-        P("<h3>실제 — 롤아웃 (나온 것)</h3>")
+        P("<h3>Observed — rollout</h3>")
         rollout_table(P, ir)
+        P(
+            "<div class='key win'><p><b>Prefix mode is cured: 0.528 (TD) → 0.733, parity with the raw "
+            "VLA.</b> The causal chain closes at the success-rate level: remove the arg-max → inflation "
+            "vanishes → per-prefix targets flatten → commitment-length selection stops reading critic error. "
+            "Overall critic harm halves (−0.285 → −0.142) and the expectile dose-response reproduces "
+            "(e50 −0.067 p=0.727 vs e90 −0.233 p=0.016 — keep τ low). bon stays bad (0.650): deployment's "
+            "best-of-N still arg-maxes over 16 candidates, and with no true value differences between them "
+            "that arg-max selects noise. iql_qc's offline rank_c 0.571 did not transfer (bon−vla = 0)."
+            "</p></div>"
+        )
     else:
-        P("<p class='mut'>롤아웃 4건 진행 중 (각 30 trial × 5모드) — 완료 시 이 표가 채워진다.</p>")
+        P(
+            "<p class='mut'>Four rollouts in progress (30 trials × 5 modes each) — this table fills in when "
+            "they land.</p>"
+        )
 
-    # ---------------------------------------------------------------- 5. v5/v7
-    P("<h2>5. 진행 중인 나머지 축</h2>")
+    # ---------------------------------------------------------------- 5. pending
+    P("<h2>5. Still running</h2>")
     P(
         "<dl><dt>v5_stability — k3 / k5 / online / tau001 / tau05</dt>"
-        "<dd>한 번도 ablate하지 않았던 세 축: 앙상블 크기(min의 억제력), target network 유무(참조 구현 기본은 "
-        "없음), Polyak 시정수. TD 쪽에서 편향을 얼마나 줄일 수 있는지의 대조축.</dd>"
+        "<dd>The three never-ablated axes: ensemble size (how hard the min pushes back), removing the target "
+        "network entirely (the reference implementation's default), and the Polyak time constant. The control "
+        "axis for how far TD can be repaired.</dd>"
         "<dt>v7_single — ep1 / ep4 / ep16 / ep64</dt>"
-        "<dd>단일 궤적 암기 극한. ep1에서도 b(d)&gt;0이 남으면 편향은 에피소드 간 간섭이 아니라 부트스트랩 구조 "
-        "자체의 산물. act_sens가 잡음으로 오히려 오르면 'act_sens 높음=액션 이해'가 아님도 증명된다.</dd></dl>"
+        "<dd>The single-trajectory memorisation limit. If b(d) &gt; 0 survives at ep1, the bias is inherent "
+        "to the bootstrap structure rather than a product of cross-episode interference. If act_sens rises "
+        "there from pure noise, it also proves high act_sens ≠ action understanding.</dd></dl>"
     )
     if any("diag" in e for e in list(v5.values()) + list(v7.values())):
         diag_table(P, [("v5", v5), ("v7", v7)])
 
-    # ---------------------------------------------------------------- 6. 엔지니어링
-    P("<h2>6. 함께 고친 것들</h2>")
+    # ---------------------------------------------------------------- 6. engineering
+    P("<h2>6. Fixed along the way</h2>")
     P(
         "<ul>"
-        "<li><b>targets() 단순화</b> — crossed/lands_on_term/boot/term_inside 4변수 3분기 → <code>ended</code> "
-        "마스크 하나. 2,236,272셀 중 valid 셀 전부에서 기존과 비트단위 동일 검증.</li>"
-        "<li><b>QC 롤아웃 버그</b> — load_trained가 QC에 프리픽스 축 없이 반환해 np.unravel_index가 사망. "
-        "세 스윕 내내 QC 롤아웃이 조용히 죽고 있었다. P=1 축 + macro=horizon으로 계약 복구.</li>"
-        "<li><b>HUD 패널 침범 해결</b> — 롤아웃 중 렌더하지 않고 원시 데이터만 수집, 종료 후 일괄 합성. "
-        "1000프레임 실패 에피소드 전수검사 침범 0건. (원인 후보 5개를 측정으로 기각한 끝의 우회 해결.)</li>"
-        "<li><b>오버레이 재작성</b> — (a) 스케일 상수를 측정으로 교정(0.0054 m/unit), (b) 확대는 월드 공간에서 "
-        "(화면 공간 확대는 원근을 파괴), (c) 배율을 프레임에 명시, (d) 그리퍼가 화면 밖이면 그리지 않음(테두리 "
-        "clip 잔재 제거), (e) trial 간 projector 재생성(죽은 sim 참조 크래시).</li>"
-        "<li><b>재현성</b> — --discount가 주석과 다르면 mc_return 재누적 데이터셋을 자동 생성(동시 실행 안전, "
-        "원자적 rename). proprio는 annotation 단계에서 직접 기록(사후 join 제거; 기존 파일과 비트단위 동일 검증). "
-        "--use-proprio 플래그 삭제(항상 켜짐).</li>"
-        "<li><b>운영</b> — base_qos 포화 시 스윕 전체를 big_qos로 자동 라우팅. 잡 제출 후 산출물 파일 기반 감시 "
-        "+ 마일스톤 보고 체계.</li></ul>"
+        "<li><b>targets() simplified</b> — four variables and three branches (crossed/lands_on_term/boot/"
+        "term_inside) collapsed into one <code>ended</code> mask; verified bitwise-identical on every valid "
+        "cell (2,236,272 cells).</li>"
+        "<li><b>QC rollout bug</b> — load_trained returned QC critics without the prefix axis, so "
+        "np.unravel_index died and every QC rollout across three sweeps failed silently. Restored the "
+        "documented contract with a P=1 axis and macro=horizon.</li>"
+        "<li><b>HUD panel corruption solved</b> — nothing renders during the rollout; raw frames are "
+        "collected and composed afterwards. A 1000-frame failure episode scans clean (after five measured "
+        "hypothesis rejections, this removes the interleaving rather than guessing at it).</li>"
+        "<li><b>Overlay rewritten</b> — (a) scale constant re-measured (0.0054 m/unit), (b) magnification "
+        "moved to world space (screen-space scaling destroyed the perspective), (c) the factor printed on "
+        "every frame, (d) paths whose anchor is clipped to the border are skipped, (e) the projector is "
+        "rebuilt between trials (reset tears down the sim it holds).</li>"
+        "<li><b>Reproducibility</b> — training at a mismatched discount now builds the matching dataset "
+        "itself (mc_return re-accumulated, hardlinked heavy arrays, atomic rename, concurrency-safe). "
+        "Proprio is written during annotation (bitwise-equal to the old join on all 279,534 rows); "
+        "--use-proprio is gone (always on).</li>"
+        "<li><b>Operations</b> — sweeps reroute wholly to the preemptable tier when our base-QOS quota is "
+        "already full; every submission gets an artifact-file watcher and milestone reporting.</li></ul>"
     )
 
-    # ---------------------------------------------------------------- 다음
-    P("<h2>7. 다음 판정</h2>")
+    # ---------------------------------------------------------------- 7. next
+    P("<h2>7. Next verdicts</h2>")
     P(
-        "<ol><li><b>IQL 롤아웃</b> — critic−vla가 −0.285에서 0 쪽으로 오는가. iql_qc의 rank_c 0.571이 성공률로 "
-        "이어지는가.</li>"
-        "<li><b>v7 ep1</b> — 암기 극한에서의 b(d): 편향의 최종 귀속.</li>"
-        "<li><b>v5</b> — TD를 고쳐 쓸 수 있는지, 아니면 IQL로 갈아타는 게 맞는지.</li>"
-        "<li>액션 순위 신호 자체는 여전히 데이터에 없다 — 마진 랭킹 손실(다른 에피소드의 청크를 음성 표본으로) 또는 "
-        "실패 궤적 수집이 다음 단계.</li></ol>"
+        "<ol><li><b>v7 ep1</b> — b(d) in the memorisation limit: the bias's final attribution.</li>"
+        "<li><b>v5</b> — whether TD is repairable, or switching to IQL is simply correct.</li>"
+        "<li>The action-ranking signal itself is still absent from the data — a margin ranking loss "
+        "(chunks from other episodes as negatives) or collecting failure trajectories is the next step.</li>"
+        "<li>Deployment: evaluate <b>prefix-only</b> as the default configuration (IQL critic sets the "
+        "commitment length; first sample executes).</li></ol>"
     )
 
-    # ---------------------------------------------------------------- 부록
-    P("<h2>부록 A. 지표 정의</h2><dl>")
+    # ---------------------------------------------------------------- appendices
+    P("<h2>Appendix A. Metric definitions</h2><dl>")
     for dt, dd in [
         (
             "ρ(Q,MC) — spearman_q_demo_vs_mc",
-            "시연 청크의 Q ↔ 실제 거둔 리턴의 순위상관. 0=무관, 클수록 좋음. 상태 가치를 읽는 능력.",
+            "Rank correlation between the demo chunk's Q and the return actually collected. 0 = unrelated; "
+            "higher is better. Measures how well the critic reads STATE value.",
         ),
         (
             "act_sens — action_sensitivity",
-            "상태 내부 Q분산 ÷ 상태 간 Q분산. 0 = 액션 완전 무시(Q(z,a)=V(z)). 클수록 좋음.",
+            "Within-state Q variance ÷ between-state Q variance. 0 = the action is ignored entirely "
+            "(Q(z,a) collapses to V(z)); higher is better.",
         ),
         (
             "rank_c — ranking_accuracy_demo_vs_candidate",
-            "같은 상태에서 시연 청크가 정책 후보보다 높은 Q를 받는 비율. 우연=0.5, 클수록 좋음.",
+            "How often the demonstrated chunk out-scores a policy candidate at the same state. "
+            "Chance = 0.5; higher is better.",
         ),
         (
             "rank_o — ranking_accuracy_demo_vs_other",
-            "시연 청크 vs 다른 상태에서 빌려온 무관한 청크. 쉬운 문제이며 우연=0.5. 이것마저 0.5면 액션 입력 자체를 무시.",
+            "Demo chunk vs a chunk borrowed from a DIFFERENT state, scored at this state. An easy problem; "
+            "chance = 0.5. If even this sits at 0.5 the critic ignores its action input.",
         ),
         (
             "pfx_H — prefix_argmax_entropy",
-            "배포 arg-max가 고르는 프리픽스 길이 분포의 정규화 엔트로피. 1=고르게, 0=항상 같은 길이(적응 청킹 퇴화).",
+            "Normalised entropy of the prefix lengths the deployment arg-max picks. 1 = spread evenly, "
+            "0 = always the same length (adaptive chunking has degenerated).",
         ),
-        ("b(d)", "V̂(s) − γ^d. 참값이 닫힌형으로 알려져 있어 근사가 아님. 0=정확, >0=과대추정."),
-        ("y_h / γ^d", "프리픽스 h 타깃 ÷ 참값. 이론상 h 무관하게 1.0."),
-        ("McNemar p", "같은 장면의 짝지은 성패에 대한 정확검정. p<0.05 = 우연 아님."),
-        ("Wilson 구간", "이항 비율 95% 신뢰구간; 극단 비율에서도 안정."),
-        ("expectile τ", "IQL의 비대칭 회귀 파라미터. 0.5=평균(개선 없음), 1에 접근할수록 max_a Q에 접근."),
+        (
+            "b(d)",
+            "V̂(s) − γ^d. The truth is known in closed form (sparse terminal reward), so this is computed, "
+            "not approximated. 0 = exact; positive = over-estimation.",
+        ),
+        ("y_h / γ^d", "Per-prefix target over the truth. In theory 1.0, independent of h."),
+        ("McNemar p", "Exact test on paired successes over identical scenes. p&lt;0.05 = not chance."),
+        ("Wilson interval", "95% CI for a binomial rate; stable near 0 and 1."),
+        (
+            "expectile τ",
+            "IQL's asymmetric-regression parameter. 0.5 = the mean (no improvement); approaching 1 "
+            "approaches max_a Q.",
+        ),
     ]:
         P(f"<dt>{html.escape(dt)}</dt><dd>{dd}</dd>")
     P("</dl>")
-    P("<h2>부록 B. 런 이름</h2>")
-    P(f"<p class='mut'>v4 이후 baseline = {html.escape(BASELINE_NOTE)}. 각 런은 한 가지만 다르다.</p>")
-    P("<div class='scroll'><table><thead><tr><th>run</th><th>스윕</th><th>무엇이 다른가</th></tr></thead><tbody>")
+    P("<h2>Appendix B. Run names</h2>")
+    P(
+        f"<p class='mut'>Baseline from v4 onward = {html.escape(BASELINE_NOTE)}. Each run differs in exactly "
+        "one thing.</p>"
+    )
+    P("<div class='scroll'><table><thead><tr><th>run</th><th>sweep</th><th>what differs</th></tr></thead><tbody>")
     extra = {
-        "k3": "앙상블 3개 (기본 2)",
-        "k5": "앙상블 5개",
-        "online": "target network 없음 — 온라인 critic으로 부트스트랩",
-        "tau001": "Polyak τ=0.001 (10배 느린 타깃)",
-        "tau05": "Polyak τ=0.05 (10배 빠른 타깃)",
-        "iql_e50": "IQL, expectile 0.50 (=최소자승, 개선 없음 대조)",
+        "k3": "ensemble of 3 (default 2)",
+        "k5": "ensemble of 5",
+        "online": "no target network — bootstrap off the online critic",
+        "tau001": "Polyak τ=0.001 (10× slower target)",
+        "tau05": "Polyak τ=0.05 (10× faster target)",
+        "iql_e50": "IQL, expectile 0.50 (= least squares; the no-improvement control)",
         "iql_e70": "IQL, expectile 0.70",
         "iql_e90": "IQL, expectile 0.90",
         "iql_e95": "IQL, expectile 0.95",
-        "iql_qc": "IQL(τ=0.7) + QC — 프리픽스 head 없음",
-        "ep1": "에피소드 1개(745프레임)만으로 학습 — 암기 극한",
-        "ep4": "에피소드 4개",
-        "ep16": "16개",
-        "ep64": "64개",
-        "scalarq": "스칼라 회귀로 회귀(기본 HL-Gauss 대신)",
-        "nofloor": "mc 하한 없음(기본은 max(TD, mc_return))",
+        "iql_qc": "IQL (τ=0.7) + QC — no prefix head",
+        "ep1": "trained on 1 episode (745 frames) — the memorisation limit",
+        "ep4": "4 episodes",
+        "ep16": "16 episodes",
+        "ep64": "64 episodes",
+        "scalarq": "scalar regression (instead of the default HL-Gauss head)",
+        "nofloor": "no mc floor (default is max(TD, mc_return))",
     }
     for sweep, runs in [("v4", v4), ("v5", v5), ("v6", v6), ("v7", v7)]:
         for r in sorted(runs):
@@ -504,7 +582,8 @@ def main() -> None:
     P("</tbody></table></div>")
 
     out.write_text(
-        f"<title>ACRFT critic 실험 일지</title>\n<style>{CSS}</style>\n<main>{''.join(A)}</main>\n", encoding="utf-8"
+        f"<title>ACRFT critic — experiment log</title>\n<style>{CSS}</style>\n<main>{''.join(A)}</main>\n",
+        encoding="utf-8",
     )
     print(f"wrote {out}")
 
