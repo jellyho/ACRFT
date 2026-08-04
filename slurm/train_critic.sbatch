@@ -25,8 +25,10 @@
 #    SEED           seed                                                    (default 0)
 #    WANDB          1 = log to $WANDB_PROJECT                               (default 1)
 #
-#  NOTE: train_rlt_critic.py has no resume path, so the job is NOT submitted with --requeue —
-#  a preempted job would silently restart from step 0. Resubmit by hand if a node dies.
+#  Preemption/time-limit safe: training checkpoints its FULL state (state.msgpack, params +
+#  optimizer + target net) every --save-every steps and resumes from it on restart, and the job
+#  requeues itself 3 minutes before the wall clock (see the USR1 trap). A limit costs at most one
+#  save interval.
 # ============================================================================================
 #SBATCH --job-name=acrft_critic
 #SBATCH --partition=suma_a6000,gigabyte_a6000,tyan_a6000,asus_6000ada
@@ -37,9 +39,18 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=2-00:00:00
+#SBATCH --signal=B:USR1@180
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --output=/scratch/jellyho/acrft/logs/%x_%A_%a.out
 
 set -euo pipefail
+# Requeue ourselves 3 minutes before the wall clock: training checkpoints its FULL state
+# (state.msgpack) every --save-every steps, and the next incarnation resumes from it, so a time
+# limit costs at most one save interval instead of the whole run. The python process is left to be
+# killed by slurm - requeue is queued, not immediate.
+trap 'echo "[requeue] time limit imminent - requeuing ${SLURM_JOB_ID}"; scontrol requeue "${SLURM_JOB_ID}"' USR1
+
 
 cd "${ACRFT_REPO:-/home/jellyho/ACRFT/ACRFT}"
 source slurm/env.sh
@@ -194,6 +205,9 @@ trap 'kill "$SAMPLER" 2>/dev/null || true' EXIT
 
 # --- train -------------------------------------------------------------------------------------
 # $FLAGS is deliberately unquoted: it is a pre-tokenised flag string from the manifest.
+# Backgrounded + `wait`: bash only delivers a trapped signal once its FOREGROUND child yields, so a
+# foreground python would swallow the USR1 until it was already being killed - the requeue must be
+# scheduled while training still runs.
 # shellcheck disable=SC2086
 uv run --no-sync scripts/train_rlt_critic.py \
     --data "$DATA" \
@@ -205,7 +219,9 @@ uv run --no-sync scripts/train_rlt_critic.py \
     "${FIT_ARGS[@]}" \
     "${ROLLOUT_ARGS[@]}" \
     "${WANDB_ARGS[@]}" \
-    $FLAGS
+    $FLAGS &
+TRAIN_PID=$!
+wait "$TRAIN_PID"
 
 # --- offline diagnostics ------------------------------------------------------------------------
 # eval_rlt_critic.py reads the architecture (and the wandb run id) from the config.json the run just

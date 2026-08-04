@@ -740,13 +740,26 @@ def main() -> None:
         return {f"rollout/{m}_success": v for m, v in rows.items()}
 
     carry = (params, tgt_params, opt_state, v_params, v_opt_state)
+    # Resume from a previous incarnation of this run, if one saved its full state. Loading only
+    # params_*.msgpack would restart Adam and the target network from scratch - a different
+    # optimisation, not a continuation - so the resume file carries the whole carry.
+    out_dir = cfg.out or (cfg.data / f"critic_{cfg.kind}")
+    start_step = 0
+    _state_f = out_dir / "state.msgpack"
+    if _state_f.exists():
+        import flax.serialization as _fser
+
+        blob = _fser.msgpack_restore(_state_f.read_bytes())
+        start_step = int(blob["step"])
+        carry = jax.tree.map(jnp.asarray, tuple(blob["carry"]))
+        logger.info(f"resuming from {_state_f} at step {start_step}")
     t0 = time.perf_counter()
-    for s in range(0, cfg.steps, cfg.steps_per_dispatch):
+    for s in range(start_step, cfg.steps, cfg.steps_per_dispatch):
         carry, infos = run_chunk(carry, jax.random.fold_in(rng, s))
         if s % cfg.log_interval == 0:
             info = jax.tree.map(lambda x: float(jnp.mean(x)), infos)
             step = s + cfg.steps_per_dispatch
-            rate = step / max(time.perf_counter() - t0, 1e-6)
+            rate = (step - start_step) / max(time.perf_counter() - t0, 1e-6)
             logger.info(
                 f"step {step}/{cfg.steps}  {rate:.0f} it/s  " + "  ".join(f"{k}={v:.4f}" for k, v in info.items())
             )
@@ -773,11 +786,14 @@ def main() -> None:
             if run is not None:
                 run.log(r, step=step)
         if cfg.save_every and step % cfg.save_every == 0 and step < cfg.steps:
-            out0 = cfg.out or (cfg.data / f"critic_{cfg.kind}")
+            out0 = out_dir
             out0.mkdir(parents=True, exist_ok=True)
             import flax.serialization as _fser
 
             (out0 / f"params_{step}.msgpack").write_bytes(_fser.to_bytes(carry[0]))
+            _tmp = out0 / "state.msgpack.tmp"
+            _tmp.write_bytes(_fser.to_bytes({"step": step, "carry": list(carry)}))
+            _tmp.replace(out0 / "state.msgpack")
             # V goes in its own file so params_*.msgpack keeps the exact shape every existing reader
             # (load_trained, eval_rlt_critic, eval_critic) already expects.
             if cfg.objective == "iql":
@@ -800,6 +816,7 @@ def main() -> None:
     import flax.serialization as fser
 
     (out / "params.msgpack").write_bytes(fser.to_bytes(carry[0]))
+    (out / "state.msgpack").unlink(missing_ok=True)  # finished: the resume state would only confuse
     if cfg.objective == "iql":
         (out / "vparams.msgpack").write_bytes(fser.to_bytes(carry[3]))
     cfg_out = vars(cfg) | {"data": str(cfg.data), "out": str(out)} | _where_it_ran()
