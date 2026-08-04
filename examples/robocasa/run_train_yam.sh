@@ -6,6 +6,7 @@
 #   examples/robocasa/run_train_yam.sh                # relative-joint default
 #   CONFIG=pi05_yam_lego_taxi_none_rlt examples/robocasa/run_train_yam.sh   # absolute joint
 #   SUCCESS_ONLY=1 examples/robocasa/run_train_yam.sh # train on success episodes only
+#   SUCCESS_ONLY=1 ASSET_ID=jellyho/yam_lego_taxi_s100 EXP=yam_lego_taxi_rlt_s100 ...  # scaling point
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -14,27 +15,34 @@ CONFIG="${CONFIG:-pi05_yam_lego_taxi_rlt}"
 EXP="${EXP:-${CONFIG#pi05_}}"
 PROJECT="${PROJECT:-yam-rlt}"
 ENTITY="${ENTITY:-RSS-PFT_RLLAB}"
+# Where norm stats live, relative to the config's assets dir. Default keeps the historical path; the
+# data-scaling study overrides it (ASSET_ID=jellyho/yam_lego_taxi_s100, _s200, ...) so every point —
+# a DIFFERENT set of episodes — gets its OWN norm stats instead of clobbering a shared file. This is
+# passed to BOTH the compute step and the training run so they agree on the path.
+ASSET_ID="${ASSET_ID:-jellyho/yam_lego_taxi}"
 
-# Success-only: drop the 19 failed teleop episodes (BC clones them otherwise). Tags the run so it
-# gets its own checkpoint dir and does not collide with a full-data run of the same CONFIG. Norm
-# stats are shared with the full-data run (100 vs 119 episodes of the same task barely move the
-# state/action quantiles); pass FORCE_NORM_STATS=1 if you want them recomputed on the subset.
-DATA_FLAGS=()
+# Success-only: drop the failed teleop episodes (BC clones them otherwise). Tags the run so it gets
+# its own checkpoint dir, and the compute step below is told to filter too, so the stats match the
+# episodes actually trained on.
+# tyro exposes bools as bare flags (--success-only / --no-success-only), not --success-only True.
+DATA_FLAGS=(--data.assets.asset-id "$ASSET_ID")
+NORM_FLAGS=(--asset-id "$ASSET_ID")
 if [ "${SUCCESS_ONLY:-0}" = "1" ]; then
-  DATA_FLAGS+=(--data.success-only True)
+  DATA_FLAGS+=(--data.success-only)
+  NORM_FLAGS+=(--success-only)
   EXP="${EXP}_successonly"
 fi
 
-# Where the config looks for norm stats: assets_dirs/<repo_id>/norm_stats.json.
-STATS="$REPO_ROOT/assets/$CONFIG/jellyho/yam_lego_taxi/norm_stats.json"
+# Where the config looks for norm stats: assets_dirs/<asset_id>/norm_stats.json.
+STATS="$REPO_ROOT/assets/$CONFIG/$ASSET_ID/norm_stats.json"
 
 if [ -f "$STATS" ] && [ "${FORCE_NORM_STATS:-0}" != "1" ]; then
   echo "[1/2] norm stats present ($STATS), skipping"
 else
-  echo "[1/2] computing norm stats for $CONFIG (downloads the dataset if needed)"
+  echo "[1/2] computing norm stats for $CONFIG -> $ASSET_ID (downloads the dataset if needed)"
   # Norm stats only accumulate state/actions in numpy - the sole GPU use is the loader's
   # host-to-device copy, which JAX_PLATFORMS=cpu removes. Keeps this step off the GPU entirely.
-  if ! JAX_PLATFORMS=cpu uv run python scripts/compute_norm_stats.py --config-name "$CONFIG"; then
+  if ! JAX_PLATFORMS=cpu uv run python scripts/compute_norm_stats.py --config-name "$CONFIG" "${NORM_FLAGS[@]}"; then
     echo "  !! norm stats failed"; exit 1
   fi
 fi
