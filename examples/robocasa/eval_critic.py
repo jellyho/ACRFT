@@ -331,7 +331,6 @@ def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
     # Model-variant overrides: must match how the checkpoint was trained, or its parameter tree does
     # not match the registered config's default and the load fails. Same flags as annotate_rlt.py.
-    ap.add_argument("--no-proprio", action="store_true", help="Checkpoint was trained without the proprio token.")
     ap.add_argument("--decoder-mode", choices=["parallel", "autoregressive"], default=None)
     ap.add_argument("--objective", default=None, help="Override rlt_objective (e.g. recon).")
     args = ap.parse_args()
@@ -340,8 +339,6 @@ def main() -> None:
         ap.error("--critic is required unless --modes vla")
 
     model_overrides = {}
-    if args.no_proprio:
-        model_overrides["rlt_include_proprio"] = False
     if args.decoder_mode is not None:
         model_overrides["rlt_decoder_mode"] = args.decoder_mode
     if args.objective is not None:
@@ -359,13 +356,17 @@ def main() -> None:
     for kv in args.vla_override:
         k, _, v = kv.partition("=")
         _vla_ov[k] = {"true": True, "false": False}.get(v.lower(), v)
+    # Two override sources feed the model config: the convenience rlt flags (--decoder-mode,
+    # --objective) and the generic --vla-override key=value list. Merge them, with the explicit
+    # --vla-override winning on any shared key.
+    model_overrides = {**model_overrides, **_vla_ov}
     shared_vla = VLA(
         args.config,
         args.checkpoint,
         num_samples=args.num_samples,
         flow_steps=args.num_flow_steps,
         seed=args.seed,
-        model_overrides=_vla_ov,
+        model_overrides=model_overrides,
     )
 
     for mode in args.modes:
@@ -378,10 +379,9 @@ def main() -> None:
             flow_steps=args.num_flow_steps,
             seed=args.seed,
             query_noise=args.query_noise,
-            model_overrides=_vla_ov,
+            model_overrides=model_overrides,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
-            model_overrides=model_overrides,
         )
         trace, frames, box = [], [], {"trial": 0, "proj": None}
         record = args.video_dir is not None
