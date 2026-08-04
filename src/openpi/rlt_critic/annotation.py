@@ -15,6 +15,7 @@ sees no directory or sees a complete one - never a half-written one - and a task
 simply uses the winner's copy.
 """
 
+import itertools
 import json
 import logging
 import os
@@ -61,7 +62,7 @@ def mc_return_at(reward, done, episode, discount: float) -> np.ndarray:
         return mc.astype(np.float32)
     bounds = np.flatnonzero(np.diff(episode, prepend=episode[0] - 1))
     bounds = np.append(bounds, T)
-    for a, b in zip(bounds[:-1], bounds[1:], strict=True):
+    for a, b in itertools.pairwise(bounds):
         acc = 0.0
         for t in range(b - 1, a - 1, -1):
             if done[t]:

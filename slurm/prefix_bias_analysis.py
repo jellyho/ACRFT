@@ -46,8 +46,10 @@ def main() -> None:
     prefixes = np.arange(gsz, H + 1, gsz)  # exactly train_rlt_critic's `prefixes`
 
     rd = lambda n, dt: np.asarray(np.memmap(args.data / f"{n}.dat", dt, "r", shape=(T,)))  # noqa: E731
-    reward, done, episode, mc = rd("reward", np.float32), rd("done", np.int8), rd("episode_index", np.int32), rd(
-        "mc_return", np.float32
+    done, episode, mc = (
+        rd("done", np.int8),
+        rd("episode_index", np.int32),
+        rd("mc_return", np.float32),
     )
 
     # --- reproduce the trainer's terminal bookkeeping verbatim -------------------------------------

@@ -32,7 +32,7 @@ COLS = [
     ("q_demo_minus_mc_mean", "q-mc", "{:+.3f}"),
 ]
 ROLLOUT_RE = re.compile(r"\[rollout @ (\d+)\]\s+critic\s+([\d.]+)%\s+vla\s+([\d.]+)%")
-RUN_RE = re.compile(r"^sweep/run\s*:\s*(\S+)/(\S+)\s*$", re.M)
+RUN_RE = re.compile(r"^sweep/run\s*:\s*(\S+)/(\S+)\s*$", re.MULTILINE)
 
 
 def rollout_by_run(log_dir: pathlib.Path, sweep: str) -> dict[str, tuple[str, str, str]]:

@@ -30,8 +30,8 @@ Usage:
 import argparse
 import dataclasses
 import json
-import os as _os
 import logging
+import os as _os
 import pathlib
 import sys
 
@@ -224,7 +224,16 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
 
 
 def build_policy(
-    config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed, query_noise=0.0, softmax_temp=0.0,
+    config_name,
+    checkpoint,
+    critic_path,
+    *,
+    mode,
+    num_samples,
+    flow_steps,
+    seed,
+    query_noise=0.0,
+    softmax_temp=0.0,
     model_overrides=None,
     vla=None,
 ):
@@ -242,7 +251,11 @@ def build_policy(
         # ran second, purely because the leading mode had advanced the stream.
         vla.reset_rng(seed)
     vla = vla or VLA(
-        config_name, checkpoint, num_samples=num_samples, flow_steps=flow_steps, seed=seed,
+        config_name,
+        checkpoint,
+        num_samples=num_samples,
+        flow_steps=flow_steps,
+        seed=seed,
         model_overrides=model_overrides,
     )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
@@ -266,8 +279,10 @@ def main() -> None:
     ap.add_argument("--critic", type=pathlib.Path, default=None, help="Trained critic params.msgpack.")
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
-        "--modes", nargs="+", default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "vla"]
+        "--modes",
+        nargs="+",
+        default=["critic", "bon", "prefix", "rand", "vla"],
+        choices=["critic", "bon", "prefix", "rand", "vla"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
@@ -326,8 +341,12 @@ def main() -> None:
         k, _, v = kv.partition("=")
         _vla_ov[k] = {"true": True, "false": False}.get(v.lower(), v)
     shared_vla = VLA(
-        args.config, args.checkpoint, num_samples=args.num_samples,
-        flow_steps=args.num_flow_steps, seed=args.seed, model_overrides=_vla_ov,
+        args.config,
+        args.checkpoint,
+        num_samples=args.num_samples,
+        flow_steps=args.num_flow_steps,
+        seed=args.seed,
+        model_overrides=_vla_ov,
     )
 
     for mode in args.modes:
@@ -412,12 +431,22 @@ def main() -> None:
 
                 dash = _hud2.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size)
                 composed = [
-                    dash.frame(r["agent"], r["wrist"], r["info"], r["step"],
-                               paths=r["paths"], chosen=r["chosen"], success=r["success"])
+                    dash.frame(
+                        r["agent"],
+                        r["wrist"],
+                        r["info"],
+                        r["step"],
+                        paths=r["paths"],
+                        chosen=r["chosen"],
+                        success=r["success"],
+                    )
                     for r in _frames
                 ]
                 imageio.mimwrite(
-                    out, composed, fps=args.fps, codec="libx264",
+                    out,
+                    composed,
+                    fps=args.fps,
+                    codec="libx264",
                     output_params=["-crf", str(args.video_crf), "-preset", "medium"],
                 )
                 logger.info(f"  saved {out}  ({len(composed)} frames, composed after the rollout)")

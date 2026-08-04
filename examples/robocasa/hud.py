@@ -125,8 +125,16 @@ class Dashboard:
             loc="left",
         )
         if q.shape[1] > 1:
-            ax.text(0.0, 1.015, f"bar = one candidate's best over {q.shape[1]} prefixes",
-                    transform=ax.transAxes, ha="left", va="bottom", color=_INK2, fontsize=6.5)
+            ax.text(
+                0.0,
+                1.015,
+                f"bar = one candidate's best over {q.shape[1]} prefixes",
+                transform=ax.transAxes,
+                ha="left",
+                va="bottom",
+                color=_INK2,
+                fontsize=6.5,
+            )
         # The winner's rank among the candidates, which is the thing best-of-N is buying.
         ax.text(
             0.98,
@@ -200,7 +208,10 @@ class Dashboard:
             bx.set_ylabel("steps run", color=_INK2, fontsize=7.5, labelpad=2)
             bx.set_title(
                 f"steps committed per replan   mean {float(np.mean(self.spans)):.1f} of {self.horizon}",
-                color=_SPAN, fontsize=7.5, pad=3, loc="left",
+                color=_SPAN,
+                fontsize=7.5,
+                pad=3,
+                loc="left",
             )
         else:
             # The whole of best-of-N is the gap between the best candidate and the rest. If this bar
@@ -213,7 +224,10 @@ class Dashboard:
             bx.set_title(
                 f"candidate value spread per replan   mean {float(sp.mean()):.5f}"
                 f"   (≈0 ⇒ best-of-N is a coin flip)",
-                color=_SPAN, fontsize=7.5, pad=3, loc="left",
+                color=_SPAN,
+                fontsize=7.5,
+                pad=3,
+                loc="left",
             )
         bx.set_xlabel("env step", color=_INK2, fontsize=7.5)
         return _render(fig)
@@ -305,8 +319,11 @@ class Dashboard:
         d.text((10, 7), self.mode, font=self._f_lg, fill=_INK)
         d.text((_W_MAIN - 150, 9), f"step {step:4d}", font=self._f_sm, fill=_INK2)
         if info is not None:
-            _hdr = (f"Q {info.value:.4f}   run {info.n_exec}/{self.horizon}" if self.has_prefix
-                    else f"Q {info.value:.4f}   spread {self.spreads[-1]:.5f}")
+            _hdr = (
+                f"Q {info.value:.4f}   run {info.n_exec}/{self.horizon}"
+                if self.has_prefix
+                else f"Q {info.value:.4f}   spread {self.spreads[-1]:.5f}"
+            )
             d.text((90, 9), _hdr, font=self._f_md, fill=_WIN)
         else:
             d.text((90, 10), "no critic — first sample, full chunk", font=self._f_md, fill=_INK2)
@@ -317,8 +334,12 @@ class Dashboard:
             # PATH_GAIN times life size, not a distance the arm will travel.
             import action_overlay as _ov  # the label must track the constant, not restate it
 
-            d.text((8, _H_TOP - 20), f"chunk paths x{_ov.PATH_GAIN:g}, world-scale (true span ~3 cm)",
-                   font=self._f_sm, fill=(150, 175, 200))
+            d.text(
+                (8, _H_TOP - 20),
+                f"chunk paths x{_ov.PATH_GAIN:g}, world-scale (true span ~3 cm)",
+                font=self._f_sm,
+                fill=(150, 175, 200),
+            )
         if success:
             d.rectangle([2, 2, WIDTH - 3, HEIGHT - 3], outline=_WIN, width=3)
             d.rectangle([_W_MAIN - 138, _H_TOP - 36, _W_MAIN - 8, _H_TOP - 8], fill=(10, 13, 12))

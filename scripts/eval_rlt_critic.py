@@ -77,9 +77,11 @@ def main() -> None:
     # concatenation and the same z-scoring have to be reproduced here or the network is fed the wrong
     # width. Whether it was is recorded in the run's config.json, read a few lines below; this is
     # resolved early because `tok` is needed before that.
-    _tcfg = json.loads((args.params.parent / "config.json").read_text()) if (
-        args.params.parent / "config.json"
-    ).exists() else {}
+    _tcfg = (
+        json.loads((args.params.parent / "config.json").read_text())
+        if (args.params.parent / "config.json").exists()
+        else {}
+    )
     if _tcfg.get("use_proprio"):
         pdim = meta["proprio_dim"]
         pro = _load(args.data, "proprio", (T, pdim), np.float32)

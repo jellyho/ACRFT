@@ -12,16 +12,26 @@ reader needs is "what is different about this one", not a dump of forty settings
 # (config key, baseline value, how to say it when it differs)
 _AXES = [
     ("kind", "arq", lambda v: "QC — chunk 전체에 값 하나, prefix head 없음" if v == "qc" else f"kind={v}"),
-    ("num_atoms", 51, lambda v: "스칼라 회귀 critic — 기본값인 HL-Gauss 히스토그램 대신 값 하나를 직접 회귀"
-     if v == 1 else f"HL-Gauss atoms={v}"),
-    ("v_agg", "max", lambda v: {"topm": "후보 집계를 상위 m개 평균으로 (hard max 대신)",
-                                "soft": "후보 집계를 softmax 가중평균으로 (hard max 대신)"}.get(v, f"v_agg={v}")),
+    (
+        "num_atoms",
+        51,
+        lambda v: "스칼라 회귀 critic — 기본값인 HL-Gauss 히스토그램 대신 값 하나를 직접 회귀"
+        if v == 1
+        else f"HL-Gauss atoms={v}",
+    ),
+    (
+        "v_agg",
+        "max",
+        lambda v: {
+            "topm": "후보 집계를 상위 m개 평균으로 (hard max 대신)",
+            "soft": "후보 집계를 softmax 가중평균으로 (hard max 대신)",
+        }.get(v, f"v_agg={v}"),
+    ),
     ("ens_agg", "min", lambda v: "ensemble 집계를 mean−β·std(LCB)로 (hard min 대신)" if v == "lcb" else f"ens_agg={v}"),
     ("bootstrap_candidates", 0, lambda v: f"부트스트랩 max를 후보 {v}개로 좁힘 (매 스텝 재추출)"),
     ("target_noise", 0.0, lambda v: f"타깃 후보에 시간적으로 일관된 노이즈 {v}σ 주입"),
     ("macro_group_size", 2, lambda v: f"macro token {v}스텝 묶음 → prefix {16 // v}개 (기본 8개)"),
-    ("mc_lower_bound", True, lambda v: "타깃 하한 없음 — 기본값인 max(TD, mc_return) 대신 순수 TD"
-     if not v else None),
+    ("mc_lower_bound", True, lambda v: "타깃 하한 없음 — 기본값인 max(TD, mc_return) 대신 순수 TD" if not v else None),
     ("proprio_mode", "concat", lambda v: "proprio를 전용 토큰으로 (토큰에 이어붙이지 않음)" if v == "token" else None),
 ]
 

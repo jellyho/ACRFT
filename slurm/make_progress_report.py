@@ -7,6 +7,7 @@ pfx_curve.json), so re-running refreshes every number without editing this file.
 """
 
 import argparse
+import contextlib
 import glob
 import html
 import json
@@ -16,7 +17,8 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from _describe import BASELINE_NOTE, describe  # noqa: E402
+from _describe import BASELINE_NOTE
+from _describe import describe
 
 MODES = ["vla", "rand", "bon", "prefix", "critic"]
 BANDS = [(5, 15), (15, 30), (30, 60), (60, 120), (120, 250), (250, 600)]
@@ -94,10 +96,8 @@ def load_sweep(root, sweep):
         for name in ("diag.json", "config.json"):
             p = pathlib.Path(d) / name
             if p.exists():
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     e[name.split(".")[0]] = json.loads(p.read_text())
-                except json.JSONDecodeError:
-                    pass
         rolls = sorted(glob.glob(d + "rollout/*.json"))
         if rolls:
             e["rollout"] = json.loads(pathlib.Path(rolls[-1]).read_text())
@@ -106,30 +106,37 @@ def load_sweep(root, sweep):
     return out
 
 
-def diag_table(P, sweeps, note=""):
+def diag_table(emit, sweeps, note=""):
     """One combined diagnostics table. Columns are the necessary-condition metrics."""
-    P("<div class='scroll'><table><thead><tr><th>run</th><th>스윕</th><th>ρ(Q,MC)</th><th>act_sens</th>"
-      "<th>rank_c</th><th>rank_o</th><th>pfx_H</th></tr></thead><tbody>")
+    emit(
+        "<div class='scroll'><table><thead><tr><th>run</th><th>스윕</th><th>ρ(Q,MC)</th><th>act_sens</th>"
+        "<th>rank_c</th><th>rank_o</th><th>pfx_H</th></tr></thead><tbody>"
+    )
     for sweep, runs in sweeps:
         for r, e in sorted(runs.items()):
             g = e.get("diag")
             if not g:
                 continue
-            fmt = lambda k, p=3: (f"{g[k]:.{p}f}" if k in g else "—")  # noqa: E731
+            fmt = lambda k, p=3, g=g: (f"{g[k]:.{p}f}" if k in g else "—")  # noqa: E731
             rc = g.get("ranking_accuracy_demo_vs_candidate", 0)
-            P(f"<tr><td>{html.escape(r)}</td><td class='mut'>{html.escape(sweep)}</td>"
-              f"<td>{fmt('spearman_q_demo_vs_mc')}</td><td>{fmt('action_sensitivity', 4)}</td>"
-              f"<td class='{'ok' if rc > 0.55 else ''}'>{fmt('ranking_accuracy_demo_vs_candidate')}</td>"
-              f"<td>{fmt('ranking_accuracy_demo_vs_other')}</td><td>{fmt('prefix_argmax_entropy')}</td></tr>")
-    P("</tbody></table></div>")
+            emit(
+                f"<tr><td>{html.escape(r)}</td><td class='mut'>{html.escape(sweep)}</td>"
+                f"<td>{fmt('spearman_q_demo_vs_mc')}</td><td>{fmt('action_sensitivity', 4)}</td>"
+                f"<td class='{'ok' if rc > 0.55 else ''}'>{fmt('ranking_accuracy_demo_vs_candidate')}</td>"
+                f"<td>{fmt('ranking_accuracy_demo_vs_other')}</td><td>{fmt('prefix_argmax_entropy')}</td></tr>"
+            )
+    emit("</tbody></table></div>")
     if note:
-        P(f"<p class='mut' style='font-size:.9rem'>{note}</p>")
+        emit(f"<p class='mut' style='font-size:.9rem'>{note}</p>")
 
 
-def rollout_table(P, runs, id_prefix=""):
+def rollout_table(emit, runs, id_prefix=""):
     tot = {m: [0, 0] for m in MODES}
-    P("<div class='scroll'><table><thead><tr><th>run</th>" + "".join(f"<th>{m}</th>" for m in MODES) +
-      "<th>critic−vla</th><th>McNemar p</th></tr></thead><tbody>")
+    emit(
+        "<div class='scroll'><table><thead><tr><th>run</th>"
+        + "".join(f"<th>{m}</th>" for m in MODES)
+        + "<th>critic−vla</th><th>McNemar p</th></tr></thead><tbody>"
+    )
     for r, e in sorted(runs.items()):
         d = e.get("rollout")
         if not d:
@@ -151,15 +158,20 @@ def rollout_table(P, runs, id_prefix=""):
             n = b + c
             pv = 1.0 if n == 0 else min(1.0, sum(math.comb(n, i) for i in range(min(b, c) + 1)) * 2 / 2**n)
             diff = d["critic"]["success_rate"] - d["vla"]["success_rate"]
-            cells += (f"<td class='{'bad' if diff < 0 else 'ok'}'>{diff:+.3f}</td>"
-                      f"<td class='{'bad' if pv < 0.05 else 'mut'}'>{pv:.3f}</td>")
+            cells += (
+                f"<td class='{'bad' if diff < 0 else 'ok'}'>{diff:+.3f}</td>"
+                f"<td class='{'bad' if pv < 0.05 else 'mut'}'>{pv:.3f}</td>"
+            )
         else:
             cells += "<td class='mut'>—</td><td class='mut'>—</td>"
-        P(f"<tr><td>{html.escape(r)}</td>{cells}</tr>")
+        emit(f"<tr><td>{html.escape(r)}</td>{cells}</tr>")
     if any(n for _, n in tot.values()):
-        P("<tr class='total'><td>합계</td>" + "".join(f"<td>{tot[m][0]}/{tot[m][1]}</td>" for m in MODES) +
-          "<td colspan='2'></td></tr>")
-    P("</tbody></table></div>")
+        emit(
+            "<tr class='total'><td>합계</td>"
+            + "".join(f"<td>{tot[m][0]}/{tot[m][1]}</td>" for m in MODES)
+            + "<td colspan='2'></td></tr>"
+        )
+    emit("</tbody></table></div>")
     return tot
 
 
@@ -184,41 +196,62 @@ def main() -> None:
     A = []
     P = A.append
     P("<h1>ACRFT critic — 이틀간의 실험 일지</h1>")
-    P("<p class='lede'>15종 TD ablation이 전부 같은 자리에 도달한 이유를 측정으로 좁혀 들어가, "
-      "원인(부트스트랩 arg-max)을 확정하고 그것을 제거한 IQL을 구현·검증하기까지.</p>")
-    P(f"<p class='stamp'>{html.escape(args.generated)} · RoboCasa PrepareCoffee · 시연 514 에피소드 / "
-      f"279,534 프레임 · γ=0.99 · 상세 조사 리포트: report_bias.html</p>")
+    P(
+        "<p class='lede'>15종 TD ablation이 전부 같은 자리에 도달한 이유를 측정으로 좁혀 들어가, "
+        "원인(부트스트랩 arg-max)을 확정하고 그것을 제거한 IQL을 구현·검증하기까지.</p>"
+    )
+    P(
+        f"<p class='stamp'>{html.escape(args.generated)} · RoboCasa PrepareCoffee · 시연 514 에피소드 / "
+        f"279,534 프레임 · γ=0.99 · 상세 조사 리포트: report_bias.html</p>"
+    )
 
     # ---------------------------------------------------------------- 요약
     P("<h2>요약 — 확정된 것 다섯 가지</h2>")
-    P("<ol>"
-      "<li><b>critic은 유해하다.</b> 롤아웃에서 결정권을 줄수록 성공률이 단조 하락 "
-      "(vla 74% → critic 46%, 13런 × 30 trial, 신뢰구간 분리). 후보 선택만 맡겨도 무작위 선택보다 나쁘다.</li>"
-      "<li><b>원인은 부트스트랩의 arg-max.</b> 타깃의 V가 목표에서 먼 상태에서 체계적으로 과대추정된다 "
-      "(250스텝 밖 5.07배). 참값이 γ^d로 알려져 있어 이것은 추정이 아니라 계산이다.</li>"
-      "<li><b>IQL(expectile 회귀)이 그 팽창을 19~38배 줄였다.</b> expectile을 올리면 편향이 단조 복귀하는 "
-      "용량-반응까지 확인 — 인과가 확정됐다.</li>"
-      "<li><b>액션 순위 신호는 여전히 데이터에 없다.</b> 상태당 액션이 하나뿐이라 타깃이 액션·프리픽스 모두에 "
-      "무관하고, 그래서 act_sens ≈ 0은 21개 런 전부에서 유지된다. 유일한 예외 후보는 IQL+QC 조합의 "
-      "rank_c 0.571 (롤아웃 검증 중).</li>"
-      "<li><b>프리픽스 축은 커밋 길이가 아니라 critic 오차를 재고 있었다.</b> 같은 상태의 프리픽스별 타깃은 "
-      "이론상 전부 γ^d로 같아야 하는데, V 편향이 거리에 따라 달라 단조 감소했다 — 영상에서 보인 "
-      "'prefix 값 단조 감소'의 정체.</li></ol>")
+    P(
+        "<ol>"
+        "<li><b>critic은 유해하다.</b> 롤아웃에서 결정권을 줄수록 성공률이 단조 하락 "
+        "(vla 74% → critic 46%, 13런 × 30 trial, 신뢰구간 분리). 후보 선택만 맡겨도 무작위 선택보다 나쁘다.</li>"
+        "<li><b>원인은 부트스트랩의 arg-max.</b> 타깃의 V가 목표에서 먼 상태에서 체계적으로 과대추정된다 "
+        "(250스텝 밖 5.07배). 참값이 γ^d로 알려져 있어 이것은 추정이 아니라 계산이다.</li>"
+        "<li><b>IQL(expectile 회귀)이 그 팽창을 19~38배 줄였다.</b> expectile을 올리면 편향이 단조 복귀하는 "
+        "용량-반응까지 확인 — 인과가 확정됐다.</li>"
+        "<li><b>액션 순위 신호는 여전히 데이터에 없다.</b> 상태당 액션이 하나뿐이라 타깃이 액션·프리픽스 모두에 "
+        "무관하고, 그래서 act_sens ≈ 0은 21개 런 전부에서 유지된다. 유일한 예외 후보는 IQL+QC 조합의 "
+        "rank_c 0.571 (롤아웃 검증 중).</li>"
+        "<li><b>프리픽스 축은 커밋 길이가 아니라 critic 오차를 재고 있었다.</b> 같은 상태의 프리픽스별 타깃은 "
+        "이론상 전부 γ^d로 같아야 하는데, V 편향이 거리에 따라 달라 단조 감소했다 — 영상에서 보인 "
+        "'prefix 값 단조 감소'의 정체.</li></ol>"
+    )
 
     # ---------------------------------------------------------------- 타임라인
     P("<h2>경과 타임라인</h2><ul class='tl'>")
     for t, ev in [
         ("어제 오후", "v3_fixedmask 15런 완료. 전 런 act_sens≈0.0003, rank_c≈0.5 — 서열을 매길 축이 없음을 확인."),
-        ("어제 저녁", "15런 전부 롤아웃 제출 (30 trial × 5모드). HUD 패널 침범을 수집후렌더로 해결 (1000프레임 전수검사 0건)."),
-        ("어제 밤", "롤아웃 13런 회수: critic이 유해함이 판명. targets()를 단일 ended 마스크로 재작성 "
-                  "(2.2M 셀 비트단위 동치 검증). γ 변형 데이터셋 자동 생성(ensure_discount), proprio를 annotation 단계로 이동."),
-        ("오늘 새벽", "프리픽스별 타깃 분해 → y_h = γ^d + γ^h·b, 편향 b가 거리 구조를 가짐을 확인. "
-                   "IQL 구현 (ValueNet + expectile, 후보 배열 미사용). v4(HL-Gauss+mcfloor baseline) 재제출."),
-        ("오늘 오전", "b(d) 15런 측정: 편향은 실재하나 런 간 성능차는 설명 못 함 (ρ=−0.17) — 원인은 편향 크기가 아니라 "
-                   "arg-max가 고르는 오차 산포로 좁혀짐. v5(stability)·v6(IQL)·v7(에피소드 사다리) 제출."),
-        ("오늘 오후", "v6 완료: IQL이 b(d)를 19~38배 축소, expectile 용량-반응 확인. iql_qc rank_c 0.571 (21런 중 최초로 "
-                   "우연 초과). QC 롤아웃이 세 스윕 내내 죽고 있던 버그(load_trained P축 누락) 발견·수정. "
-                   "오버레이 월드공간 확대로 재작성. IQL 롤아웃 4건 진행 중."),
+        (
+            "어제 저녁",
+            "15런 전부 롤아웃 제출 (30 trial × 5모드). HUD 패널 침범을 수집후렌더로 해결 (1000프레임 전수검사 0건).",
+        ),
+        (
+            "어제 밤",
+            "롤아웃 13런 회수: critic이 유해함이 판명. targets()를 단일 ended 마스크로 재작성 "
+            "(2.2M 셀 비트단위 동치 검증). γ 변형 데이터셋 자동 생성(ensure_discount), proprio를 annotation 단계로 이동.",
+        ),
+        (
+            "오늘 새벽",
+            "프리픽스별 타깃 분해 → y_h = γ^d + γ^h·b, 편향 b가 거리 구조를 가짐을 확인. "
+            "IQL 구현 (ValueNet + expectile, 후보 배열 미사용). v4(HL-Gauss+mcfloor baseline) 재제출.",
+        ),
+        (
+            "오늘 오전",
+            "b(d) 15런 측정: 편향은 실재하나 런 간 성능차는 설명 못 함 (ρ=−0.17) — 원인은 편향 크기가 아니라 "
+            "arg-max가 고르는 오차 산포로 좁혀짐. v5(stability)·v6(IQL)·v7(에피소드 사다리) 제출.",
+        ),
+        (
+            "오늘 오후",
+            "v6 완료: IQL이 b(d)를 19~38배 축소, expectile 용량-반응 확인. iql_qc rank_c 0.571 (21런 중 최초로 "
+            "우연 초과). QC 롤아웃이 세 스윕 내내 죽고 있던 버그(load_trained P축 누락) 발견·수정. "
+            "오버레이 월드공간 확대로 재작성. IQL 롤아웃 4건 진행 중.",
+        ),
     ]:
         P(f"<li><time>{t}</time><span>{ev}</span></li>")
     P("</ul>")
@@ -226,71 +259,105 @@ def main() -> None:
     # ---------------------------------------------------------------- 1. v3 롤아웃
     P("<h2>1. v3 롤아웃 — critic은 무해하지 않았다 <span class='pill p-done'>완료</span></h2>")
     P("<h3>프로토콜</h3>")
-    P("<p>15개 critic(200k 스텝, batch 1024) 각각을 다섯 모드로 30 trial씩 평가. 다섯 모드는 같은 seed의 "
-      "같은 장면을 보므로 짝지은 비교가 성립한다. <code>vla</code>=critic 없음(기준), <code>rand</code>=후보 "
-      "무작위(대조군), <code>bon</code>=후보만 critic 선택, <code>prefix</code>=커밋 길이만 critic 선택, "
-      "<code>critic</code>=결합 arg-max(배포 규칙).</p>")
-    P("<pre>ROLLOUT=0 SWEEP=v3_fixedmask slurm/sweep.sh\n"
-      "RUN_DIR=$CACHE_DIR/critic_runs/v3_fixedmask/&lt;run&gt; TRIALS=30 sbatch slurm/eval_rollout.sbatch</pre>")
-    P("<h3>예상</h3><p>오프라인 진단(act_sens≈0, rank_c≈0.5)에 근거해 <b>bon ≈ rand, critic ≈ vla</b> — "
-      "즉 '무해하지만 무용'을 예상했다.</p>")
+    P(
+        "<p>15개 critic(200k 스텝, batch 1024) 각각을 다섯 모드로 30 trial씩 평가. 다섯 모드는 같은 seed의 "
+        "같은 장면을 보므로 짝지은 비교가 성립한다. <code>vla</code>=critic 없음(기준), <code>rand</code>=후보 "
+        "무작위(대조군), <code>bon</code>=후보만 critic 선택, <code>prefix</code>=커밋 길이만 critic 선택, "
+        "<code>critic</code>=결합 arg-max(배포 규칙).</p>"
+    )
+    P(
+        "<pre>ROLLOUT=0 SWEEP=v3_fixedmask slurm/sweep.sh\n"
+        "RUN_DIR=$CACHE_DIR/critic_runs/v3_fixedmask/&lt;run&gt; TRIALS=30 sbatch slurm/eval_rollout.sbatch</pre>"
+    )
+    P(
+        "<h3>예상</h3><p>오프라인 진단(act_sens≈0, rank_c≈0.5)에 근거해 <b>bon ≈ rand, critic ≈ vla</b> — "
+        "즉 '무해하지만 무용'을 예상했다.</p>"
+    )
     P("<h3>실제</h3>")
     tot = rollout_table(P, v3)
     if tot["vla"][1]:
-        P("<div class='key fail'><p>예상이 틀렸다. " + " · ".join(
-            f"<b>{m}</b> {tot[m][0] / tot[m][1]:.3f}" for m in MODES if tot[m][1]) +
-          ". critic 개입이 늘수록 단조 하락하고, bon이 rand보다 나쁘다 — arg-max가 '최선'이 아니라 "
-          "'가장 부풀려진 오차'를 고른다는 뜻. rand≈vla는 후보 재선택 자체는 거의 공짜임을 보인다: "
-          "손실은 선택을 바꿔서가 아니라 critic이 선택해서 생긴다.</p></div>")
+        P(
+            "<div class='key fail'><p>예상이 틀렸다. "
+            + " · ".join(f"<b>{m}</b> {tot[m][0] / tot[m][1]:.3f}" for m in MODES if tot[m][1])
+            + ". critic 개입이 늘수록 단조 하락하고, bon이 rand보다 나쁘다 — arg-max가 '최선'이 아니라 "
+            "'가장 부풀려진 오차'를 고른다는 뜻. rand≈vla는 후보 재선택 자체는 거의 공짜임을 보인다: "
+            "손실은 선택을 바꿔서가 아니라 critic이 선택해서 생긴다.</p></div>"
+        )
 
     # ---------------------------------------------------------------- 2. 타깃 분해
     P("<h2>2. 프리픽스별 타깃 분해 — 편향의 구조 <span class='pill p-done'>완료</span></h2>")
-    P("<p>sparse+terminal 보상이라 참 가치가 <code>γ^d</code>(d=목표까지 스텝)로 정확히 계산된다. "
-      "타깃을 전개하면 <code>y_h = γ^d + γ^h·b</code>: V̂가 정확하면 프리픽스 8개의 타깃이 전부 같아야 한다.</p>")
+    P(
+        "<p>sparse+terminal 보상이라 참 가치가 <code>γ^d</code>(d=목표까지 스텝)로 정확히 계산된다. "
+        "타깃을 전개하면 <code>y_h = γ^d + γ^h·b</code>: V̂가 정확하면 프리픽스 8개의 타깃이 전부 같아야 한다.</p>"
+    )
     if pfx.get("buckets"):
         pl = pfx.get("pfx", [2, 4, 6, 8, 10, 12, 14, 16])
-        P("<div class='scroll'><table><thead><tr><th>거리 구간</th><th>n</th>" +
-          "".join(f"<th>h={h}</th>" for h in pl) + "</tr></thead><tbody>")
+        P(
+            "<div class='scroll'><table><thead><tr><th>거리 구간</th><th>n</th>"
+            + "".join(f"<th>h={h}</th>" for h in pl)
+            + "</tr></thead><tbody>"
+        )
         for b in pfx["buckets"]:
-            cells = "".join(f"<td class='{'bad' if v > 1.15 else ('warn' if v > 1.03 else '')}'>{v:.3f}</td>"
-                            for v in b["ratio"])
+            cells = "".join(
+                f"<td class='{'bad' if v > 1.15 else ('warn' if v > 1.03 else '')}'>{v:.3f}</td>" for v in b["ratio"]
+            )
             P(f"<tr><td>{b['lo']}–{b['hi']}</td><td class='mut'>{b['n']}</td>{cells}</tr>")
         P("</tbody></table></div>")
         P("<p class='mut' style='font-size:.9rem'>값 = y_h / γ^d (1.0=정확). TD base critic, 구간당 400상태.</p>")
-    P("<p>모든 거리에서 h에 대해 단조 감소 — 영상의 'prefix 값이 단조 감소'는 critic이 목표에서 먼 후속 상태를 "
-      "더 과대평가한 것의 직접 반영이다. 250스텝 밖에서는 타깃이 참값의 <b>5배</b>.</p>")
-    P("<div class='note'><p><b>부수 확인 — 편향 크기는 런 간 성능차를 설명 못 한다.</b> 13런에서 b 평균과 "
-      "critic 성공률의 순위상관 −0.17. 일정한 편향은 arg-max를 바꾸지 않으므로(전부 같이 부풀면 순위 불변), "
-      "성능을 가르는 것은 후보 간 오차의 <b>산포</b>다. soft(유일한 음수 편향)가 최고, tn03(최대 편향)이 "
-      "최악인 극단만 맞는다.</p></div>")
+    P(
+        "<p>모든 거리에서 h에 대해 단조 감소 — 영상의 'prefix 값이 단조 감소'는 critic이 목표에서 먼 후속 상태를 "
+        "더 과대평가한 것의 직접 반영이다. 250스텝 밖에서는 타깃이 참값의 <b>5배</b>.</p>"
+    )
+    P(
+        "<div class='note'><p><b>부수 확인 — 편향 크기는 런 간 성능차를 설명 못 한다.</b> 13런에서 b 평균과 "
+        "critic 성공률의 순위상관 −0.17. 일정한 편향은 arg-max를 바꾸지 않으므로(전부 같이 부풀면 순위 불변), "
+        "성능을 가르는 것은 후보 간 오차의 <b>산포</b>다. soft(유일한 음수 편향)가 최고, tn03(최대 편향)이 "
+        "최악인 극단만 맞는다.</p></div>"
+    )
 
     # ---------------------------------------------------------------- 3. v4
     P("<h2>3. v4 — baseline을 HL-Gauss+mcfloor로 <span class='pill p-done'>완료</span></h2>")
-    P("<p>사용자 결정으로 분포형 head(51 atoms)와 mc_return 하한을 기본값으로 승격, 같은 15 arm을 재실행. "
-      "스칼라·무하한으로 되돌리는 <code>scalarq</code>/<code>nofloor</code> arm이 방향을 뒤집어 대신한다.</p>")
-    P("<h3>예상</h3><p>act_sens는 그대로 0일 것(타깃의 문제이므로). mg4/mg8의 ρ 이득(0.92/0.91)이 유지되는지가 "
-      "관전 포인트.</p>")
+    P(
+        "<p>사용자 결정으로 분포형 head(51 atoms)와 mc_return 하한을 기본값으로 승격, 같은 15 arm을 재실행. "
+        "스칼라·무하한으로 되돌리는 <code>scalarq</code>/<code>nofloor</code> arm이 방향을 뒤집어 대신한다.</p>"
+    )
+    P(
+        "<h3>예상</h3><p>act_sens는 그대로 0일 것(타깃의 문제이므로). mg4/mg8의 ρ 이득(0.92/0.91)이 유지되는지가 "
+        "관전 포인트.</p>"
+    )
     P("<h3>실제</h3>")
-    diag_table(P, [("v4", v4)],
-               "v3 대비: act_sens 여전히 ≤0.0014 (예상대로). mg4/mg8의 ρ 이득은 <b>사라짐</b> (0.92/0.91 → "
-               "0.82/0.82; v4는 전 런 0.81–0.83으로 평평) — 그 이득은 스칼라 회귀와의 조합 특이 효과였다. "
-               "v3에서의 'mg가 최대 효과' 결론은 baseline 의존적이었던 것으로 정정.")
+    diag_table(
+        P,
+        [("v4", v4)],
+        "v3 대비: act_sens 여전히 ≤0.0014 (예상대로). mg4/mg8의 ρ 이득은 <b>사라짐</b> (0.92/0.91 → "
+        "0.82/0.82; v4는 전 런 0.81–0.83으로 평평) — 그 이득은 스칼라 회귀와의 조합 특이 효과였다. "
+        "v3에서의 'mg가 최대 효과' 결론은 baseline 의존적이었던 것으로 정정.",
+    )
 
     # ---------------------------------------------------------------- 4. IQL
     P("<h2>4. IQL — arg-max를 제거한다 <span class='pill p-run'>롤아웃 진행 중</span></h2>")
     P("<h3>설계</h3>")
-    P("<pre>L_V = E[ |τ − 1(u&lt;0)| · u² ],   u = Q_tgt(z, a_demo, h) − V(z)\n"
-      "L_Q = E[ (Q(z, a_demo, h) − y_h)² ],  y_h = cum_h + γ^h · ¬ended · V(z_{t+h})</pre>")
-    P("<p>후보 배열을 학습에서 아예 쓰지 않는다. τ=0.5는 최소자승(V→평균 Q, 개선 없음), τ↑일수록 max_a Q에 "
-      "접근. 후보 forward가 사라져 학습 ~2.5배 고속. τ ∈ {0.5, 0.7, 0.9, 0.95} + QC 변형(<code>iql_qc</code>, "
-      "프리픽스 head 없음 — 'IQL이 좋다'와 '프리픽스 축이 문제'를 분리).</p>")
+    P(
+        "<pre>L_V = E[ |τ − 1(u&lt;0)| · u² ],   u = Q_tgt(z, a_demo, h) − V(z)\n"
+        "L_Q = E[ (Q(z, a_demo, h) − y_h)² ],  y_h = cum_h + γ^h · ¬ended · V(z_{t+h})</pre>"
+    )
+    P(
+        "<p>후보 배열을 학습에서 아예 쓰지 않는다. τ=0.5는 최소자승(V→평균 Q, 개선 없음), τ↑일수록 max_a Q에 "
+        "접근. 후보 forward가 사라져 학습 ~2.5배 고속. τ ∈ {0.5, 0.7, 0.9, 0.95} + QC 변형(<code>iql_qc</code>, "
+        "프리픽스 head 없음 — 'IQL이 좋다'와 '프리픽스 축이 문제'를 분리).</p>"
+    )
     P("<pre>ROLLOUT=0 AXES=iql SWEEP=v6_iql slurm/sweep.sh</pre>")
-    P("<h3>예상</h3><p>b(d)가 0 근처로 내려가고, τ가 클수록 max에 접근하므로 편향이 되돌아올 것. 롤아웃에서는 "
-      "'vla를 이긴다'가 아니라 '<b>덜 해친다</b>'가 성공 기준 — 액션 순위 신호 자체는 IQL도 못 만든다.</p>")
+    P(
+        "<h3>예상</h3><p>b(d)가 0 근처로 내려가고, τ가 클수록 max에 접근하므로 편향이 되돌아올 것. 롤아웃에서는 "
+        "'vla를 이긴다'가 아니라 '<b>덜 해친다</b>'가 성공 기준 — 액션 순위 신호 자체는 IQL도 못 만든다.</p>"
+    )
     P("<h3>실제 — V 편향</h3>")
     if vb6:
-        P("<div class='scroll'><table><thead><tr><th>run</th>" +
-          "".join(f"<th>{a}–{b}</th>" for a, b in BANDS) + "</tr></thead><tbody>")
+        P(
+            "<div class='scroll'><table><thead><tr><th>run</th>"
+            + "".join(f"<th>{a}–{b}</th>" for a, b in BANDS)
+            + "</tr></thead><tbody>"
+        )
         base_row = vb3.get("base", {}).get("rows")
         if base_row:
             cells = "".join(f"<td class='bad'>{x['b']:+.4f}</td>" if x else "<td>—</td>" for x in base_row)
@@ -305,17 +372,24 @@ def main() -> None:
                     cells += f"<td class='{cls}'>{x['b']:+.4f}</td>"
             P(f"<tr><td>{html.escape(r)}</td>{cells}</tr>")
         P("</tbody></table></div>")
-        P("<p class='mut' style='font-size:.9rem'>b(d) = V̂(s) − γ^d. V̂는 배포와 동일하게 후보 16개 max로 계산 "
-          "— 즉 배포가 실제로 읽는 양의 편향이다. 최종(200k) 체크포인트.</p>")
-    P("<div class='key win'><p><b>60–120 구간: TD +0.100 → iql_e50 +0.003 / e70 +0.005 — 19~38배 축소.</b> "
-      "그리고 e50 ≈ e70 &lt; e90 &lt; e95의 단조 용량-반응: expectile이 max에 접근할수록 max의 편향이 "
-      "되돌아온다. 다섯 런이 같은 학습 단계이므로 시점 교란이 아니다 — <b>'팽창의 원인은 arg-max'가 인과로 "
-      "확정</b>됐다. TD와 달리 학습이 길어져도(100k→200k) 편향이 자라지 않는다.</p></div>")
+        P(
+            "<p class='mut' style='font-size:.9rem'>b(d) = V̂(s) − γ^d. V̂는 배포와 동일하게 후보 16개 max로 계산 "
+            "— 즉 배포가 실제로 읽는 양의 편향이다. 최종(200k) 체크포인트.</p>"
+        )
+    P(
+        "<div class='key win'><p><b>60–120 구간: TD +0.100 → iql_e50 +0.003 / e70 +0.005 — 19~38배 축소.</b> "
+        "그리고 e50 ≈ e70 &lt; e90 &lt; e95의 단조 용량-반응: expectile이 max에 접근할수록 max의 편향이 "
+        "되돌아온다. 다섯 런이 같은 학습 단계이므로 시점 교란이 아니다 — <b>'팽창의 원인은 arg-max'가 인과로 "
+        "확정</b>됐다. TD와 달리 학습이 길어져도(100k→200k) 편향이 자라지 않는다.</p></div>"
+    )
     P("<h3>실제 — 진단</h3>")
-    diag_table(P, [("v6", v6)],
-               "iql_qc의 rank_c 0.571은 21개 런 중 유일하게 우연(0.5) 대역을 벗어난 값. 같은 τ의 ARQ(iql_e70 "
-               "0.523)에서는 나지 않으므로 IQL 단독도 QC 단독도 아닌 <b>조합</b> 효과 — ARQ는 트렁크를 프리픽스 "
-               "head 8개가 나눠 쓰지만 QC는 head 하나가 concat(z,a)를 직접 본다는 가설. 롤아웃이 판정한다.")
+    diag_table(
+        P,
+        [("v6", v6)],
+        "iql_qc의 rank_c 0.571은 21개 런 중 유일하게 우연(0.5) 대역을 벗어난 값. 같은 τ의 ARQ(iql_e70 "
+        "0.523)에서는 나지 않으므로 IQL 단독도 QC 단독도 아닌 <b>조합</b> 효과 — ARQ는 트렁크를 프리픽스 "
+        "head 8개가 나눠 쓰지만 QC는 head 하나가 concat(z,a)를 직접 본다는 가설. 롤아웃이 판정한다.",
+    )
     ir = {r: e for r, e in v6.items() if "rollout" in e}
     if ir:
         P("<h3>실제 — 롤아웃 (나온 것)</h3>")
@@ -325,50 +399,71 @@ def main() -> None:
 
     # ---------------------------------------------------------------- 5. v5/v7
     P("<h2>5. 진행 중인 나머지 축</h2>")
-    P("<dl><dt>v5_stability — k3 / k5 / online / tau001 / tau05</dt>"
-      "<dd>한 번도 ablate하지 않았던 세 축: 앙상블 크기(min의 억제력), target network 유무(참조 구현 기본은 "
-      "없음), Polyak 시정수. TD 쪽에서 편향을 얼마나 줄일 수 있는지의 대조축.</dd>"
-      "<dt>v7_single — ep1 / ep4 / ep16 / ep64</dt>"
-      "<dd>단일 궤적 암기 극한. ep1에서도 b(d)&gt;0이 남으면 편향은 에피소드 간 간섭이 아니라 부트스트랩 구조 "
-      "자체의 산물. act_sens가 잡음으로 오히려 오르면 'act_sens 높음=액션 이해'가 아님도 증명된다.</dd></dl>")
+    P(
+        "<dl><dt>v5_stability — k3 / k5 / online / tau001 / tau05</dt>"
+        "<dd>한 번도 ablate하지 않았던 세 축: 앙상블 크기(min의 억제력), target network 유무(참조 구현 기본은 "
+        "없음), Polyak 시정수. TD 쪽에서 편향을 얼마나 줄일 수 있는지의 대조축.</dd>"
+        "<dt>v7_single — ep1 / ep4 / ep16 / ep64</dt>"
+        "<dd>단일 궤적 암기 극한. ep1에서도 b(d)&gt;0이 남으면 편향은 에피소드 간 간섭이 아니라 부트스트랩 구조 "
+        "자체의 산물. act_sens가 잡음으로 오히려 오르면 'act_sens 높음=액션 이해'가 아님도 증명된다.</dd></dl>"
+    )
     if any("diag" in e for e in list(v5.values()) + list(v7.values())):
         diag_table(P, [("v5", v5), ("v7", v7)])
 
     # ---------------------------------------------------------------- 6. 엔지니어링
     P("<h2>6. 함께 고친 것들</h2>")
-    P("<ul>"
-      "<li><b>targets() 단순화</b> — crossed/lands_on_term/boot/term_inside 4변수 3분기 → <code>ended</code> "
-      "마스크 하나. 2,236,272셀 중 valid 셀 전부에서 기존과 비트단위 동일 검증.</li>"
-      "<li><b>QC 롤아웃 버그</b> — load_trained가 QC에 프리픽스 축 없이 반환해 np.unravel_index가 사망. "
-      "세 스윕 내내 QC 롤아웃이 조용히 죽고 있었다. P=1 축 + macro=horizon으로 계약 복구.</li>"
-      "<li><b>HUD 패널 침범 해결</b> — 롤아웃 중 렌더하지 않고 원시 데이터만 수집, 종료 후 일괄 합성. "
-      "1000프레임 실패 에피소드 전수검사 침범 0건. (원인 후보 5개를 측정으로 기각한 끝의 우회 해결.)</li>"
-      "<li><b>오버레이 재작성</b> — (a) 스케일 상수를 측정으로 교정(0.0054 m/unit), (b) 확대는 월드 공간에서 "
-      "(화면 공간 확대는 원근을 파괴), (c) 배율을 프레임에 명시, (d) 그리퍼가 화면 밖이면 그리지 않음(테두리 "
-      "clip 잔재 제거), (e) trial 간 projector 재생성(죽은 sim 참조 크래시).</li>"
-      "<li><b>재현성</b> — --discount가 주석과 다르면 mc_return 재누적 데이터셋을 자동 생성(동시 실행 안전, "
-      "원자적 rename). proprio는 annotation 단계에서 직접 기록(사후 join 제거; 기존 파일과 비트단위 동일 검증). "
-      "--use-proprio 플래그 삭제(항상 켜짐).</li>"
-      "<li><b>운영</b> — base_qos 포화 시 스윕 전체를 big_qos로 자동 라우팅. 잡 제출 후 산출물 파일 기반 감시 "
-      "+ 마일스톤 보고 체계.</li></ul>")
+    P(
+        "<ul>"
+        "<li><b>targets() 단순화</b> — crossed/lands_on_term/boot/term_inside 4변수 3분기 → <code>ended</code> "
+        "마스크 하나. 2,236,272셀 중 valid 셀 전부에서 기존과 비트단위 동일 검증.</li>"
+        "<li><b>QC 롤아웃 버그</b> — load_trained가 QC에 프리픽스 축 없이 반환해 np.unravel_index가 사망. "
+        "세 스윕 내내 QC 롤아웃이 조용히 죽고 있었다. P=1 축 + macro=horizon으로 계약 복구.</li>"
+        "<li><b>HUD 패널 침범 해결</b> — 롤아웃 중 렌더하지 않고 원시 데이터만 수집, 종료 후 일괄 합성. "
+        "1000프레임 실패 에피소드 전수검사 침범 0건. (원인 후보 5개를 측정으로 기각한 끝의 우회 해결.)</li>"
+        "<li><b>오버레이 재작성</b> — (a) 스케일 상수를 측정으로 교정(0.0054 m/unit), (b) 확대는 월드 공간에서 "
+        "(화면 공간 확대는 원근을 파괴), (c) 배율을 프레임에 명시, (d) 그리퍼가 화면 밖이면 그리지 않음(테두리 "
+        "clip 잔재 제거), (e) trial 간 projector 재생성(죽은 sim 참조 크래시).</li>"
+        "<li><b>재현성</b> — --discount가 주석과 다르면 mc_return 재누적 데이터셋을 자동 생성(동시 실행 안전, "
+        "원자적 rename). proprio는 annotation 단계에서 직접 기록(사후 join 제거; 기존 파일과 비트단위 동일 검증). "
+        "--use-proprio 플래그 삭제(항상 켜짐).</li>"
+        "<li><b>운영</b> — base_qos 포화 시 스윕 전체를 big_qos로 자동 라우팅. 잡 제출 후 산출물 파일 기반 감시 "
+        "+ 마일스톤 보고 체계.</li></ul>"
+    )
 
     # ---------------------------------------------------------------- 다음
     P("<h2>7. 다음 판정</h2>")
-    P("<ol><li><b>IQL 롤아웃</b> — critic−vla가 −0.285에서 0 쪽으로 오는가. iql_qc의 rank_c 0.571이 성공률로 "
-      "이어지는가.</li>"
-      "<li><b>v7 ep1</b> — 암기 극한에서의 b(d): 편향의 최종 귀속.</li>"
-      "<li><b>v5</b> — TD를 고쳐 쓸 수 있는지, 아니면 IQL로 갈아타는 게 맞는지.</li>"
-      "<li>액션 순위 신호 자체는 여전히 데이터에 없다 — 마진 랭킹 손실(다른 에피소드의 청크를 음성 표본으로) 또는 "
-      "실패 궤적 수집이 다음 단계.</li></ol>")
+    P(
+        "<ol><li><b>IQL 롤아웃</b> — critic−vla가 −0.285에서 0 쪽으로 오는가. iql_qc의 rank_c 0.571이 성공률로 "
+        "이어지는가.</li>"
+        "<li><b>v7 ep1</b> — 암기 극한에서의 b(d): 편향의 최종 귀속.</li>"
+        "<li><b>v5</b> — TD를 고쳐 쓸 수 있는지, 아니면 IQL로 갈아타는 게 맞는지.</li>"
+        "<li>액션 순위 신호 자체는 여전히 데이터에 없다 — 마진 랭킹 손실(다른 에피소드의 청크를 음성 표본으로) 또는 "
+        "실패 궤적 수집이 다음 단계.</li></ol>"
+    )
 
     # ---------------------------------------------------------------- 부록
     P("<h2>부록 A. 지표 정의</h2><dl>")
     for dt, dd in [
-        ("ρ(Q,MC) — spearman_q_demo_vs_mc", "시연 청크의 Q ↔ 실제 거둔 리턴의 순위상관. 0=무관, 클수록 좋음. 상태 가치를 읽는 능력."),
-        ("act_sens — action_sensitivity", "상태 내부 Q분산 ÷ 상태 간 Q분산. 0 = 액션 완전 무시(Q(z,a)=V(z)). 클수록 좋음."),
-        ("rank_c — ranking_accuracy_demo_vs_candidate", "같은 상태에서 시연 청크가 정책 후보보다 높은 Q를 받는 비율. 우연=0.5, 클수록 좋음."),
-        ("rank_o — ranking_accuracy_demo_vs_other", "시연 청크 vs 다른 상태에서 빌려온 무관한 청크. 쉬운 문제이며 우연=0.5. 이것마저 0.5면 액션 입력 자체를 무시."),
-        ("pfx_H — prefix_argmax_entropy", "배포 arg-max가 고르는 프리픽스 길이 분포의 정규화 엔트로피. 1=고르게, 0=항상 같은 길이(적응 청킹 퇴화)."),
+        (
+            "ρ(Q,MC) — spearman_q_demo_vs_mc",
+            "시연 청크의 Q ↔ 실제 거둔 리턴의 순위상관. 0=무관, 클수록 좋음. 상태 가치를 읽는 능력.",
+        ),
+        (
+            "act_sens — action_sensitivity",
+            "상태 내부 Q분산 ÷ 상태 간 Q분산. 0 = 액션 완전 무시(Q(z,a)=V(z)). 클수록 좋음.",
+        ),
+        (
+            "rank_c — ranking_accuracy_demo_vs_candidate",
+            "같은 상태에서 시연 청크가 정책 후보보다 높은 Q를 받는 비율. 우연=0.5, 클수록 좋음.",
+        ),
+        (
+            "rank_o — ranking_accuracy_demo_vs_other",
+            "시연 청크 vs 다른 상태에서 빌려온 무관한 청크. 쉬운 문제이며 우연=0.5. 이것마저 0.5면 액션 입력 자체를 무시.",
+        ),
+        (
+            "pfx_H — prefix_argmax_entropy",
+            "배포 arg-max가 고르는 프리픽스 길이 분포의 정규화 엔트로피. 1=고르게, 0=항상 같은 길이(적응 청킹 퇴화).",
+        ),
         ("b(d)", "V̂(s) − γ^d. 참값이 닫힌형으로 알려져 있어 근사가 아님. 0=정확, >0=과대추정."),
         ("y_h / γ^d", "프리픽스 h 타깃 ÷ 참값. 이론상 h 무관하게 1.0."),
         ("McNemar p", "같은 장면의 짝지은 성패에 대한 정확검정. p<0.05 = 우연 아님."),
@@ -381,24 +476,36 @@ def main() -> None:
     P(f"<p class='mut'>v4 이후 baseline = {html.escape(BASELINE_NOTE)}. 각 런은 한 가지만 다르다.</p>")
     P("<div class='scroll'><table><thead><tr><th>run</th><th>스윕</th><th>무엇이 다른가</th></tr></thead><tbody>")
     extra = {
-        "k3": "앙상블 3개 (기본 2)", "k5": "앙상블 5개", "online": "target network 없음 — 온라인 critic으로 부트스트랩",
-        "tau001": "Polyak τ=0.001 (10배 느린 타깃)", "tau05": "Polyak τ=0.05 (10배 빠른 타깃)",
-        "iql_e50": "IQL, expectile 0.50 (=최소자승, 개선 없음 대조)", "iql_e70": "IQL, expectile 0.70",
-        "iql_e90": "IQL, expectile 0.90", "iql_e95": "IQL, expectile 0.95",
+        "k3": "앙상블 3개 (기본 2)",
+        "k5": "앙상블 5개",
+        "online": "target network 없음 — 온라인 critic으로 부트스트랩",
+        "tau001": "Polyak τ=0.001 (10배 느린 타깃)",
+        "tau05": "Polyak τ=0.05 (10배 빠른 타깃)",
+        "iql_e50": "IQL, expectile 0.50 (=최소자승, 개선 없음 대조)",
+        "iql_e70": "IQL, expectile 0.70",
+        "iql_e90": "IQL, expectile 0.90",
+        "iql_e95": "IQL, expectile 0.95",
         "iql_qc": "IQL(τ=0.7) + QC — 프리픽스 head 없음",
-        "ep1": "에피소드 1개(745프레임)만으로 학습 — 암기 극한", "ep4": "에피소드 4개", "ep16": "16개", "ep64": "64개",
-        "scalarq": "스칼라 회귀로 회귀(기본 HL-Gauss 대신)", "nofloor": "mc 하한 없음(기본은 max(TD, mc_return))",
+        "ep1": "에피소드 1개(745프레임)만으로 학습 — 암기 극한",
+        "ep4": "에피소드 4개",
+        "ep16": "16개",
+        "ep64": "64개",
+        "scalarq": "스칼라 회귀로 회귀(기본 HL-Gauss 대신)",
+        "nofloor": "mc 하한 없음(기본은 max(TD, mc_return))",
     }
     for sweep, runs in [("v4", v4), ("v5", v5), ("v6", v6), ("v7", v7)]:
         for r in sorted(runs):
             cfg = runs[r].get("config")
             desc = extra.get(r) or (" / ".join(describe(cfg)) if cfg else "") or "baseline"
-            P(f"<tr><td>{html.escape(r)}</td><td class='mut'>{sweep}</td>"
-              f"<td style='text-align:left;white-space:normal'>{html.escape(desc)}</td></tr>")
+            P(
+                f"<tr><td>{html.escape(r)}</td><td class='mut'>{sweep}</td>"
+                f"<td style='text-align:left;white-space:normal'>{html.escape(desc)}</td></tr>"
+            )
     P("</tbody></table></div>")
 
-    out.write_text(f"<title>ACRFT critic 실험 일지</title>\n<style>{CSS}</style>\n<main>{''.join(A)}</main>\n",
-                   encoding="utf-8")
+    out.write_text(
+        f"<title>ACRFT critic 실험 일지</title>\n<style>{CSS}</style>\n<main>{''.join(A)}</main>\n", encoding="utf-8"
+    )
     print(f"wrote {out}")
 
 

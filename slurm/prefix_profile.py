@@ -30,7 +30,7 @@ import numpy as np
 import openpi.rlt_critic.critic as _critic
 
 
-def load_data(data: pathlib.Path, n_states: int, seed: int, use_proprio: bool = False):
+def load_data(data: pathlib.Path, n_states: int, seed: int, *, use_proprio: bool = False):
     import ml_dtypes
 
     meta = json.loads((data / "meta.json").read_text())
@@ -49,7 +49,9 @@ def load_data(data: pathlib.Path, n_states: int, seed: int, use_proprio: bool = 
             t = fired[0]
             dist[w[0] : t + 1] = np.arange(t - w[0], -1, -1)
     rng = np.random.default_rng(seed)
-    pick = np.sort(rng.choice(np.flatnonzero(dist < 10**6), size=min(n_states, int((dist < 10**6).sum())), replace=False))
+    pick = np.sort(
+        rng.choice(np.flatnonzero(dist < 10**6), size=min(n_states, int((dist < 10**6).sum())), replace=False)
+    )
     obs = mm("rl_token", (T, D), dt)[pick].astype(np.float32)
     if use_proprio:
         # Must match the trainer exactly: same columns, same per-dim z-scoring, constant dims zeroed.
@@ -80,48 +82,57 @@ def main() -> None:
             continue
         key = (cfg["data"], bool(cfg.get("use_proprio")))
         if key not in cache:
-            cache[key] = load_data(pathlib.Path(cfg["data"]), args.n_states, args.seed, bool(cfg.get("use_proprio")))
+            cache[key] = load_data(
+                pathlib.Path(cfg["data"]), args.n_states, args.seed, use_proprio=bool(cfg.get("use_proprio"))
+            )
         meta, tok, cand, dist = cache[key]
-        H, A, N = meta["horizon"], meta["action_dim"], meta["num_samples"]
+        H, A = meta["horizon"], meta["action_dim"]
         g = cfg["macro_group_size"]
 
-        net = _critic.Ensemble(
-            make_critic=lambda: _critic.make_critic(
-                "arq",
-                action_dim=A,
-                horizon=H,
-                num_atoms=cfg["num_atoms"],
-                macro_group_size=g,
-                num_layers=cfg["num_layers"],
-                num_heads=cfg["num_heads"],
-                head_dim=cfg["head_dim"],
-                mlp_dim=cfg["mlp_dim"],
-                **({"proprio_dim": meta["proprio_dim"]} if cfg.get("proprio_mode") == "token" and cfg.get("use_proprio") else {}),
+        arch = {
+            "action_dim": A,
+            "horizon": H,
+            "num_atoms": cfg["num_atoms"],
+            "macro_group_size": g,
+            "num_layers": cfg["num_layers"],
+            "num_heads": cfg["num_heads"],
+            "head_dim": cfg["head_dim"],
+            "mlp_dim": cfg["mlp_dim"],
+            **(
+                {"proprio_dim": meta["proprio_dim"]}
+                if cfg.get("proprio_mode") == "token" and cfg.get("use_proprio")
+                else {}
             ),
+        }
+        net = _critic.Ensemble(
+            # bound as a default: a bare closure would read the LAST iteration's arch (B023)
+            make_critic=lambda arch=arch: _critic.make_critic("arq", **arch),
             num_critics=cfg["num_critics"],
         )
         hl = _critic.HLGauss(v_min=cfg["v_min"], v_max=cfg["v_max"], num_atoms=max(cfg["num_atoms"], 2))
         params = fser.msgpack_restore(params_f.read_bytes())
 
         @jax.jit
-        def q_of(p, z, c):
-            out = net.apply(p, jnp.repeat(z[:, None], c.shape[1], axis=1), c)
-            out = hl.from_logits(out) if cfg["num_atoms"] > 1 else out
+        def q_of(p, z, c, *, _net=net, _hl=hl, _atoms=cfg["num_atoms"]):
+            out = _net.apply(p, jnp.repeat(z[:, None], c.shape[1], axis=1), c)
+            out = _hl.from_logits(out) if _atoms > 1 else out
             return jnp.min(out, axis=0)  # ensemble-min -> [S, N, P], as deployment does
 
         q = np.asarray(q_of(params, tok, cand))  # [S, N, P]
         P = q.shape[-1]
         prefixes = np.arange(g, H + 1, g)
 
-        def summarize(mask):
+        def summarize(mask, *, q=q, n_p=P, g=g):
             qq = q[mask]
             if len(qq) == 0:
                 return None
             flat = qq.reshape(len(qq), -1)
             am = np.array(np.unravel_index(flat.argmax(-1), qq.shape[1:])).T  # [(cand, prefix)]
-            hist = np.bincount(am[:, 1], minlength=P) / len(qq)
+            hist = np.bincount(am[:, 1], minlength=n_p) / len(qq)
             mean_by_p = qq.mean(axis=(0, 1))
-            rho = float(np.corrcoef(np.argsort(np.argsort(mean_by_p)), np.arange(P))[0, 1]) if P > 1 else float("nan")
+            rho = (
+                float(np.corrcoef(np.argsort(np.argsort(mean_by_p)), np.arange(n_p))[0, 1]) if n_p > 1 else float("nan")
+            )
             return {
                 "n_states": int(len(qq)),
                 "mean_q_by_prefix": [float(x) for x in mean_by_p],

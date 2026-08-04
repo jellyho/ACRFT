@@ -61,7 +61,7 @@ def main() -> None:
             t = f.read_text(errors="replace")
         except OSError:
             continue
-        m = re.search(r"^node +: (\S+)", t, re.M)
+        m = re.search(r"^node +: (\S+)", t, re.MULTILINE)
         if not m:
             continue
         n = m.group(1)

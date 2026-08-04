@@ -36,9 +36,11 @@ def main() -> None:
 
     meta = json.loads((args.data / "meta.json").read_text())
     T, stride = meta["num_frames"], meta.get("stride", 1)
-    root = args.lerobot_root or pathlib.Path(
-        os.environ.get("HF_LEROBOT_HOME", os.path.expanduser("~/.cache/huggingface/lerobot"))
-    ) / meta["repo_id"]
+    root = (
+        args.lerobot_root
+        or pathlib.Path(os.environ.get("HF_LEROBOT_HOME", os.path.expanduser("~/.cache/huggingface/lerobot")))
+        / meta["repo_id"]
+    )
 
     files = sorted(glob.glob(str(root / "data/chunk-*/file-*.parquet")))
     if not files:

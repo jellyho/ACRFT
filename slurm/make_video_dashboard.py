@@ -24,7 +24,8 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from _describe import BASELINE_NOTE, describe
+from _describe import BASELINE_NOTE
+from _describe import describe
 
 CSS = """
 :root{--bg:#12130f;--fg:#eceadf;--mut:#8f8d7e;--line:#2a2c22;--panel:#191b14;--signal:#e0863f;
@@ -102,11 +103,16 @@ def main() -> None:
     A = parts.append
     A("<h1>ACRFT rollout 영상</h1>")
     total = sum(len(v) for r in found.values() for v in r.values())
-    A(f"<p class='sub'>{len(found)} runs · {total} clips" + (f" · {html.escape(args.generated)}" if args.generated else "") + "</p>")
-    A("<div class='legend'><p><b>네 모드는 같은 scene에서 돕니다</b> (seed 고정). "
-      "critic의 두 결정을 분리하려는 구성이라, 나란히 봐야 의미가 있습니다.</p>"
-      + "".join(f"<p><code>{m}</code> — {MODE_NOTE[m]}</p>" for m in MODE_ORDER)
-      + "<p style='margin-top:.6rem'>HUD: 우측은 <b>후보 16개의 값 산포</b>(겹쳐 있으면 best-of-N은 동전던지기), "
+    A(
+        f"<p class='sub'>{len(found)} runs · {total} clips"
+        + (f" · {html.escape(args.generated)}" if args.generated else "")
+        + "</p>"
+    )
+    A(
+        "<div class='legend'><p><b>네 모드는 같은 scene에서 돕니다</b> (seed 고정). "
+        "critic의 두 결정을 분리하려는 구성이라, 나란히 봐야 의미가 있습니다.</p>"
+        + "".join(f"<p><code>{m}</code> — {MODE_NOTE[m]}</p>" for m in MODE_ORDER)
+        + "<p style='margin-top:.6rem'>HUD: 우측은 <b>후보 16개의 값 산포</b>(겹쳐 있으면 best-of-N은 동전던지기), "
         "아래는 <b>value trace</b>(로그축 — <code>V=γ^남은스텝</code>이므로 일관되면 직선)와 "
         "<b>replan당 커밋 스텝</b>입니다.</p>"
         "<p style='margin-top:.6rem'>런 헤더의 숫자: <code>act_sens</code> = 상태 내부 Q 분산 ÷ 상태 간 분산 "
@@ -114,14 +120,17 @@ def main() -> None:
         "<code>rank_cand</code> = 같은 상태에서 시연 chunk가 정책 후보보다 높은 Q를 받는 비율 "
         "(<b>우연 = 0.5</b>). 둘 다 기준값이면 best-of-N은 무작위 선택입니다.</p>"
         f"<p style='margin-top:.6rem'><b>baseline</b> = {BASELINE_NOTE}. "
-        "런 이름 아래 ▸ 로 적힌 것이 baseline과 다른 점의 전부입니다 (한 번에 하나씩만 바꿉니다).</p></div>")
+        "런 이름 아래 ▸ 로 적힌 것이 baseline과 다른 점의 전부입니다 (한 번에 하나씩만 바꿉니다).</p></div>"
+    )
 
     if not found:
         A("<p class='empty'>영상이 없습니다. rollout eval을 <code>NUM_VIDEOS=2</code>로 돌리세요.</p>")
 
     for run_key in sorted(found):
         sweep, run = run_key.split("/")
-        A(f"<h2><code>{html.escape(run)}</code> <span style='color:var(--mut);font-size:.8rem'>({html.escape(sweep)})</span></h2>")
+        A(
+            f"<h2><code>{html.escape(run)}</code> <span style='color:var(--mut);font-size:.8rem'>({html.escape(sweep)})</span></h2>"
+        )
 
         # 진단 수치를 옆에 둔다: 맥락 없이 영상만 보면 인상만 남는다.
         bits = []
@@ -130,7 +139,9 @@ def main() -> None:
             try:
                 d = json.loads(diag.read_text())
                 bits.append(f"act_sens <b>{d.get('action_sensitivity', float('nan')):.4f}</b> (0=액션무시)")
-                bits.append(f"rank_cand <b>{d.get('ranking_accuracy_demo_vs_candidate', float('nan')):.3f}</b> (우연 0.5)")
+                bits.append(
+                    f"rank_cand <b>{d.get('ranking_accuracy_demo_vs_candidate', float('nan')):.3f}</b> (우연 0.5)"
+                )
             except Exception:
                 pass
         cfgf = runs_root / sweep / run / "config.json"
@@ -138,8 +149,11 @@ def main() -> None:
             try:
                 c = json.loads(cfgf.read_text())
                 diffs = describe(c)
-                A(f"<p class='what'>{'<br>'.join('▸ ' + html.escape(d) for d in diffs)}</p>"
-                  if diffs else "<p class='what mut'>▸ baseline (아래 설정 그대로)</p>")
+                A(
+                    f"<p class='what'>{'<br>'.join('▸ ' + html.escape(d) for d in diffs)}</p>"
+                    if diffs
+                    else "<p class='what mut'>▸ baseline (아래 설정 그대로)</p>"
+                )
             except Exception:
                 pass
         # 성공률은 모드별로: 영상 자체가 표본이므로 몇 개 중 몇 개인지 보여준다.
@@ -157,10 +171,12 @@ def main() -> None:
         for mode in MODE_ORDER:
             for trial, succ, rel in sorted(found[run_key].get(mode, [])):
                 cls, label = ("ok", "성공") if succ else ("bad", "실패")
-                A(f"<div class='card'><video controls preload='metadata' src='{html.escape(rel)}'></video>"
-                  f"<div class='cap'><span class='mode'>{mode}</span>"
-                  f"<span class='trial'>trial {trial}</span>"
-                  f"<span class='badge {cls}'>{label}</span></div></div>")
+                A(
+                    f"<div class='card'><video controls preload='metadata' src='{html.escape(rel)}'></video>"
+                    f"<div class='cap'><span class='mode'>{mode}</span>"
+                    f"<span class='trial'>trial {trial}</span>"
+                    f"<span class='badge {cls}'>{label}</span></div></div>"
+                )
         A("</div>")
 
     out.write_text(
