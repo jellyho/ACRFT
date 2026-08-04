@@ -294,6 +294,13 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_
         pred = net.apply(params, data.token[idx], data.chunk[idx])  # [K, B(, P)(, atoms)]
         if cfg.kind == "qc":
             pred = pred[:, :, None] if cfg.num_atoms == 1 else pred[:, :, None, :]
+        if cfg.dueling:
+            # The network's output is the ADVANTAGE; V supplies the baseline outside the gradient.
+            # y is ~all state value (0..1) while the action/prefix contrast is ~0.007 - fitting the
+            # residual is where advantage comparison actually reduces variance, since the
+            # within-state arg-max is invariant to subtracting V(z).
+            v_base = jax.lax.stop_gradient(v_net.apply(v_params, data.token[idx]))  # [B]
+            pred = pred + v_base[None, :, None]
 
         w = valid.astype(jnp.float32)[None]  # [1, B, P]
         if cfg.num_atoms > 1:
@@ -318,6 +325,8 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_
             qd = jnp.min(qd, 0)  # ensemble min, matching how the deployed value is read
             qd = qd[:, None] if cfg.kind == "qc" else qd  # [B, P]
             v = v_net.apply(v_params, data.token[idx])[:, None]  # [B, 1] -> broadcast over prefixes
+            if cfg.dueling:
+                qd = qd + jax.lax.stop_gradient(v)  # the target Q is A_tgt + V, same composition
             u = jax.lax.stop_gradient(qd) - v
             wexp = jnp.abs(cfg.expectile - (u < 0).astype(jnp.float32))
             v_loss = jnp.sum(wexp * jnp.square(u) * valid) / jnp.maximum(jnp.sum(valid), 1.0)
@@ -404,6 +413,15 @@ def main() -> None:
         "bootstraps that instead - no candidate array, no arg-max, and therefore none of the upward "
         "bias of maxing over N*P noisy estimates (measured on the td runs: V over-estimated by "
         "+0.025 far from the goal, ~0 near it, which is what tilts the per-prefix targets).",
+    )
+    ap.add_argument(
+        "--dueling",
+        action="store_true",
+        help="IQL only: the Q network predicts the ADVANTAGE and the value network supplies the "
+        "baseline, Q = A + stopgrad(V(z)). The state value is ~all of the target's variance "
+        "(0..1 across the episode) while the action/prefix contrast is ~0.007, so regressing the "
+        "residual instead of the sum is where 'compare prefixes by advantage' actually buys "
+        "variance reduction - the within-state arg-max itself is invariant to subtracting V(z).",
     )
     ap.add_argument(
         "--expectile",
@@ -517,6 +535,12 @@ def main() -> None:
     # config.json, because that is what tells every reader (eval, rollout, the probes) whether an
     # observation is token-only or token+proprio, and runs from before this was settled say False.
     cfg.use_proprio = True
+    if cfg.dueling and (cfg.objective != "iql" or cfg.num_atoms > 1):
+        raise ValueError(
+            "--dueling needs --objective iql (it uses the value network as the baseline) and "
+            "--num-atoms 1: a categorical head predicts a distribution over Q, and shifting its "
+            "support by a per-state V has no clean composition."
+        )
     cfg.v_clip = 0.0 if str(cfg.v_clip).lower() in ("off", "none", "0") else cfg.v_clip
     # The reward scheme decides the discount and the value support together (sparse terminal 0/1 with
     # gamma 0.99 lands in [0, 1]; the reference living-cost scheme with gamma 0.9999 lands in [-1, 0]),

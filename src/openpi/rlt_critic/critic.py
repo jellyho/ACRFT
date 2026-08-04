@@ -258,6 +258,22 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
     hl = HLGauss(v_min=cfg.get("v_min", 0.0), v_max=cfg.get("v_max", 1.0), num_atoms=max(num_atoms, 2))
     params = flax.serialization.msgpack_restore(params_path.read_bytes())
 
+    v_add = None
+    if cfg.get("dueling"):
+        # The saved Q params are the ADVANTAGE head; deployment must add the value baseline back or
+        # every consumer of "Q" (value traces, commit rules, diagnostics) reads a different quantity.
+        # Within-state arg-max alone would survive without it - nothing else would.
+        vp = params_path.parent / (
+            "vparams.msgpack"
+            if params_path.name == "params.msgpack"
+            else params_path.name.replace("params_", "vparams_")
+        )
+        v_params = flax.serialization.msgpack_restore(vp.read_bytes())
+        v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", [512, 512, 512])))
+
+        def v_add(obs):
+            return v_net.apply(v_params, obs)
+
     if cfg.get("kind", "arq") == "qc":
         # QC has no prefix head, so the raw output is [K, S, M] and the promised trailing P axis is
         # missing - which is exactly the shape every caller then unpacks wrong (np.unravel_index over
@@ -266,12 +282,14 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
         # one value IS committing to the full chunk.
         def apply_fn(obs, actions):
             out = net.apply(params, obs, actions)
-            return (hl.from_logits(out) if num_atoms > 1 else out)[..., None]
+            out = (hl.from_logits(out) if num_atoms > 1 else out)[..., None]
+            return out + v_add(obs)[..., None] if v_add is not None else out
 
         return apply_fn, params, horizon
 
     def apply_fn(obs, actions):
         out = net.apply(params, obs, actions)
-        return hl.from_logits(out) if num_atoms > 1 else out
+        out = hl.from_logits(out) if num_atoms > 1 else out
+        return out + v_add(obs)[..., None] if v_add is not None else out
 
     return apply_fn, params, g
