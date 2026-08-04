@@ -30,6 +30,7 @@ Usage:
 import argparse
 import dataclasses
 import json
+import os as _os
 import logging
 import pathlib
 import sys
@@ -71,8 +72,18 @@ class VLA:
     params every evaluation, instead of reloading the 3B model each time.
     """
 
-    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed):
+    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None):
         train_config = _config.get_config(config_name)
+        if model_overrides:
+            # Some checkpoints were trained with model flags that are NOT baked into the registered
+            # config — run_train_rlt.sh passes them on the command line and only records them in the
+            # experiment directory name (e.g. `_pardec_noprop`). Restoring such a checkpoint against
+            # the bare config fails on missing params (rlt_proprio_in_proj, rlt_dec_aux_embed, ...),
+            # so the same overrides have to be replayed here.
+            train_config = dataclasses.replace(
+                train_config, model=dataclasses.replace(train_config.model, **model_overrides)
+            )
+            logger.info(f"VLA model overrides: {model_overrides}")
         checkpoint = pathlib.Path(_download.maybe_download(str(checkpoint)))
         self.model_config = train_config.model
         data_config = train_config.data.create(train_config.assets_dirs, self.model_config)
@@ -113,6 +124,10 @@ class VLA:
         )
         self.raw_dim = int(np.asarray(probe["actions"]).shape[-1])
 
+    def reset_rng(self, seed):
+        """Rewind candidate sampling, so a reused model gives each mode an identical draw."""
+        self._rng[0] = jax.random.key(seed)
+
     def _decode(self, actions):
         out = self._out(
             {"state": np.zeros((actions.shape[0], self.model_config.action_dim), np.float32), "actions": actions}
@@ -129,7 +144,26 @@ class VLA:
         return np.asarray(z, np.float32), self._decode(np.asarray(base[0], np.float32))
 
 
-def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0):
+def proprio_stats(critic_path):
+    """(mean, std) for the proprio a critic was trained on, or None if it was not trained with any.
+
+    A critic trained with --use-proprio expects token+proprio as its observation, and the rollout has
+    to reproduce the SAME normalisation the trainer used or the network sees a differently-scaled
+    input than it was fitted on. Both facts live in artefacts that are already on disk: the run's
+    config.json says whether proprio was used and which annotation it came from, and that
+    annotation's meta.json carries the per-dim statistics extract_proprio.py recorded.
+    """
+    cfg_p = pathlib.Path(critic_path).parent / "config.json"
+    if not cfg_p.exists():
+        return None
+    cfg = json.loads(cfg_p.read_text())
+    if not cfg.get("use_proprio"):
+        return None
+    meta = json.loads((pathlib.Path(cfg["data"]) / "meta.json").read_text())
+    return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
+
+
+def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
 
@@ -146,6 +180,19 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
         z, cand = vla.token_and_candidates(element)
         if mode == "vla":
             return cand[0], vla.H, None
+        if mode == "rand":
+            # The control the other modes were missing. `bon` beating `vla` would only show that
+            # picking a different sample helps — not that the CRITIC picked it. Drawing uniformly
+            # from the same N candidates separates those: if bon ~ rand the critic's ranking is
+            # indistinguishable from a coin flip, whatever an oracle could have done.
+            return cand[rng.integers(len(cand))], vla.H, None
+        if proprio is not None:
+            # The `noprop` token leaves proprio out, so the critic reads it as extra observation
+            # dims. Same z-scoring as training, constant dims zeroed rather than divided by ~0.
+            mu, sd = proprio
+            p = np.asarray(element["observation/state"], np.float32) - mu
+            p = np.where(sd > 1e-6, p / np.where(sd > 1e-6, sd, 1.0), 0.0)
+            z = np.concatenate([np.asarray(z, np.float32), p[None, :]], axis=-1)
         scored = cand
         if query_noise > 0:
             # Temporally coherent offset+drift per candidate, scaled by the chunk's own spread, so the
@@ -177,15 +224,35 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
 
 
 def build_policy(
-    config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed, query_noise=0.0, softmax_temp=0.0
+    config_name, checkpoint, critic_path, *, mode, num_samples, flow_steps, seed, query_noise=0.0, softmax_temp=0.0,
+    model_overrides=None,
+    vla=None,
 ):
-    """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro)."""
-    vla = VLA(config_name, checkpoint, num_samples=num_samples, flow_steps=flow_steps, seed=seed)
+    """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
+
+    Pass `vla` to reuse an already-loaded model. Building one per mode leaves the previous 3 B model's
+    parameters alive on the device — jax frees them only at GC, and with XLA holding 92% of the card
+    the accumulated copies starve MuJoCo's EGL offscreen renderer, which then hands back stale frame
+    buffers. That is what corrupted the HUD in every mode after the first.
+    """
+    if vla is not None:
+        # Sharing the model must not share its sampling. Every mode has to draw the SAME candidates
+        # at the same states or the comparison is between different policies, not different
+        # selection rules — measured: prefix succeeded in 701 steps alone and failed at 1000 when it
+        # ran second, purely because the leading mode had advanced the stream.
+        vla.reset_rng(seed)
+    vla = vla or VLA(
+        config_name, checkpoint, num_samples=num_samples, flow_steps=flow_steps, seed=seed,
+        model_overrides=model_overrides,
+    )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
     if mode == "vla":
         return make_policy_fn(vla, None, None, mode=mode, **kw), vla.H, None
     score, _, macro = _critic.load_trained(critic_path, action_dim=vla.raw_dim, horizon=vla.H)
-    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, **kw), vla.H, macro
+    pro = proprio_stats(critic_path)
+    if pro is not None:
+        logger.info(f"critic reads proprio: +{len(pro[0])} dims appended to the token")
+    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, proprio=pro, **kw), vla.H, macro
 
 
 def main() -> None:
@@ -199,7 +266,8 @@ def main() -> None:
     ap.add_argument("--critic", type=pathlib.Path, default=None, help="Trained critic params.msgpack.")
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
-        "--modes", nargs="+", default=["critic", "bon", "prefix", "vla"], choices=["critic", "bon", "prefix", "vla"]
+        "--modes", nargs="+", default=["critic", "bon", "prefix", "rand", "vla"],
+        choices=["critic", "bon", "prefix", "rand", "vla"]
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
@@ -210,11 +278,27 @@ def main() -> None:
         "--softmax-temp", type=float, default=0.0, help="Sample the candidate from softmax(Q/temp); 0 = arg-max."
     )
     ap.add_argument("--num-flow-steps", type=int, default=10)
+    ap.add_argument(
+        "--vla-override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Model-config field to override before restoring the VLA, repeatable. Needed when a "
+        "checkpoint was trained with flags the registered config does not carry — e.g. the "
+        "_pardec_noprop checkpoint needs rlt_decoder_mode=parallel and rlt_include_proprio=False.",
+    )
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
     ap.add_argument("--camera-size", type=int, default=256)
     ap.add_argument("--video-dir", type=pathlib.Path, default=None)
     ap.add_argument("--num-videos", type=int, default=4)
     ap.add_argument("--fps", type=int, default=20)
+    ap.add_argument(
+        "--video-crf",
+        type=int,
+        default=26,
+        help="x264 quality, lower = bigger/better. 26 keeps every HUD number readable at ~1/9 the "
+        "size of the old quality=9 setting; drop to ~20 if a clip will be zoomed into.",
+    )
     ap.add_argument(
         "--path-scale",
         type=float,
@@ -235,6 +319,17 @@ def main() -> None:
         args.path_scale = _ov0.EE_METRES_PER_UNIT
     env = _ro.make_env(args.task, camera_size=args.camera_size, seed=args.seed)
     results = {}
+    # One VLA for every mode. See build_policy: a per-mode rebuild leaks the previous model onto the
+    # device and breaks offscreen rendering for every mode after the first.
+    _vla_ov = {}
+    for kv in args.vla_override:
+        k, _, v = kv.partition("=")
+        _vla_ov[k] = {"true": True, "false": False}.get(v.lower(), v)
+    shared_vla = VLA(
+        args.config, args.checkpoint, num_samples=args.num_samples,
+        flow_steps=args.num_flow_steps, seed=args.seed, model_overrides=_vla_ov,
+    )
+
     for mode in args.modes:
         policy, H, macro = build_policy(
             args.config,
@@ -245,9 +340,11 @@ def main() -> None:
             flow_steps=args.num_flow_steps,
             seed=args.seed,
             query_noise=args.query_noise,
+            model_overrides=_vla_ov,
+            vla=shared_vla,
             softmax_temp=args.softmax_temp,
         )
-        trace, frames, box = [], [], {"trial": 0, "dash": None, "proj": None}
+        trace, frames, box = [], [], {"trial": 0, "proj": None}
         record = args.video_dir is not None
 
         def on_step(obs, info, step, *, _trace=trace, _frames=frames, _box=box, _mode=mode, _rec=record, _hz=H):
@@ -262,28 +359,41 @@ def main() -> None:
                 # env.sim is only populated by the first reset, so the projector cannot be built
                 # alongside the env - it is built on the first recorded frame instead.
                 _box["proj"] = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
-            if _box["dash"] is None:
-                _box["dash"] = _hud.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size)
             paths = None
             if info is not None:
                 # Anchor every candidate at the LIVE end-effector so the fan stays attached to the
                 # gripper as it moves, rather than to wherever the replan happened.
                 ee, bq = np.asarray(obs["robot0_eef_pos"]), np.asarray(obs["robot0_base_quat"])
-                sc = args.path_scale
+                sc = args.path_scale * _ov.PATH_GAIN  # world-space magnification; HUD labels it
                 paths = [_box["proj"].project(_ov.predict_path(ee, bq, c, sc)) for c in info.cand]
+            _agent = _ro.image_from_obs(obs, _ro.CAMERAS["observation/image"])
+            if _os.environ.get("ACRFT_DEBUG_FRAMES"):
+                # Is the camera image already wrong when it reaches us, or does the HUD break it?
+                # The panel background is a flat known colour, so "how much of this image is that
+                # colour" separates a real camera frame (~0.13) from a pasted panel (>0.6).
+                _bg = np.array(_hud._BG, dtype=int)
+                _pl = float((np.abs(_agent.astype(int) - _bg).sum(-1) < 24).mean())
+                if _pl > 0.25:
+                    logger.error(f"[{_mode}] step {step}: agent image is {_pl:.3f} panel-like AT SOURCE")
+            # Collect only. Nothing is drawn while the rollout is running: matplotlib rendering
+            # interleaved with MuJoCo's offscreen renderer and jax is what corrupted frames (the
+            # camera image arrived at the HUD already overwritten, and four separate hypotheses for
+            # why were each ruled out by measurement). Composing afterwards removes the interleaving
+            # instead of guessing at it — and costs LESS memory, since two 256x256 camera images are
+            # 4.5x smaller than one composed 768x768 frame.
             _frames.append(
-                _box["dash"].frame(
-                    _ro.image_from_obs(obs, _ro.CAMERAS["observation/image"]),
-                    _ro.image_from_obs(obs, _ro.CAMERAS["observation/wrist_image"]),
-                    info,
-                    step,
-                    paths=paths,
-                    chosen=(info.best_cand if info is not None else 0),
-                    success=bool(env._check_success()),
-                )
+                {
+                    "agent": _agent,
+                    "wrist": _ro.image_from_obs(obs, _ro.CAMERAS["observation/wrist_image"]),
+                    "info": info,
+                    "step": step,
+                    "paths": paths,
+                    "chosen": (info.best_cand if info is not None else 0),
+                    "success": bool(env._check_success()),
+                }
             )
 
-        def on_trial(trial, success, steps, *, _frames=frames, _box=box, _mode=mode, _rec=record):
+        def on_trial(trial, success, steps, *, _frames=frames, _box=box, _mode=mode, _rec=record, _hz=H):
             logger.info(
                 f"[{_mode}] trial {trial + 1}/{args.num_trials}: {'SUCCESS' if success else 'failure'} in {steps} steps"
             )
@@ -292,11 +402,31 @@ def main() -> None:
 
                 args.video_dir.mkdir(parents=True, exist_ok=True)
                 out = args.video_dir / f"{args.task}_{_mode}_t{trial:02d}_{'succ' if success else 'fail'}.mp4"
-                imageio.mimwrite(out, _frames, fps=args.fps, quality=9)
-                logger.info(f"  saved {out}  ({len(_frames)} frames)")
+                # quality=9 (imageio's 0-10 scale) wrote 3.4 Mbit/s for a 768x768 frame that is
+                # mostly a static kitchen and flat HUD panels — 21 MB per 50 s rollout. CRF 26 gives
+                # 2.3 MB for the same clip with every HUD number still legible (checked frame by
+                # frame: value, spread, chosen candidate, prefix, axis labels). The video exists to
+                # be read, so the check that matters is the text, not PSNR.
+                # Render every panel now, with the simulator and the policy both idle.
+                import hud as _hud2
+
+                dash = _hud2.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size)
+                composed = [
+                    dash.frame(r["agent"], r["wrist"], r["info"], r["step"],
+                               paths=r["paths"], chosen=r["chosen"], success=r["success"])
+                    for r in _frames
+                ]
+                imageio.mimwrite(
+                    out, composed, fps=args.fps, codec="libx264",
+                    output_params=["-crf", str(args.video_crf), "-preset", "medium"],
+                )
+                logger.info(f"  saved {out}  ({len(composed)} frames, composed after the rollout)")
             _frames.clear()
+            # The projector holds env.sim, and reset() between trials tears that sim down - touching
+            # the dead handle raises 'MjSim' object has no attribute 'model'. Rebuild from the fresh
+            # sim on the next frame.
+            _box["proj"] = None
             _box["trial"] = trial + 1
-            _box["dash"] = None
 
         res = _ro.run_trials(
             env,

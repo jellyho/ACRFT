@@ -21,9 +21,13 @@ go*, frame-correct, and needs no online calibration (which was fragile: base mot
 and the spray flew off).
 
 Robosuite/RoboCasa specifics: EE world position is ``obs["robot0_eef_pos"]``, base orientation is
-``obs["robot0_base_quat"]`` (xyzw); the agentview camera is world-fixed so its projection matrix is
-computed once. Frames are flipped vertically for display (rollout.image_from_obs), so projected rows
-are flipped to match.
+``obs["robot0_base_quat"]`` (xyzw); ``robot0_agentview_left`` rides on the mobile base, so its
+projection matrix is recomputed every frame.
+
+robosuite's project_points_from_world_to_camera already returns rows in the DISPLAY convention (row 0
+at the top), the same orientation rollout.image_from_obs produces. Flipping again here inverted the
+overlay: measured on a reset scene, lifting the end-effector 15 cm moved the projected row from 137
+to 171 — down the screen instead of up.
 """
 
 import numpy as np
@@ -32,21 +36,26 @@ _EE_POS_DELTA = slice(5, 8)  # ee-position delta in the 12-d LeRobot action (see
 
 
 class CameraProjector:
-    """World 3-D points → pixel (row, col) in the *display* (vertically flipped) frame."""
+    """World 3-D points → pixel (row, col) in the display frame (row 0 = top)."""
 
     def __init__(self, sim, camera: str, height: int, width: int):
         from robosuite.utils import camera_utils as _cu
 
         self._cu = _cu
-        self._w2p = _cu.get_camera_transform_matrix(sim, camera, height, width)
+        # The matrix is recomputed on every projection, NOT cached. `robot0_agentview_left` is named
+        # for the robot it is bolted to, and RoboCasa drives a mobile base, so the camera pose is a
+        # function of time. Caching it froze the transform at the reset pose: as the base moved the
+        # projected points drifted until they left the frame, and robosuite CLIPS out-of-view pixels
+        # to the border rather than dropping them, so the paths did not disappear - they piled up
+        # against the right edge, which is exactly how the bug presented.
+        self._sim, self._cam = sim, camera
         self._h, self._w = height, width
 
     def project(self, points_world: np.ndarray) -> np.ndarray:
-        """[n, 3] world → [n, 2] (row, col) in the flipped display frame."""
-        px = self._cu.project_points_from_world_to_camera(np.asarray(points_world), self._w2p, self._h, self._w)
-        px = np.asarray(px, dtype=np.float64)
-        px[:, 0] = self._h - 1 - px[:, 0]  # flip row to match the flipped display image
-        return px
+        """[n, 3] world → [n, 2] (row, col), row 0 = top, matching the displayed frame."""
+        w2p = self._cu.get_camera_transform_matrix(self._sim, self._cam, self._h, self._w)
+        px = self._cu.project_points_from_world_to_camera(np.asarray(points_world), w2p, self._h, self._w)
+        return np.asarray(px, dtype=np.float64)
 
 
 def _base_rotation(base_quat) -> np.ndarray:
@@ -70,11 +79,30 @@ def predict_path(ee_world, base_quat, chunk, scale: float) -> np.ndarray:
     return np.stack(path)
 
 
-# Metres of end-effector motion per unit of normalised action, read off the controller the
-# evaluation env actually runs: robosuite OSC_POSE for PandaOmron maps input [-1, 1] to
-# output [-0.05, 0.05] m per step (default_pandaomron.json, body_parts.arms.right). With this the
-# drawn path IS the predicted trajectory and lands where the gripper goes.
-EE_METRES_PER_UNIT = 0.05
+# Metres of end-effector motion per unit of normalised action — MEASURED, not read off the
+# controller config.
+#
+# The config says OSC_POSE maps [-1, 1] to [-0.05, 0.05] m per step, and this constant used to be
+# that 0.05. But that is what the controller is COMMANDED to reach, not what the arm achieves: OSC is
+# impedance control, so a single step lands well short of its target, and contacts and joint limits
+# take more. Fitting actual EE displacement against commanded action over 600 steps
+# (slurm/probes/scale_fit.py, least squares, PrepareCoffee seed 0) gives 0.0054 m/unit — the config
+# value drew every path about 9x too long.
+#
+#   per-axis fit  0.0058 / 0.0053 / 0.0052   (close enough that one scalar is honest)
+#   correlation   0.72                       (not 1.0: contacts and limits make it non-linear)
+#
+# The same file already carries the opposite mistake in _adaptive_scale, which drew paths ~2x too
+# SHORT. Both came from assuming a number instead of measuring one.
+EE_METRES_PER_UNIT = 0.0054
+
+# Drawing magnification, applied in WORLD space (predict_path integrates scale*deltas from the live
+# EE position, so the anchor is unaffected and the enlarged path still projects with correct
+# perspective). A 16-step chunk really moves ~3 cm - about 5 px on this camera - so an unmagnified
+# fan is smaller than its own endpoint dot. x6 makes the spread legible; the HUD prints the factor
+# on every frame so the length is never mistaken for a real distance. 6.0 read as visually too
+# large; 4.0 keeps the fan legible while staying closer to the true span.
+PATH_GAIN = 4.0
 
 
 def _adaptive_scale(chunk, target_len: float) -> float:

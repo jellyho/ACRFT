@@ -83,6 +83,11 @@ class Dashboard:
         self.mode, self.horizon, self.discount, self.cam = mode, horizon, discount, camera_size
         self.values: list[float] = []  # one per replan
         self.spans: list[int] = []
+        # QC has no prefix head, so "steps committed per replan" is a constant bar at H and tells the
+        # viewer nothing. Its one decision is which of the N candidates to run, so the panel is given
+        # over to the value gap that choice is buying. Recorded for every critic; only plotted for QC.
+        self.spreads: list[float] = []
+        self.has_prefix: bool | None = None
         self.steps: list[int] = []  # step index at which each replan started
         self._cand_png = None
         self._trace_png = None
@@ -109,18 +114,25 @@ class Dashboard:
         ax.invert_yaxis()
         ax.set_xlim(0, max(spread, 1e-9) * 1.08)
         ax.set_xlabel(f"value − {lo:.4f}", color=_INK2, fontsize=7.5)
+        # One bar per CANDIDATE (not per prefix): a bar's length is that candidate's best value
+        # across its prefix heads, i.e. exactly the score the joint arg-max ranks it by. The prefix
+        # axis appears only inside the chosen-candidate annotation below.
         ax.set_title(
             f"{len(best)} candidates   spread {spread:.4f}",
             color=_INK,
             fontsize=8.5,
-            pad=6,
+            pad=16,
             loc="left",
         )
+        if q.shape[1] > 1:
+            ax.text(0.0, 1.015, f"bar = one candidate's best over {q.shape[1]} prefixes",
+                    transform=ax.transAxes, ha="left", va="bottom", color=_INK2, fontsize=6.5)
         # The winner's rank among the candidates, which is the thing best-of-N is buying.
         ax.text(
             0.98,
             0.02,
-            f"chosen: #{info.best_cand}  prefix {info.best_prefix + 1}/{q.shape[1]}",
+            f"chosen: cand #{info.best_cand}"
+            + (f" @ prefix {info.best_prefix + 1}/{q.shape[1]}" if q.shape[1] > 1 else "  (no prefix head)"),
             transform=ax.transAxes,
             ha="right",
             va="bottom",
@@ -180,21 +192,36 @@ class Dashboard:
 
         bx = fig.add_subplot(gs[1], sharex=ax)
         _style(bx)
-        bx.bar(x, self.spans, width=max(1.0, 0.6 * (np.diff(x).mean() if len(x) > 1 else 4)), color=_SPAN)
-        bx.axhline(self.horizon, color=_OTHER, lw=0.7, ls="--")
-        bx.set_ylim(0, self.horizon * 1.15)
-        bx.set_ylabel("steps run", color=_INK2, fontsize=7.5, labelpad=2)
+        w = max(1.0, 0.6 * (np.diff(x).mean() if len(x) > 1 else 4))
+        if self.has_prefix:
+            bx.bar(x, self.spans, width=w, color=_SPAN)
+            bx.axhline(self.horizon, color=_OTHER, lw=0.7, ls="--")
+            bx.set_ylim(0, self.horizon * 1.15)
+            bx.set_ylabel("steps run", color=_INK2, fontsize=7.5, labelpad=2)
+            bx.set_title(
+                f"steps committed per replan   mean {float(np.mean(self.spans)):.1f} of {self.horizon}",
+                color=_SPAN, fontsize=7.5, pad=3, loc="left",
+            )
+        else:
+            # The whole of best-of-N is the gap between the best candidate and the rest. If this bar
+            # is flat at ~0 the selection is a coin flip, which is the claim the numbers make offline
+            # and the thing a viewer should be able to check for themselves while watching.
+            sp = np.asarray(self.spreads, np.float64)
+            bx.bar(x, sp, width=w, color=_SPAN)
+            bx.set_ylim(0, max(float(sp.max()) * 1.15, 1e-9))
+            bx.set_ylabel("best − worst", color=_INK2, fontsize=7.5, labelpad=2)
+            bx.set_title(
+                f"candidate value spread per replan   mean {float(sp.mean()):.5f}"
+                f"   (≈0 ⇒ best-of-N is a coin flip)",
+                color=_SPAN, fontsize=7.5, pad=3, loc="left",
+            )
         bx.set_xlabel("env step", color=_INK2, fontsize=7.5)
-        mean_span = float(np.mean(self.spans))
-        bx.set_title(
-            f"steps committed per replan   mean {mean_span:.1f} of {self.horizon}",
-            color=_SPAN,
-            fontsize=7.5,
-            pad=3,
-            loc="left",
-        )
         return _render(fig)
 
+    # The magnification factor lives in action_overlay.PATH_GAIN and is applied in WORLD space,
+    # before projection - this class only draws the projected points and prints the label. Stretching
+    # the projected 2-D points instead (the first attempt) kept the anchor but destroyed the
+    # perspective foreshortening, so the fan stopped reading as a 3-D trajectory.
     def _draw_paths(self, img, paths, chosen):
         """Overlay the candidate end-effector paths on the (already upscaled) agent view.
 
@@ -207,24 +234,38 @@ class Dashboard:
         from PIL import ImageDraw
 
         k = _W_MAIN / self.cam
+
+        def _screen(path):
+            """Projected (row, col) -> screen (x, y). None if the anchor is outside the camera.
+
+            robosuite CLIPS out-of-view projections to the border instead of dropping them, so when
+            the end-effector leaves the frame every path collapses onto the image edge and draws as
+            a bogus line hugging the border. If the anchor itself sits on the border, nothing about
+            the fan is real - skip it entirely.
+            """
+            a = np.asarray(path)
+            if a[0, 0] <= 0 or a[0, 0] >= self.cam - 1 or a[0, 1] <= 0 or a[0, 1] >= self.cam - 1:
+                return None
+            return [(float(c) * k, float(r) * k) for r, c in a]
+
         base = img.convert("RGBA")
         layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
         d = ImageDraw.Draw(layer)
         for i, path in enumerate(paths):
-            pts = [(float(c) * k, float(r) * k) for r, c in np.asarray(path)]
-            if len(pts) < 2:
+            pts = _screen(path)
+            if pts is None or len(pts) < 2:
                 continue
             if i == chosen:
                 continue  # drawn last, on top
             d.line(pts, fill=(150, 175, 200, 120), width=2)
             d.ellipse(
-                [pts[-1][0] - 2.5, pts[-1][1] - 2.5, pts[-1][0] + 2.5, pts[-1][1] + 2.5], fill=(150, 175, 200, 170)
+                [pts[-1][0] - 1.5, pts[-1][1] - 1.5, pts[-1][0] + 1.5, pts[-1][1] + 1.5], fill=(150, 175, 200, 170)
             )
         if 0 <= chosen < len(paths):
-            pts = [(float(c) * k, float(r) * k) for r, c in np.asarray(paths[chosen])]
-            if len(pts) >= 2:
+            pts = _screen(paths[chosen])
+            if pts is not None and len(pts) >= 2:
                 d.line(pts, fill=(49, 196, 141, 255), width=4, joint="curve")
-                d.ellipse([pts[-1][0] - 5, pts[-1][1] - 5, pts[-1][0] + 5, pts[-1][1] + 5], fill=(49, 196, 141, 255))
+                d.ellipse([pts[-1][0] - 3, pts[-1][1] - 3, pts[-1][0] + 3, pts[-1][1] + 3], fill=(49, 196, 141, 255))
         return Image.alpha_composite(base, layer).convert("RGB")
 
     # ---------------------------------------------------------------- frame
@@ -235,6 +276,11 @@ class Dashboard:
 
         if info is not None and id(info) != self._last_id:
             self._last_id = id(info)
+            _q = np.asarray(info.q)
+            if self.has_prefix is None:
+                self.has_prefix = _q.ndim > 1 and _q.shape[1] > 1
+            _best = _q.max(axis=1) if _q.ndim > 1 else _q
+            self.spreads.append(float(_best.max() - _best.min()))
             self.values.append(float(info.value))
             self.spans.append(int(info.n_exec))
             self.steps.append(int(step))
@@ -259,11 +305,20 @@ class Dashboard:
         d.text((10, 7), self.mode, font=self._f_lg, fill=_INK)
         d.text((_W_MAIN - 150, 9), f"step {step:4d}", font=self._f_sm, fill=_INK2)
         if info is not None:
-            d.text((90, 9), f"Q {info.value:.4f}   run {info.n_exec}/{self.horizon}", font=self._f_md, fill=_WIN)
+            _hdr = (f"Q {info.value:.4f}   run {info.n_exec}/{self.horizon}" if self.has_prefix
+                    else f"Q {info.value:.4f}   spread {self.spreads[-1]:.5f}")
+            d.text((90, 9), _hdr, font=self._f_md, fill=_WIN)
         else:
             d.text((90, 10), "no critic — first sample, full chunk", font=self._f_md, fill=_INK2)
         d.rectangle([_W_MAIN, 0, WIDTH, 22], fill=(10, 13, 12))
         d.text((_W_MAIN + 9, 5), "wrist camera", font=self._f_sm, fill=_INK2)
+        if paths is not None:
+            # Say it on the frame, every frame: the fan is a direction-and-spread indicator drawn
+            # PATH_GAIN times life size, not a distance the arm will travel.
+            import action_overlay as _ov  # the label must track the constant, not restate it
+
+            d.text((8, _H_TOP - 20), f"chunk paths x{_ov.PATH_GAIN:g}, world-scale (true span ~3 cm)",
+                   font=self._f_sm, fill=(150, 175, 200))
         if success:
             d.rectangle([2, 2, WIDTH - 3, HEIGHT - 3], outline=_WIN, width=3)
             d.rectangle([_W_MAIN - 138, _H_TOP - 36, _W_MAIN - 8, _H_TOP - 8], fill=(10, 13, 12))
