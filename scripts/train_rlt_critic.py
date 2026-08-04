@@ -295,11 +295,13 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_
         if cfg.kind == "qc":
             pred = pred[:, :, None] if cfg.num_atoms == 1 else pred[:, :, None, :]
         if cfg.dueling:
-            # The network's output is the ADVANTAGE; V supplies the baseline outside the gradient.
-            # y is ~all state value (0..1) while the action/prefix contrast is ~0.007 - fitting the
-            # residual is where advantage comparison actually reduces variance, since the
-            # within-state arg-max is invariant to subtracting V(z).
-            v_base = jax.lax.stop_gradient(v_net.apply(v_params, data.token[idx]))  # [B]
+            # Q = V + (A - mean_h A). Forcing A to zero mean over the prefix axis is what pins the
+            # (V+c, A-c) gauge - the first attempt (detached V) let V drift to |200| within 1k
+            # steps, and the second (sigmoid-bounded V) saturated V dead at 0. With the constant
+            # freedom removed from A, the target's absolute level has exactly one place to live: V.
+            # V rides the regression gradient here AND its own expectile loss below.
+            pred = pred - jnp.mean(pred, axis=-1, keepdims=True)
+            v_base = v_net.apply(v_params, data.token[idx])  # [B]
             pred = pred + v_base[None, :, None]
 
         w = valid.astype(jnp.float32)[None]  # [1, B, P]
@@ -326,7 +328,8 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_
             qd = qd[:, None] if cfg.kind == "qc" else qd  # [B, P]
             v = v_net.apply(v_params, data.token[idx])[:, None]  # [B, 1] -> broadcast over prefixes
             if cfg.dueling:
-                qd = qd + jax.lax.stop_gradient(v)  # the target Q is A_tgt + V, same composition
+                # Same composition for the target: zero-mean A_tgt plus the (detached) baseline.
+                qd = qd - jnp.mean(qd, axis=-1, keepdims=True) + jax.lax.stop_gradient(v)
             u = jax.lax.stop_gradient(qd) - v
             wexp = jnp.abs(cfg.expectile - (u < 0).astype(jnp.float32))
             v_loss = jnp.sum(wexp * jnp.square(u) * valid) / jnp.maximum(jnp.sum(valid), 1.0)
@@ -535,11 +538,11 @@ def main() -> None:
     # config.json, because that is what tells every reader (eval, rollout, the probes) whether an
     # observation is token-only or token+proprio, and runs from before this was settled say False.
     cfg.use_proprio = True
-    if cfg.dueling and (cfg.objective != "iql" or cfg.num_atoms > 1):
+    if cfg.dueling and (cfg.objective != "iql" or cfg.num_atoms > 1 or cfg.kind != "arq"):
         raise ValueError(
-            "--dueling needs --objective iql (it uses the value network as the baseline) and "
-            "--num-atoms 1: a categorical head predicts a distribution over Q, and shifting its "
-            "support by a per-state V has no clean composition."
+            "--dueling needs --objective iql, --num-atoms 1 and --kind arq: the gauge freedom of "
+            "Q = A + V is pinned by forcing A to zero mean over the prefix axis, and QC has no "
+            "prefix axis to average over (its single output would be forced to exactly zero)."
         )
     cfg.v_clip = 0.0 if str(cfg.v_clip).lower() in ("off", "none", "0") else cfg.v_clip
     # The reward scheme decides the discount and the value support together (sparse terminal 0/1 with
@@ -622,9 +625,9 @@ def main() -> None:
     v_net = (
         _critic.ValueNet(
             hidden_dims=tuple(cfg.hidden_dims),
-            # Dueling pins the gauge by bounding V to the support; plain IQL keeps the unbounded
-            # head its finished runs were trained with.
-            bound=(cfg.v_min, cfg.v_max) if cfg.dueling else None,
+            # The gauge is pinned by the zero-mean advantage, not by squashing V: a sigmoid
+            # bound saturated V dead at the support edge on its first outing.
+            bound=None,
         )
         if cfg.objective == "iql"
         else None

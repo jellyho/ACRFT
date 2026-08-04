@@ -279,10 +279,7 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
             else params_path.name.replace("params_", "vparams_")
         )
         v_params = flax.serialization.msgpack_restore(vp.read_bytes())
-        v_net = ValueNet(
-            hidden_dims=tuple(cfg.get("hidden_dims", [512, 512, 512])),
-            bound=(cfg.get("v_min", 0.0), cfg.get("v_max", 1.0)),
-        )
+        v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", [512, 512, 512])))
 
         def v_add(obs):
             return v_net.apply(v_params, obs)
@@ -303,6 +300,8 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
     def apply_fn(obs, actions):
         out = net.apply(params, obs, actions)
         out = hl.from_logits(out) if num_atoms > 1 else out
-        return out + v_add(obs)[..., None] if v_add is not None else out
+        if v_add is not None:
+            out = out - out.mean(axis=-1, keepdims=True) + v_add(obs)[..., None]
+        return out
 
     return apply_fn, params, g
