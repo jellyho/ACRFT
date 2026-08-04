@@ -73,6 +73,20 @@ def main() -> None:
 
     dt = {"float32": np.float32, "float16": np.float16, "bfloat16": ml_dtypes.bfloat16}[meta.get("dtype", "float32")]
     tok = _load(args.data, "rl_token", (T, D), dt)
+    # A critic trained with --use-proprio expects token+proprio as its observation, so the same
+    # concatenation and the same z-scoring have to be reproduced here or the network is fed the wrong
+    # width. Whether it was is recorded in the run's config.json, read a few lines below; this is
+    # resolved early because `tok` is needed before that.
+    _tcfg = json.loads((args.params.parent / "config.json").read_text()) if (
+        args.params.parent / "config.json"
+    ).exists() else {}
+    if _tcfg.get("use_proprio"):
+        pdim = meta["proprio_dim"]
+        pro = _load(args.data, "proprio", (T, pdim), np.float32)
+        mu, sd = pro.mean(0), pro.std(0)
+        tok = np.concatenate([tok, np.where(sd > 1e-6, (pro - mu) / np.where(sd > 1e-6, sd, 1.0), 0.0)], axis=1)
+        D = D + pdim
+        logger.info(f"proprio: +{pdim} dims -> obs {D}")
     chunk = _load(args.data, "action_chunk", (T, H, A), dt)
     cand = _load(args.data, "base_action", (T, N, H, A), dt)
     mc = _load(args.data, "mc_return", (T,), np.float32)

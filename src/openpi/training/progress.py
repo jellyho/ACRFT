@@ -85,6 +85,28 @@ def read_reward_column(root: pathlib.Path, total_frames: int, reward_key: str = 
     return reward
 
 
+def read_vector_column(root: pathlib.Path, total_frames: int, key: str) -> np.ndarray | None:
+    """Read a per-frame VECTOR column (e.g. ``observation.state``) out of the LeRobot v3 parquet.
+
+    Same access path as :func:`read_reward_column`, so a caller that already has the dataset root can
+    take proprioception straight from the source instead of joining it back afterwards on
+    (episode_index, frame_index). Returns None if the column is absent.
+    """
+    import pyarrow.dataset as pads
+
+    files = sorted(root.glob("data/chunk-*/file-*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"No LeRobot v3 parquet files under {root}/data/chunk-*/file-*.parquet")
+    dataset = pads.dataset(files, format="parquet")
+    if key not in dataset.schema.names:
+        return None
+    table = dataset.to_table(columns=["index", key])
+    vals = np.stack(table[key].to_pylist()).astype(np.float32)
+    out = np.zeros((total_frames, vals.shape[1]), dtype=np.float32)
+    out[table["index"].to_numpy()] = vals
+    return out
+
+
 def compute_progress_labels(
     repo_id: str, *, reward_key: str = "next.reward", mode: str = "per_episode", use_cache: bool = True
 ) -> ProgressLabels:

@@ -103,6 +103,12 @@ def main() -> None:
     ap.add_argument("--objective", default=None, help="Override rlt_objective to match the checkpoint.")
     ap.add_argument("--decoder-mode", default=None, help="Override rlt_decoder_mode (autoregressive|parallel).")
     ap.add_argument("--no-proprio", action="store_true", help="Checkpoint was trained with --no-proprio.")
+    ap.add_argument(
+        "--proprio-key",
+        default="observation.state",
+        help="Per-frame vector column written alongside the tokens as proprio.dat. The critic always "
+        "reads it, because the RL token deliberately does not carry it.",
+    )
     ap.add_argument("--token-dim", type=int, default=None, help="Override rlt_token_dim.")
     ap.add_argument("--num-tokens", type=int, default=None, help="Override rlt_num_tokens.")
     ap.add_argument("--num-flow-steps", type=int, default=10, help="Flow-matching denoising steps.")
@@ -184,6 +190,17 @@ def main() -> None:
 
     meta = lerobot_dataset.LeRobotDatasetMetadata(data_config.repo_id)
     reward_all = _progress.read_reward_column(pathlib.Path(meta.root), meta.total_frames)
+    # Proprioception is written HERE, not joined back later. The `noprop` bottleneck leaves it out of
+    # the RL token by design, so every critic needs it, and the dataset is already open on the exact
+    # frame indices being annotated - taking it now is one column read, whereas recovering it
+    # afterwards means re-opening the parquet and matching on (episode_index, frame_index).
+    proprio_all = _progress.read_vector_column(pathlib.Path(meta.root), meta.total_frames, args.proprio_key)
+    if proprio_all is None:
+        raise ValueError(
+            f"{args.proprio_key!r} is not a column of {data_config.repo_id}. The critic cannot judge an "
+            f"action chunk without knowing where the arm is; pass --proprio-key to name the right column."
+        )
+    logger.info(f"proprio: {args.proprio_key} is {proprio_all.shape[1]}-d")
     if reward_all is None:  # no success column: the sparse reward is all zeros
         reward_all = np.zeros(meta.total_frames, dtype=np.float32)
     # NOT lo/hi: those name the frame range this process owns, a few lines up.
@@ -249,6 +266,8 @@ def main() -> None:
         "config": args.config,
         "checkpoint": str(args.checkpoint),
         "repo_id": data_config.repo_id,
+        "proprio_dim": int(proprio_all.shape[1]),
+        "proprio_key": args.proprio_key,
     }
     (args.out / "meta.json").write_text(json.dumps(spec, indent=2))
 
@@ -266,6 +285,7 @@ def main() -> None:
         )
 
     tok_mm = _mm("rl_token", (n_keep, D))
+    proprio_mm = _mm("proprio", (n_keep, proprio_all.shape[1]), np.float32)
     chunk_mm = _mm("action_chunk", (n_keep, H, raw_dim))
     act_mm = _mm("base_action", (n_keep, args.num_samples, H, raw_dim))
     held_mm = _mm("base_action_heldout", (n_keep, args.num_heldout, H, raw_dim)) if args.num_heldout else None
@@ -323,6 +343,7 @@ def main() -> None:
         scalars["episode_index"][s0 : s0 + nb] = ep_of[ix]
         scalars["frame_index"][s0 : s0 + nb] = frame_of[ix]
         scalars["done"][s0 : s0 + nb] = done_all[ix]
+        proprio_mm[s0 : s0 + nb] = proprio_all[ix]
         n_written = s0 + nb
         if (s0 // args.batch_size) % 20 == 0:
             el = time.perf_counter() - t0
@@ -357,7 +378,7 @@ def main() -> None:
     if pending is not None:
         _write_scalars(*flush(pending))
 
-    for m in (tok_mm, chunk_mm, act_mm, *scalars.values()):
+    for m in (tok_mm, chunk_mm, act_mm, proprio_mm, *scalars.values()):
         m.flush()
     done_path.write_text(json.dumps({"done": int(hi)}))
     logger.info(f"wrote frames [{lo}, {hi}) to {args.out} in {(time.perf_counter() - t0) / 60:.1f} min")

@@ -28,7 +28,9 @@ import argparse
 import dataclasses
 import json
 import logging
+import os as _os
 import pathlib
+import socket as _socket
 import time
 
 import jax
@@ -36,9 +38,31 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from openpi.rlt_critic import annotation as _annot
 from openpi.rlt_critic import critic as _critic
 
 logger = logging.getLogger(__name__)
+
+
+def _where_it_ran() -> dict:
+    """Host and device, recorded alongside what was run.
+
+    Throughput and failures cluster by node on this cluster (one machine hands out GPUs jax cannot
+    see), and without this the only way to tie a slow or dead run to its host is to go back to the
+    slurm log. Written to BOTH the wandb config and config.json, so the correlation survives with or
+    without wandb. Best-effort throughout: this must never be what fails a run.
+    """
+    try:
+        d = jax.devices()[0]
+        gpu = getattr(d, "device_kind", None) or str(d)
+    except Exception:
+        gpu = "unknown"
+    return {
+        "slurm_node": _os.environ.get("SLURMD_NODENAME") or _socket.gethostname(),
+        "slurm_job": _os.environ.get("SLURM_JOB_ID"),
+        "slurm_array_task": _os.environ.get("SLURM_ARRAY_TASK_ID"),
+        "gpu": gpu,
+    }
 
 
 @dataclasses.dataclass
@@ -54,7 +78,6 @@ class Data:
     done: jax.Array  # [T]  1 at a terminal (task achieved, or the episode's last frame)
     done_cum: jax.Array  # [T]  running count of terminals, for "how many fall inside [t, t+h]"
     alive: jax.Array  # [T]  frame is at or before its episode's terminal (a real decision point)
-    borrowed: jax.Array  # [T, N]  per-candidate return borrowed from the nearest executed chunk (or NaN)
     horizon: int
     action_dim: int
     num_samples: int
@@ -82,7 +105,7 @@ def _terminals(done, episode):
     }
 
 
-def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
+def load_data(path: pathlib.Path, *, max_frames: int = 0, use_proprio: bool = True) -> Data:
     meta = json.loads((path / "meta.json").read_text())
     if meta["stride"] != 1:
         raise ValueError(
@@ -103,18 +126,32 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
         return np.asarray(arr, dtype=np.float32) if dtype is None else np.asarray(arr)
 
     full = json.loads((path / "meta.json").read_text())["num_frames"]
+
+    obs = rd("rl_token", (full, D))
+    if use_proprio:
+        # The `noprop` bottleneck excludes proprio from the token on purpose, so the critic is meant
+        # to be handed it separately (README: "critic must supply proprio"). extract_proprio.py joins
+        # it back from the source dataset. z-scored per dim because the raw state mixes metres,
+        # quaternions and gripper qpos, and the critic's first op is a LayerNorm over the whole
+        # observation - unnormalised, 16 raw dims sitting beside 2048 token dims would be flattened by
+        # the token's statistics. Constant dims (std 0) are passed through as zeros rather than NaN.
+        pd_ = meta.get("proprio_dim")
+        if not pd_ or not (path / "proprio.dat").exists():
+            raise ValueError(f"no proprio.dat in {path}. Run slurm/extract_proprio.py --data {path}")
+        pro = rd("proprio", (full, pd_), np.float32)
+        mu, sd = pro.mean(0), pro.std(0)
+        pro = np.where(sd > 1e-6, (pro - mu) / np.where(sd > 1e-6, sd, 1.0), 0.0).astype(np.float32)
+        obs = np.concatenate([obs, pro], axis=1)
+        D = D + pd_
+        logger.info(f"proprio: +{pd_} dims (z-scored, {int((sd <= 1e-6).sum())} constant dims zeroed) -> obs {D}")
+
     d = Data(
-        token=jnp.asarray(rd("rl_token", (full, D))),
+        token=jnp.asarray(obs),
         chunk=jnp.asarray(rd("action_chunk", (full, H, A))),
         cand=jnp.asarray(rd("base_action", (full, N, H, A))),
         reward=jnp.asarray(rd("reward", (full,))),
         episode=jnp.asarray(rd("episode_index", (full,), np.int32)),
         mc_return=jnp.asarray(rd("mc_return", (full,), np.float32)),
-        borrowed=jnp.asarray(
-            rd("borrowed_return", (full, N), np.float32)
-            if (path / "borrowed_return.dat").exists()
-            else np.full((full, N), np.nan, np.float32)
-        ),
         **_terminals(rd("done", (full,), np.int8), rd("episode_index", (full,), np.int32)),
         horizon=H,
         action_dim=A,
@@ -125,7 +162,7 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
     return d
 
 
-def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
+def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_net=None):
     """One jitted critic update, written so it can be scanned over many steps."""
     T = data.token.shape[0]
     H, g = data.horizon, cfg.macro_group_size
@@ -143,7 +180,7 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
     v_lo, v_hi = float(sup[0]), float(sup[1])
     logger.info(f"value support [{v_lo:.3f}, {v_hi:.3f}] ({cfg.v_clip})" if v_hi > v_lo else "value clip OFF")
 
-    def targets(idx, tgt_params, rng):
+    def targets(idx, tgt_params, rng, v_params=None):
         """Per-prefix (cum_reward, next_value, valid) for the sampled transitions."""
         ep = data.episode[idx]  # [B]
         # Rewards over the chunk, zeroed once the episode ends.
@@ -154,20 +191,35 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
         cum_all = jnp.cumsum(rew * disc[None, :], axis=-1)  # [B, H]
         cum = cum_all[:, prefixes - 1]  # [B, P]
 
-        nxt = jnp.clip(idx[:, None] + prefixes[None, :], 0, T - 1)  # [B, P]
-        # Terminal handling follows the reference (vla_aqc.py): what matters is the state the prefix
-        # LANDS on, not whether a terminal sits somewhere inside the window.
-        #   terminals in [idx, idx+h] == 0                  -> ordinary transition, bootstrap
-        #   == 1 and it is exactly the landing state        -> terminal transition, no bootstrap
-        #   otherwise                                       -> the prefix runs past the terminal,
-        #                                                      so the transition does not exist
-        # Counting only up to idx+h-1 (the obvious reading) gets the third case right and the second
-        # one wrong: landing exactly on the goal would bootstrap a value from the terminal state,
-        # and every transition that reaches the goal is of that kind.
-        crossed = data.done_cum[nxt] - jnp.where(idx > 0, data.done_cum[idx - 1], 0)[:, None]
-        lands_on_term = (crossed == 1) & (data.done[nxt] > 0)
-        boot = (crossed == 0) & (idx[:, None] + prefixes[None, :] < T)
-        valid = (boot | lands_on_term) & (data.alive[idx][:, None] > 0)
+        # Where each prefix lands, and whether the episode is still running when it gets there.
+        # `ended` = a terminal sits in [t, t+h-1]: the episode finished partway through the
+        # commitment, so there is no successor and `cum` already holds the whole return (it sums
+        # i < h and the terminal reward sits at i = d < h, giving exactly gamma^d).
+        #
+        # The window stops at h-1, not h. Including h would make a prefix that lands exactly ON the
+        # goal look like it ran past it - and every transition that reaches the goal is of that kind,
+        # so the success reward would enter no target and V=0 becomes the fixed point (measured:
+        # corr(Q, mc_return) = -0.75).
+        land = idx[:, None] + prefixes[None, :]  # [B, P]
+        nxt = jnp.clip(land, 0, T - 1)
+        ended = data.done_cum[jnp.clip(land - 1, 0, T - 1)] > jnp.where(idx > 0, data.done_cum[idx - 1], 0)[:, None]
+        valid = (data.alive[idx][:, None] > 0) & (ended | (land < T))
+
+        if cfg.objective == "iql":
+            # No candidate array, no arg-max: the successor value is read straight off V. `ended`
+            # still masks it, and a terminal successor still uses its own reward - those are facts
+            # about the MDP, not about how V(s') is estimated.
+            v_next = v_net.apply(v_params, data.token[nxt])  # [B, P]
+            v_next = jnp.clip(v_next, v_lo, v_hi) if v_hi > v_lo else v_next
+            v_next = jnp.where(data.done[nxt] > 0, data.reward[nxt], v_next)
+            gam = cfg.discount ** prefixes.astype(jnp.float32)
+            y = cum + gam[None, :] * ~ended * v_next
+            floor_gap = jnp.maximum(data.mc_return[idx][:, None] - y, 0.0)
+            if cfg.mc_lower_bound:
+                y = jnp.maximum(y, data.mc_return[idx][:, None])
+            if v_hi > v_lo:
+                y = jnp.clip(y, v_lo, v_hi)
+            return y, valid, {"floor_gap": floor_gap}
 
         # V(s') aggregates the target Q over candidates (and prefixes, for ARQ). Both reductions are
         # configurable because a hard max over K*N*P noisy estimates is biased upward, and this method
@@ -215,12 +267,15 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
         gam = cfg.discount ** prefixes.astype(jnp.float32)  # [P]
         if v_hi > v_lo:
             v_next = jnp.clip(v_next, v_lo, v_hi)
-        # At a terminal the critic has nothing to say, and the return from there is known exactly.
-        if cfg.terminal_uses_mc:
-            v_next = jnp.where(lands_on_term, data.mc_return[nxt], v_next)
-            y = cum + gam[None, :] * (boot | lands_on_term) * v_next
-        else:
-            y = cum + gam[None, :] * boot * v_next
+        # V is known in closed form at a terminal state: nothing follows it, so its value is its own
+        # reward. Where that is true, use it instead of the network's guess. This is the same
+        # V(s_{t+h}) slot as every other transition, not a separate branch.
+        #
+        # A pure TD target: reward plus the bootstrap, with mc_return nowhere in it. The precomputed
+        # return is an auxiliary array for diagnostics and for the optional floor below - it has no
+        # business standing in for a value the bootstrap states exactly.
+        v_next = jnp.where(data.done[nxt] > 0, data.reward[nxt], v_next)
+        y = cum + gam[None, :] * ~ended * v_next
         floor_gap = jnp.maximum(data.mc_return[idx][:, None] - y, 0.0)
         if cfg.mc_lower_bound:
             # The behaviour policy demonstrably obtained mc_return from this state, so the optimal
@@ -230,11 +285,11 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
             y = jnp.maximum(y, data.mc_return[idx][:, None])
         if v_hi > v_lo:
             y = jnp.clip(y, v_lo, v_hi)
-        return y, valid, {"term_frac": lands_on_term, "floor_gap": floor_gap}
+        return y, valid, {"floor_gap": floor_gap}
 
-    def loss_fn(params, tgt_params, idx, rng):
+    def loss_fn(params, tgt_params, idx, rng, v_params=None):
         # `tgt_params` is whatever --bootstrap selected; stop_gradient makes the online choice safe.
-        y, valid, tinfo = targets(idx, jax.lax.stop_gradient(tgt_params), rng)
+        y, valid, tinfo = targets(idx, jax.lax.stop_gradient(tgt_params), rng, jax.lax.stop_gradient(v_params))
         y = jax.lax.stop_gradient(y)
         pred = net.apply(params, data.token[idx], data.chunk[idx])  # [K, B(, P)(, atoms)]
         if cfg.kind == "qc":
@@ -251,56 +306,66 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0)):
         loss = jnp.sum(per * w) / (jnp.sum(w) * pred.shape[0] + 1e-8)
         vs = jnp.maximum(jnp.sum(valid), 1.0)
 
-        # --- per-candidate borrowed-return regression -------------------------------------------
-        # The TD loss above scores one action per state (the demo) and reads its target at the state
-        # the demo reached, so it never says one candidate is worth more than another - which is why
-        # a critic trained on it does not extract the within-state ranking signal that IS in the data
-        # (signal_analysis.py: SNR ~ 11, but the critic's within-state Spearman against the true
-        # outcome is 0.03). This term gives every candidate its OWN target: the return of the nearest
-        # executed chunk, validated to recover the demo's known return at 0.86. Unlike CQL it does not
-        # push the candidates down uniformly - it pulls each toward its estimated value, which is what
-        # creates an ordering. The borrowed return is approximate, so this is a small auxiliary weight
-        # and the TD term still carries the level.
-        borrow = jnp.zeros(())
-        if cfg.borrowed_weight > 0:
-            bt = data.borrowed[idx]  # [B, N]
-            ok = jnp.isfinite(bt).astype(jnp.float32)
-            bt = jnp.where(ok > 0, bt, 0.0)
-            qc = net.apply(params, jnp.repeat(data.token[idx][:, None], data.num_samples, axis=1), data.cand[idx])
-            qc = hl.from_logits(qc) if cfg.num_atoms > 1 else qc  # [K, B, N(, P)]
-            qc = qc[..., -1] if qc.ndim == 4 else qc  # full-chunk value [K, B, N]
-            per_b = jnp.square(qc - jax.lax.stop_gradient(bt)[None])  # [K, B, N]
-            borrow = jnp.sum(per_b * ok[None]) / (jnp.sum(ok) * qc.shape[0] + 1e-8)
-            loss = loss + cfg.borrowed_weight * borrow
+        extra = {}
+        if cfg.objective == "iql":
+            # Expectile regression pulls V toward an upper quantile of Q over the actions the data
+            # contains. tau=0.5 is least squares and gives the MEAN; tau>0.5 penalises under-shooting
+            # more than over-shooting, so V rises toward max_a Q without ever proposing an action.
+            # Q_target is detached: this term trains V only, and the target above detaches V, so the
+            # two halves cannot chase each other through the shared optimiser.
+            qd = net.apply(jax.lax.stop_gradient(tgt_params), data.token[idx], data.chunk[idx])
+            qd = hl.from_logits(qd) if cfg.num_atoms > 1 else qd  # [K, B(, P)]
+            qd = jnp.min(qd, 0)  # ensemble min, matching how the deployed value is read
+            qd = qd[:, None] if cfg.kind == "qc" else qd  # [B, P]
+            v = v_net.apply(v_params, data.token[idx])[:, None]  # [B, 1] -> broadcast over prefixes
+            u = jax.lax.stop_gradient(qd) - v
+            wexp = jnp.abs(cfg.expectile - (u < 0).astype(jnp.float32))
+            v_loss = jnp.sum(wexp * jnp.square(u) * valid) / jnp.maximum(jnp.sum(valid), 1.0)
+            loss = loss + v_loss
+            extra = {
+                "v_loss": v_loss,
+                "v_mean": jnp.sum(v * valid) / jnp.maximum(jnp.sum(valid), 1.0),
+                # Positive means V sits BELOW the Q of the demonstrated action, i.e. the expectile is
+                # not reaching the actions the data actually took.
+                "v_minus_q": jnp.sum((v - qd) * valid) / jnp.maximum(jnp.sum(valid), 1.0),
+            }
 
-        return loss, {
+        return loss, extra | {
             "loss": loss,
-            "borrow_loss": borrow,
             "q_mean": q_mean,
             "target_mean": jnp.sum(y * valid) / vs,
+            # What fraction of the batch is a usable transition at all. Like the terminal counts it
+            # replaced, this is a property of the DATA and does not move during training - it is a
+            # sanity check that reads wrong-if-it-changes, not a curve worth watching.
             "valid": jnp.mean(w),
-            # How often the transition lands on the goal, how often the MC floor lifts the target and
-            # by how much, and whether the target left the support the histogram can represent.
-            "term_frac": jnp.mean(tinfo["term_frac"]),
+            # How often the MC floor lifts the target and by how much, and whether the target left
+            # the support the histogram can represent.
             "mc_floor_frac": jnp.sum((tinfo["floor_gap"] > 0) * valid) / vs,
             "mc_floor_gap": jnp.sum(tinfo["floor_gap"] * valid) / vs,
             "target_oob": jnp.sum(((y < v_lo) | (y > v_hi)) * valid) / vs,
         }
 
     tx = optax.adam(cfg.lr)
+    tx_v = optax.adam(cfg.lr)
 
     def step(carry, rng):
-        params, tgt_params, opt_state = carry
+        # v_params rides along even under --objective td, where it is an empty pytree and every
+        # operation on it is a no-op. One carry shape means one jit signature for both objectives.
+        params, tgt_params, opt_state, v_params, v_opt_state = carry
         k_idx, k_tgt = jax.random.split(rng)
         idx = jax.random.randint(k_idx, (cfg.batch_size,), 0, T)
         boot_params = params if cfg.bootstrap == "online" else tgt_params
-        (_, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, boot_params, idx, k_tgt)
+        (_, info), (grads, v_grads) = jax.value_and_grad(loss_fn, argnums=(0, 4), has_aux=True)(
+            params, boot_params, idx, k_tgt, v_params
+        )
         updates, opt_state = tx.update(grads, opt_state)
         params = optax.apply_updates(params, updates)
+        v_updates, v_opt_state = tx_v.update(v_grads, v_opt_state)
+        v_params = optax.apply_updates(v_params, v_updates)
         tgt_params = optax.incremental_update(params, tgt_params, cfg.target_tau)
-        return (params, tgt_params, opt_state), info
+        return (params, tgt_params, opt_state, v_params, v_opt_state), info
 
-    return step, tx
+    return step, tx, tx_v
 
 
 def main() -> None:
@@ -316,8 +381,9 @@ def main() -> None:
         "--discount",
         type=float,
         default=None,
-        help="Defaults to the discount the annotation's returns were accumulated with. Setting it by "
-        "hand to something else makes the bootstrap and mc_return disagree about what a step costs.",
+        help="Defaults to the discount the annotation's returns were accumulated with. Setting it to "
+        "anything else builds (or reuses) the matching annotation automatically - mc_return is "
+        "re-accumulated at the new gamma, so the bootstrap and the return floor never disagree.",
     )
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument(
@@ -329,6 +395,23 @@ def main() -> None:
         "Polyak copy, which is the usual stabiliser but adds a second timescale to the fixed point.",
     )
     ap.add_argument("--num-critics", type=int, default=2)
+    ap.add_argument(
+        "--objective",
+        choices=["td", "iql"],
+        default="td",
+        help="'td' bootstraps V(s') by maxing Q over the stored candidate chunks. 'iql' learns a "
+        "separate state value V(z) by expectile regression on the DEMONSTRATED action only and "
+        "bootstraps that instead - no candidate array, no arg-max, and therefore none of the upward "
+        "bias of maxing over N*P noisy estimates (measured on the td runs: V over-estimated by "
+        "+0.025 far from the goal, ~0 near it, which is what tilts the per-prefix targets).",
+    )
+    ap.add_argument(
+        "--expectile",
+        type=float,
+        default=0.7,
+        help="tau for IQL's expectile regression. 0.5 is plain least squares (V -> mean Q); higher "
+        "weights over-shoots more and approaches max_a Q. Ignored unless --objective iql.",
+    )
     # --- bootstrap aggregation ---------------------------------------------------------------
     # The joint arg-max runs over N candidates x P prefixes, an order of magnitude more items than
     # ordinary actor-critic maxes over, so the upward bias of max-over-noisy-estimates is amplified
@@ -364,26 +447,19 @@ def main() -> None:
         "return (measured: 26.5 against a ceiling of 15.7).",
     )
     ap.add_argument(
-        "--terminal-uses-mc",
-        action="store_true",
-        help="At a transition that lands on a terminal, take the value from mc_return instead of "
-        "dropping the bootstrap. The return from a terminal is known exactly, so this is the "
-        "reference's choice (vla_aqc.py, terminal_uses_mc).",
-    )
-    ap.add_argument(
-        "--borrowed-weight",
-        type=float,
-        default=0.0,
-        help="Weight of a per-candidate regression toward the borrowed return (nearest executed "
-        "chunk's mc_return, precomputed by compute_borrowed_returns.py). This is the only term that "
-        "gives the candidates a target of their own; without it the critic learns V(s) and cannot "
-        "rank actions. Needs borrowed_return.dat in the data dir. 0 = off.",
-    )
-    ap.add_argument(
         "--mc-lower-bound",
         action="store_true",
         help="Floor the target at the return the behaviour policy actually collected from this "
         "state. Sound by definition (that return is achievable), and free.",
+    )
+    ap.add_argument(
+        "--proprio-mode",
+        choices=["concat", "token"],
+        default="concat",
+        help="How proprioception reaches the network. 'concat' appends it to the RL token, where 16 "
+        "dims sit among 2048 and are then LayerNorm'd against the token's statistics. 'token' gives "
+        "it its own projection - a separate sequence position for ARQ, a widened embedding for QC - "
+        "so it is not diluted.",
     )
     ap.add_argument("--num-atoms", type=int, default=1, help="1 = scalar Q; >1 = HL-Gauss distributional")
     # The histogram's support has to be the value support, or the targets sit on its edge atoms and
@@ -435,11 +511,25 @@ def main() -> None:
     ap.add_argument("--wandb-name", default=None, help="Run name; defaults to the output dir's name.")
     cfg = ap.parse_args()
 
+    # Not a flag. The `noprop` bottleneck leaves proprioception out of the RL token by design, so a
+    # critic without it is asked to judge an action chunk without knowing where the arm is - which is
+    # not an ablation anyone wants to run, it is a broken configuration. Still recorded in
+    # config.json, because that is what tells every reader (eval, rollout, the probes) whether an
+    # observation is token-only or token+proprio, and runs from before this was settled say False.
+    cfg.use_proprio = True
     cfg.v_clip = 0.0 if str(cfg.v_clip).lower() in ("off", "none", "0") else cfg.v_clip
     # The reward scheme decides the discount and the value support together (sparse terminal 0/1 with
     # gamma 0.99 lands in [0, 1]; the reference living-cost scheme with gamma 0.9999 lands in [-1, 0]),
     # and relabel_reward.py records both. Taking them from the data rather than from flags is what
     # keeps a re-labelled dataset from being trained against the previous scheme's constants.
+    # A discount the annotation was not accumulated at selects a DIFFERENT dataset, and this makes
+    # it appear rather than requiring anyone to have prepared it: mc_return is re-derived from the
+    # stored per-frame reward at the new gamma, the multi-GB arrays are shared by hardlink, and the
+    # result is published by a single atomic rename so concurrent array tasks are safe. Without this
+    # the flag trained the bootstrap at one gamma against returns from another - silently wrong
+    # everywhere, and actively harmful under --mc-lower-bound, where mc_return is not a bystander
+    # but the floor the target is clamped to.
+    cfg.data = _annot.ensure_discount(cfg.data, cfg.discount)
     _meta = json.loads((cfg.data / "meta.json").read_text())
     meta_support = _meta.get("value_support", [0.0, 1.0])
     if cfg.discount is None:
@@ -449,16 +539,19 @@ def main() -> None:
     if cfg.v_max is None:
         cfg.v_max = meta_support[1]
     logger.info(f"reward scheme {_meta.get('reward_scheme', 'raw')!r}: discount {cfg.discount}, support {meta_support}")
-    data = load_data(cfg.data, max_frames=cfg.max_frames)
+    data = load_data(cfg.data, max_frames=cfg.max_frames, use_proprio=cfg.use_proprio)
     if data.horizon % cfg.macro_group_size:
         raise ValueError(f"macro_group_size {cfg.macro_group_size} must divide horizon {data.horizon}")
 
+    # Only the 'token' mode tells the module about proprio; 'concat' leaves it as plain input dims.
+    _pro_dim = _meta.get("proprio_dim", 0) if (cfg.use_proprio and cfg.proprio_mode == "token") else 0
     net = _critic.Ensemble(
         make_critic=lambda: _critic.make_critic(
             cfg.kind,
             action_dim=data.action_dim,
             horizon=data.horizon,
             num_atoms=cfg.num_atoms,
+            **({"proprio_dim": _pro_dim} if _pro_dim else {}),
             **(
                 {
                     "macro_group_size": cfg.macro_group_size,
@@ -485,7 +578,11 @@ def main() -> None:
             group=cfg.wandb_group,
             name=cfg.wandb_name or (cfg.out.name if cfg.out else f"critic_{cfg.kind}"),
             config=vars(cfg)
-            | {"data": str(cfg.data), "reward_scheme": _meta.get("reward_scheme"), "frames": data.token.shape[0]},
+            | {"data": str(cfg.data), "reward_scheme": _meta.get("reward_scheme"), "frames": data.token.shape[0]}
+            # Where it ran, recorded alongside what it ran. Throughput and failures cluster by node on
+            # this cluster (one machine hands out GPUs jax cannot see), and without this the only way
+            # to correlate a slow or dead run with its host is to go back to the slurm log.
+            | _where_it_ran(),
         )
 
     rng = jax.random.key(cfg.seed)
@@ -496,8 +593,18 @@ def main() -> None:
     # Noise scale from the data itself: one std per action dim, so the smoothing means the same
     # thing regardless of task or units, and no magic constant has to be guessed.
     act_scale = jnp.std(data.cand.reshape(-1, data.cand.shape[-1]), axis=0)[None, None, None, None, :]
-    step_fn, tx = make_update(data, cfg, net, hl, act_scale, meta_support)
+    # An empty pytree under --objective td: the V network is built only when something reads it, but
+    # it still occupies its slot in the carry so both objectives compile to the same scan signature.
+    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims)) if cfg.objective == "iql" else None
+    v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
+    if v_net is not None:
+        logger.info(
+            f"IQL: V head {sum(x.size for x in jax.tree.leaves(v_params)) / 1e6:.2f}M params, "
+            f"expectile tau={cfg.expectile} (no candidate array, no arg-max in the target)"
+        )
+    step_fn, tx, tx_v = make_update(data, cfg, net, hl, act_scale, meta_support, v_net=v_net)
     opt_state = tx.init(params)
+    v_opt_state = tx_v.init(v_params)
     tgt_params = params
 
     @jax.jit
@@ -517,14 +624,33 @@ def main() -> None:
         z = data.token[diag_idx]  # [S, D]
         qc = net.apply(p, jnp.repeat(z[:, None], data.num_samples, axis=1), data.cand[diag_idx])
         qc = hl.from_logits(qc) if cfg.num_atoms > 1 else qc
-        qc = jnp.min(qc, axis=0)  # ensemble -> [S, N(, P)]
-        qc = qc[..., -1] if qc.ndim == 3 else qc  # full-chunk value -> [S, N]
+        qa = jnp.min(qc, axis=0)  # ensemble -> [S, N(, P)]
+        qc = qa[..., -1] if qa.ndim == 3 else qa  # full-chunk value -> [S, N]
         qd = net.apply(p, z[:, None], data.chunk[diag_idx][:, None])
         qd = hl.from_logits(qd) if cfg.num_atoms > 1 else qd
-        qd = (qd[..., -1] if qd.ndim == 4 else qd)[:, 0, 0] if qd.ndim >= 3 else qd[:, 0]
+        # Same reduction order as qc above: ensemble first, then the full-chunk prefix, then drop the
+        # singleton candidate axis. Reducing in any other order collapses the STATE axis instead of
+        # the ensemble axis and leaves qd with length K, which only shows up as a broadcast error
+        # against qc once --eval-every actually fires.
+        qd = jnp.min(qd, axis=0)  # ensemble -> [S, 1(, P)]
+        qd = qd[..., -1] if qd.ndim == 3 else qd  # full-chunk value -> [S, 1]
+        qd = qd[:, 0]  # [S]
         within = jnp.mean(jnp.std(qc, axis=1))
         between = jnp.std(jnp.mean(qc, axis=1))
-        return {
+        extra = {}
+        if qa.ndim == 3:
+            # The quantity deployment actually acts on: eval_critic.make_policy_fn takes a JOINT
+            # arg-max over (candidate, prefix) and executes (p+1)*macro_group_size steps. Tracking it
+            # during training shows directly whether the critic is collapsing onto short commitments,
+            # rather than inferring it from rollout video afterwards.
+            flat = qa.reshape(qa.shape[0], -1)
+            p_idx = jnp.argmax(flat, axis=-1) % qa.shape[-1]
+            extra = {
+                "diag_step/avg_chosen_horizon": jnp.mean((p_idx + 1) * cfg.macro_group_size),
+                "diag_step/frac_shortest_prefix": jnp.mean(p_idx == 0),
+                "diag_step/frac_longest_prefix": jnp.mean(p_idx == qa.shape[-1] - 1),
+            }
+        return extra | {
             "diag_step/within_state_std": within,
             "diag_step/between_state_std": between,
             "diag_step/action_sensitivity": jnp.mean(jnp.var(qc, axis=1)) / (between**2 + 1e-12),
@@ -577,7 +703,7 @@ def main() -> None:
         logger.info(f"  [rollout @ {step}] critic {rows['critic']:.0%}  vla {rows['vla']:.0%}")
         return {f"rollout/{m}_success": v for m, v in rows.items()}
 
-    carry = (params, tgt_params, opt_state)
+    carry = (params, tgt_params, opt_state, v_params, v_opt_state)
     t0 = time.perf_counter()
     for s in range(0, cfg.steps, cfg.steps_per_dispatch):
         carry, infos = run_chunk(carry, jax.random.fold_in(rng, s))
@@ -595,7 +721,14 @@ def main() -> None:
         if cfg.eval_every and step % cfg.eval_every == 0:
             d = {k: float(v) for k, v in _diag(carry[0]).items()}
             logger.info(
-                f"  [diag @ {step}] range/std {d['diag_step/range_over_std']:.2f}  rank {d['diag_step/ranking_demo_vs_cand']:.3f}"
+                f"  [diag @ {step}] range/std {d['diag_step/range_over_std']:.2f}  "
+                f"rank {d['diag_step/ranking_demo_vs_cand']:.3f}"
+                + (
+                    f"  horizon {d['diag_step/avg_chosen_horizon']:.2f}/{data.horizon}"
+                    f" (shortest {d['diag_step/frac_shortest_prefix']:.0%})"
+                    if "diag_step/avg_chosen_horizon" in d
+                    else ""
+                )
             )
             if run is not None:
                 run.log(d, step=step)
@@ -609,6 +742,21 @@ def main() -> None:
             import flax.serialization as _fser
 
             (out0 / f"params_{step}.msgpack").write_bytes(_fser.to_bytes(carry[0]))
+            # V goes in its own file so params_*.msgpack keeps the exact shape every existing reader
+            # (load_trained, eval_rlt_critic, eval_critic) already expects.
+            if cfg.objective == "iql":
+                (out0 / f"vparams_{step}.msgpack").write_bytes(_fser.to_bytes(carry[3]))
+            # Write the architecture alongside the FIRST intermediate checkpoint, not only at the
+            # end. Everything that loads a checkpoint (load_trained, eval_rlt_critic) reads
+            # config.json to rebuild the network, so without this an intermediate checkpoint is
+            # unloadable until the run finishes - which defeats the point of saving it, and blocks
+            # evaluating it concurrently on another GPU.
+            _cfgf = out0 / "config.json"
+            if not _cfgf.exists():
+                _c = vars(cfg) | {"data": str(cfg.data), "out": str(out0)}
+                if run is not None:
+                    _c["wandb_id"] = run.id
+                _cfgf.write_text(json.dumps(_c, indent=2, default=str))
             logger.info(f"  saved checkpoint params_{step}.msgpack")
 
     out = cfg.out or (cfg.data / f"critic_{cfg.kind}")
@@ -616,7 +764,9 @@ def main() -> None:
     import flax.serialization as fser
 
     (out / "params.msgpack").write_bytes(fser.to_bytes(carry[0]))
-    cfg_out = vars(cfg) | {"data": str(cfg.data), "out": str(out)}
+    if cfg.objective == "iql":
+        (out / "vparams.msgpack").write_bytes(fser.to_bytes(carry[3]))
+    cfg_out = vars(cfg) | {"data": str(cfg.data), "out": str(out)} | _where_it_ran()
     if run is not None:
         cfg_out["wandb_id"] = run.id
     (out / "config.json").write_text(json.dumps(cfg_out, indent=2))
