@@ -52,10 +52,25 @@ class CameraProjector:
         self._h, self._w = height, width
 
     def project(self, points_world: np.ndarray) -> np.ndarray:
-        """[n, 3] world → [n, 2] (row, col), row 0 = top, matching the displayed frame."""
+        """[n, 3] world → [n, 2] (row, col), row 0 = top; NaN rows for points the camera cannot see.
+
+        robosuite's helper divides by the projective depth WITHOUT checking its sign and then clips
+        to the border, so a point behind the camera lands at a mirrored in-frame position and an
+        out-of-view point piles on the edge - both drew wild strokes, worst on the wrist camera,
+        which the path routinely passes behind. Projecting manually exposes the depth: behind-camera
+        and out-of-frame points become NaN, and the drawing side truncates at the first NaN.
+        """
         w2p = self._cu.get_camera_transform_matrix(self._sim, self._cam, self._h, self._w)
-        px = self._cu.project_points_from_world_to_camera(np.asarray(points_world), w2p, self._h, self._w)
-        return np.asarray(px, dtype=np.float64)
+        pts = np.asarray(points_world, dtype=np.float64)
+        hom = np.concatenate([pts, np.ones((len(pts), 1))], axis=1) @ w2p.T  # [n, 4]
+        depth = hom[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            col = hom[:, 0] / depth
+            row = hom[:, 1] / depth
+        ok = (depth > 1e-9) & (row >= 0) & (row <= self._h - 1) & (col >= 0) & (col <= self._w - 1)
+        out = np.stack([row, col], axis=1)
+        out[~ok] = np.nan
+        return out
 
 
 def _base_rotation(base_quat) -> np.ndarray:

@@ -244,10 +244,15 @@ class Dashboard:
             a bogus line hugging the border. If the anchor itself sits on the border, nothing about
             the fan is real - skip it entirely.
             """
-            a = np.asarray(path)
-            if a[0, 0] <= 0 or a[0, 0] >= self.cam - 1 or a[0, 1] <= 0 or a[0, 1] >= self.cam - 1:
+            a = np.asarray(path, dtype=np.float64)
+            # The projector marks behind-camera / out-of-frame points as NaN. Draw the prefix up to
+            # the first invisible point and stop - continuing past it is what produced the wild
+            # strokes, and interpolating through it would invent geometry the camera never saw.
+            finite = np.isfinite(a).all(axis=1)
+            if not finite[0]:
                 return None
-            return [(float(c) * k, float(r) * k) for r, c in a]
+            n = int(np.argmin(finite)) if not finite.all() else len(a)
+            return [(float(c) * k, float(r) * k) for r, c in a[:n]]
 
         base = img.convert("RGBA")
         layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
