@@ -190,12 +190,19 @@ class Dashboard:
         _style(bx)
         w = max(1.0, 0.6 * (np.diff(x).mean() if len(x) > 1 else 4))
         if self.has_prefix:
-            bx.bar(x, self.spans, width=w, color=_SPAN)
+            # A step function, not bars: each replan's commitment h is drawn as y = h held for
+            # exactly the h steps it governed, so the line tiles the timeline with no gaps and the
+            # area under it IS steps executed. Discrete bars at replan points left most of the axis
+            # empty and read as scatter.
+            sp = np.asarray(self.spans, np.float64)
+            xs = np.append(x, x[-1] + sp[-1])
+            bx.step(xs, np.append(sp, sp[-1]), where="post", color=_SPAN, lw=2.0)
+            bx.fill_between(xs, 0, np.append(sp, sp[-1]), step="post", color=_SPAN, alpha=0.18)
             bx.axhline(self.horizon, color=_OTHER, lw=0.7, ls="--")
             bx.set_ylim(0, self.horizon * 1.15)
-            bx.set_ylabel("steps run", color=_INK2, fontsize=9, labelpad=2)
+            bx.set_ylabel("commit h", color=_INK2, fontsize=9, labelpad=2)
             bx.set_title(
-                f"commit per replan   mean {float(np.mean(self.spans)):.1f}/{self.horizon}",
+                f"commitment length over time   mean {float(np.mean(self.spans)):.1f}/{self.horizon}",
                 color=_SPAN,
                 fontsize=9.5,
                 pad=4,
@@ -206,7 +213,9 @@ class Dashboard:
             # is flat at ~0 the selection is a coin flip, which is the claim the numbers make offline
             # and the thing a viewer should be able to check for themselves while watching.
             sp = np.asarray(self.spreads, np.float64)
-            bx.bar(x, sp, width=w, color=_SPAN)
+            xs = np.append(x, x[-1] + self.spans[-1])
+            bx.step(xs, np.append(sp, sp[-1]), where="post", color=_SPAN, lw=2.0)
+            bx.fill_between(xs, 0, np.append(sp, sp[-1]), step="post", color=_SPAN, alpha=0.18)
             bx.set_ylim(0, max(float(sp.max()) * 1.15, 1e-9))
             bx.set_ylabel("best−worst", color=_INK2, fontsize=9, labelpad=2)
             bx.set_title(
