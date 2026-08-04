@@ -100,9 +100,11 @@ EE_METRES_PER_UNIT = 0.0054
 # EE position, so the anchor is unaffected and the enlarged path still projects with correct
 # perspective). A 16-step chunk really moves ~3 cm - about 5 px on this camera - so an unmagnified
 # fan is smaller than its own endpoint dot. x6 makes the spread legible; the HUD prints the factor
-# on every frame so the length is never mistaken for a real distance. 6.0 read as visually too
-# large; 4.0 keeps the fan legible while staying closer to the true span.
-PATH_GAIN = 4.0
+# on every frame so the length is never mistaken for a real distance. The base constant already IS
+# the control-frequency-corrected effective displacement (the config's 0.05 m is the COMMANDED
+# offset per step; what one control period actually achieves is the measured 0.0054), so the gain is
+# purely a legibility knob - and 2x proved enough once the fans were anchored and world-scaled.
+PATH_GAIN = 2.0
 
 
 def _adaptive_scale(chunk, target_len: float) -> float:

@@ -363,7 +363,7 @@ def main() -> None:
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
         )
-        trace, frames, box = [], [], {"trial": 0, "proj": None}
+        trace, frames, box = [], [], {"trial": 0, "proj": None, "wproj": None}
         record = args.video_dir is not None
 
         def on_step(obs, info, step, *, _trace=trace, _frames=frames, _box=box, _mode=mode, _rec=record, _hz=H):
@@ -378,13 +378,18 @@ def main() -> None:
                 # env.sim is only populated by the first reset, so the projector cannot be built
                 # alongside the env - it is built on the first recorded frame instead.
                 _box["proj"] = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
-            paths = None
+                # The wrist camera rides the arm; CameraProjector recomputes its matrix per call,
+                # so one object per camera is enough.
+                _box["wproj"] = _ov.CameraProjector(env.sim, "robot0_eye_in_hand", args.camera_size, args.camera_size)
+            paths = wrist_paths = None
             if info is not None:
                 # Anchor every candidate at the LIVE end-effector so the fan stays attached to the
                 # gripper as it moves, rather than to wherever the replan happened.
                 ee, bq = np.asarray(obs["robot0_eef_pos"]), np.asarray(obs["robot0_base_quat"])
                 sc = args.path_scale * _ov.PATH_GAIN  # world-space magnification; HUD labels it
-                paths = [_box["proj"].project(_ov.predict_path(ee, bq, c, sc)) for c in info.cand]
+                world = [_ov.predict_path(ee, bq, c, sc) for c in info.cand]
+                paths = [_box["proj"].project(w) for w in world]
+                wrist_paths = [_box["wproj"].project(w) for w in world]
             _agent = _ro.image_from_obs(obs, _ro.CAMERAS["observation/image"])
             if _os.environ.get("ACRFT_DEBUG_FRAMES"):
                 # Is the camera image already wrong when it reaches us, or does the HUD break it?
@@ -407,6 +412,7 @@ def main() -> None:
                     "info": info,
                     "step": step,
                     "paths": paths,
+                    "wrist_paths": wrist_paths,
                     "chosen": (info.best_cand if info is not None else 0),
                     "success": bool(env._check_success()),
                 }
@@ -437,6 +443,7 @@ def main() -> None:
                         r["info"],
                         r["step"],
                         paths=r["paths"],
+                        wrist_paths=r.get("wrist_paths"),
                         chosen=r["chosen"],
                         success=r["success"],
                     )
@@ -455,6 +462,7 @@ def main() -> None:
             # the dead handle raises 'MjSim' object has no attribute 'model'. Rebuild from the fresh
             # sim on the next frame.
             _box["proj"] = None
+            _box["wproj"] = None
             _box["trial"] = trial + 1
 
         res = _ro.run_trials(
