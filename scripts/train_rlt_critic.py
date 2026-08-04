@@ -619,7 +619,16 @@ def main() -> None:
     act_scale = jnp.std(data.cand.reshape(-1, data.cand.shape[-1]), axis=0)[None, None, None, None, :]
     # An empty pytree under --objective td: the V network is built only when something reads it, but
     # it still occupies its slot in the carry so both objectives compile to the same scan signature.
-    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims)) if cfg.objective == "iql" else None
+    v_net = (
+        _critic.ValueNet(
+            hidden_dims=tuple(cfg.hidden_dims),
+            # Dueling pins the gauge by bounding V to the support; plain IQL keeps the unbounded
+            # head its finished runs were trained with.
+            bound=(cfg.v_min, cfg.v_max) if cfg.dueling else None,
+        )
+        if cfg.objective == "iql"
+        else None
+    )
     v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
     if v_net is not None:
         logger.info(

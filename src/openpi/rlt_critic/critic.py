@@ -149,10 +149,20 @@ class ValueNet(nn.Module):
     """
 
     hidden_dims: tuple[int, ...] = (512, 512, 512)
+    # (lo, hi) squashes the output onto the value support with a sigmoid. Plain IQL leaves this off:
+    # V is anchored directly by its target (Q_tgt lives on the support). Dueling NEEDS it - Q = A + V
+    # has a gauge freedom ((V+c, A-c) changes the loss only through the (gamma^h - 1)*c residue of
+    # the bootstrap, ~0.02c here), and measured un-bounded, V drifted to +-200 within 1k steps while
+    # A chased it. Bounding V is what pins the gauge.
+    bound: tuple[float, float] | None = None
 
     @nn.compact
     def __call__(self, obs):
-        return jnp.squeeze(_mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=1), -1)  # [...]
+        out = jnp.squeeze(_mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=1), -1)  # [...]
+        if self.bound is not None:
+            lo, hi = self.bound
+            out = lo + (hi - lo) * nn.sigmoid(out)
+        return out
 
 
 class Ensemble(nn.Module):
@@ -269,7 +279,10 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
             else params_path.name.replace("params_", "vparams_")
         )
         v_params = flax.serialization.msgpack_restore(vp.read_bytes())
-        v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", [512, 512, 512])))
+        v_net = ValueNet(
+            hidden_dims=tuple(cfg.get("hidden_dims", [512, 512, 512])),
+            bound=(cfg.get("v_min", 0.0), cfg.get("v_max", 1.0)),
+        )
 
         def v_add(obs):
             return v_net.apply(v_params, obs)
