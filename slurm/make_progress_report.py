@@ -8,7 +8,6 @@ pfx_curve.json), so re-running refreshes every number without editing this file.
 
 import argparse
 import contextlib
-import glob
 import html
 import json
 import math
@@ -90,19 +89,23 @@ def wilson(k, n, z=1.96):
 
 def load_sweep(root, sweep):
     out = {}
-    for d in sorted(glob.glob(str(root / f"critic_runs/{sweep}/*/"))):
-        r = os.path.basename(d.rstrip("/"))
+    # NOT `glob(".../*/")`: pathlib normalises away the trailing slash, so the old string
+    # concatenation quietly produced ".../baserollout/*.json" and every rollout table came out
+    # empty while the prose around it (hand-computed) looked fine.
+    for d in sorted((root / "critic_runs" / sweep).glob("*")):
+        if not d.is_dir():
+            continue
         e = {}
         for name in ("diag.json", "config.json"):
-            p = pathlib.Path(d) / name
-            if p.exists():
+            f = d / name
+            if f.exists():
                 with contextlib.suppress(json.JSONDecodeError):
-                    e[name.split(".")[0]] = json.loads(p.read_text())
-        rolls = sorted(glob.glob(d + "rollout/*.json"))
+                    e[name.split(".")[0]] = json.loads(f.read_text())
+        rolls = sorted((d / "rollout").glob("*.json"))
         if rolls:
-            e["rollout"] = json.loads(pathlib.Path(rolls[-1]).read_text())
+            e["rollout"] = json.loads(rolls[-1].read_text())
         if e:
-            out[r] = e
+            out[d.name] = e
     return out
 
 
@@ -175,6 +178,108 @@ def rollout_table(emit, runs):
     return tot
 
 
+# ---------------------------------------------------------------- charts
+# Static inline SVG: CSP-safe, theme-aware via CSS vars. One axis per chart, series directly
+# labelled at their last point - the tables stay underneath as the precise backup.
+PAL = {"td": "#c0563f", "e50": "#3b78ae", "e70": "#2f855a", "e90": "#b9892e", "e95": "#8168b3"}
+
+
+def _sv(tag, **kw):
+    a = " ".join(f'{k.replace("_", "-")}="{v}"' for k, v in kw.items())
+    return f"<{tag} {a}/>"
+
+
+def _tx(x, y, t, *, size=11, color="var(--mut)", anchor="start", mono=True, weight=""):
+    fam = "ui-monospace,Menlo,monospace" if mono else "inherit"
+    w = f' font-weight="{weight}"' if weight else ""
+    return (
+        f'<text x="{x:.1f}" y="{y:.1f}" fill="{color}" font-size="{size}" '
+        f'text-anchor="{anchor}" font-family="{fam}"{w}>{t}</text>'
+    )
+
+
+def dot_intervals(rows, *, w=680, rowh=34, pad_l=76, x_lo=0.3, x_hi=0.85, title=""):
+    """rows = [(label, [(series_name, color, k, n)])] - a dot with a Wilson CI per series per row."""
+    h = len(rows) * rowh + 56
+    iw = w - pad_l - 60
+    X = lambda p: pad_l + iw * (p - x_lo) / (x_hi - x_lo)  # noqa: E731
+    out = [f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{title}">']
+    for gx in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8):
+        out.append(_sv("line", x1=f"{X(gx):.1f}", y1=26, x2=f"{X(gx):.1f}", y2=h - 30, stroke="var(--line)"))
+        out.append(_tx(X(gx), h - 14, f"{gx * 100:.0f}%", anchor="middle", size=10))
+    for i, (lab, pts) in enumerate(rows):
+        y = 40 + i * rowh
+        out.append(_tx(pad_l - 10, y + 4, lab, anchor="end", size=12, color="var(--ink)"))
+        for j, (name, color, k, n) in enumerate(pts):
+            if not n:
+                continue
+            pr = k / n
+            lo, hi = wilson(k, n)
+            yy = y + (j - (len(pts) - 1) / 2) * 9
+            out.append(
+                _sv(
+                    "line",
+                    x1=f"{X(lo):.1f}",
+                    y1=yy,
+                    x2=f"{X(hi):.1f}",
+                    y2=yy,
+                    stroke=color,
+                    stroke_width=2,
+                    opacity=0.55,
+                )
+            )
+            out.append(_sv("circle", cx=f"{X(pr):.1f}", cy=yy, r=4.2, fill=color))
+            if i == 0:
+                out.append(_tx(X(pr), 18, name, anchor="middle", size=10.5, color=color, weight=600))
+    out.append("</svg>")
+    return "".join(out)
+
+
+def line_chart(series, xticks, *, w=680, h=300, pad_l=64, pad_b=42, ylabel="", zero_line=True, title=""):
+    """series = [(name, color, [y...])] over the shared xticks (band or h labels)."""
+    ys = [v for _, _, vv in series for v in vv if v is not None]
+    lo = min([*ys, 0.0]) if zero_line else min(ys)
+    hi = max(ys)
+    span = (hi - lo) or 1.0
+    lo -= span * 0.04
+    hi += span * 0.08
+    span = hi - lo
+    iw, ih = w - pad_l - 78, h - pad_b - 20
+    X = lambda i: pad_l + iw * i / max(len(xticks) - 1, 1)  # noqa: E731
+    Y = lambda v: 20 + ih * (1 - (v - lo) / span)  # noqa: E731
+    out = [f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{title}">']
+    for t in range(5):
+        v = lo + span * t / 4
+        out.append(_sv("line", x1=pad_l, y1=f"{Y(v):.1f}", x2=pad_l + iw, y2=f"{Y(v):.1f}", stroke="var(--line)"))
+        out.append(_tx(pad_l - 8, Y(v) + 4, f"{v:+.2f}" if abs(hi) < 10 else f"{v:.1f}", anchor="end", size=10))
+    if zero_line and lo < 0 < hi:
+        out.append(
+            _sv(
+                "line",
+                x1=pad_l,
+                y1=f"{Y(0):.1f}",
+                x2=pad_l + iw,
+                y2=f"{Y(0):.1f}",
+                stroke="var(--mut)",
+                stroke_dasharray="3 3",
+            )
+        )
+    for i, lab in enumerate(xticks):
+        out.append(_tx(X(i), h - 26, str(lab), anchor="middle", size=10))
+    if ylabel:
+        out.append(_tx(pad_l, h - 8, ylabel, size=10.5))
+    for name, color, vv in series:
+        pts = " ".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(vv) if v is not None)
+        out.append(
+            f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+        )
+        last = max(i for i, v in enumerate(vv) if v is not None)
+        out.append(_tx(X(last) + 7, Y(vv[last]) + 4, name, size=10.5, color=color, weight=600))
+    out.append("</svg>")
+    return "".join(out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", type=pathlib.Path, default=None)
@@ -233,6 +338,30 @@ def main() -> None:
         "<b>prefix-only</b>: the IQL critic sets the commitment length, the first sample is executed.</li>"
         "</ol>"
     )
+
+    # Headline chart: the same five modes under TD and IQL, side by side. The whole story is here.
+    tot3 = {m: [0, 0] for m in MODES}
+    tot6 = {m: [0, 0] for m in MODES}
+    for runs, tot in ((v3, tot3), (v6, tot6)):
+        for e in runs.values():
+            d = e.get("rollout")
+            if d:
+                for m in MODES:
+                    if m in d:
+                        tot[m][0] += d[m]["successes"]
+                        tot[m][1] += d[m]["num_trials"]
+    if tot3["vla"][1] and tot6["vla"][1]:
+        P(
+            "<figure>"
+            + dot_intervals(
+                [(m, [("TD (v3)", PAL["td"], *tot3[m]), ("IQL (v6)", PAL["e70"], *tot6[m])]) for m in MODES],
+                title="success rate by mode, TD vs IQL",
+            )
+            + "<figcaption>Success rate by evaluation mode — dot = rate, bar = 95% Wilson interval "
+            "(TD pools 13 runs × 30 trials; IQL pools 4 runs × 30). The prefix mode recovering to "
+            "vla-parity under IQL, while bon stays low under both, is the two-sentence summary of "
+            "this whole log.</figcaption></figure>"
+        )
 
     # ---------------------------------------------------------------- timeline
     P("<h2>Timeline</h2><ul class='tl'>")
@@ -338,6 +467,23 @@ def main() -> None:
             "<p class='mut' style='font-size:.9rem'>Values are <code>y_h / γ^d</code> (1.0 = exact). "
             "TD base critic, 400 states per band.</p>"
         )
+    if pfx.get("buckets"):
+        bands_lab = [f"{b['lo']}–{b['hi']}" for b in pfx["buckets"]]
+        pl2 = pfx.get("pfx", [2, 4, 6, 8, 10, 12, 14, 16])
+        shade = ["#3b78ae", "#2f855a", "#b9892e", "#c0563f", "#8168b3", "#666a5e"]
+        P(
+            "<figure>"
+            + line_chart(
+                [(bands_lab[i], shade[i % 6], list(b["ratio"])) for i, b in enumerate(pfx["buckets"])],
+                pl2,
+                ylabel="y_h / γ^d   (1.0 = exact)",
+                zero_line=False,
+                title="per-prefix target over truth, by distance band",
+            )
+            + "<figcaption>Per-prefix target ÷ true value, one line per distance-to-goal band "
+            "(TD base critic). Every line slopes down in h and the far bands float far above 1.0 — "
+            "the two facts that make the joint arg-max prefer short commits.</figcaption></figure>"
+        )
     P(
         "<p>Monotone decline in h within every band — the 'prefix values fall monotonically' seen in the "
         "videos is the direct image of the critic over-valuing far-from-goal successor states. Beyond 250 "
@@ -392,6 +538,28 @@ def main() -> None:
         "does not contain.</p>"
     )
     P("<h3>Observed — value bias</h3>")
+    if vb6:
+        bands_lab = [f"{a}–{b}" for a, b in BANDS]
+        ser = []
+        base_row = vb3.get("base", {}).get("rows")
+        if base_row:
+            ser.append(("TD base", PAL["td"], [x["b"] if x else None for x in base_row]))
+        for r, key in (("iql_e50", "e50"), ("iql_e70", "e70"), ("iql_e90", "e90"), ("iql_e95", "e95")):
+            if r in vb6:
+                ser.append((key, PAL[key], [x["b"] if x else None for x in vb6[r]["rows"]]))
+        P(
+            "<figure>"
+            + line_chart(
+                ser,
+                bands_lab,
+                ylabel="b(d) = V̂ − γ^d   (0 = exact)",
+                title="value bias by distance, TD vs IQL expectiles",
+            )
+            + "<figcaption>Deployment-side value bias by distance to goal. The TD curve is the "
+            "inflation the arg-max feeds on; the IQL curves collapse toward zero and re-inflate "
+            "monotonically as the expectile approaches a max — the dose-response that pins "
+            "causality.</figcaption></figure>"
+        )
     if vb6:
         P(
             "<div class='scroll'><table><thead><tr><th>run</th>"
