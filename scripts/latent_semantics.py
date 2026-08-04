@@ -84,9 +84,12 @@ def infer_overrides(name: str) -> dict:
     for tag, obj in (
         ("_reconprogact", "reconstruction+progress+action"),
         ("_reconactbeh", "reconstruction+action+behsim"),
+        ("_reconactepadv", "reconstruction+action+epadv"),
+        ("_reconbehepadv", "reconstruction+behsim+epadv"),
         ("_reconprog", "reconstruction+progress"),
         ("_reconact", "reconstruction+action"),
         ("_reconbeh", "reconstruction+behsim"),
+        ("_reconepadv", "reconstruction+epadv"),
     ):
         if tag in name:
             over["rlt_objective"] = obj

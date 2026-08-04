@@ -24,6 +24,8 @@ OBJECTIVES = [
     "reconstruction+behsim",
     "reconstruction+action+behsim",
     "reconstruction+progress+action",
+    "reconstruction+epadv",
+    "reconstruction+behsim+epadv",
 ]
 
 
@@ -52,6 +54,8 @@ def main():
         # Progress is only populated by the data config; supply it here for the objectives that need
         # it, and vary it per sample so a degenerate constant does not hide a broadcasting bug.
         obs = obs.replace(progress=jnp.linspace(0.0, 1.0, 2))
+        # Distinct episode ids per sample, for the epadv adversary.
+        obs = obs.replace(episode_index=jnp.arange(2, dtype=jnp.int32))
         # Vary actions per sample too: behsim's target distribution is uniform (and its gradient
         # zero) if every chunk is identical, which would make a broken distance matrix look fine.
         act = act + jax.random.normal(jax.random.key(1), act.shape) * 0.5

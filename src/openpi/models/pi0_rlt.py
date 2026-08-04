@@ -265,6 +265,25 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
     # rather than on the representation itself so that the token is not forced to *be* the
     # contrastive space — it only has to contain it (SimCLR §4.2).
     rlt_behsim_proj_dim: int = 128
+
+    # --- Episode-adversarial invariance ("+epadv") ---
+    # A domain-adversarial (DANN, Ganin & Lempitsky 2015) term that DIRECTLY attacks the measured
+    # pathology: a linear probe reads "which demo" off z_rl at 100% accuracy, because reconstruction
+    # targets appearance and every RoboCasa demo looks different. An episode classifier is trained on
+    # z_rl, but a gradient-reversal layer flips the sign of the gradient flowing back into the token,
+    # so the classifier gets better while the token is pushed to make "which demo" undecodable —
+    # leaving only what is shared across demos (task structure). Unlike behsim it assumes NOTHING
+    # about temporal order, so it survives demos whose subtasks happen in different orders. Needs the
+    # data config to inject episode_index (include_episode_index=True).
+    rlt_epadv_weight: float = 1.0
+    # Gradient-reversal strength λ. The classifier minimizes its loss normally; the token receives
+    # -λ times that gradient. Larger λ = stronger push to invariance (and less stable).
+    rlt_epadv_lambda: float = 1.0
+    # Class count of the adversary. Episodes are bucketed by (episode_index % rlt_num_episodes), so
+    # this only has to be >= the dataset's episode count to avoid collisions (514 for PrepareCoffee);
+    # it is a build-time constant baked into the head's shape, so keep it fixed across a checkpoint's
+    # train/diagnostic lifetime. Bucketing (rather than the exact count) keeps the head dataset-agnostic.
+    rlt_num_episodes: int = 1024
     # Where the auxiliary heads (progress, proprio) read their features from.
     #   "decoder" (default): the decoder's position-0 output, a NONLINEAR function of z_rl alone
     #       (position 0 attends only to itself, and its input is the projected token, so no
@@ -319,10 +338,10 @@ class Pi0RLTConfig(pi0_config.Pi0Config):
             raise ValueError(f"rlt_num_tokens must be >= 1, got {self.rlt_num_tokens}")
         # "reconstruction" + any subset of the addition terms, in any order after the first.
         head, *additions = self.rlt_objective.split("+")
-        if head != "reconstruction" or not set(additions) <= {"progress", "action", "behsim"}:
+        if head != "reconstruction" or not set(additions) <= {"progress", "action", "behsim", "epadv"}:
             raise ValueError(
                 "rlt_objective must start with 'reconstruction' and add any of '+progress', "
-                "'+action', '+behsim' — every addition is too low-dimensional to hold the "
+                "'+action', '+behsim', '+epadv' — every addition is too low-dimensional to hold the "
                 "bottleneck open on its own (progress is one scalar per frame; behsim only "
                 f"constrains relative geometry), so reconstruction is always required. Got "
                 f"{self.rlt_objective!r}"
@@ -459,6 +478,17 @@ class Pi0RLT(Pi0):
             # would let the decoder absorb the constraint instead.
             self.rlt_behsim_proj_in = nnx.Linear(self.rlt_token_total, p, rngs=rngs)
             self.rlt_behsim_proj_out = nnx.Linear(p, p, rngs=rngs)
+
+        # ── Episode-adversarial head (epadv) ────────────────────────────────
+        self.rlt_epadv_weight = config.rlt_epadv_weight
+        self.rlt_epadv_lambda = config.rlt_epadv_lambda
+        self.rlt_num_episodes = config.rlt_num_episodes
+        if "epadv" in config.rlt_objective:
+            # A 2-layer MLP adversary — strictly stronger than the linear probe the diagnostic uses,
+            # so driving IT down guarantees the linear probe (episode_acc) comes down too. Reads z_rl
+            # through a gradient-reversal layer applied in the loss.
+            self.rlt_epadv_hidden = nnx.Linear(self.rlt_token_total, 512, rngs=rngs)
+            self.rlt_epadv_out = nnx.Linear(512, config.rlt_num_episodes, rngs=rngs)
 
         # ── Latent BC probe (flow-matching action head on the frozen z_rl) ──
         # Built only when enabled, so a non-probe checkpoint keeps its old param structure.
@@ -738,7 +768,32 @@ class Pi0RLT(Pi0):
             "rlt/behsim_mean_cos": jnp.sum(sim * off_diag) / jnp.sum(off_diag),
         }
 
-    def _rlt_losses(self, z, img_mask, state, progress=None, actions=None, rng=None):
+    def _epadv_loss(self, z_rl, episode_index):
+        """Domain-adversarial episode-invariance: push z_rl to be un-decodable into "which demo".
+
+        Reconstruction makes the token encode appearance, and appearance is demo-specific in
+        RoboCasa, so a linear probe reads the episode off z_rl at 100% accuracy (measured). Here an
+        MLP classifier is trained to predict the episode, but a gradient-reversal layer negates the
+        gradient into z_rl, so the token is optimised to DEFEAT the classifier — dropping whatever is
+        demo-identifying while keeping whatever is shared across demos. Assumes nothing about
+        temporal order, unlike behsim/TCC.
+
+        Returns (per-sample loss [b], aux scalars).
+        """
+        # Gradient reversal: identity in the forward pass, gradient scaled by -λ backward. The
+        # stop_gradient branch contributes 0 to the gradient, leaving d/dz = -λ.
+        lam = self.rlt_epadv_lambda
+        z_rev = jax.lax.stop_gradient((1.0 + lam) * z_rl) - lam * z_rl
+        logits = self.rlt_epadv_out(jax.nn.gelu(self.rlt_epadv_hidden(z_rev)))
+        target = jnp.mod(episode_index.astype(jnp.int32), self.rlt_num_episodes)
+        logp = jax.nn.log_softmax(logits, axis=-1)
+        loss = -jnp.take_along_axis(logp, target[:, None], axis=-1)[:, 0]  # [b]
+        # Adversary accuracy: HIGH means the token still leaks episode identity (invariance failing);
+        # it should fall over training as z_rl becomes demo-invariant.
+        adv_acc = jnp.mean((jnp.argmax(logits, axis=-1) == target).astype(jnp.float32))
+        return loss, {"rlt/epadv_ce": jnp.mean(loss), "rlt/epadv_adv_acc": adv_acc}
+
+    def _rlt_losses(self, z, img_mask, state, progress=None, actions=None, episode_index=None, rng=None):
         """RLT loss terms + z_rl, from the image embeddings z [b, M, W].
 
         Which terms are active is set by ``rlt_objective``; the reconstruction decoder is only run
@@ -805,6 +860,11 @@ class Pi0RLT(Pi0):
                 "from compute_loss — inference paths (extract_rl_token, annotation, eval) do not "
                 "run these terms."
             )
+        if "epadv" in self.rlt_objective and episode_index is None:
+            raise ValueError(
+                f"rlt_objective={self.rlt_objective!r} needs episode_index. Set "
+                "include_episode_index=True on the data config."
+            )
 
         if "action" in self.rlt_objective:
             tgt = actions[..., : self._rlt_act_dim]
@@ -822,6 +882,11 @@ class Pi0RLT(Pi0):
             bs_loss, bs_aux = self._behsim_loss(z_rl, actions)
             rlt_loss = rlt_loss + self.rlt_behsim_weight * bs_loss
             aux |= {"rlt/loss_behsim": jnp.mean(bs_loss), **bs_aux}
+
+        if "epadv" in self.rlt_objective:
+            ea_loss, ea_aux = self._epadv_loss(z_rl, episode_index)
+            rlt_loss = rlt_loss + self.rlt_epadv_weight * ea_loss
+            aux |= {"rlt/loss_epadv": jnp.mean(ea_loss), **ea_aux}
 
         return rlt_loss, z_rl, z_tgt, aux
 
@@ -1042,6 +1107,7 @@ class Pi0RLT(Pi0):
             observation.state,
             observation.progress,
             actions=actions,
+            episode_index=observation.episode_index,
             rng=jax.random.fold_in(rng, 7),
         )
 

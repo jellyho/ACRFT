@@ -159,7 +159,10 @@ if [ -n "${RLT_OBJECTIVE:-}" ]; then
     reconstruction+progress)        OBJ_TAG="_reconprog" ;;
     reconstruction+action)          OBJ_TAG="_reconact" ;;
     reconstruction+behsim)          OBJ_TAG="_reconbeh" ;;
+    reconstruction+epadv)           OBJ_TAG="_reconepadv" ;;
     reconstruction+action+behsim)   OBJ_TAG="_reconactbeh" ;;
+    reconstruction+action+epadv)    OBJ_TAG="_reconactepadv" ;;
+    reconstruction+behsim+epadv)    OBJ_TAG="_reconbehepadv" ;;
     reconstruction+progress+action) OBJ_TAG="_reconprogact" ;;
     progress) echo "--objective progress is no longer supported: progress alone supervises the token
 with a single scalar per frame and lets it collapse. Use reconstruction+progress."; exit 1 ;;

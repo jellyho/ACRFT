@@ -91,6 +91,37 @@ def test_behsim_ignores_padded_action_dims():
     assert jnp.allclose(base, same)
 
 
+def test_epadv_gradient_is_reversed():
+    """The whole mechanism is the sign flip: the token must get MINUS-lambda the classifier gradient.
+
+    If the reversal were dropped, z_rl would be trained to HELP predict the episode — the exact
+    opposite of the intent. This pins the gradient into z_rl to -lambda times the plain-CE gradient.
+    """
+    from flax import nnx
+
+    rngs = nnx.Rngs(0)
+    lam = 2.0
+    stub = types.SimpleNamespace(
+        rlt_epadv_lambda=lam,
+        rlt_num_episodes=16,
+        rlt_epadv_hidden=nnx.Linear(8, 32, rngs=rngs),
+        rlt_epadv_out=nnx.Linear(32, 16, rngs=rngs),
+    )
+    z = jax.random.normal(jax.random.key(0), (5, 8))
+    ep = jnp.arange(5)
+
+    g_rev = jax.grad(lambda zz: jnp.mean(pi0_rlt.Pi0RLT._epadv_loss(stub, zz, ep)[0]))(z)  # noqa: SLF001
+
+    def plain_ce(zz):  # same head, no gradient reversal
+        logits = stub.rlt_epadv_out(jax.nn.gelu(stub.rlt_epadv_hidden(zz)))
+        logp = jax.nn.log_softmax(logits, axis=-1)
+        tgt = jnp.mod(ep, 16)
+        return jnp.mean(-jnp.take_along_axis(logp, tgt[:, None], axis=-1)[:, 0])
+
+    g_plain = jax.grad(plain_ce)(z)
+    assert jnp.allclose(g_rev, -lam * g_plain, atol=1e-4)
+
+
 @pytest.mark.parametrize(
     "objective",
     [
@@ -100,6 +131,8 @@ def test_behsim_ignores_padded_action_dims():
         "reconstruction+behsim",
         "reconstruction+action+behsim",
         "reconstruction+progress+action",
+        "reconstruction+epadv",
+        "reconstruction+behsim+epadv",
     ],
 )
 def test_objective_accepted(objective):

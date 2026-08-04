@@ -383,6 +383,9 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
     # Dataset column holding the sparse success signal that defines "task done" for `progress`.
     # Defaults to the LeRobot convention; a dataset without it falls back to episode-end-is-the-goal.
     reward_key: str = "next.reward"
+    # Carry each frame's `episode_index` through to the model. Needed by Pi0RLT's episode-adversarial
+    # objective (make z_rl un-decodable into "which demo"); train-only, dropped at inference.
+    include_episode_index: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -397,6 +400,9 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             "actions": "action",
             "prompt": "prompt",
         }
+        # `episode_index` is already on the raw LeRobot item, so it only has to survive the repack.
+        if self.include_episode_index:
+            structure["episode_index"] = "episode_index"
         repack_inputs = []
         if self.include_progress:
             structure["progress"] = "progress"
@@ -1346,6 +1352,8 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
             # Cheap, and lets --model.rlt-objective switch to a progress objective without a
             # second data config.
             include_progress=True,
+            # Likewise carry episode_index so --model.rlt-objective can add '+epadv' with no data change.
+            include_episode_index=True,
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
