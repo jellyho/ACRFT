@@ -29,11 +29,23 @@
 #                              encoder and no proprio reconstruction term. This is the paper's own
 #                              setup, where the critic takes (z_rl, s^p) and gets proprio directly,
 #                              so whatever consumes z_rl must supply proprio itself. (NO_PROPRIO=1)
-#     --objective STR          reconstruction | reconstruction+progress      (RLT_OBJECTIVE=)
-#                              adding "progress" regresses time-to-success, derived from the sparse
-#                              success reward (see training/progress.py). Reconstruction is always
-#                              present: progress alone is one scalar per frame and lets the
-#                              bottleneck collapse, so it is an addition, not an objective.
+#     --objective STR          reconstruction[+progress][+action][+behsim]   (RLT_OBJECTIVE=)
+#                              Reconstruction is always present: every addition is too
+#                              low-dimensional to hold the bottleneck open on its own, so they are
+#                              additions, not objectives.
+#                                +progress  regress time-to-success, derived from the sparse success
+#                                           reward (see training/progress.py).
+#                                +action    predict the demonstrated action chunk from the token,
+#                                           gradient FLOWING (unlike the rlt_bc_probe, which is the
+#                                           same prediction detached, and stays a pure measurement).
+#                                +behsim    PSE-style contrastive: make token similarity mirror
+#                                           action-chunk similarity. Reconstruction targets SigLIP
+#                                           features, which are a function of appearance, so in
+#                                           RoboCasa (a different kitchen per demo) the token learns
+#                                           "which episode" — measured at 100% linear episode-ID
+#                                           probe accuracy. This is the term that pulls
+#                                           behaviourally-equivalent frames from DIFFERENT demos
+#                                           together, which is what cross-trajectory stitching needs.
 #     --scalar-head            progress head = MSE regression instead of the default HL-Gauss
 #                              histogram + cross-entropy                     (SCALAR_HEAD=1)
 #     --progress-bins INT      histogram bins for the distributional head    (PROGRESS_BINS=)
@@ -143,11 +155,20 @@ if [ -n "${RLT_OBJECTIVE:-}" ]; then
   # Explicit tags: truncating the objective string would collide "reconstruction" with
   # "reconstruction+progress" and silently point two ablations at the same checkpoint dir.
   case "$RLT_OBJECTIVE" in
-    reconstruction)          OBJ_TAG="_recon" ;;
-    reconstruction+progress) OBJ_TAG="_reconprog" ;;
+    reconstruction)                 OBJ_TAG="_recon" ;;
+    reconstruction+progress)        OBJ_TAG="_reconprog" ;;
+    reconstruction+action)          OBJ_TAG="_reconact" ;;
+    reconstruction+behsim)          OBJ_TAG="_reconbeh" ;;
+    reconstruction+epadv)           OBJ_TAG="_reconepadv" ;;
+    reconstruction+action+behsim)   OBJ_TAG="_reconactbeh" ;;
+    reconstruction+action+epadv)    OBJ_TAG="_reconactepadv" ;;
+    reconstruction+behsim+epadv)    OBJ_TAG="_reconbehepadv" ;;
+    reconstruction+progress+action) OBJ_TAG="_reconprogact" ;;
     progress) echo "--objective progress is no longer supported: progress alone supervises the token
 with a single scalar per frame and lets it collapse. Use reconstruction+progress."; exit 1 ;;
-    *) echo "Unknown --objective: $RLT_OBJECTIVE (reconstruction | reconstruction+progress)"; exit 1 ;;
+    *) echo "Unknown --objective: $RLT_OBJECTIVE (reconstruction[+progress][+action][+behsim];
+add the tag to this case if you need another combination — truncating the string would let two
+ablations share a checkpoint dir)"; exit 1 ;;
   esac
   RLT_FLAGS+=(--model.rlt-objective "$RLT_OBJECTIVE"); VARIANT_TAG="${VARIANT_TAG}${OBJ_TAG}"
 fi
@@ -171,6 +192,10 @@ if [ -n "${RLT_LOSS_WEIGHT:-}" ]; then
 fi
 RLT_FLAGS+=(--project-name "$PROJECT")
 RLT_FLAGS+=(--wandb-entity "$ENTITY")
+# RoboCasa frames are decoded from video, so the loader — not the GPU — sets the step time. The
+# config default is 2 workers, which is what left rlt7_mae075 at 2.1 s/it; pass NUM_WORKERS (the
+# slurm wrapper derives it from --cpus-per-task) to actually use the allocation.
+[ -n "${NUM_WORKERS:-}" ] && RLT_FLAGS+=(--num-workers "$NUM_WORKERS")
 [ -n "$GROUP" ] && RLT_FLAGS+=(--wandb-group "$GROUP")
 [ -n "${MONITOR_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-monitor-interval "$MONITOR_INTERVAL")
 [ -n "${VIS_INTERVAL:-}" ] && RLT_FLAGS+=(--rlt-vis-interval "$VIS_INTERVAL")

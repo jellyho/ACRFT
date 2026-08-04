@@ -94,6 +94,12 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # Subset of episode indices to load (LeRobot v3 `episodes=`); None loads every episode. Used to
+    # train on success-only teleop data — the factory resolves the list, so downstream (including the
+    # norm-stats pass, which shares create_torch_dataset) sees exactly the trained-on episodes. The
+    # filtered dataset keeps ORIGINAL episode_index values, so progress labels still line up.
+    episodes: tuple[int, ...] | None = None
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
@@ -377,6 +383,9 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
     # Dataset column holding the sparse success signal that defines "task done" for `progress`.
     # Defaults to the LeRobot convention; a dataset without it falls back to episode-end-is-the-goal.
     reward_key: str = "next.reward"
+    # Carry each frame's `episode_index` through to the model. Needed by Pi0RLT's episode-adversarial
+    # objective (make z_rl un-decodable into "which demo"); train-only, dropped at inference.
+    include_episode_index: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -391,6 +400,9 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             "actions": "action",
             "prompt": "prompt",
         }
+        # `episode_index` is already on the raw LeRobot item, so it only has to survive the repack.
+        if self.include_episode_index:
+            structure["episode_index"] = "episode_index"
         repack_inputs = []
         if self.include_progress:
             structure["progress"] = "progress"
@@ -441,6 +453,11 @@ class LeRobotYAMDataConfig(DataConfigFactory):
     delta_mode: str = "joint"  # joint (relative) | none (absolute)
     include_progress: bool = False
     reward_key: str = "next.reward"
+    # Train on successful episodes only. The YAM teleop set is 100 success / 19 fail; with this off
+    # (the default) BC clones the failures too, which is what a critic wants as negatives later but
+    # is not what a clean BC policy wants. On, it resolves the success episode list from
+    # outcomes.jsonl and trains (and computes norm stats) on exactly those.
+    success_only: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -480,12 +497,24 @@ class LeRobotYAMDataConfig(DataConfigFactory):
             )
 
         model_transforms = ModelTransformFactory()(model_config)
+        # Resolve the success-only episode subset now (startup), so both training and the norm-stats
+        # pass see the same episodes. None => train on everything.
+        episodes = None
+        if self.success_only:
+            episodes = _progress.success_episode_indices(self.repo_id, reward_key=self.reward_key)
+            if episodes is None:
+                raise ValueError(
+                    f"success_only=True but {self.repo_id} has no outcomes.jsonl and no "
+                    f"'{self.reward_key}' column to derive success from."
+                )
+            episodes = tuple(episodes)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=("action",),
+            episodes=episodes,
         )
 
 
@@ -1323,6 +1352,8 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
             # Cheap, and lets --model.rlt-objective switch to a progress objective without a
             # second data config.
             include_progress=True,
+            # Likewise carry episode_index so --model.rlt-objective can add '+epadv' with no data change.
+            include_episode_index=True,
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,
@@ -1364,7 +1395,10 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
         name=f"pi05_yam_lego_taxi{tag}_rlt",
         model=pi0_rlt.Pi0RLTConfig(
             pi05=True,
-            action_horizon=16,
+            # 30 frames at YAM's 30 fps is exactly a one-second window. The 16 this started with was
+            # carried over from the RoboCasa configs and covers only 0.53 s - short for a bimanual
+            # chunk, and it is also the window the RLT bottleneck has to summarise into one token.
+            action_horizon=30,
             discrete_state_input=False,
             rlt_backbone_gradient=False,
             rlt_decoder_mode="parallel",  # pardec: best on RoboCasa, un-bypassable bottleneck

@@ -65,6 +65,55 @@ class ProgressLabels:
         raise ValueError(f"unknown progress mode {self.mode!r}")
 
 
+def success_episode_indices(repo_id: str, *, reward_key: str = "next.reward") -> list[int] | None:
+    """Episode indices that ended in success, or None when the notion does not apply.
+
+    Two sources, in order:
+      1. ``outcomes.jsonl`` at the dataset root — one row per episode with an ``outcome`` field
+         ("success"/"fail"). This is the authoritative per-episode label for teleop datasets that
+         mix successes and failures (e.g. YAM: 100 success / 19 fail).
+      2. the ``reward_key`` column — an episode counts as a success if the sparse reward fires
+         anywhere in it. Used for datasets that carry a reward but no outcomes file.
+
+    Returns None (meaning "do not filter") when NEITHER source exists, which is the correct default
+    for demonstration datasets that are successful by construction (every RoboCasa demo) — there the
+    fail set is empty and a filter would be a silent no-op at best.
+    """
+    import json
+
+    from lerobot.datasets import lerobot_dataset
+
+    meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    root = pathlib.Path(meta.root)
+
+    outcomes = root / "outcomes.jsonl"
+    if outcomes.exists():
+        keep = []
+        for line in outcomes.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if row.get("outcome") == "success":
+                keep.append(int(row["episode"]))
+        keep.sort()
+        logger.info(
+            f"outcomes.jsonl for {repo_id}: {len(keep)}/{meta.total_episodes} episodes are success"
+        )
+        return keep
+
+    reward = read_reward_column(root, meta.total_frames, reward_key)
+    if reward is None:
+        return None
+    lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
+    hi = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
+    keep = [i for i, (a, b) in enumerate(zip(lo, hi, strict=True)) if np.any(reward[a:b] > 0)]
+    logger.info(
+        f"reward column for {repo_id}: {len(keep)}/{len(lo)} episodes fire '{reward_key}' (success)"
+    )
+    return keep
+
+
 def read_reward_column(root: pathlib.Path, total_frames: int, reward_key: str = "next.reward") -> np.ndarray | None:
     """Read the (index, ``reward_key``) columns out of the LeRobot v3 parquet files.
 

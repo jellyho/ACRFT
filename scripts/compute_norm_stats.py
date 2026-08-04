@@ -5,6 +5,8 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import dataclasses
+
 import numpy as np
 import tqdm
 import tyro
@@ -31,7 +33,8 @@ def create_torch_dataloader(
 ) -> tuple[_data_loader.Dataset, int]:
     if data_config.repo_id is None:
         raise ValueError("Data config must have a repo_id")
-    dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
+    # Only state/actions are accumulated, so skip decoding the camera videos entirely.
+    dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config, skip_videos=True)
     dataset = _data_loader.TransformedDataset(
         dataset,
         [
@@ -86,8 +89,30 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def main(config_name: str, max_frames: int | None = None):
+def main(
+    config_name: str,
+    max_frames: int | None = None,
+    success_only: bool = False,
+    asset_id: str | None = None,
+):
+    """Compute norm stats, optionally on a success-only subset and into a custom asset dir.
+
+    ``success_only`` and ``asset_id`` exist for the data-scaling study: each scaling point trains on
+    a DIFFERENT set of episodes (its own success-only subset), so it must get its OWN norm stats
+    rather than sharing one file. ``asset_id`` isolates the output directory per point, and stats are
+    written to ``assets_dirs/asset_id`` — the exact path the training run then LOADS from (train
+    passes the matching ``--data.assets.asset-id``).
+    """
     config = _config.get_config(config_name)
+    if success_only or asset_id is not None:
+        replaced = {}
+        if success_only:
+            if not hasattr(config.data, "success_only"):
+                raise ValueError(f"{type(config.data).__name__} has no success_only field")
+            replaced["success_only"] = True
+        if asset_id is not None:
+            replaced["assets"] = dataclasses.replace(config.data.assets, asset_id=asset_id)
+        config = dataclasses.replace(config, data=dataclasses.replace(config.data, **replaced))
     data_config = config.data.create(config.assets_dirs, config.model)
 
     if data_config.rlds_data_dir is not None:
@@ -108,7 +133,9 @@ def main(config_name: str, max_frames: int | None = None):
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    # Write where the training run will LOAD from: assets_dirs/asset_id (asset_id defaults to repo_id,
+    # so the un-overridden path is unchanged).
+    output_path = config.assets_dirs / (data_config.asset_id or data_config.repo_id)
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

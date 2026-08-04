@@ -79,6 +79,10 @@ class RoboCasaInputs(transforms.DataTransformFn):
         if "progress" in data:
             inputs["progress"] = data["progress"]
 
+        # Episode id for Pi0RLT's episode-adversarial term; train-only, injected by the data config.
+        if "episode_index" in data:
+            inputs["episode_index"] = data["episode_index"]
+
         return inputs
 
 
