@@ -112,7 +112,7 @@ def main() -> None:
         "<div class='legend'><p><b>네 모드는 같은 scene에서 돕니다</b> (seed 고정). "
         "critic의 두 결정을 분리하려는 구성이라, 나란히 봐야 의미가 있습니다.</p>"
         + "".join(f"<p><code>{m}</code> — {MODE_NOTE[m]}</p>" for m in MODE_ORDER)
-        + "<p style='margin-top:.6rem'>HUD: 우측은 <b>후보 16개의 값 산포</b>(겹쳐 있으면 best-of-N은 동전던지기), "
+        + "<p style='margin-top:.6rem'>HUD: 우측은 <b>Q[후보 16 × 커밋길이] 그리드</b> — 색이 Q값, 초록 테두리가 선택된 칸입니다 (prefix 모드는 0행 고정, 점선 표시). spread가 좁으면 best-of-N은 동전던지기입니다. "
         "아래는 <b>value trace</b>(로그축 — <code>V=γ^남은스텝</code>이므로 일관되면 직선)와 "
         "<b>replan당 커밋 스텝</b>입니다.</p>"
         "<p style='margin-top:.6rem'>런 헤더의 숫자: <code>act_sens</code> = 상태 내부 Q 분산 ÷ 상태 간 분산 "
