@@ -188,7 +188,6 @@ class Dashboard:
 
         bx = fig.add_subplot(gs[1], sharex=ax)
         _style(bx)
-        w = max(1.0, 0.6 * (np.diff(x).mean() if len(x) > 1 else 4))
         if self.has_prefix:
             # A step function, not bars: each replan's commitment h is drawn as y = h held for
             # exactly the h steps it governed, so the line tiles the timeline with no gaps and the
