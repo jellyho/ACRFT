@@ -125,6 +125,16 @@ def main() -> None:
         v_min=tcfg.get("v_min", args.v_min), v_max=tcfg.get("v_max", args.v_max), num_atoms=max(num_atoms, 2)
     )
     params = flax.serialization.msgpack_restore(args.params.read_bytes())
+    v_apply = None
+    if tcfg.get("dueling"):
+        # Dueling checkpoints store the ADVANTAGE head; every metric here is about Q, so V must be
+        # recomposed or rho/bias measure a different (and meaningless) quantity.
+        vp = args.params.parent / args.params.name.replace("params", "vparams")
+        v_params = flax.serialization.msgpack_restore(vp.read_bytes())
+        v_net = _critic.ValueNet(hidden_dims=tuple(tcfg.get("hidden_dims", [512, 512, 512])))
+
+        def v_apply(z):
+            return v_net.apply(v_params, z)
 
     rng = np.random.default_rng(args.seed)
     idx = np.sort(rng.choice(T, size=min(args.num_states, T), replace=False))
@@ -133,8 +143,11 @@ def main() -> None:
     def q_of(actions):
         """[S, M, H, A] -> ensemble-min Q, reduced over prefixes to the full-chunk value."""
         m = actions.shape[1]
-        out = net.apply(params, jnp.repeat(z[:, None], m, axis=1), jnp.asarray(np.asarray(actions, np.float32)))
+        zz = jnp.repeat(z[:, None], m, axis=1)
+        out = net.apply(params, zz, jnp.asarray(np.asarray(actions, np.float32)))
         out = hl.from_logits(out) if num_atoms > 1 else out
+        if v_apply is not None:
+            out = out - out.mean(axis=-1, keepdims=True) + v_apply(zz)[..., None]
         return jnp.min(out, axis=0)  # ensemble -> [S, M] for qc, [S, M, P] for arq
 
     q_cand = np.asarray(q_of(np.asarray(cand[idx])))
