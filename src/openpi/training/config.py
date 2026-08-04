@@ -94,6 +94,12 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # Subset of episode indices to load (LeRobot v3 `episodes=`); None loads every episode. Used to
+    # train on success-only teleop data — the factory resolves the list, so downstream (including the
+    # norm-stats pass, which shares create_torch_dataset) sees exactly the trained-on episodes. The
+    # filtered dataset keeps ORIGINAL episode_index values, so progress labels still line up.
+    episodes: tuple[int, ...] | None = None
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
@@ -441,6 +447,11 @@ class LeRobotYAMDataConfig(DataConfigFactory):
     delta_mode: str = "joint"  # joint (relative) | none (absolute)
     include_progress: bool = False
     reward_key: str = "next.reward"
+    # Train on successful episodes only. The YAM teleop set is 100 success / 19 fail; with this off
+    # (the default) BC clones the failures too, which is what a critic wants as negatives later but
+    # is not what a clean BC policy wants. On, it resolves the success episode list from
+    # outcomes.jsonl and trains (and computes norm stats) on exactly those.
+    success_only: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -480,12 +491,24 @@ class LeRobotYAMDataConfig(DataConfigFactory):
             )
 
         model_transforms = ModelTransformFactory()(model_config)
+        # Resolve the success-only episode subset now (startup), so both training and the norm-stats
+        # pass see the same episodes. None => train on everything.
+        episodes = None
+        if self.success_only:
+            episodes = _progress.success_episode_indices(self.repo_id, reward_key=self.reward_key)
+            if episodes is None:
+                raise ValueError(
+                    f"success_only=True but {self.repo_id} has no outcomes.jsonl and no "
+                    f"'{self.reward_key}' column to derive success from."
+                )
+            episodes = tuple(episodes)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=("action",),
+            episodes=episodes,
         )
 
 

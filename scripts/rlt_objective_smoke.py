@@ -45,11 +45,13 @@ def main():
         model = cfg.create(jax.random.key(0))
         # ones, not zeros: the masks must be True or there are no image tokens to reconstruct and
         # every masked mean falls back to its epsilon guard, which hides real shape bugs.
-        obs = cfg.fake_obs(batch_size=4)
-        act = cfg.fake_act(batch_size=4)
+        # batch 2: this is a shape/pytree check, not a throughput test, and the full 2B backbone plus
+        # the reconstruction decoder over every image token OOMs an L40S at batch 4.
+        obs = cfg.fake_obs(batch_size=2)
+        act = cfg.fake_act(batch_size=2)
         # Progress is only populated by the data config; supply it here for the objectives that need
         # it, and vary it per sample so a degenerate constant does not hide a broadcasting bug.
-        obs = obs.replace(progress=jnp.linspace(0.0, 1.0, 4))
+        obs = obs.replace(progress=jnp.linspace(0.0, 1.0, 2))
         # Vary actions per sample too: behsim's target distribution is uniform (and its gradient
         # zero) if every chunk is identical, which would make a broken distance matrix look fine.
         act = act + jax.random.normal(jax.random.key(1), act.shape) * 0.5
