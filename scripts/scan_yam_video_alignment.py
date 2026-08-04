@@ -70,8 +70,11 @@ def main() -> None:
                 flush=True,
             )
             for r in bad:
-                print(f"      ep {r['episode']} expected {r['expected']} -> offset {r['offset']:+d} "
-                      f"(sharpness {r['sharpness']})", flush=True)
+                print(
+                    f"      ep {r['episode']} expected {r['expected']} -> offset {r['offset']:+d} "
+                    f"(sharpness {r['sharpness']})",
+                    flush=True,
+                )
 
     with open("/data5/jellyho/ACRFT/openpi/.scratch/boundary_offsets.json", "w") as f:
         json.dump(out, f, indent=1)

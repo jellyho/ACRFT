@@ -89,17 +89,15 @@ def success_episode_indices(repo_id: str, *, reward_key: str = "next.reward") ->
     outcomes = root / "outcomes.jsonl"
     if outcomes.exists():
         keep = []
-        for line in outcomes.read_text().splitlines():
-            line = line.strip()
+        for raw_line in outcomes.read_text().splitlines():
+            line = raw_line.strip()
             if not line:
                 continue
             row = json.loads(line)
             if row.get("outcome") == "success":
                 keep.append(int(row["episode"]))
         keep.sort()
-        logger.info(
-            f"outcomes.jsonl for {repo_id}: {len(keep)}/{meta.total_episodes} episodes are success"
-        )
+        logger.info(f"outcomes.jsonl for {repo_id}: {len(keep)}/{meta.total_episodes} episodes are success")
         return keep
 
     reward = read_reward_column(root, meta.total_frames, reward_key)
@@ -108,9 +106,7 @@ def success_episode_indices(repo_id: str, *, reward_key: str = "next.reward") ->
     lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
     hi = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
     keep = [i for i, (a, b) in enumerate(zip(lo, hi, strict=True)) if np.any(reward[a:b] > 0)]
-    logger.info(
-        f"reward column for {repo_id}: {len(keep)}/{len(lo)} episodes fire '{reward_key}' (success)"
-    )
+    logger.info(f"reward column for {repo_id}: {len(keep)}/{len(lo)} episodes fire '{reward_key}' (success)")
     return keep
 
 

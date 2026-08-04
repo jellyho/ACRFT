@@ -61,7 +61,7 @@ import openpi.training.data_loader as _data_loader
 import openpi.training.progress as _progress
 
 mpl.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -304,14 +304,16 @@ def main() -> None:
 
     rows = []
     for step in steps:
-        model = model_config.load(_model.restore_params(args.checkpoint_root / str(step) / "params", dtype=jnp.bfloat16))
+        model = model_config.load(
+            _model.restore_params(args.checkpoint_root / str(step) / "params", dtype=jnp.bfloat16)
+        )
         model.eval()
 
         @jax.jit
         def extract(obs, _m=model):
             obs = _model.preprocess_observation(None, obs, train=False)
-            z, img_mask, _, _ = _m._prefix_forward(obs)  # noqa: SLF001
-            z_rl = _m._encode_rl_token(z, img_mask, obs.state)  # noqa: SLF001
+            z, img_mask, _, _ = _m._prefix_forward(obs)
+            z_rl = _m._encode_rl_token(z, img_mask, obs.state)
             m = img_mask[..., None].astype(jnp.float32)
             pooled = jnp.sum(z * m, axis=1) / (jnp.sum(m, axis=1) + 1e-6)
             return z_rl, pooled

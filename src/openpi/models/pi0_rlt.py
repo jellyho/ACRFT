@@ -423,9 +423,7 @@ class Pi0RLT(Pi0):
         # no aux head the model is then byte-identical to one that never had this feature, which keeps
         # "reconstruction only, no proprio" a clean baseline across code versions.
         self._dec_has_aux = config.rlt_aux_head_source == "decoder" and (
-            config.rlt_include_proprio
-            or "progress" in config.rlt_objective
-            or "action" in config.rlt_objective
+            config.rlt_include_proprio or "progress" in config.rlt_objective or "action" in config.rlt_objective
         )
         if self._dec_has_aux:
             self.rlt_dec_aux_embed = nnx.Param(jax.random.normal(rngs.params(), (d,)) * 0.02)

@@ -92,6 +92,7 @@ def create_rlds_dataloader(
 def main(
     config_name: str,
     max_frames: int | None = None,
+    *,
     success_only: bool = False,
     asset_id: str | None = None,
 ):
