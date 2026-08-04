@@ -325,6 +325,16 @@ def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
     args = ap.parse_args()
 
+    # The HUD's "steps left" relabelling is log V / log gamma - with the wrong gamma it is wrong by
+    # the ratio of the logs (10x for 0.999 vs 0.99), which is exactly how it presented.
+    _crit_discount = 0.99
+    if args.critic is not None:
+        import contextlib as _ctx
+        import json as _json
+
+        with _ctx.suppress(Exception):
+            _crit_discount = float(_json.loads((args.critic.parent / "config.json").read_text())["discount"])
+
     if "vla" not in args.modes and args.critic is None:
         ap.error("--critic is required unless --modes vla")
 
@@ -435,7 +445,7 @@ def main() -> None:
                 # Render every panel now, with the simulator and the policy both idle.
                 import hud as _hud2
 
-                dash = _hud2.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size)
+                dash = _hud2.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size, discount=_crit_discount)
                 composed = [
                     dash.frame(
                         r["agent"],

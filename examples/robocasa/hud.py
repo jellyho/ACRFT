@@ -29,13 +29,13 @@ the candidate set are constant between replans, so this is 5-10x fewer renders w
 import numpy as np
 
 _HDR = 36  # header strip
-_CAM = 784  # each camera view, square
-_GAP = 4
-_RIGHT = 344  # width of the analytics column
-_GRID_H = 360
-WIDTH = 2 * _CAM + 2 * _GAP + _RIGHT  # 1920
-HEIGHT = _HDR + _CAM + _GAP  # 824
-_TRACE_H = HEIGHT - _HDR - _GRID_H - _GAP  # 424
+_CAM = 796  # each camera view, square
+_GAP = 8
+_AN_H = 400  # analytics row below the cameras
+_GRID_W = 460  # Q-grid panel width inside that row
+WIDTH = 2 * _CAM + _GAP  # 1600
+_TRACE_W = WIDTH - _GRID_W - _GAP  # 1132
+HEIGHT = _HDR + _CAM + _GAP + _AN_H  # 1240
 
 # A cool, slightly green-biased dark ground: the accents sit on it without vibrating, and it reads as
 # instrumentation rather than as a slide.
@@ -117,7 +117,7 @@ class Dashboard:
         n, pnum = q.shape
         lo, hi = float(q.min()), float(q.max())
         spread = hi - lo
-        fig = _fig(_RIGHT, _GRID_H)
+        fig = _fig(_GRID_W, _AN_H)
         ax = fig.add_axes([0.15, 0.16, 0.79, 0.70])
         _style(ax)
         ax.imshow(q, aspect="auto", cmap="viridis", vmin=lo, vmax=hi if hi > lo else lo + 1e-9, interpolation="nearest")
@@ -147,9 +147,9 @@ class Dashboard:
         return _render(fig)
 
     def _trace_panel(self):
-        fig = _fig(_RIGHT, _TRACE_H)
+        fig = _fig(_TRACE_W, _AN_H)
         gs = fig.add_gridspec(
-            2, 1, height_ratios=[2.0, 1.0], hspace=0.30, left=0.185, right=0.83, top=0.90, bottom=0.11
+            2, 1, height_ratios=[2.0, 1.0], hspace=0.32, left=0.065, right=0.945, top=0.90, bottom=0.12
         )
         ax = fig.add_subplot(gs[0])
         _style(ax)
@@ -162,15 +162,17 @@ class Dashboard:
         ax.plot(x, v, color=_TRACE, lw=1.8, solid_capstyle="round")
         ax.plot(x[-1:], v[-1:], "o", color=_TRACE, ms=5, mec=np.array(_BG) / 255, mew=1.2)
         ax.set_yscale("log")
-        ax.minorticks_off()  # log minor labels shred a narrow range into noise
+        from matplotlib.ticker import FuncFormatter
+        from matplotlib.ticker import LogLocator
+
+        # A narrow log range (say 0.06..0.99) contains no power of ten, so the default locator draws
+        # NO labels at all - the axis read as unlabelled. Subs at 1/2/3/5/7 guarantee ticks inside
+        # any range wider than ~1.4x, and the plain-decimal formatter keeps them readable.
+        ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 3.0, 5.0, 7.0), numticks=12))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.minorticks_off()
         ax.set_ylabel("Q chosen", color=_INK2, fontsize=9, labelpad=2)
-        ax.set_title(
-            f"value   now {raw[-1]:.4f}   ≈{np.log(v[-1]) / np.log(self.discount):.0f} steps left",
-            color=_INK,
-            fontsize=10.5,
-            pad=6,
-            loc="left",
-        )
+        ax.set_title(f"value of the chosen chunk   now {raw[-1]:.4f}", color=_INK, fontsize=10.5, pad=6, loc="left")
         if oob:
             ax.text(
                 0.998,
@@ -182,19 +184,6 @@ class Dashboard:
                 color="#d03b3b",
                 fontsize=8.5,
             )
-        # log V is linear in the steps remaining, so relabelling the same axis in those units costs
-        # nothing and is what the number means. Not a second measure - a change of unit.
-        rax = ax.twinx()
-        rax.set_yscale("log")
-        rax.minorticks_off()
-        rax.set_ylim(ax.get_ylim())
-        ticks = [t for t in (0.9, 0.5, 0.2, 0.05, 0.01, 0.002) if ax.get_ylim()[0] <= t <= ax.get_ylim()[1]]
-        rax.set_yticks(ticks)
-        rax.set_yticklabels([f"{np.log(t) / np.log(self.discount):.0f}" for t in ticks])
-        rax.tick_params(colors=_INK2, labelsize=8, length=2, width=0.6)
-        for s in rax.spines.values():
-            s.set_visible(False)
-        rax.set_ylabel("steps left", color=_INK2, fontsize=9, rotation=270, labelpad=13)
         ax.tick_params(labelbottom=False)  # the step axis is shared with the panel below
 
         bx = fig.add_subplot(gs[1], sharex=ax)
@@ -314,11 +303,11 @@ class Dashboard:
             if wrist_paths is not None:
                 wr = self._draw_paths(wr, wrist_paths, chosen)
             canvas.paste(wr, (_CAM + _GAP, _HDR))
-        rx = 2 * (_CAM + _GAP)
+        ay = _HDR + _CAM + _GAP
         if self._cand_png is not None:
-            canvas.paste(Image.fromarray(self._cand_png), (rx, _HDR))
+            canvas.paste(Image.fromarray(self._cand_png), (0, ay))
         if self._trace_png is not None:
-            canvas.paste(Image.fromarray(self._trace_png), (rx, _HDR + _GRID_H + _GAP))
+            canvas.paste(Image.fromarray(self._trace_png), (_GRID_W + _GAP, ay))
 
         d = ImageDraw.Draw(canvas)
         d.rectangle([0, 0, WIDTH, _HDR - 2], fill=(10, 13, 12))
@@ -339,7 +328,7 @@ class Dashboard:
             import action_overlay as _ov  # the label must track the constant, not restate it
 
             d.text(
-                (14, HEIGHT - 26),
+                (14, _HDR + _CAM - 26),
                 f"chunk paths x{_ov.PATH_GAIN:g}, world-scale (true span ~3 cm)",
                 font=self._f_sm,
                 fill=(150, 175, 200),
