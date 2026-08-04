@@ -121,9 +121,14 @@ class Dashboard:
         ax = fig.add_axes([0.15, 0.16, 0.79, 0.70])
         _style(ax)
         ax.imshow(q, aspect="auto", cmap="viridis", vmin=lo, vmax=hi if hi > lo else lo + 1e-9, interpolation="nearest")
-        # The chosen cell - the one decision this whole panel exists to explain.
+        # The chosen cell - the one decision this whole panel exists to explain. A green outline
+        # vanished into viridis's own greens; a white-over-black double ring is visible on every
+        # colour the map can produce.
         ax.add_patch(
-            Rectangle((info.best_prefix - 0.5, info.best_cand - 0.5), 1, 1, fill=False, edgecolor=_WIN, lw=2.4)
+            Rectangle((info.best_prefix - 0.5, info.best_cand - 0.5), 1, 1, fill=False, edgecolor="black", lw=4.0)
+        )
+        ax.add_patch(
+            Rectangle((info.best_prefix - 0.5, info.best_cand - 0.5), 1, 1, fill=False, edgecolor="white", lw=1.8)
         )
         if self.mode == "prefix":
             # Candidate is pinned: only row 0's cells were ever eligible.
@@ -231,7 +236,7 @@ class Dashboard:
     # before projection - this class only draws the projected points and prints the label. Stretching
     # the projected 2-D points instead (the first attempt) kept the anchor but destroyed the
     # perspective foreshortening, so the fan stopped reading as a 3-D trajectory.
-    def _draw_paths(self, img, paths, chosen):
+    def _draw_paths(self, img, paths, chosen, exec_steps=None):
         """Overlay the candidate end-effector paths on one (already upscaled) camera view.
 
         The projector returns (row, col); PIL wants (x=col, y=row), and getting that backwards
@@ -278,8 +283,20 @@ class Dashboard:
         if 0 <= chosen < len(paths):
             pts = _screen(paths[chosen])
             if pts is not None and len(pts) >= 2:
-                d.line(pts, fill=(49, 196, 141, 255), width=5, joint="curve")
-                d.ellipse([pts[-1][0] - 4, pts[-1][1] - 4, pts[-1][0] + 4, pts[-1][1] + 4], fill=(49, 196, 141, 255))
+                # Per-segment colour gradient along time (dark green -> pale mint), so the direction
+                # of travel reads without an arrowhead. Only the first `exec_steps` segments - the
+                # prefix actually committed - get the bright treatment; the tail of the chunk that
+                # will never run is thin and faded, which puts the commit decision on the path itself.
+                k = len(pts) - 1 if exec_steps is None else max(1, min(int(exec_steps), len(pts) - 1))
+                c0, c1 = (20, 140, 95), (190, 255, 225)
+                for i in range(k):
+                    t = i / max(k - 1, 1)
+                    col = tuple(int(a + (b - a) * t) for a, b in zip(c0, c1, strict=True))
+                    d.line([pts[i], pts[i + 1]], fill=(*col, 255), width=5, joint="curve")
+                for i in range(k, len(pts) - 1):
+                    d.line([pts[i], pts[i + 1]], fill=(160, 200, 185, 90), width=2)
+                ex, ey = pts[min(k, len(pts) - 1)]
+                d.ellipse([ex - 4, ey - 4, ex + 4, ey + 4], fill=(*c1, 255))
         return Image.alpha_composite(base, layer).convert("RGB")
 
     # ---------------------------------------------------------------- frame
@@ -307,14 +324,15 @@ class Dashboard:
             self._trace_png = self._trace_panel()
 
         canvas = Image.new("RGB", (WIDTH, HEIGHT), _BG)
+        _ex = int(info.n_exec) if info is not None else None
         main = Image.fromarray(np.ascontiguousarray(agent_rgb)).resize((_CAM, _CAM), Image.LANCZOS)
         if paths is not None:
-            main = self._draw_paths(main, paths, chosen)
+            main = self._draw_paths(main, paths, chosen, exec_steps=_ex)
         canvas.paste(main, (0, _HDR))
         if wrist_rgb is not None:
             wr = Image.fromarray(np.ascontiguousarray(wrist_rgb)).resize((_CAM, _CAM), Image.LANCZOS)
             if wrist_paths is not None:
-                wr = self._draw_paths(wr, wrist_paths, chosen)
+                wr = self._draw_paths(wr, wrist_paths, chosen, exec_steps=_ex)
             canvas.paste(wr, (_CAM + _GAP, _HDR))
         ay = _HDR + _CAM + _GAP
         if self._cand_png is not None:
