@@ -206,7 +206,17 @@ representation transfers, the action evaluation is the bottleneck.</p>
 
 <h2>5 &nbsp;Data-size ladder — TD, γ=0.999 (bootstrap attribution)</h2>
 <p><b>Question</b>: with γ matched at 0.999, how much of the small-data held-out failure is the TD
-bootstrap itself rather than data scarcity? Same rungs, same probe.</p>
+bootstrap itself rather than data scarcity? Same rungs, same probe, same 20k-step budget as the IQL
+ladder. <b>Actual</b>: catastrophic upward collapse at every rung — the value curve sits flat at
+≈0.86 over the whole episode instead of following the 0.48→1.0 slope, <i>including on the training
+episode</i> (mean error 0.18–0.20 at 1 through 64 episodes; IQL fits the same data to 0.013–0.027 at
+the same budget). Mechanism: at γ=0.999 the per-backup contraction is only 0.999<sup>h</sup>≈0.98–0.998,
+so the max-over-candidates bootstrap compounds its own overestimation almost undamped and the value
+plateaus near the top of the support; the MC floor cannot help because it only bounds from below.
+The full-data 200k-step TD γ=0.999 run (section 6) does eventually grind down to a clean fit, so this
+is a convergence/stability failure, not a permanent divergence — but at any budget where IQL is
+already exact, TD is still inflated. This closes the attribution: the ladder failures are bootstrap
+pathology, not data scarcity.</p>
 {fig_block("Fig 10 — TD γ=0.999 ladder", PLOTS / "10_ladder_traj_fit.png", "Direct comparison partner of Fig 11 — same data, same γ, only the objective differs.")}
 {fig_block("Fig 10b — ladder summary", PLOTS / "10_ladder_summary.png", "Fit error vs training episodes, TD objective.")}
 
