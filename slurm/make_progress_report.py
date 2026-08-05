@@ -342,26 +342,29 @@ def main() -> None:
         "soft/lcb/bc) bound how much variance-softening alone can give.</li>"
         "</ol>"
     )
-        # ---------------------------------------------------------------- figures
+    # ---------------------------------------------------------------- figures
     P("<h2>The results in six figures</h2>")
     figs = [
-        ("1_success_by_mode.png",
-         "Each method as the critic gains authority (thin line = one run, bold = family median, "
-         "dashed = that family's own vla level). TD declines monotonically; IQL γ=.99 holds parity "
-         "through prefix and only drops at the joint arg-max; dueling collapses at prefix."),
-        ("2_value_bias.png",
-         "Value bias b(d) = V̂ − γ^d by distance to goal. Left: TD inflates with distance and the "
-         "IQL expectile ladder re-inflates toward it. Right (same scale): γ=.999 / .9995 and "
-         "dueling sit on the zero line everywhere."),
-        ("3_dose_response.png",
-         "The expectile dose-response, offline and in rollout — the causal pin on the arg-max."),
-        ("4_prefix_targets.png",
-         "TD per-prefix targets over truth (log scale): every distance band slopes down in h, and "
-         "the far band floats at 5×."),
-        ("5_per_run_harm.png",
-         "critic − vla for every rollout run (filled = McNemar p<0.05). No run above zero yet."),
-        ("6_success_vs_steps.png",
-         "v8 success vs training steps, 30 trials per point — trends only."),
+        (
+            "1_success_by_mode.png",
+            "Each method as the critic gains authority (thin line = one run, bold = family median, "
+            "dashed = that family's own vla level). TD declines monotonically; IQL γ=.99 holds parity "
+            "through prefix and only drops at the joint arg-max; dueling collapses at prefix.",
+        ),
+        (
+            "2_value_bias.png",
+            "Value bias b(d) = V̂ − γ^d by distance to goal. Left: TD inflates with distance and the "
+            "IQL expectile ladder re-inflates toward it. Right (same scale): γ=.999 / .9995 and "
+            "dueling sit on the zero line everywhere.",
+        ),
+        ("3_dose_response.png", "The expectile dose-response, offline and in rollout — the causal pin on the arg-max."),
+        (
+            "4_prefix_targets.png",
+            "TD per-prefix targets over truth (log scale): every distance band slopes down in h, and "
+            "the far band floats at 5×.",
+        ),
+        ("5_per_run_harm.png", "critic − vla for every rollout run (filled = McNemar p<0.05). No run above zero yet."),
+        ("6_success_vs_steps.png", "v8 success vs training steps, 30 trials per point — trends only."),
     ]
     import base64 as _b64
 
@@ -370,39 +373,49 @@ def main() -> None:
         if not fp.exists():
             continue
         b64 = _b64.b64encode(fp.read_bytes()).decode()
-        P(f"<figure><img src='data:image/png;base64,{b64}' alt='{html.escape(cap)}' "
-          f"style='width:100%;height:auto;border:1px solid var(--line);border-radius:3px'>"
-          f"<figcaption style='font-size:.85rem;color:var(--mut);margin-top:.4rem'>{cap}</figcaption></figure>")
-    P("<p class='mut' style='font-size:.88rem'>Statistical honesty notes: every job replays the same "
-      "30 scenes, and rollouts are not bit-deterministic across jobs (different GPU models × chaotic "
-      "contacts — measured: identical vla policies agree on only 20–25/30 trials between jobs), so "
-      "family claims rest on run-level tests, not pooled CIs: critic−vla is negative in 14/14 TD "
-      "runs (sign test p≈1e-4); prefix under IQL beats TD across runs (Mann-Whitney z=2.6).</p>")
+        P(
+            f"<figure><img src='data:image/png;base64,{b64}' alt='{html.escape(cap)}' "
+            f"style='width:100%;height:auto;border:1px solid var(--line);border-radius:3px'>"
+            f"<figcaption style='font-size:.85rem;color:var(--mut);margin-top:.4rem'>{cap}</figcaption></figure>"
+        )
+    P(
+        "<p class='mut' style='font-size:.88rem'>Statistical honesty notes: every job replays the same "
+        "30 scenes, and rollouts are not bit-deterministic across jobs (different GPU models × chaotic "
+        "contacts — measured: identical vla policies agree on only 20–25/30 trials between jobs), so "
+        "family claims rest on run-level tests, not pooled CIs: critic−vla is negative in 14/14 TD "
+        "runs (sign test p≈1e-4); prefix under IQL beats TD across runs (Mann-Whitney z=2.6).</p>"
+    )
 
     # ---------------------------------------------------------------- why
     P("<h2>Why more critic authority fails — the causal chain</h2>")
-    P("<p>There are <b>two arg-maxes</b>, and the eval modes touch only one of them. Training-time: "
-      "the TD target maxes Q over N×P candidate cells at the next state (IQL deletes this). "
-      "Deployment-time: best-of-N maxes over candidates at the current state (present in bon/critic "
-      "whatever the objective). The modes are pure inference rules — training is identical within "
-      "a run.</p>")
-    P("<ol>"
-      "<li><b>There is nothing to choose between candidates.</b> The VLA imitates the demos, so its "
-      "16 samples share the same true value to within 1/150 of the between-state spread; dueling "
-      "proved the ranking signal is absent from the DATA, not from capacity (its advantage head, "
-      "freed of state-value variance, still ranked candidates at exactly chance while memorising "
-      "the trained pair at 0.96).</li>"
-      "<li><b>An arg-max over equal-mean noisy scores picks the largest error.</b> And the error is "
-      "a FIXED function, not fresh noise — the critic consistently over-values particular kinds of "
-      "chunks, so the tilt repeats every replan. That is why bon (0.64) is worse than rand (0.70): "
-      "rand samples the average error, bon samples the maximum, systematically.</li>"
-      "<li><b>Under TD the prefix axis measured critic error, not commitment.</b> The distance-"
-      "structured inflation tilted per-prefix targets monotonically, so the joint arg-max collapsed "
-      "to the shortest commit. IQL flattened the targets and the prefix mode recovered to vla "
-      "parity — the one axis with a real signal, cured.</li></ol>")
-    P("<div class='key'><p><b>One sentence:</b> failure scales not with authority but with the "
-      "number of arg-maxes taken over noise. Where the axis has signal (IQL's prefix), authority is "
-      "harmless; where it has none (candidates), authority is harm.</p></div>")
+    P(
+        "<p>There are <b>two arg-maxes</b>, and the eval modes touch only one of them. Training-time: "
+        "the TD target maxes Q over N×P candidate cells at the next state (IQL deletes this). "
+        "Deployment-time: best-of-N maxes over candidates at the current state (present in bon/critic "
+        "whatever the objective). The modes are pure inference rules — training is identical within "
+        "a run.</p>"
+    )
+    P(
+        "<ol>"
+        "<li><b>There is nothing to choose between candidates.</b> The VLA imitates the demos, so its "
+        "16 samples share the same true value to within 1/150 of the between-state spread; dueling "
+        "proved the ranking signal is absent from the DATA, not from capacity (its advantage head, "
+        "freed of state-value variance, still ranked candidates at exactly chance while memorising "
+        "the trained pair at 0.96).</li>"
+        "<li><b>An arg-max over equal-mean noisy scores picks the largest error.</b> And the error is "
+        "a FIXED function, not fresh noise — the critic consistently over-values particular kinds of "
+        "chunks, so the tilt repeats every replan. That is why bon (0.64) is worse than rand (0.70): "
+        "rand samples the average error, bon samples the maximum, systematically.</li>"
+        "<li><b>Under TD the prefix axis measured critic error, not commitment.</b> The distance-"
+        "structured inflation tilted per-prefix targets monotonically, so the joint arg-max collapsed "
+        "to the shortest commit. IQL flattened the targets and the prefix mode recovered to vla "
+        "parity — the one axis with a real signal, cured.</li></ol>"
+    )
+    P(
+        "<div class='key'><p><b>One sentence:</b> failure scales not with authority but with the "
+        "number of arg-maxes taken over noise. Where the axis has signal (IQL's prefix), authority is "
+        "harmless; where it has none (candidates), authority is harm.</p></div>"
+    )
 
     # ---------------------------------------------------------------- timeline
     P("<h2>Timeline</h2><ul class='tl'>")
