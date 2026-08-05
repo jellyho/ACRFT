@@ -211,7 +211,17 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
             choice = rng.choice(len(flat), p=w / w.sum())
         else:
             choice = int(np.argmax(flat))
-        if mode == "bon":
+        if mode == "softcand":
+            # The two-stage rule the paired-comparison decomposition argues for: the candidate is
+            # SAMPLED (softmax over row-maxima - sampling breaks the winner's curse of executing
+            # whichever chunk the critic most over-values), and h is that row's ARG-MAX (safe: the
+            # 8 prefix values share ~88% of their error, so the within-row comparison is paired).
+            row = q.max(axis=1)
+            t = softmax_temp if softmax_temp > 0 else max(float(row.std()), 1e-6)
+            w = np.exp((row - row.max()) / t)
+            i = int(rng.choice(len(row), p=w / w.sum()))
+            pp = int(np.argmax(q[i]))
+        elif mode == "bon":
             i, pp = choice, q.shape[1] - 1
         elif mode == "prefix":
             i, pp = 0, choice
@@ -282,7 +292,7 @@ def main() -> None:
         "--modes",
         nargs="+",
         default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "vla"],
+        choices=["critic", "bon", "prefix", "rand", "vla", "softcand"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
