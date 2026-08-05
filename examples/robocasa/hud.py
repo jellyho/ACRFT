@@ -92,6 +92,12 @@ class Dashboard:
         # viewer nothing. Its one decision is which of the N candidates to run, so the panel is given
         # over to the value gap that choice is buying. Recorded for every critic; only plotted for QC.
         self.spreads: list[float] = []
+        # Bollinger-style context for the trace: per replan, (q01, q25, q50, q75, q99) over every
+        # cell of the Q matrix, and V(z) when the run has a value net. One chosen-Q line alone reads
+        # as "the critic said this number" with nothing to compare it against; the band shows where
+        # that number sits inside everything the critic scored at the same state.
+        self.qbands: list[tuple[float, float, float, float, float]] = []
+        self.vvals: list[float | None] = []
         self.has_prefix: bool | None = None
         self.steps: list[int] = []  # step index at which each replan started
         self._cand_png = None
@@ -164,8 +170,18 @@ class Dashboard:
         raw = np.asarray(self.values, np.float64)
         oob = int((raw > 1.0).sum())
         v = np.clip(raw, 1e-6, 1.0)
-        ax.plot(x, v, color=_TRACE, lw=1.8, solid_capstyle="round")
+        qb = np.clip(np.asarray(self.qbands, np.float64), 1e-6, 1.0)  # [R, 5] q01 q25 q50 q75 q99
+        ax.fill_between(x, qb[:, 0], qb[:, 4], color="#5c7fa3", alpha=0.22, lw=0, label="cand Q q01–q99")
+        ax.fill_between(x, qb[:, 1], qb[:, 3], color="#5c7fa3", alpha=0.38, lw=0, label="cand Q q25–q75")
+        ax.plot(x, qb[:, 4], color="#7fa3c8", lw=0.9, ls="-")
+        ax.plot(x, qb[:, 0], color="#7fa3c8", lw=0.9, ls=":")
+        ax.plot(x, qb[:, 2], color="#4a6d94", lw=1.2, label="cand Q median")
+        ax.plot(x, v, color=_TRACE, lw=1.8, solid_capstyle="round", label="Q chosen")
+        vv = [w for w in self.vvals if w is not None]
+        if len(vv) == len(self.vvals) and vv:
+            ax.plot(x, np.clip(np.asarray(vv, np.float64), 1e-6, 1.0), color="#d03b3b", lw=1.6, label="V(z)")
         ax.plot(x[-1:], v[-1:], "o", color=_TRACE, ms=5, mec=np.array(_BG) / 255, mew=1.2)
+        ax.legend(fontsize=7, frameon=False, loc="lower right", ncol=2, labelcolor=_INK2)
         ax.set_yscale("log")
         from matplotlib.ticker import FuncFormatter
         from matplotlib.ticker import LogLocator
@@ -176,7 +192,7 @@ class Dashboard:
         ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 3.0, 5.0, 7.0), numticks=12))
         ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
         ax.minorticks_off()
-        ax.set_ylabel("Q chosen", color=_INK2, fontsize=9, labelpad=2)
+        ax.set_ylabel("Q / V", color=_INK2, fontsize=9, labelpad=2)
         ax.set_title(f"value of the chosen chunk   now {raw[-1]:.4f}", color=_INK, fontsize=10.5, pad=6, loc="left")
         if oob:
             ax.text(
@@ -317,6 +333,8 @@ class Dashboard:
                 self.has_prefix = _q.ndim > 1 and _q.shape[1] > 1
             _best = _q.max(axis=1) if _q.ndim > 1 else _q
             self.spreads.append(float(_best.max() - _best.min()))
+            self.qbands.append(tuple(float(x) for x in np.quantile(_q.reshape(-1), (0.01, 0.25, 0.5, 0.75, 0.99))))
+            self.vvals.append(getattr(info, "v", None))
             self.values.append(float(info.value))
             self.spans.append(int(info.n_exec))
             self.steps.append(int(step))

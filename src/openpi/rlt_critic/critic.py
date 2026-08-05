@@ -243,6 +243,30 @@ def make_critic(kind: str, *, action_dim: int, horizon: int, num_atoms: int, **k
     raise ValueError(f"critic kind must be 'qc' or 'arq', got {kind!r}")
 
 
+def load_value_net(params_path):
+    """Load the IQL state-value net saved beside a critic checkpoint, or None if the run has none.
+
+    Returns ``v_apply(obs [..., D]) -> V [...]``. TD runs never write vparams, so a None here is the
+    normal case, not an error - callers use it to decide whether a V trace exists at all.
+    """
+    import json
+    import pathlib
+
+    import flax.serialization
+
+    params_path = pathlib.Path(params_path)
+    run_dir = params_path.parent
+    vpath = run_dir / params_path.name.replace("params", "vparams")
+    if not vpath.exists():
+        vpath = run_dir / "vparams.msgpack"
+    if not vpath.exists():
+        return None
+    cfg = json.loads((run_dir / "config.json").read_text())
+    v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", (512, 512, 512))))
+    vparams = flax.serialization.msgpack_restore(vpath.read_bytes())
+    return lambda obs: v_net.apply(vparams, obs)
+
+
 def load_trained(params_path, *, action_dim: int, horizon: int):
     """Rebuild a trained critic from the params and the config train_rlt_critic.py saved beside them.
 

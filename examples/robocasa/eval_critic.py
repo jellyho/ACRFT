@@ -63,6 +63,7 @@ class Replan:
     best_prefix: int  # 0-indexed macro prefix
     n_exec: int  # real steps committed to
     value: float  # the winning value
+    v: float | None = None  # IQL state value V(z) at this replan, when the run trained one
 
 
 class VLA:
@@ -163,7 +164,7 @@ def proprio_stats(critic_path):
     return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
 
 
-def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None):
+def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, vfn=None):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
 
@@ -228,7 +229,8 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
         else:
             i, pp = np.unravel_index(choice, q.shape)
         n_exec = int((pp + 1) * macro)
-        return cand[i], n_exec, Replan(q, cand, int(i), int(pp), n_exec, float(q[i, pp]))
+        v = float(np.asarray(vfn(jnp.asarray(z))).reshape(-1)[0]) if vfn is not None else None
+        return cand[i], n_exec, Replan(q, cand, int(i), int(pp), n_exec, float(q[i, pp]), v)
 
     return fn
 
@@ -275,7 +277,11 @@ def build_policy(
     pro = proprio_stats(critic_path)
     if pro is not None:
         logger.info(f"critic reads proprio: +{len(pro[0])} dims appended to the token")
-    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, proprio=pro, **kw), vla.H, macro
+    vfn = _critic.load_value_net(critic_path)
+    if vfn is not None:
+        logger.info("run has an IQL value net: V(z) will ride along in the HUD trace")
+        vfn = jax.jit(vfn)
+    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, proprio=pro, vfn=vfn, **kw), vla.H, macro
 
 
 def main() -> None:
