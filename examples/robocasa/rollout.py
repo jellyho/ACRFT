@@ -133,7 +133,18 @@ def run_trials(
                 if step >= max_steps:
                     break
         successes += int(success)
-        trials.append({"trial": trial, "success": bool(success), "steps": step})
+        meta = env.get_ep_meta() if hasattr(env, "get_ep_meta") else {}
+        trials.append(
+            {
+                "trial": trial,
+                "success": bool(success),
+                "steps": step,
+                # Scene fingerprint: lets any later audit confirm two runs really replayed the same
+                # scenes without keeping the sim around.
+                "layout": meta.get("layout_id"),
+                "style": meta.get("style_id"),
+            }
+        )
         if on_trial is not None:
             on_trial(trial, success, step)
     return {
