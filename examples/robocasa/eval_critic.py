@@ -363,6 +363,13 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
     ap.add_argument("--camera-size", type=int, default=256)
     ap.add_argument(
+        "--scenes-from-extras",
+        type=pathlib.Path,
+        default=None,
+        help="Directory of demo extras (episode_XXXXXX/ep_meta.json). Trial i replays training "
+        "episode i's exact scene instead of sampling a fresh one - the in-distribution eval.",
+    )
+    ap.add_argument(
         "--dump-traj",
         type=pathlib.Path,
         default=None,
@@ -587,6 +594,13 @@ def main() -> None:
                 if _prev is not None:
                     _prev(trial, success, steps)
 
+        ep_metas = None
+        if args.scenes_from_extras is not None:
+            import json as _json
+
+            dirs = sorted(args.scenes_from_extras.glob("episode_*"))[: args.num_trials]
+            ep_metas = [_json.loads((d / "ep_meta.json").read_text()) for d in dirs]
+            logger.info(f"replaying {len(ep_metas)} recorded demo scenes from {args.scenes_from_extras}")
         res = _ro.run_trials(
             env,
             policy,
@@ -597,6 +611,7 @@ def main() -> None:
             on_trial=on_trial,
             on_step=on_step,
             on_transition=on_transition,
+            ep_metas=ep_metas,
         )
         res["trace"] = trace
         results[mode] = res

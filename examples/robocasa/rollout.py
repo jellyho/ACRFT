@@ -82,6 +82,7 @@ def run_trials(
     on_trial=None,
     on_step=None,
     on_transition=None,
+    ep_metas=None,
 ) -> dict:
     """Roll out ``policy_fn`` for ``num_trials`` and return {successes, num_trials, success_rate, trials}.
 
@@ -94,6 +95,8 @@ def run_trials(
     ``on_trial(trial_index, success, steps)`` fires once per trial (e.g. logging).
     ``on_transition(obs, action, step)`` fires BEFORE each env.step with the action about to run —
     the (state, action) pairs a dataset collector wants.
+    ``ep_metas`` is an optional list of robocasa ep_meta dicts; trial i replays scene i (mod len)
+    exactly instead of sampling a fresh one from (seed, trial).
     ``on_step(obs, info, step)`` fires after every env step, which is where a caller renders frames.
     """
     max_steps = max_steps or int(getattr(env, "horizon", 500))
@@ -106,6 +109,12 @@ def run_trials(
         # the legacy global RNG instead, so both are pinned here rather than once per eval.
         env.rng = np.random.default_rng(seed + trial)
         np.random.seed(seed + trial)
+        if ep_metas is not None:
+            # Replay an exact recorded scene: robocasa Kitchen envs rebuild the kitchen (layout,
+            # style, every object placement) from a stored ep_meta on the next reset. This is how
+            # the training demos' scenes are put back in front of the policy - the in-distribution
+            # evaluation that fresh seeds cannot give.
+            env.set_ep_meta(ep_metas[trial % len(ep_metas)])
         obs = env.reset()
         prompt = env.get_ep_meta().get("lang", task)
         success, step = False, 0
