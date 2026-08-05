@@ -93,40 +93,35 @@ def main() -> None:
     vb8 = json.loads((ROOT / "vbias_v8_iql2.json").read_text())
     pfx = json.loads((ROOT / "pfx_curve.json").read_text())
 
-    # ---------------------------------------------------------------- 1. success by mode, by family
-    # Run-level strips, not pooled rates: the 14 TD runs are DIFFERENT methods, and pooling also
-    # recycles the same 30 scenes per run, so a pooled CI overstates both homogeneity and
-    # independence. One dot per run; the bar is the family median.
+    # ---------------------------------------------------------------- 1. per-family mode progression
+    # One panel per method family; inside, each run is a thin line over vla -> rand -> bon ->
+    # prefix -> critic, the bold line is the family median. This reads as "what happens to THIS
+    # method as the critic gains authority", which is the actual question - a mode-first grouping
+    # forced the reader to reassemble it across columns.
     fams = [
         ("TD (v3, 14 runs)", C["td"], v3),
-        ("IQL γ=.99 (v6, 4 runs)", C["iql"], v6),
+        ("IQL γ=.99 (v6)", C["iql"], v6),
         ("IQL γ=.999+ (v8 @150k)", C["g999"], {k: v for k, v in v8.items() if k.startswith("g")}),
         ("dueling (v8 @150k)", C["duel"], {k: v for k, v in v8.items() if k.startswith("duel")}),
     ]
-    rng = np.random.default_rng(0)
-    fig, ax = plt.subplots(figsize=(10.2, 4.8), constrained_layout=True)
+    fig, axs = plt.subplots(1, len(fams), figsize=(13.2, 4.3), sharey=True, constrained_layout=True)
     xs = np.arange(len(MODES))
-    for gi, (name, col, runs) in enumerate(fams):
-        off = (gi - (len(fams) - 1) / 2) * 0.19
-        for i, m in enumerate(MODES):
-            vals = [d[m]["success_rate"] for d in runs.values() if m in d]
-            if not vals:
-                continue
-            jit = rng.uniform(-0.035, 0.035, len(vals))
-            ax.plot(xs[i] + off + jit, vals, "o", ms=3.6, color=col, alpha=0.55, label=name if i == 0 else None)
-            med = float(np.median(vals))
-            ax.plot([xs[i] + off - 0.07, xs[i] + off + 0.07], [med, med], color=col, lw=2.6)
-    ax.set_xticks(xs)
-    ax.set_xticklabels(
-        ["vla\n(no critic)", "rand\n(random cand)", "bon\n(pick cand)", "prefix\n(pick commit)", "critic\n(pick both)"]
-    )
-    ax.set_ylabel("success rate (per run, 30 trials)")
-    ax.set_ylim(0.05, 1.0)
-    ax.set_title(
-        "Rollout success by mode — one dot per run, bar = family median\n"
-        "(the vla spread across runs is the cross-job noise floor of an identical policy)"
-    )
-    ax.legend(loc="lower left", frameon=False, fontsize=9)
+    for ax, (name, col, runs) in zip(axs, fams, strict=True):
+        mat = []
+        for d in runs.values():
+            row = [d[m]["success_rate"] if m in d else np.nan for m in MODES]
+            mat.append(row)
+            ax.plot(xs, row, "-", color=col, alpha=0.30, lw=1.1)
+        med = np.nanmedian(np.asarray(mat), axis=0)
+        ax.plot(xs, med, "o-", color=col, lw=2.8, ms=5)
+        ax.axhline(med[0], color="k", lw=0.9, ls=(0, (2, 2)), alpha=0.6)
+        ax.set_title(f"{name}", fontsize=10)
+        ax.set_xticks(xs)
+        ax.set_xticklabels(["vla", "rand", "bon", "prefix", "critic"], fontsize=9)
+        ax.set_ylim(0.05, 1.0)
+    axs[0].set_ylabel("success rate (per run, 30 trials)")
+    axs[0].annotate("dashed = own vla median", (0.02, 0.03), xycoords="axes fraction", fontsize=8, color="k", alpha=0.7)
+    fig.suptitle("Each method as the critic gains authority (thin = one run, bold = family median)", fontsize=11)
     fig.savefig(OUT / "1_success_by_mode.png")
     plt.close(fig)
 
