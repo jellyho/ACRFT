@@ -408,6 +408,15 @@ def main() -> None:
     )
     ap.add_argument("--num-critics", type=int, default=2)
     ap.add_argument(
+        "--head-ensemble",
+        type=int,
+        default=1,
+        help="ARQ only: >1 replaces the K-full-transformer ensemble with ONE trunk and K per-position "
+        "head banks (leading-K contract preserved). Members share features - more correlated than "
+        "true ensembles - but K scales to 8/16 at ~zero extra cost, which is what the min over the "
+        "deployment arg-max needs.",
+    )
+    ap.add_argument(
         "--objective",
         choices=["td", "iql"],
         default="td",
@@ -572,27 +581,44 @@ def main() -> None:
 
     # Only the 'token' mode tells the module about proprio; 'concat' leaves it as plain input dims.
     _pro_dim = _meta.get("proprio_dim", 0) if (cfg.use_proprio and cfg.proprio_mode == "token") else 0
-    net = _critic.Ensemble(
-        make_critic=lambda: _critic.make_critic(
+    if cfg.head_ensemble > 1:
+        if cfg.kind != "arq":
+            raise ValueError("--head-ensemble needs --kind arq (QC has no per-position head bank)")
+        net = _critic.make_critic(
             cfg.kind,
             action_dim=data.action_dim,
             horizon=data.horizon,
             num_atoms=cfg.num_atoms,
+            macro_group_size=cfg.macro_group_size,
+            num_layers=cfg.num_layers,
+            num_heads=cfg.num_heads,
+            head_dim=cfg.head_dim,
+            mlp_dim=cfg.mlp_dim,
+            head_ensemble=cfg.head_ensemble,
             **({"proprio_dim": _pro_dim} if _pro_dim else {}),
-            **(
-                {
-                    "macro_group_size": cfg.macro_group_size,
-                    "num_layers": cfg.num_layers,
-                    "num_heads": cfg.num_heads,
-                    "head_dim": cfg.head_dim,
-                    "mlp_dim": cfg.mlp_dim,
-                }
-                if cfg.kind == "arq"
-                else {"hidden_dims": tuple(cfg.hidden_dims)}
+        )
+    else:
+        net = _critic.Ensemble(
+            make_critic=lambda: _critic.make_critic(
+                cfg.kind,
+                action_dim=data.action_dim,
+                horizon=data.horizon,
+                num_atoms=cfg.num_atoms,
+                **({"proprio_dim": _pro_dim} if _pro_dim else {}),
+                **(
+                    {
+                        "macro_group_size": cfg.macro_group_size,
+                        "num_layers": cfg.num_layers,
+                        "num_heads": cfg.num_heads,
+                        "head_dim": cfg.head_dim,
+                        "mlp_dim": cfg.mlp_dim,
+                    }
+                    if cfg.kind == "arq"
+                    else {"hidden_dims": tuple(cfg.hidden_dims)}
+                ),
             ),
-        ),
-        num_critics=cfg.num_critics,
-    )
+            num_critics=cfg.num_critics,
+        )
     hl = _critic.HLGauss(v_min=cfg.v_min, v_max=cfg.v_max, num_atoms=max(cfg.num_atoms, 2))
 
     run = None

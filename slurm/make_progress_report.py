@@ -312,56 +312,97 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------------- summary
-    P("<h2>Summary — six things now settled</h2>")
+    P("<h2>Summary — what is now settled</h2>")
     P(
         "<ol>"
-        "<li><b>The critic is harmful, not merely useless.</b> Success falls monotonically with how much "
-        "authority it gets (vla 74% → critic 46%, 13 runs × 30 trials, non-overlapping confidence "
-        "intervals). Candidate selection alone does worse than picking at random.</li>"
-        "<li><b>The cause is the bootstrap's arg-max.</b> The target's V is systematically over-estimated "
-        "far from the goal — 5.07× beyond 250 steps. The true value is known in closed form (γ^d), so "
-        "this is computed, not estimated.</li>"
-        "<li><b>IQL (expectile regression) removes the inflation — by 19–38×.</b> Raising the expectile "
-        "brings the bias back monotonically (e50 ≈ e70 &lt; e90 &lt; e95), a dose-response that settles "
-        "causality.</li>"
-        "<li><b>An action-ranking signal still does not exist in the data.</b> With one action per state, "
-        "the target depends on neither the action nor the prefix; act_sens ≈ 0 holds across all 26 runs. "
-        "The one offline exception (IQL+QC, rank_c 0.571) was rejected in rollout: bon−vla = 0.</li>"
-        "<li><b>The prefix axis was measuring critic error, not commitment length.</b> Per-prefix targets "
-        "at one state should all equal γ^d; the distance-structured V bias tilted them into the monotone "
-        "decline visible in the videos.</li>"
-        "<li><b>IQL cured the prefix axis (rollout verdict).</b> The worst mode under TD — prefix — went "
-        "from 0.528 to <b>0.733, at parity with the raw VLA</b>. Overall critic harm halved (−0.285 → "
-        "−0.142), the expectile dose-response reproduced in success rates (e50 −0.067 &lt; e90 −0.233, "
-        "p=0.016), and what remains is the deployment best-of-N's candidate arg-max — unfixable by "
-        "algorithm while the data carries no action contrast. The safe deployment on this data is "
-        "<b>prefix-only</b>: the IQL critic sets the commitment length, the first sample is executed.</li>"
+        "<li><b>The critic is harmful, not merely useless</b> — and unanimously so under TD: "
+        "critic−vla is negative in 14/14 runs (sign test p≈1e-4). Candidate selection alone does "
+        "worse than picking at random.</li>"
+        "<li><b>The cause is the bootstrap's arg-max</b>: the target's V is over-estimated with a "
+        "distance structure (5.07× beyond 250 steps; the truth γ^d is known in closed form).</li>"
+        "<li><b>IQL removes the inflation (19–38×) with a clean expectile dose-response</b>, offline "
+        "and in rollout — causality settled.</li>"
+        "<li><b>IQL cures the prefix axis</b>: 0.528 → 0.733 in rollout, at parity with the raw VLA "
+        "(TD-vs-IQL across runs: Mann-Whitney z=2.6). Safe deployment today = <b>prefix-only</b>.</li>"
+        "<li><b>The candidate axis stays dead because the signal is absent from the data</b>: with "
+        "one action per state the target is action-independent (act_sens ≈ 0 across 30+ runs), and "
+        "dueling — the cleanest possible conditions — still ranked candidates at chance while "
+        "memorising the trained pair (rank_c 0.96 with zero similarity gradient). Dueling also "
+        "hurts deployment (p=0.021): untrained candidates' advantage profiles are noise.</li>"
+        "<li><b>Larger discounts calibrate but do not select</b>: γ=.999 puts b(d) within ±0.01 at "
+        "every distance and lifts cross-state ranking (rank_o 0.56→0.65), yet rollout matches "
+        "IQL γ=.99 — calibration cannot substitute for a ranking signal.</li>"
+        "<li><b>The episode ladder shows the value model is generalisation, not memorisation</b>: "
+        "trained on 1/4/16/64 episodes, whole-dataset ρ(Q,MC) climbs 0.48→0.58→0.74→0.78 — most of "
+        "the state-value skill comes from cross-episode structure, converging toward the full-data "
+        "0.82.</li>"
+        "<li><b>Ensembles and target networks are not the lever</b>: K 2→3 changed nothing "
+        "measurable (ρ 0.816→0.814, rank_c 0.521→0.532); K=5 / no-target / τ-ladder still running "
+        "after two infrastructure losses, but the candidate-side knobs that already failed (topm/"
+        "soft/lcb/bc) bound how much variance-softening alone can give.</li>"
         "</ol>"
     )
+        # ---------------------------------------------------------------- figures
+    P("<h2>The results in six figures</h2>")
+    figs = [
+        ("1_success_by_mode.png",
+         "Each method as the critic gains authority (thin line = one run, bold = family median, "
+         "dashed = that family's own vla level). TD declines monotonically; IQL γ=.99 holds parity "
+         "through prefix and only drops at the joint arg-max; dueling collapses at prefix."),
+        ("2_value_bias.png",
+         "Value bias b(d) = V̂ − γ^d by distance to goal. Left: TD inflates with distance and the "
+         "IQL expectile ladder re-inflates toward it. Right (same scale): γ=.999 / .9995 and "
+         "dueling sit on the zero line everywhere."),
+        ("3_dose_response.png",
+         "The expectile dose-response, offline and in rollout — the causal pin on the arg-max."),
+        ("4_prefix_targets.png",
+         "TD per-prefix targets over truth (log scale): every distance band slopes down in h, and "
+         "the far band floats at 5×."),
+        ("5_per_run_harm.png",
+         "critic − vla for every rollout run (filled = McNemar p<0.05). No run above zero yet."),
+        ("6_success_vs_steps.png",
+         "v8 success vs training steps, 30 trials per point — trends only."),
+    ]
+    import base64 as _b64
 
-    # Headline chart: the same five modes under TD and IQL, side by side. The whole story is here.
-    tot3 = {m: [0, 0] for m in MODES}
-    tot6 = {m: [0, 0] for m in MODES}
-    for runs, tot in ((v3, tot3), (v6, tot6)):
-        for e in runs.values():
-            d = e.get("rollout")
-            if d:
-                for m in MODES:
-                    if m in d:
-                        tot[m][0] += d[m]["successes"]
-                        tot[m][1] += d[m]["num_trials"]
-    if tot3["vla"][1] and tot6["vla"][1]:
-        P(
-            "<figure>"
-            + dot_intervals(
-                [(m, [("TD (v3)", PAL["td"], *tot3[m]), ("IQL (v6)", PAL["e70"], *tot6[m])]) for m in MODES],
-                title="success rate by mode, TD vs IQL",
-            )
-            + "<figcaption>Success rate by evaluation mode — dot = rate, bar = 95% Wilson interval "
-            "(TD pools 13 runs × 30 trials; IQL pools 4 runs × 30). The prefix mode recovering to "
-            "vla-parity under IQL, while bon stays low under both, is the two-sentence summary of "
-            "this whole log.</figcaption></figure>"
-        )
+    for fn, cap in figs:
+        fp = root / "plots" / fn
+        if not fp.exists():
+            continue
+        b64 = _b64.b64encode(fp.read_bytes()).decode()
+        P(f"<figure><img src='data:image/png;base64,{b64}' alt='{html.escape(cap)}' "
+          f"style='width:100%;height:auto;border:1px solid var(--line);border-radius:3px'>"
+          f"<figcaption style='font-size:.85rem;color:var(--mut);margin-top:.4rem'>{cap}</figcaption></figure>")
+    P("<p class='mut' style='font-size:.88rem'>Statistical honesty notes: every job replays the same "
+      "30 scenes, and rollouts are not bit-deterministic across jobs (different GPU models × chaotic "
+      "contacts — measured: identical vla policies agree on only 20–25/30 trials between jobs), so "
+      "family claims rest on run-level tests, not pooled CIs: critic−vla is negative in 14/14 TD "
+      "runs (sign test p≈1e-4); prefix under IQL beats TD across runs (Mann-Whitney z=2.6).</p>")
+
+    # ---------------------------------------------------------------- why
+    P("<h2>Why more critic authority fails — the causal chain</h2>")
+    P("<p>There are <b>two arg-maxes</b>, and the eval modes touch only one of them. Training-time: "
+      "the TD target maxes Q over N×P candidate cells at the next state (IQL deletes this). "
+      "Deployment-time: best-of-N maxes over candidates at the current state (present in bon/critic "
+      "whatever the objective). The modes are pure inference rules — training is identical within "
+      "a run.</p>")
+    P("<ol>"
+      "<li><b>There is nothing to choose between candidates.</b> The VLA imitates the demos, so its "
+      "16 samples share the same true value to within 1/150 of the between-state spread; dueling "
+      "proved the ranking signal is absent from the DATA, not from capacity (its advantage head, "
+      "freed of state-value variance, still ranked candidates at exactly chance while memorising "
+      "the trained pair at 0.96).</li>"
+      "<li><b>An arg-max over equal-mean noisy scores picks the largest error.</b> And the error is "
+      "a FIXED function, not fresh noise — the critic consistently over-values particular kinds of "
+      "chunks, so the tilt repeats every replan. That is why bon (0.64) is worse than rand (0.70): "
+      "rand samples the average error, bon samples the maximum, systematically.</li>"
+      "<li><b>Under TD the prefix axis measured critic error, not commitment.</b> The distance-"
+      "structured inflation tilted per-prefix targets monotonically, so the joint arg-max collapsed "
+      "to the shortest commit. IQL flattened the targets and the prefix mode recovered to vla "
+      "parity — the one axis with a real signal, cured.</li></ol>")
+    P("<div class='key'><p><b>One sentence:</b> failure scales not with authority but with the "
+      "number of arg-maxes taken over noise. Where the axis has signal (IQL's prefix), authority is "
+      "harmless; where it has none (candidates), authority is harm.</p></div>")
 
     # ---------------------------------------------------------------- timeline
     P("<h2>Timeline</h2><ul class='tl'>")

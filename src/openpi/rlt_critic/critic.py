@@ -80,6 +80,12 @@ class ARQCritic(nn.Module):
     mlp_dim: int = 1024
     num_atoms: int = 1
     per_position_head: bool = True
+    # >1 = ONE shared trunk with K independent per-position output heads, returned with a leading
+    # ensemble axis [K, ..., mh(, atoms)] - the same contract Ensemble provides, at ~1/K the cost of
+    # K full transformers. The members share features, so they are more correlated than true
+    # ensembles (weaker per-member pessimism); the trade is that K can be large for free, which is
+    # what the min/LCB over the DEPLOYMENT arg-max actually needs.
+    head_ensemble: int = 1
     # >0 = the last `proprio_dim` entries of obs are proprioception, given their OWN sequence
     # position instead of being concatenated into the state token. Concatenated, 16 proprio dims sit
     # beside 2048 token dims (0.8% of the input) and are then LayerNorm'd against the token's
@@ -125,6 +131,11 @@ class ARQCritic(nn.Module):
             x = x + nn.Dense(d)(nn.gelu(nn.Dense(self.mlp_dim)(h)))
         x = nn.LayerNorm()(x)[..., nl:, :]  # drop the observation positions: [..., mh, d]
 
+        if self.head_ensemble > 1:
+            kernel = self.param("head_k", nn.initializers.lecun_normal(), (self.head_ensemble, mh, d, self.num_atoms))
+            bias = self.param("head_b", nn.initializers.zeros, (self.head_ensemble, mh, self.num_atoms))
+            out = jnp.einsum("...hd,khda->k...ha", x, kernel) + bias[(slice(None),) + (None,) * (x.ndim - 2)]
+            return out if self.num_atoms > 1 else jnp.squeeze(out, -1)  # [K, ..., mh(, atoms)]
         if self.per_position_head:
             # A distinct head per prefix position (ACSAC Prop. G.7).
             kernel = self.param("head_k", nn.initializers.lecun_normal(), (mh, d, self.num_atoms))
@@ -243,6 +254,7 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
     arch = (
         {
             "macro_group_size": g,
+            "head_ensemble": cfg.get("head_ensemble", 1),
             "num_layers": cfg.get("num_layers", 3),
             "num_heads": cfg.get("num_heads", 8),
             "head_dim": cfg.get("head_dim", 48),
@@ -259,12 +271,17 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
         import pathlib as _pathlib
 
         arch["proprio_dim"] = _json.loads((_pathlib.Path(cfg["data"]) / "meta.json").read_text())["proprio_dim"]
-    net = Ensemble(
-        make_critic=lambda: make_critic(
-            cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch
-        ),
-        num_critics=cfg.get("num_critics", 2),
-    )
+    if cfg.get("head_ensemble", 1) > 1:
+        # The K axis already leads from the head bank; wrapping in Ensemble would nest two
+        # ensemble axes and break every consumer's [K, ...] contract.
+        net = make_critic(cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch)
+    else:
+        net = Ensemble(
+            make_critic=lambda: make_critic(
+                cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch
+            ),
+            num_critics=cfg.get("num_critics", 2),
+        )
     hl = HLGauss(v_min=cfg.get("v_min", 0.0), v_max=cfg.get("v_max", 1.0), num_atoms=max(num_atoms, 2))
     params = flax.serialization.msgpack_restore(params_path.read_bytes())
 
