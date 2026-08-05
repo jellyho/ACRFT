@@ -329,6 +329,14 @@ def main() -> None:
     )
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
     ap.add_argument("--camera-size", type=int, default=256)
+    ap.add_argument(
+        "--dump-traj",
+        type=pathlib.Path,
+        default=None,
+        help="Save every trial's per-step (images, state, action, success) as one npz here — the "
+        "raw material annotate_rollouts.py turns into critic training data. Failures included; "
+        "that is the point.",
+    )
     ap.add_argument("--video-dir", type=pathlib.Path, default=None)
     ap.add_argument("--num-videos", type=int, default=4)
     ap.add_argument("--fps", type=int, default=20)
@@ -500,6 +508,47 @@ def main() -> None:
             _box["wproj"] = None
             _box["trial"] = trial + 1
 
+        on_transition = None
+        if args.dump_traj is not None:
+            args.dump_traj.mkdir(parents=True, exist_ok=True)
+            _tb = {"imgs": [], "wrist": [], "states": [], "actions": [], "trial": 0}
+
+            def on_transition(obs, action, step, *, _tb=_tb, _mode=mode):
+                import io as _io
+
+                from PIL import Image as _Image
+
+                el = _ro.obs_to_element(obs, "")
+                for key, buf in (("observation/image", _tb["imgs"]), ("observation/wrist_image", _tb["wrist"])):
+                    b = _io.BytesIO()
+                    _Image.fromarray(np.asarray(el[key])).save(b, format="JPEG", quality=90)
+                    buf.append(b.getvalue())
+                _tb["states"].append(np.asarray(el["observation/state"], np.float32))
+                _tb["actions"].append(np.asarray(action, np.float32))
+
+            _orig_on_trial = on_trial
+
+            def on_trial(trial, success, steps, *, _tb=_tb, _mode=mode, _prev=_orig_on_trial):
+                f = args.dump_traj / f"{args.task}_{_mode}_seed{args.seed}_t{trial:02d}.npz"
+                np.savez_compressed(
+                    f,
+                    images=np.array(_tb["imgs"], dtype=object),
+                    wrist=np.array(_tb["wrist"], dtype=object),
+                    states=np.stack(_tb["states"]),
+                    actions=np.stack(_tb["actions"]),
+                    success=bool(success),
+                    steps=int(steps),
+                    task=args.task,
+                    mode=_mode,
+                    seed=int(args.seed),
+                    prompt=str(env.get_ep_meta().get("lang", args.task)),
+                )
+                logger.info(f"  traj -> {f.name} ({steps} steps, {'succ' if success else 'FAIL'})")
+                for k in ("imgs", "wrist", "states", "actions"):
+                    _tb[k].clear()
+                if _prev is not None:
+                    _prev(trial, success, steps)
+
         res = _ro.run_trials(
             env,
             policy,
@@ -509,6 +558,7 @@ def main() -> None:
             replan_steps=H,
             on_trial=on_trial,
             on_step=on_step,
+            on_transition=on_transition,
         )
         res["trace"] = trace
         results[mode] = res

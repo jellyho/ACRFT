@@ -81,6 +81,7 @@ def run_trials(
     max_steps: int | None = None,
     on_trial=None,
     on_step=None,
+    on_transition=None,
 ) -> dict:
     """Roll out ``policy_fn`` for ``num_trials`` and return {successes, num_trials, success_rate, trials}.
 
@@ -91,6 +92,8 @@ def run_trials(
     and is never interpreted here.
 
     ``on_trial(trial_index, success, steps)`` fires once per trial (e.g. logging).
+    ``on_transition(obs, action, step)`` fires BEFORE each env.step with the action about to run —
+    the (state, action) pairs a dataset collector wants.
     ``on_step(obs, info, step)`` fires after every env step, which is where a caller renders frames.
     """
     max_steps = max_steps or int(getattr(env, "horizon", 500))
@@ -116,6 +119,10 @@ def run_trials(
                 chunk, n_exec = out, replan_steps
             chunk = np.asarray(chunk)
             for action in chunk[: max(int(n_exec), 1)]:
+                if on_transition is not None:
+                    # Fires with the PRE-step obs: (obs_t, action executed at t) is the pair an
+                    # annotation pass needs; post-step obs would shift every frame by one.
+                    on_transition(obs, np.asarray(action), step)
                 obs, _, _, _ = env.step(lerobot_action_to_env(np.asarray(action)))
                 step += 1
                 if on_step is not None:
