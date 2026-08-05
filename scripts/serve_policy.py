@@ -76,29 +76,51 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
-def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
-    """Create a default policy for the given environment."""
-    if checkpoint := DEFAULT_CHECKPOINT.get(env):
-        return _policy_config.create_trained_policy(
-            _config.get_config(checkpoint.config), checkpoint.dir, default_prompt=default_prompt
-        )
-    raise ValueError(f"Unsupported environment mode: {env}")
+def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
+    """Create a policy from the given arguments, with the config it was built from.
 
-
-def create_policy(args: Args) -> _policy.Policy:
-    """Create a policy from the given arguments."""
+    The config comes back too so the server can describe the policy to its client (see
+    `spec_metadata`) without anyone hard-coding numbers per robot.
+    """
     match args.policy:
         case Checkpoint():
-            return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+            train_config = _config.get_config(args.policy.config)
+            return (
+                _policy_config.create_trained_policy(train_config, args.policy.dir, default_prompt=args.default_prompt),
+                train_config,
             )
         case Default():
-            return create_default_policy(args.env, default_prompt=args.default_prompt)
+            checkpoint = DEFAULT_CHECKPOINT.get(args.env)
+            if checkpoint is None:
+                raise ValueError(f"Unsupported environment mode: {args.env}")
+            train_config = _config.get_config(checkpoint.config)
+            return (
+                _policy_config.create_trained_policy(train_config, checkpoint.dir, default_prompt=args.default_prompt),
+                train_config,
+            )
+
+
+def spec_metadata(train_config: _config.TrainConfig) -> dict:
+    """The part of the obs/action spec a client can act on, read off the train config.
+
+    Every model config carries `action_horizon`, so this is the same code for RoboCasa,
+    YAM, or anything added later — no per-robot branch. Without it the chunk size has to
+    reach the client out of band, and a checkpoint trained at 30 served to a client
+    assuming 16 raises nothing: it silently discards half of every chunk.
+
+    `model.action_dim` is deliberately not advertised. It is the model's padded width (32
+    for pi05), while the output transform slices the chunk back to the robot's real action
+    size on the way out — 14 for YAM. Publishing 32 would describe something no client ever
+    receives, which is worse than publishing nothing.
+    """
+    return {"action_horizon": int(train_config.model.action_horizon)}
 
 
 def main(args: Args) -> None:
-    policy = create_policy(args)
-    policy_metadata = policy.metadata
+    policy, train_config = create_policy(args)
+    # Config-derived spec first, so an explicit policy_metadata entry can still override it.
+    policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}
+    logging.info("Serving %s: %s", train_config.name, policy_metadata)
 
     # Record the policy's behavior.
     if args.record:
