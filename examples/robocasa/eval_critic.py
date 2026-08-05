@@ -181,6 +181,15 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
         z, cand = vla.token_and_candidates(element)
         if mode == "vla":
             return cand[0], vla.H, None
+        if mode == "randh":
+            # The honest null for the JOINT arg-max: uniform over the critic's whole decision space,
+            # candidate AND commit length. `rand` alone always commits the full chunk, so it nulls
+            # only the candidate axis; a critic that beats rand but not randh is winning on
+            # commitment-length luck, not on scoring.
+            i = int(rng.integers(len(cand)))
+            pnum = vla.H // macro
+            n_exec = int((int(rng.integers(pnum)) + 1) * macro)
+            return cand[i], n_exec, None
         if mode == "rand":
             # The control the other modes were missing. `bon` beating `vla` would only show that
             # picking a different sample helps — not that the CRITIC picked it. Drawing uniformly
@@ -298,7 +307,7 @@ def main() -> None:
         "--modes",
         nargs="+",
         default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "vla", "softcand"],
+        choices=["critic", "bon", "prefix", "rand", "randh", "vla", "softcand"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
