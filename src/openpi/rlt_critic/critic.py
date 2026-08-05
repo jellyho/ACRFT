@@ -86,6 +86,7 @@ class ARQCritic(nn.Module):
     # ensembles (weaker per-member pessimism); the trade is that K can be large for free, which is
     # what the min/LCB over the DEPLOYMENT arg-max actually needs.
     head_ensemble: int = 1
+    head_ensemble_hidden: int = 128
     # >0 = the last `proprio_dim` entries of obs are proprioception, given their OWN sequence
     # position instead of being concatenated into the state token. Concatenated, 16 proprio dims sit
     # beside 2048 token dims (0.8% of the input) and are then LayerNorm'd against the token's
@@ -132,9 +133,16 @@ class ARQCritic(nn.Module):
         x = nn.LayerNorm()(x)[..., nl:, :]  # drop the observation positions: [..., mh, d]
 
         if self.head_ensemble > 1:
-            kernel = self.param("head_k", nn.initializers.lecun_normal(), (self.head_ensemble, mh, d, self.num_atoms))
-            bias = self.param("head_b", nn.initializers.zeros, (self.head_ensemble, mh, self.num_atoms))
-            out = jnp.einsum("...hd,khda->k...ha", x, kernel) + bias[(slice(None),) + (None,) * (x.ndim - 2)]
+            # Two-layer MLP per head, NOT a linear map: linear heads on a shared feature are K
+            # reparametrisations of one function and diversify only through a single init matrix.
+            ke, hh = self.head_ensemble, self.head_ensemble_hidden
+            w1 = self.param("head_w1", nn.initializers.lecun_normal(), (ke, mh, d, hh))
+            b1 = self.param("head_b1", nn.initializers.zeros, (ke, mh, hh))
+            w2 = self.param("head_w2", nn.initializers.lecun_normal(), (ke, mh, hh, self.num_atoms))
+            b2 = self.param("head_b2", nn.initializers.zeros, (ke, mh, self.num_atoms))
+            pad = (slice(None),) + (None,) * (x.ndim - 2)
+            h1 = nn.gelu(jnp.einsum("...hd,khdm->k...hm", x, w1) + b1[pad])
+            out = jnp.einsum("k...hm,khma->k...ha", h1, w2) + b2[pad]
             return out if self.num_atoms > 1 else jnp.squeeze(out, -1)  # [K, ..., mh(, atoms)]
         if self.per_position_head:
             # A distinct head per prefix position (ACSAC Prop. G.7).
