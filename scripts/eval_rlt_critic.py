@@ -82,7 +82,7 @@ def main() -> None:
         if (args.params.parent / "config.json").exists()
         else {}
     )
-    if _tcfg.get("use_proprio"):
+    if _tcfg.get("use_proprio") is not False:
         pdim = meta["proprio_dim"]
         pro = _load(args.data, "proprio", (T, pdim), np.float32)
         mu, sd = pro.mean(0), pro.std(0)
@@ -125,6 +125,12 @@ def main() -> None:
         v_min=tcfg.get("v_min", args.v_min), v_max=tcfg.get("v_max", args.v_max), num_atoms=max(num_atoms, 2)
     )
     params = flax.serialization.msgpack_restore(args.params.read_bytes())
+    a_norm = tcfg.get("action_norm")
+    if a_norm:
+        # New checkpoints train on normalised actions; score them on the same scale.
+        _amu, _asd = np.asarray(a_norm["mean"], np.float32), np.asarray(a_norm["std"], np.float32)
+        chunk = (np.asarray(chunk) - _amu) / _asd
+        cand = (np.asarray(cand) - _amu) / _asd
     v_apply = None
     if tcfg.get("dueling"):
         # Dueling checkpoints store the ADVANTAGE head; every metric here is about Q, so V must be

@@ -157,7 +157,7 @@ def proprio_stats(critic_path):
     if not cfg_p.exists():
         return None
     cfg = json.loads(cfg_p.read_text())
-    if not cfg.get("use_proprio"):
+    if cfg.get("use_proprio") is False:  # only legacy token-only runs recorded False
         return None
     meta = json.loads((pathlib.Path(cfg["data"]) / "meta.json").read_text())
     return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)

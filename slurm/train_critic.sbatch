@@ -18,9 +18,6 @@
 #    SWEEP          sweep name; groups the runs on disk and in wandb        (default manual)
 #    STEPS          training steps                                          (default 200000)
 #    TASK           RoboCasa task, used by the rollout eval                 (default PrepareCoffee)
-#    ROLLOUT        1 = in-process critic-vs-VLA sim rollouts               (default 1)
-#    ROLLOUT_EVERY  steps between rollout evals                             (default 50000)
-#    ROLLOUT_TRIALS trials per rollout eval, per mode                       (default 20)
 #    EVAL_EVERY     steps between the cheap within-state diagnostics        (default 5000)
 #    SEED           seed                                                    (default 0)
 #    WANDB          1 = log to $WANDB_PROJECT                               (default 1)
@@ -70,9 +67,6 @@ SWEEP="${SWEEP:-manual}"
 STEPS="${STEPS:-200000}"
 TASK="${TASK:-PrepareCoffee}"
 SEED="${SEED:-0}"
-ROLLOUT="${ROLLOUT:-1}"
-ROLLOUT_EVERY="${ROLLOUT_EVERY:-50000}"
-ROLLOUT_TRIALS="${ROLLOUT_TRIALS:-20}"
 EVAL_EVERY="${EVAL_EVERY:-5000}"
 WANDB="${WANDB:-1}"
 BATCH="${BATCH:-0}"                 # 0 = train_rlt_critic.py's own default (1024)
@@ -100,7 +94,7 @@ SEED_ARGS=()
 # The venv check comes first because `uv run --no-sync` against a missing .venv CREATES an empty one
 # and then fails with a bare ModuleNotFoundError — and with several array members starting at once,
 # each would race to create it in the shared checkout.
-[[ -x .venv/bin/python ]] || { echo "ERROR: no .venv — run 'ROLLOUT=1 slurm/setup.sh' on the login node first"; exit 1; }
+[[ -x .venv/bin/python ]] || { echo "ERROR: no .venv — run 'slurm/setup.sh' on the login node first"; exit 1; }
 [[ -f "$DATA/meta.json" ]] || { echo "ERROR: no meta.json in DATA=$DATA"; exit 1; }
 grep -q '"stride": 1' "$DATA/meta.json" \
     || { echo "ERROR: $DATA was annotated with stride != 1; the per-prefix reward sums need every frame"; exit 1; }
@@ -133,24 +127,6 @@ fi
 # This is the actual objective (does critic-guided selection beat the plain VLA?); the offline
 # diagnostics are only its proxy. It keeps the annotated VLA resident, so it needs the checkpoint
 # the tokens came from plus the sim deps (`uv sync --group eval`, see slurm/setup.sh).
-ROLLOUT_ARGS=()
-if [[ "$ROLLOUT" == "1" ]]; then
-    [[ -d "$VLA_CKPT" ]] || {
-        echo "ERROR: ROLLOUT=1 but VLA_CKPT=$VLA_CKPT is not a directory."
-        echo "       Fetch the pi05 checkpoint the tokens were annotated from, or run the sweep"
-        echo "       offline-only with ROLLOUT=0 and add the rollout arm once it is available."
-        exit 1
-    }
-    uv run --no-sync python -c "import robosuite, mujoco" 2>/dev/null \
-        || { echo "ERROR: sim deps missing — run 'ROLLOUT=1 slurm/setup.sh' on the login node"; exit 1; }
-    ROLLOUT_ARGS=(
-        --rollout-every "$ROLLOUT_EVERY"
-        --rollout-trials "$ROLLOUT_TRIALS"
-        --vla-checkpoint "$VLA_CKPT"
-        --task "$TASK"
-    )
-    echo "rollout   : every $ROLLOUT_EVERY steps, $ROLLOUT_TRIALS trials, vla=$VLA_CKPT"
-fi
 
 # Only now, past every check — an empty run dir left by a job that died in preflight would show up
 # in collect.py as a variant that ran and produced nothing.
@@ -217,7 +193,6 @@ uv run --no-sync scripts/train_rlt_critic.py \
     --save-every "${SAVE_EVERY:-50000}" \
     "${SEED_ARGS[@]}" \
     "${FIT_ARGS[@]}" \
-    "${ROLLOUT_ARGS[@]}" \
     "${WANDB_ARGS[@]}" \
     $FLAGS &
 TRAIN_PID=$!

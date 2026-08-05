@@ -51,7 +51,7 @@ TASK="${TASK:-PrepareCoffee}"
 DATA="${DATA:-$ANNOT_ROOT/$DATA_NAME}"
 DATA_G999="${DATA_G999:-${DATA}_g999}"
 DATA_G9995="${DATA_G9995:-${DATA}_g9995}"
-AXES="${AXES:-agg,discount,structure,target,stability,iql}"
+AXES="${AXES:-discount,structure,target,stability,iql}"
 SEEDS="${SEEDS:-0}"
 MAXPAR="${MAXPAR:-8}"
 STEPS="${STEPS:-200000}"
@@ -122,31 +122,6 @@ add() {
 # ensemble, no target smoothing, scalar Q, macro group 2, and whatever gamma/value support the
 # annotation's own meta.json records.
 add base ""
-
-if has_axis agg; then
-    # --- how the bootstrap reduces over candidates -------------------------------------------
-    add topm "--v-agg topm --top-m 3"          # average the 3 best instead of taking the max
-    add soft "--v-agg soft --soft-tau 0.1"     # softmax-weighted, so a lone peak cannot own the target
-    # --- how it reduces over the ensemble -----------------------------------------------------
-    add lcb  "--ens-agg lcb --lcb-beta 1.0"    # mean - std, a graded pessimism instead of hard min
-    # --- how many candidates the max ranges over ----------------------------------------------
-    # Fewer items is both cheaper (the target forward dominates a step) and less biased upward;
-    # resampling each step still visits all N over training. Taken as fractions of the annotation's
-    # own N, because train_rlt_critic.py only subsamples when 0 < bootstrap_candidates < N — a
-    # hardcoded 16 against an N=16 dataset is a silent no-op that duplicates the baseline.
-    for n in $((N_CAND / 2)) $((N_CAND / 4)); do
-        # 0 means "use all N", and n >= N does not subsample either — both would duplicate the
-        # baseline under a different name. Only emit the arm when it actually narrows the max.
-        if [[ "$n" -ge 2 && "$n" -lt "$N_CAND" ]]; then
-            add "bc$n" "--bootstrap-candidates $n"
-        else
-            echo "  skip bc$n — no-op against N=$N_CAND"
-        fi
-    done
-    # --- local smoothing of Q around each candidate --------------------------------------------
-    add tn03 "--target-noise 0.3"
-    add tn10 "--target-noise 1.0"
-fi
 
 if has_axis discount; then
     # Separate datasets, not flags: the discount also sets mc_return and the value support, and
