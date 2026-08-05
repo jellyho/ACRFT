@@ -544,7 +544,7 @@ def main() -> None:
         on_transition = None
         if args.dump_traj is not None:
             args.dump_traj.mkdir(parents=True, exist_ok=True)
-            _tb = {"imgs": [], "wrist": [], "states": [], "actions": [], "trial": 0}
+            _tb = {"imgs": [], "wrist": [], "right": [], "states": [], "actions": [], "trial": 0}
 
             def on_transition(obs, action, step, *, _tb=_tb, _mode=mode):
                 import io as _io
@@ -552,7 +552,11 @@ def main() -> None:
                 from PIL import Image as _Image
 
                 el = _ro.obs_to_element(obs, "")
-                for key, buf in (("observation/image", _tb["imgs"]), ("observation/wrist_image", _tb["wrist"])):
+                for key, buf in (
+                    ("observation/image", _tb["imgs"]),
+                    ("observation/wrist_image", _tb["wrist"]),
+                    ("observation/image_right", _tb["right"]),
+                ):
                     b = _io.BytesIO()
                     _Image.fromarray(np.asarray(el[key])).save(b, format="JPEG", quality=90)
                     buf.append(b.getvalue())
@@ -567,6 +571,7 @@ def main() -> None:
                     f,
                     images=np.array(_tb["imgs"], dtype=object),
                     wrist=np.array(_tb["wrist"], dtype=object),
+                    right=np.array(_tb["right"], dtype=object),
                     states=np.stack(_tb["states"]),
                     actions=np.stack(_tb["actions"]),
                     success=bool(success),
@@ -577,7 +582,7 @@ def main() -> None:
                     prompt=str(env.get_ep_meta().get("lang", args.task)),
                 )
                 logger.info(f"  traj -> {f.name} ({steps} steps, {'succ' if success else 'FAIL'})")
-                for k in ("imgs", "wrist", "states", "actions"):
+                for k in ("imgs", "wrist", "right", "states", "actions"):
                     _tb[k].clear()
                 if _prev is not None:
                     _prev(trial, success, steps)

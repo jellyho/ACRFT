@@ -40,6 +40,7 @@ def load_traj(f):
     return {
         "images": z["images"],
         "wrist": z["wrist"],
+        "right": z["right"],
         "states": z["states"].astype(np.float32),
         "actions": z["actions"].astype(np.float32),
         "success": bool(z["success"]),
@@ -85,7 +86,12 @@ def main() -> None:
         num_samples=args.num_samples,
         flow_steps=args.num_flow_steps,
         seed=args.seed,
-        model_overrides=dict(kv.split("=", 1) for kv in args.vla_override) if args.vla_override else None,
+        model_overrides={
+            k: {"true": True, "false": False}.get(v.lower(), v)
+            for k, _, v in (kv.partition("=") for kv in args.vla_override)
+        }
+        if args.vla_override
+        else None,
     )
     H, A = vla.H, vla.raw_dim
 
@@ -98,6 +104,7 @@ def main() -> None:
         return {
             "observation/image": np.asarray(Image.open(io.BytesIO(tr["images"][t]))),
             "observation/wrist_image": np.asarray(Image.open(io.BytesIO(tr["wrist"][t]))),
+            "observation/image_right": np.asarray(Image.open(io.BytesIO(tr["right"][t]))),
             "observation/state": tr["states"][t],
             "prompt": tr["prompt"],
         }
