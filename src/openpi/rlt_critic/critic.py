@@ -174,10 +174,16 @@ class ValueNet(nn.Module):
     # the bootstrap, ~0.02c here), and measured un-bounded, V drifted to +-200 within 1k steps while
     # A chased it. Bounding V is what pins the gauge.
     bound: tuple[float, float] | None = None
+    # 1 = the classic scalar V. 1 + P = AQC layout: head 0 keeps the bootstrap semantics unchanged,
+    # heads 1..P are per-prefix baselines b_h(z) ~ expectile_h of Q(z, a_demo, h) - each Q head gets
+    # a baseline that shares its own systematic bias, so (Q_h - b_h) cancels it before the /gamma^h
+    # rescale makes horizons comparable.
+    out_dim: int = 1
 
     @nn.compact
     def __call__(self, obs):
-        out = jnp.squeeze(_mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=1), -1)  # [...]
+        out = _mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=self.out_dim)
+        out = jnp.squeeze(out, -1) if self.out_dim == 1 else out  # [...] or [..., out_dim]
         if self.bound is not None:
             lo, hi = self.bound
             out = lo + (hi - lo) * nn.sigmoid(out)
@@ -262,9 +268,31 @@ def load_value_net(params_path):
     if not vpath.exists():
         return None
     cfg = json.loads((run_dir / "config.json").read_text())
-    v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", (512, 512, 512))))
+    out_dim = 1 + cfg.get("num_prefixes", 0) if cfg.get("aqc_baseline") else 1
+    v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", (512, 512, 512))), out_dim=out_dim)
     vparams = flax.serialization.msgpack_restore(vpath.read_bytes())
-    return lambda obs: v_net.apply(vparams, obs)
+    if out_dim == 1:
+        return lambda obs: v_net.apply(vparams, obs)
+    return lambda obs: v_net.apply(vparams, obs)[..., 0]  # scalar V; baselines via load_prefix_baselines
+
+
+def load_prefix_baselines(params_path):
+    """b_h(z) [..., P] for AQC-style prefix selection, or None if the run trained no baselines."""
+    import json
+    import pathlib
+
+    import flax.serialization
+
+    run_dir = pathlib.Path(params_path).parent
+    cfg = json.loads((run_dir / "config.json").read_text())
+    if not cfg.get("aqc_baseline"):
+        return None
+    vpath = run_dir / pathlib.Path(params_path).name.replace("params", "vparams")
+    if not vpath.exists():
+        vpath = run_dir / "vparams.msgpack"
+    v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", (512, 512, 512))), out_dim=1 + cfg["num_prefixes"])
+    vparams = flax.serialization.msgpack_restore(vpath.read_bytes())
+    return lambda obs: v_net.apply(vparams, obs)[..., 1:]
 
 
 def load_trained(params_path, *, action_dim: int, horizon: int):

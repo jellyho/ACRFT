@@ -36,7 +36,8 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         valid = (data.alive[idx][:, None] > 0) & (ended | (landing < T))
 
         if cfg.objective == "iql":
-            v_next = clamp(v_net.apply(v_params, data.token[next_idx]))  # [B, P]
+            v_out = v_net.apply(v_params, data.token[next_idx])
+            v_next = clamp(v_out[..., 0] if getattr(cfg, "aqc_baseline", False) else v_out)  # [B, P]
         else:
             # TD: V(s') = max over the stored candidates (and prefixes) of the ensemble-min Q.
             q = net.apply(
@@ -67,7 +68,8 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             # Q = V + (A - mean_h A): the zero-mean advantage pins the (V+c, A-c) gauge, so the
             # target's absolute level has exactly one place to live (V). Scalar ARQ only.
             pred = pred - jnp.mean(pred, axis=-1, keepdims=True)
-            pred = pred + v_net.apply(v_params, data.token[idx])[None, :, None]
+            v_out = v_net.apply(v_params, data.token[idx])
+            pred = pred + (v_out[..., 0] if getattr(cfg, "aqc_baseline", False) else v_out)[None, :, None]
 
         if cfg.num_atoms > 1:
             probs = hl.to_probs(jnp.clip(y, hl.v_min, hl.v_max))[None]
@@ -86,7 +88,8 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             q_demo = hl.from_logits(q_demo) if cfg.num_atoms > 1 else q_demo
             q_demo = jnp.min(q_demo, axis=0)  # ensemble min, as deployment reads it
             q_demo = q_demo[:, None] if cfg.kind == "qc" else q_demo  # [B, P]
-            v = v_net.apply(v_params, data.token[idx])[:, None]
+            v_all = v_net.apply(v_params, data.token[idx])
+            v = (v_all[..., 0] if getattr(cfg, "aqc_baseline", False) else v_all)[:, None]
             if cfg.dueling:
                 q_demo = q_demo - jnp.mean(q_demo, axis=-1, keepdims=True) + jax.lax.stop_gradient(v)
             u = jax.lax.stop_gradient(q_demo) - v
@@ -94,6 +97,15 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             v_loss = jnp.sum(weight * jnp.square(u) * valid) / n_valid
             loss = loss + v_loss
             info = {"v_loss": v_loss, "v_mean": jnp.sum(v * valid) / n_valid}
+            if getattr(cfg, "aqc_baseline", False):
+                # Per-prefix baselines: each b_h chases the kappa_b-expectile of ITS OWN Q head on the
+                # demo action, elementwise over [B, P] - the paired zero-point (Q_h - b_h) reads.
+                b = v_all[..., 1:]  # [B, P]
+                u_b = jax.lax.stop_gradient(q_demo) - b
+                w_b = jnp.abs(cfg.baseline_expectile - (u_b < 0).astype(jnp.float32))
+                b_loss = jnp.sum(w_b * jnp.square(u_b) * valid) / n_valid
+                loss = loss + b_loss
+                info |= {"b_loss": b_loss, "b_mean": jnp.sum(b * valid) / n_valid}
 
         return loss, info | {
             "loss": loss,

@@ -164,7 +164,9 @@ def proprio_stats(critic_path):
     return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
 
 
-def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, vfn=None):
+def make_policy_fn(
+    vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, vfn=None, bfn=None, gamma=0.99
+):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
 
@@ -221,7 +223,18 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
             choice = rng.choice(len(flat), p=w / w.sum())
         else:
             choice = int(np.argmax(flat))
-        if mode == "softcand":
+        if mode == "aqc":
+            # Adaptive Q-Chunking selection (arXiv:2605.05544): advantage against a per-prefix
+            # baseline, rescaled by gamma^h so horizons compare on one footing, then z-scored
+            # within each prefix column so no scale dominates by variance alone. The candidate
+            # ranking inside a column is unchanged (affine) - this targets the h axis only.
+            b = np.asarray(bfn(jnp.asarray(z))).reshape(-1)  # [P]
+            g_h = gamma ** (macro * (np.arange(q.shape[1]) + 1.0))
+            score_m = (q - b[None, :]) / g_h[None, :]
+            score_m = (score_m - score_m.mean(0, keepdims=True)) / (score_m.std(0, keepdims=True) + 1e-8)
+            i, pp = np.unravel_index(int(np.argmax(score_m)), score_m.shape)
+            i, pp = int(i), int(pp)
+        elif mode == "softcand":
             # The two-stage rule the paired-comparison decomposition argues for: the candidate is
             # SAMPLED (softmax over row-maxima - sampling breaks the winner's curse of executing
             # whichever chunk the critic most over-values), and h is that row's ARG-MAX (safe: the
@@ -290,7 +303,27 @@ def build_policy(
     if vfn is not None:
         logger.info("run has an IQL value net: V(z) will ride along in the HUD trace")
         vfn = jax.jit(vfn)
-    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, proprio=pro, vfn=vfn, **kw), vla.H, macro
+    bfn = _critic.load_prefix_baselines(critic_path)
+    if mode == "aqc" and bfn is None:
+        raise ValueError("mode=aqc needs a critic trained with --aqc-baseline (per-prefix baseline heads)")
+    if bfn is not None:
+        bfn = jax.jit(bfn)
+    _ccfg = json.loads((pathlib.Path(critic_path).parent / "config.json").read_text())
+    return (
+        make_policy_fn(
+            vla,
+            jax.jit(score),
+            macro,
+            mode=mode,
+            proprio=pro,
+            vfn=vfn,
+            bfn=bfn,
+            gamma=_ccfg.get("discount", 0.99),
+            **kw,
+        ),
+        vla.H,
+        macro,
+    )
 
 
 def main() -> None:
@@ -307,7 +340,7 @@ def main() -> None:
         "--modes",
         nargs="+",
         default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "randh", "vla", "softcand"],
+        choices=["critic", "bon", "prefix", "rand", "randh", "vla", "softcand", "aqc"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")

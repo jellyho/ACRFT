@@ -73,6 +73,15 @@ def parse_args():
     )
     obj.add_argument("--expectile", type=float, default=0.7, help="iql: 0.5 = mean, ->1 approaches max_a Q")
     obj.add_argument(
+        "--aqc-baseline",
+        action="store_true",
+        help="iql: also train per-prefix baselines b_h(z) (extra value-net heads) for AQC-style "
+        "commit-length selection: score = (Q_h - b_h) / gamma^h at deployment.",
+    )
+    obj.add_argument(
+        "--baseline-expectile", type=float, default=0.9, help="expectile for the per-prefix baselines"
+    )
+    obj.add_argument(
         "--dueling",
         action="store_true",
         help="iql+arq+scalar only: Q = V + zero-mean advantage, so the Q head fits only the within-state contrast",
@@ -193,7 +202,12 @@ def main() -> None:
     params = net.init(rng, data.token[:1], data.chunk[:1])
     logger.info(f"{cfg.kind.upper()} critic: {sum(x.size for x in jax.tree.leaves(params)) / 1e6:.2f}M params")
 
-    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims)) if cfg.objective == "iql" else None
+    num_prefixes = 1 if cfg.kind == "qc" else data.chunk.shape[1] // cfg.macro_group_size
+    cfg.num_prefixes = num_prefixes
+    v_out_dim = 1 + num_prefixes if cfg.aqc_baseline else 1
+    v_net = (
+        _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), out_dim=v_out_dim) if cfg.objective == "iql" else None
+    )
     v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
     step_fn, tx, tx_v = _training.make_update(data, cfg, net, hl, support, v_net=v_net)
     carry = (params, params, tx.init(params), v_params, tx_v.init(v_params))
