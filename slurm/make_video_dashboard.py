@@ -99,6 +99,24 @@ def main() -> None:
         run_key = f"{mp4.parents[2].name}/{mp4.parents[1].name}"  # sweep/run
         found[run_key][mode].append((trial, outcome == "succ", mp4.relative_to(root).as_posix()))
 
+    # Loose verification-session directories (HUD iterations, overlay fixes, probes). Labelled so a
+    # viewer knows which rendering generation they are watching; the corrupted node50 session is
+    # annotated rather than hidden - it is the evidence for the bad-node ledger entry.
+    SESSIONS = {
+        "videos_hud_v2": "HUD v2 — dual full-size cameras, analytics column (γ mislabelled steps-left era)",
+        "videos_hud_v3": "HUD v3 — analytics row below cameras, honest value axis",
+        "videos_hud_v3c": "HUD v3 + visibility-clipped overlay (current pipeline)",
+        "videos_overlay4": "overlay world-scale x6 (pre gain reduction)",
+        "videos_overlay5": "overlay world-scale x4",
+        "videos_grid": "Q-grid panel debut — WARNING: prefix clip corrupted by node50's renderer",
+        "videos_fliprobe": "node50 fault probe (mode order reversed, clean)",
+    }
+    sessions_found = []
+    for dname, note in SESSIONS.items():
+        clips = sorted((root / dname).glob("*.mp4"))
+        if clips:
+            sessions_found.append((dname, note, [c.relative_to(root).as_posix() for c in clips]))
+
     parts = []
     A = parts.append
     A("<h1>ACRFT rollout 영상</h1>")
@@ -178,6 +196,24 @@ def main() -> None:
                     f"<span class='badge {cls}'>{label}</span></div></div>"
                 )
         A("</div>")
+
+    if sessions_found:
+        A("<h2 style='margin-top:3rem'>검증 세션 영상</h2>")
+        A("<p class='sub'>HUD/오버레이 개선 이력의 검증 렌더들 — 위 런 영상과 달리 파이프라인 세대가 제각각입니다.</p>")
+        for dname, note, clips in sessions_found:
+            A(
+                f"<h2><code>{html.escape(dname)}</code></h2><p class='what mut'>▸ {html.escape(note)}</p><div class='grid'>"
+            )
+            for rel in clips:
+                nm = rel.split("/")[-1].replace(".mp4", "")
+                ok = "_succ" in nm
+                cls, label = ("ok", "성공") if ok else ("bad", "실패")
+                A(
+                    f"<div class='card'><video controls preload='metadata' src='{html.escape(rel)}'></video>"
+                    f"<div class='cap'><span class='mode'>{html.escape(nm)}</span>"
+                    f"<span class='badge {cls}'>{label}</span></div></div>"
+                )
+            A("</div>")
 
     out.write_text(
         f"<title>ACRFT rollout 영상</title>\n<style>{CSS}</style>\n<main>{''.join(parts)}</main>\n",
