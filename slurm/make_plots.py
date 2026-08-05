@@ -94,40 +94,38 @@ def main() -> None:
     pfx = json.loads((ROOT / "pfx_curve.json").read_text())
 
     # ---------------------------------------------------------------- 1. success by mode, by family
-    groups = [
-        ("TD (v3, 14 runs)", C["td"], pool(v3)),
-        ("IQL γ=.99 (v6, 4 runs)", C["iql"], pool(v6)),
-        ("IQL γ=.999+ (v8, 3 runs @150k)", C["g999"], pool({k: v for k, v in v8.items() if k.startswith("g")})),
-        ("IQL dueling (duel_e70 @150k)", C["duel"], pool({k: v for k, v in v8.items() if k.startswith("duel")})),
+    # Run-level strips, not pooled rates: the 14 TD runs are DIFFERENT methods, and pooling also
+    # recycles the same 30 scenes per run, so a pooled CI overstates both homogeneity and
+    # independence. One dot per run; the bar is the family median.
+    fams = [
+        ("TD (v3, 14 runs)", C["td"], v3),
+        ("IQL γ=.99 (v6, 4 runs)", C["iql"], v6),
+        ("IQL γ=.999+ (v8 @150k)", C["g999"], {k: v for k, v in v8.items() if k.startswith("g")}),
+        ("dueling (v8 @150k)", C["duel"], {k: v for k, v in v8.items() if k.startswith("duel")}),
     ]
-    fig, ax = plt.subplots(figsize=(9.6, 4.6), constrained_layout=True)
+    rng = np.random.default_rng(0)
+    fig, ax = plt.subplots(figsize=(10.2, 4.8), constrained_layout=True)
     xs = np.arange(len(MODES))
-    for gi, (name, col, tot) in enumerate(groups):
-        off = (gi - (len(groups) - 1) / 2) * 0.17
+    for gi, (name, col, runs) in enumerate(fams):
+        off = (gi - (len(fams) - 1) / 2) * 0.19
         for i, m in enumerate(MODES):
-            k, n = tot[m]
-            if not n:
+            vals = [d[m]["success_rate"] for d in runs.values() if m in d]
+            if not vals:
                 continue
-            p = k / n
-            lo, hi = wilson(k, n)
-            ax.errorbar(
-                xs[i] + off,
-                p,
-                yerr=[[p - lo], [hi - p]],
-                fmt="o",
-                ms=6,
-                lw=1.6,
-                capsize=3,
-                color=col,
-                label=name if i == 0 else None,
-            )
+            jit = rng.uniform(-0.035, 0.035, len(vals))
+            ax.plot(xs[i] + off + jit, vals, "o", ms=3.6, color=col, alpha=0.55, label=name if i == 0 else None)
+            med = float(np.median(vals))
+            ax.plot([xs[i] + off - 0.07, xs[i] + off + 0.07], [med, med], color=col, lw=2.6)
     ax.set_xticks(xs)
     ax.set_xticklabels(
         ["vla\n(no critic)", "rand\n(random cand)", "bon\n(pick cand)", "prefix\n(pick commit)", "critic\n(pick both)"]
     )
-    ax.set_ylabel("success rate")
-    ax.set_ylim(0.30, 0.95)
-    ax.set_title("Rollout success by evaluation mode — dots with 95% Wilson intervals")
+    ax.set_ylabel("success rate (per run, 30 trials)")
+    ax.set_ylim(0.05, 1.0)
+    ax.set_title(
+        "Rollout success by mode — one dot per run, bar = family median\n"
+        "(the vla spread across runs is the cross-job noise floor of an identical policy)"
+    )
     ax.legend(loc="lower left", frameon=False, fontsize=9)
     fig.savefig(OUT / "1_success_by_mode.png")
     plt.close(fig)
