@@ -97,7 +97,7 @@ def main():
         ] + [np.mean([t["success"] for t in tr])]
         ax.plot(range(4), surv, "o-", lw=2.2, ms=7, color=colors[m], label=f"{m} (n={len(tr)})")
         for x, y in enumerate(surv):
-            ax.text(x, y + 0.012, f"{y:.2f}", ha="center", fontsize=8, color=colors[m])
+            ax.text(x, y + 0.012 + 0.02 * order.index(m), f"{y:.2f}", ha="center", fontsize=8, color=colors[m])
     ax.set_xticks(range(4))
     ax.set_xticklabels(STAGE_LABELS, fontsize=9)
     ax.set_ylabel("fraction of trials reaching stage")
@@ -145,7 +145,7 @@ def main():
             bp["boxes"][0].set_facecolor(colors[m])
             bp["boxes"][0].set_alpha(0.65)
     ax.set_xticks(range(3))
-    ax.set_xticklabels([s.replace("\n", " ") for s in STAGE_LABELS[:3]], fontsize=9)
+    ax.set_xticklabels(["grasped", "placed", "machine_on"], fontsize=10)
     ax.set_ylabel("env step when stage first reached")
     ax.set_title("Stage timing (box color = mode, as in panel 1)")
     ax.grid(axis="y", alpha=0.25)
