@@ -137,6 +137,7 @@ def main() -> None:
         return np.memmap(path, dtype, mode, shape=shape)
 
     rl_token = mm("rl_token", (total, token_dim))
+    episode_index = mm("episode_index", (total,), np.int32)
     proprio = mm("proprio", (total, proprio_dim))
     action_chunk = mm("action_chunk", (total, H, A))
     base_action = mm("base_action", (total, args.num_samples, H, A))
@@ -170,7 +171,8 @@ def main() -> None:
         mc_return[lo : lo + n] = mc
         done[lo : lo + n] = 0
         done[lo + n - 1] = 1
-        for arr in (rl_token, base_action, action_chunk, proprio, reward, mc_return, done):
+        episode_index[lo : lo + n] = ti
+        for arr in (rl_token, base_action, action_chunk, proprio, reward, mc_return, done, episode_index):
             arr.flush()
         logger.info(
             f"[{k + 1}/{len(own)}] {tr['name']}: {n} frames {'SUCCESS' if tr['success'] else 'fail'} "
