@@ -70,6 +70,26 @@ def obs_to_element(obs: dict, prompt: str) -> dict:
     }
 
 
+def end_state(env):
+    """Final-frame success-condition readout, for splitting pressed_no_success into its sub-modes:
+    retreat failure (gripper still near mug/button) vs displaced mug (placement lost)."""
+    try:
+        import numpy as _np
+        from robocasa.utils import object_utils as ou
+
+        obj = env.sim.data.body_xpos[env.obj_body_id["obj"]]
+        grip = env.sim.data.site_xpos[env.robots[0].eef_site_id["right"]]
+        return {
+            "grip_obj_dist": float(_np.linalg.norm(grip - obj)),
+            "placed": bool(env.coffee_machine.check_receptacle_placement_for_pouring(env, "obj")),
+            "machine_on": bool(env.coffee_machine._turned_on),
+            "grip_button_far": bool(env.coffee_machine.gripper_button_far(env)),
+            "grasped": bool(ou.check_obj_grasped(env, "obj")),
+        }
+    except Exception:
+        return {}
+
+
 def stage_flags(env):
     """Task-stage predicates for the failure taxonomy. PrepareCoffee-shaped; returns {} elsewhere.
 
@@ -178,6 +198,7 @@ def run_trials(
                 # First step each task stage was reached (absent = never): the failure taxonomy
                 # reads straight off this - no grasp / grasped-but-not-placed / placed-but-no-press.
                 "stage_at": stage_at,
+                "end_state": end_state(env),
             }
         )
         if on_trial is not None:
