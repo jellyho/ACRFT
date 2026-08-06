@@ -139,21 +139,39 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
 
 
 def make_diag(data, cfg, net, hl):
-    """Within-state diagnostics on resident data - the make-or-break metrics, cheap enough for every eval."""
+    """Within-state diagnostics on resident data - the make-or-break metrics, cheap enough for every eval.
+
+    Evaluated in SLICES of 256 states: the naive single call put all 2048 states x N candidates
+    through the net in one jit program, whose compilation blew host memory alongside a large
+    resident dataset and killed the job with no traceback (v12 mixed runs died at the first eval,
+    step 5000, twice, before this was found). The slices reuse ONE compiled program of fixed shape.
+    """
     rng = np.random.default_rng(cfg.seed)
-    diag_idx = jnp.asarray(np.sort(rng.choice(data.token.shape[0], size=min(2048, data.token.shape[0]), replace=False)))
+    n_diag = min(2048, data.token.shape[0])
+    n_diag -= n_diag % 256  # fixed slice shape -> single compilation
+    diag_idx = jnp.asarray(np.sort(rng.choice(data.token.shape[0], size=max(n_diag, 256), replace=False)))
 
     @jax.jit
-    def diag(p):
-        z = data.token[diag_idx]
-        qa = net.apply(p, jnp.repeat(z[:, None], data.num_samples, axis=1), data.cand[diag_idx])
+    def diag_slice(p, idx):
+        z = data.token[idx]
+        qa = net.apply(p, jnp.repeat(z[:, None], data.num_samples, axis=1), data.cand[idx])
         qa = hl.from_logits(qa) if cfg.num_atoms > 1 else qa
         qa = jnp.min(qa, axis=0)  # ensemble -> [S, N(, P)]
-        q_cand = qa[..., -1] if qa.ndim == 3 else qa
-        q_demo = net.apply(p, z[:, None], data.chunk[diag_idx][:, None])
+        q_demo = net.apply(p, z[:, None], data.chunk[idx][:, None])
         q_demo = hl.from_logits(q_demo) if cfg.num_atoms > 1 else q_demo
         q_demo = jnp.min(q_demo, axis=0)
         q_demo = (q_demo[..., -1] if q_demo.ndim == 3 else q_demo)[:, 0]
+        return qa, q_demo
+
+    def diag(p):
+        qas, q_demos = [], []
+        for i in range(0, len(diag_idx), 256):
+            qa_s, qd_s = diag_slice(p, diag_idx[i : i + 256])
+            qas.append(np.asarray(qa_s))
+            q_demos.append(np.asarray(qd_s))
+        qa = np.concatenate(qas)
+        q_demo = np.concatenate(q_demos)
+        q_cand = qa[..., -1] if qa.ndim == 3 else qa
         within = jnp.mean(jnp.std(q_cand, axis=1))
         between = jnp.std(jnp.mean(q_cand, axis=1))
         out = {
