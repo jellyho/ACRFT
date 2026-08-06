@@ -78,10 +78,10 @@ def stage_flags(env):
     machine_on the start button has been pressed
     """
     try:
-        from robocasa.utils import object_utils as OU
+        from robocasa.utils import object_utils as ou
 
         return {
-            "grasped": bool(OU.check_obj_grasped(env, "obj")),
+            "grasped": bool(ou.check_obj_grasped(env, "obj")),
             "placed": bool(env.coffee_machine.check_receptacle_placement_for_pouring(env, "obj")),
             "machine_on": bool(env.coffee_machine._turned_on),
         }
