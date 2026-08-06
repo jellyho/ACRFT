@@ -89,7 +89,7 @@ def main():
     logger.info(f"{n} frames, {len(eps_u)} episodes ({n_held} held out), z {zdim}d, chunk {H}x{A}")
 
     # Valid anchors: t and t+H inside the same episode (so every prefix target exists).
-    ep_end = np.zeros(len(eps_u).max() + 1, dtype=np.int64)
+    ep_end = np.zeros(int(eps_u.max()) + 1, dtype=np.int64)
     for e in eps_u:
         ep_end[e] = np.flatnonzero(ep == e).max()
     valid = np.flatnonzero((np.arange(n) + H) <= ep_end[ep])

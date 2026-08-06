@@ -96,6 +96,13 @@ def main():
     ap.add_argument("--num-pos", type=int, default=1, help="cross-episode positives per anchor")
     ap.add_argument("--epadv-weight", type=float, default=0.0,
                     help="DANN-style episode adversary on z (gradient reversal); 0 = off")
+    # HILP-style expectile-TD metric term (2402.15567): V(s,g) = -||phi(z_s)-phi(z_g)|| trained with
+    # a TD backup. The stitching probe showed our MC/alignment losses do not compose across unseen
+    # (s,g) pairs (rho_stitch 0.24 vs VLA-z 0.47) - exactly what the taxonomy (2401.11237) predicts:
+    # only TD-bootstrapped objectives stitch. The 30% cross-episode goals are the stitching pressure.
+    ap.add_argument("--hilp-weight", type=float, default=0.0, help="expectile-TD metric term; 0 = off")
+    ap.add_argument("--hilp-tau", type=float, default=0.9, help="expectile")
+    ap.add_argument("--hilp-dim", type=int, default=64)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -130,6 +137,21 @@ def main():
 
     head = Head(cam_dim).to(dev)
     opt = torch.optim.AdamW(head.parameters(), lr=args.lr, weight_decay=1e-5)
+    if args.hilp_weight > 0:
+        # phi maps z -> metric space; gradient flows through the MAIN head too, so the TD geometry
+        # shapes z itself (that is the point - stitching pressure on the representation).
+        import copy
+        head.hilp = nn.Sequential(nn.Linear(256, 256), nn.GELU(), nn.Linear(256, args.hilp_dim)).to(dev)
+        opt.add_param_group({"params": head.hilp.parameters()})
+        tgt_head = copy.deepcopy(head)
+        for q in tgt_head.parameters():
+            q.requires_grad_(False)
+        # episode start row per frame, for same-episode geometric-future goal sampling
+        ep_start_of = np.zeros(n, dtype=np.int64)
+        ep_end_of = np.zeros(n, dtype=np.int64)
+        for e, (s0, t0) in ep_range.items():
+            ep_start_of[s0:t0] = s0
+            ep_end_of[s0:t0] = t0
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
 
     def embed(rows_t):  # rows: LongTensor -> (per-cam [B,C,256], frame [B,256])
@@ -197,9 +219,39 @@ def main():
             l_adv = F.cross_entropy(logits_ep, ep_t[ar])
             loss = loss + args.epadv_weight * l_adv
 
+        l_hilp = torch.zeros((), device=dev)
+        if args.hilp_weight > 0:
+            B2 = 256
+            srow = rng.integers(0, n - 1, size=B2)
+            # keep s' inside the episode
+            srow = np.where(srow + 1 < ep_end_of[srow], srow, srow - 1)
+            nrow = srow + 1
+            # goals: 20% g=s' / 50% geometric future in-episode / 30% random other episode
+            u = rng.random(B2)
+            grow = np.empty(B2, dtype=np.int64)
+            fut = np.minimum(srow + rng.geometric(1 - args.gamma, size=B2), ep_end_of[srow] - 1)
+            rnd = rng.integers(0, n, size=B2)
+            grow = np.where(u < 0.2, nrow, np.where(u < 0.7, fut, rnd))
+            si = torch.from_numpy(srow).to(dev); ni = torch.from_numpy(nrow).to(dev)
+            gi = torch.from_numpy(grow).to(dev)
+            _, zs = embed(si); _, zg = embed(gi)
+            with torch.no_grad():
+                f_n = tgt_head(feats_t[ni].float().view(-1, ncam, cam_dim))[1]
+                f_g = tgt_head(feats_t[gi].float().view(-1, ncam, cam_dim))[1]
+                v_next = -torch.norm(tgt_head.hilp(f_n) - tgt_head.hilp(f_g), dim=-1)
+            v = -torch.norm(head.hilp(zs) - head.hilp(zg), dim=-1)
+            not_goal = (si != gi).float()
+            td = (-not_goal) + args.gamma * v_next * not_goal - v
+            w = torch.abs(args.hilp_tau - (td < 0).float())
+            l_hilp = (w * td ** 2).mean()
+            loss = loss + args.hilp_weight * l_hilp
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step(); sched.step()
+        if args.hilp_weight > 0 and step % 5 == 0:
+            with torch.no_grad():
+                for q, p_ in zip(tgt_head.parameters(), head.parameters()):
+                    q.mul_(0.995).add_(p_, alpha=0.005)
 
         if step % 1000 == 0:
             with torch.no_grad():
@@ -208,7 +260,7 @@ def main():
                 rankme = float(torch.exp(-(p_ * torch.log(p_ + 1e-9)).sum()))
             logger.info(
                 f"step {step}: vip {l_vip.item():.3f} nce_x {l_nce_x.item():.3f} "
-                f"nce_v {l_nce_v.item():.3f} vc {l_vc.item():.3f} adv {l_adv.item():.3f} rankme {rankme:.1f}"
+                f"nce_v {l_nce_v.item():.3f} vc {l_vc.item():.3f} adv {l_adv.item():.3f} hilp {l_hilp.item():.4f} rankme {rankme:.1f}"
             )
 
     # ---- encode everything, save, and probe with the SAME harness as the baseline.
