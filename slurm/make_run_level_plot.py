@@ -23,11 +23,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 C = pathlib.Path(os.environ.get("CACHE_DIR", "/scratch/jellyho/acrft"))
-METHODS = [("td", "critic"), ("iql", "critic"), ("qc", "critic"), ("aqc", "aqc")]
+METHODS = [
+    ("v11_std/td", "td\n(demo-only)", "critic"),
+    ("v11_std/iql", "iql\n(demo-only)", "critic"),
+    ("v11_std/qc", "qc\n(demo-only)", "critic"),
+    ("v11_std/aqc", "aqc\n(demo-only)", "aqc"),
+    ("v12_mixed/iql", "iql\n(MIXED +failures)", "critic"),
+    ("v12_mixed/aqc", "aqc\n(MIXED +failures)", "aqc"),
+]
 POOLS = {
     "std": ("scenes 3000-3300", "#2563eb"),
     "old": ("scenes 0-300", "#dc2626"),
     "nseed": ("scenes 4000-4700", "#16a34a"),
+    "ev": ("mixed-eval scenes (0-300+3000-3300)", "#9333ea"),
 }
 TCRIT = {
     k: v
@@ -78,10 +86,10 @@ TCRIT = {
 }
 
 
-def run_deltas(method, mode):
+def run_deltas(root, mode):
     out = []
     for prefix, (pool_label, color) in POOLS.items():
-        for f in sorted(glob.glob(str(C / f"critic_runs/v11_std/{method}/rollout/{prefix}_s*.json"))):
+        for f in sorted(glob.glob(str(C / f"critic_runs/{root}/rollout/{prefix}_s*.json"))):
             j = json.loads(pathlib.Path(f).read_text())
             if mode not in j or "vla" not in j:
                 continue
@@ -93,14 +101,14 @@ def run_deltas(method, mode):
 
 def main():
     fig, axes = plt.subplots(
-        1, 2, figsize=(13.5, 5.2), constrained_layout=True, dpi=200, gridspec_kw={"width_ratios": [2.2, 1]}
+        1, 2, figsize=(16.5, 5.2), constrained_layout=True, dpi=200, gridspec_kw={"width_ratios": [2.2, 1]}
     )
 
     ax = axes[0]
     xticks, xlabels = [], []
     rng = np.random.default_rng(0)
-    for i, (m, mode) in enumerate(METHODS):
-        ds = run_deltas(m, mode)
+    for i, (root, m, mode) in enumerate(METHODS):
+        ds = run_deltas(root, mode)
         if not ds:
             xticks.append(i)
             xlabels.append(f"{m}\n(no data yet)")
@@ -146,7 +154,7 @@ def main():
         v6.append(
             np.mean([t["success"] for t in j["critic"]["trials"]]) - np.mean([t["success"] for t in j["vla"]["trials"]])
         )
-    v11 = [d for d, lbl, _ in run_deltas("iql", "critic") if lbl == "scenes 0-300"]
+    v11 = [d for d, lbl, _ in run_deltas("v11_std/iql", "critic") if lbl == "scenes 0-300"]
     gens = [
         ("v6 iql_e70\n200k · raw actions\n(yesterday's replay)", v6, "#9ca3af"),
         ("v11 iql\n100k · z-scored actions\n(fair set)", v11, "#2563eb"),
