@@ -74,13 +74,12 @@ def end_state(env):
     """Final-frame success-condition readout, for splitting pressed_no_success into its sub-modes:
     retreat failure (gripper still near mug/button) vs displaced mug (placement lost)."""
     try:
-        import numpy as _np
         from robocasa.utils import object_utils as ou
 
         obj = env.sim.data.body_xpos[env.obj_body_id["obj"]]
         grip = env.sim.data.site_xpos[env.robots[0].eef_site_id["right"]]
         return {
-            "grip_obj_dist": float(_np.linalg.norm(grip - obj)),
+            "grip_obj_dist": float(np.linalg.norm(grip - obj)),
             "placed": bool(env.coffee_machine.check_receptacle_placement_for_pouring(env, "obj")),
             "machine_on": bool(env.coffee_machine._turned_on),
             "grip_button_far": bool(env.coffee_machine.gripper_button_far(env)),
