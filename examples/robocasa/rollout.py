@@ -70,6 +70,25 @@ def obs_to_element(obs: dict, prompt: str) -> dict:
     }
 
 
+def stage_flags(env):
+    """Task-stage predicates for the failure taxonomy. PrepareCoffee-shaped; returns {} elsewhere.
+
+    grasped   the gripper currently holds the mug
+    placed    the mug sits under the dispenser well enough to pour
+    machine_on the start button has been pressed
+    """
+    try:
+        from robocasa.utils import object_utils as OU
+
+        return {
+            "grasped": bool(OU.check_obj_grasped(env, "obj")),
+            "placed": bool(env.coffee_machine.check_receptacle_placement_for_pouring(env, "obj")),
+            "machine_on": bool(env.coffee_machine._turned_on),
+        }
+    except Exception:
+        return {}
+
+
 def run_trials(
     env,
     policy_fn,
@@ -118,6 +137,7 @@ def run_trials(
         obs = env.reset()
         prompt = env.get_ep_meta().get("lang", task)
         success, step = False, 0
+        stage_at: dict = {}
         while step < max_steps and not success:
             out = policy_fn(obs_to_element(obs, prompt))
             info = None
@@ -128,6 +148,9 @@ def run_trials(
                 chunk, n_exec = out, replan_steps
             chunk = np.asarray(chunk)
             for action in chunk[: max(int(n_exec), 1)]:
+                for k, v in stage_flags(env).items():
+                    if v and k not in stage_at:
+                        stage_at[k] = step  # first step each stage was observed true
                 if on_transition is not None:
                     # Fires with the PRE-step obs: (obs_t, action executed at t) is the pair an
                     # annotation pass needs; post-step obs would shift every frame by one.
@@ -152,6 +175,9 @@ def run_trials(
                 # scenes without keeping the sim around.
                 "layout": meta.get("layout_id"),
                 "style": meta.get("style_id"),
+                # First step each task stage was reached (absent = never): the failure taxonomy
+                # reads straight off this - no grasp / grasped-but-not-placed / placed-but-no-press.
+                "stage_at": stage_at,
             }
         )
         if on_trial is not None:
