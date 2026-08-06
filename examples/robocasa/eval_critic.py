@@ -224,13 +224,17 @@ def make_policy_fn(
         else:
             choice = int(np.argmax(flat))
         if mode == "aqc":
-            # Adaptive Q-Chunking selection (arXiv:2605.05544): advantage against a per-prefix
-            # baseline, rescaled by gamma^h so horizons compare on one footing, then z-scored
-            # within each prefix column so no scale dominates by variance alone. The candidate
-            # ranking inside a column is unchanged (affine) - this targets the h axis only.
+            # Adaptive Q-Chunking selection (arXiv:2605.05544), reduced to the two ingredients
+            # that matter here: per-prefix baseline subtraction, then an epsilon'd z-score per
+            # column. Candidate ranking inside a column is unchanged (affine) - the h axis is
+            # the target.
+            # Two of the paper's three ingredients carry all the weight here: the per-prefix
+            # baseline (cancels each head's own bias) and the epsilon'd z-score (fair cross-scale
+            # comparison). The gamma^h division is dropped - at our discounts it rescales columns by
+            # at most 17% (0.99^16), far below run noise, and post-z-score its only residue was a
+            # slight epsilon-threshold tilt better controlled explicitly.
             b = np.asarray(bfn(jnp.asarray(z))).reshape(-1)  # [P]
-            g_h = gamma ** (macro * (np.arange(q.shape[1]) + 1.0))
-            score_m = (q - b[None, :]) / g_h[None, :]
+            score_m = q - b[None, :]
             # The epsilon is load-bearing (paper Eq 16): columns whose spread clears it behave as
             # z-scores, columns collapsed below it are damped toward zero instead of being amplified
             # to unit variance - with a tiny epsilon the per-column affine (Q-b)/gamma^h would cancel
