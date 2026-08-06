@@ -231,7 +231,11 @@ def make_policy_fn(
             b = np.asarray(bfn(jnp.asarray(z))).reshape(-1)  # [P]
             g_h = gamma ** (macro * (np.arange(q.shape[1]) + 1.0))
             score_m = (q - b[None, :]) / g_h[None, :]
-            score_m = (score_m - score_m.mean(0, keepdims=True)) / (score_m.std(0, keepdims=True) + 1e-8)
+            # The epsilon is load-bearing (paper Eq 16): columns whose spread clears it behave as
+            # z-scores, columns collapsed below it are damped toward zero instead of being amplified
+            # to unit variance - with a tiny epsilon the per-column affine (Q-b)/gamma^h would cancel
+            # entirely and pure-noise scales would shout as loudly as real ones.
+            score_m = (score_m - score_m.mean(0, keepdims=True)) / (score_m.std(0, keepdims=True) + 1e-3)
             i, pp = np.unravel_index(int(np.argmax(score_m)), score_m.shape)
             i, pp = int(i), int(pp)
         elif mode == "softcand":
