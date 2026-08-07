@@ -41,6 +41,8 @@ uv run --no-sync python slurm/sync_hub.py
    🗺️ 마인드맵(국면 5컬럼 × links 간선 SVG, 노드 클릭 이동).
 4. PR 생성 후 즉시 머지.
 
+게시는 **Space 하나로 일원화** — Claude Artifact는 갱신하지 않는다 (2026-08-08 폐지).
+
 비디오는 생성 즉시 HF dataset `jellyho/acrft-rollout-videos`(아카이브)와
 Space `videos/`(갤러리 서빙)에 `upload_folder`로 올린다 — 배치 대기 금지.
 
