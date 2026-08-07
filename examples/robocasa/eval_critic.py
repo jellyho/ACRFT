@@ -606,7 +606,9 @@ def main() -> None:
         if args.scenes_from_extras is not None:
             import json as _json
 
-            dirs = sorted(args.scenes_from_extras.glob("episode_*"))[: args.num_trials]
+            # seed picks the episode block, so different jobs replay different demo scenes
+            _all = sorted(args.scenes_from_extras.glob("episode_*"))
+            dirs = _all[args.seed % max(len(_all) - args.num_trials, 1) :][: args.num_trials]
             ep_metas = [_json.loads((d / "ep_meta.json").read_text()) for d in dirs]
             logger.info(f"replaying {len(ep_metas)} recorded demo scenes from {args.scenes_from_extras}")
         res = _ro.run_trials(
