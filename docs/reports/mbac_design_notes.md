@@ -167,3 +167,36 @@ Implementation: `eval_critic --modes mbac mbacv --dyn <ensemble> --dyn-tau 2.0`
 landed (DynCommit, CPU torch, relative-median hysteresis, per-trial reset).
 Blocked on phi_dyn_v1 (job 34635, running) / the hist=1 deployment variant
 (34641, queued).
+
+## Iteration 4 (05:55) — the dynamics belongs in phi space
+
+phi_dyn_v1 (job 34635, same architecture/steps as the DINO-space run):
+
+| horizon | R2 phi | R2 DINO | AUSE phi | AUSE DINO |
+|---|---|---|---|---|
+| +4  | .286 | .064 | .080 | .114 |
+| +8  | .512 | .305 | .072 | .106 |
+| +12 | .606 | .429 | .072 | .096 |
+| +16 | .659 | .519 | .075 | .089 |
+
+OOD action-swap disagreement ratio: **1.41** (DINO: 1.09).
+
+Reading: phi's TD training already threw away the appearance nuisance that the
+DINO dynamics wasted capacity on; what remains is the reachability geometry,
+which is exactly what actions move. Three consequences:
+
+- The R2(+4)>0.6 acceptance gate stays unmet (.286) — the 4-step slot is still
+  mostly copy-forward. The sigma rule's k floor of one macro-step remains the
+  right guard: the model has little to say about the first 4 steps.
+- Swap ratio 1.41 upgrades E2's prior: wrong-action chunks now visibly inflate
+  disagreement, so binding-by-disagreement has a real chance where the DINO
+  model (1.09) had almost none.
+- tau sweep design for the mbac rollout: with sigma ratios ~1.4 between
+  in/out-of-distribution chunks, tau_mult=2.0 (cut on 2x the running median)
+  may be too permissive — plan a {1.3, 2.0, 3.0} sweep AFTER the first 30-trial
+  run rather than burning trials on a grid now; the first run's sigma trace
+  (Replan.value logs sig[k]) calibrates the sweep for free.
+
+Interim from the phi+calswap rollout (34633): critic mode opened 4/4 (control
+was .567 over 30). Too early to celebrate at n=4; the full paired table lands
+this hour.
