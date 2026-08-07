@@ -557,6 +557,123 @@ content = (
 (C / "master_report_artifact.html").write_text(
     f"<title>RLT critic — 실험 마스터 리포트</title><style>{css}</style>{content}"
 )
+
+# ------------------------------------------------------------------ timeline page
+FLOW = [
+    (
+        "~07-28",
+        "파이프라인 구축",
+        "어노테이션(RL토큰+후보16) → critic 학습 → 페어드 롤아웃 평가의 3단 파이프라인 완성.",
+        "",
+    ),
+    (
+        "~08-01",
+        "첫 판정: TD critic의 일관된 적자",
+        "critic−vla 14/14런 음수(−0.2~−0.3, p≈10⁻⁴). '왜 지는가'가 프로젝트의 질문이 됨.",
+        "→ 원인 추적 시작",
+    ),
+    (
+        "~08-01",
+        "h축 오염 발견: b(d) 거리-바이어스",
+        "TD 타깃이 원거리에서 5.07× 팽창 — 커밋 길이 선택이 최단(h=2, 61%)으로 붕괴하는 원인.",
+        "→ 타깃을 고치자: IQL",
+    ),
+    (
+        "08-02",
+        "후보축 사망 선고: winner's curse",
+        "후보 간 Q차이의 81%가 상태 무관 고정 노이즈(ICC 0.878), 순위는 우연 수준. argmax = 가장 과대평가된 후보 집기.",
+        "→ 추론 기교로 구제 시도",
+    ),
+    (
+        "08-03",
+        "IQL 전환의 성과와 한계",
+        "가치 캘리브레이션 완치(오차 0.01 수준), prefix 모드 vla 회복. 그러나 후보축은 여전히 무신호 — 액션축이 아예 붕괴(밴드 0.002~0.007).",
+        "",
+    ),
+    (
+        "08-05",
+        "사다리 실험: 귀속 종결",
+        "같은 데이터·예산에서 IQL은 정확, TD γ0.999는 학습궤적조차 실패(자기증폭 인플레) — 실패의 범인은 데이터가 아니라 부트스트랩.",
+        "→ '잘 맞추는데 못 고르는' critic의 초상 완성",
+    ),
+    (
+        "08-05",
+        "추론 기교 전멸 (고검정력)",
+        "softcand·softmax·제로크로싱 재현 모두 무효과 — 무신호 순위는 샘플링으로도 못 살린다.",
+        "→ 학습 신호 주입만 남음",
+    ),
+    (
+        "08-06",
+        "능동 손실의 정량: 동전던지기 실험",
+        "critic(0.542) < rand(0.683), p=0.019 — critic의 선택이 무작위보다 나쁨을 유의하게 확인.",
+        "",
+    ),
+    (
+        "08-06",
+        "AQC: 손실의 무해화",
+        "per-h 베이스라인 + z-score로 critic을 동전던지기 밴드(0.658)로 복원, h 분포 정상화(평균 h=11). 이기지는 못함 — 분자에 내용이 없어서.",
+        "",
+    ),
+    (
+        "08-06",
+        "부검과 태스크 결함 발견",
+        "실패의 2/3가 엔드게임, 파지 실패 0. 버튼이 눌러져도 관측이 거의 안 변하는 앨리어싱 발견(귀속 ~5%로 유계 → 태스크 잔류).",
+        "",
+    ),
+    (
+        "08-06",
+        "방법론 위기와 격상: 장면 풀 효과",
+        "같은 critic이 주방 세트에 따라 −0.067 ↔ +0.017 — 30장면 비교는 풀 노이즈에 지배됨. 이후 모든 판정을 시드-레벨 95% CI × 다중 풀로.",
+        "→ v11 공정 비교 설계",
+    ),
+    (
+        "08-07",
+        "v11 완결: 데모-only의 최종 판정",
+        "method만 다른 4 체크포인트 × 16시드: TD만 확실한 해악(16/16 음수, CI [−0.21,−0.12]), IQL/QC/AQC는 무효과. 데모 데이터에서는 이길 정보가 없다.",
+        "→ 남은 지렛대 = 데이터",
+    ),
+    (
+        "08-07",
+        "v12 혼합 데이터: 밴드가 열리다",
+        "실패 롤아웃 249궤적 혼합 학습 → 후보 밴드 10~30배 개방, 실패 궤적 가치 인식. 성공률 16시드 CI 심판 진행 중.",
+        "→ CI>0이면 목표 달성 / CI∋0이면 margin 순위 손실",
+    ),
+]
+tl_items = "".join(
+    f"<div class='node'><div class='when'>{d}</div><div class='card'><h3>{t}</h3><p>{body}</p>"
+    + (f"<div class='next'>{nxt}</div>" if nxt else "")
+    + "</div></div>"
+    for d, t, body, nxt in FLOW
+)
+tl_css = (
+    css
+    + """
+.tl{position:relative;margin:20px 0 20px 8px;border-left:3px solid var(--acc);padding-left:22px}
+.node{position:relative;margin-bottom:22px}
+.node:before{content:'';position:absolute;left:-31px;top:6px;width:13px;height:13px;border-radius:50%;background:var(--acc)}
+.when{font-size:.82em;color:var(--muted);font-variant-numeric:tabular-nums;margin-bottom:2px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.card h3{margin:0 0 6px;font-size:1.02em}.card p{margin:0;font-size:.95em}
+.next{margin-top:8px;font-size:.88em;color:var(--acc);font-weight:600}
+.now{border:2px solid var(--acc);border-radius:12px;padding:14px 18px;margin-top:10px;background:var(--accink)}
+"""
+)
+tl_content = (
+    "<h1>RLT critic — Takeaway 타임라인</h1>"
+    "<div class='sub'>실험별 상세는 마스터 리포트에, 여기는 처음부터 지금까지의 발견과 흐름만. 각 카드 = 한 국면의 takeaway, 파란 줄 = 다음 국면으로 이어진 논리.</div>"
+    f"<div class='tl'>{tl_items}</div>"
+    "<div class='now'><b>현재 위치 (2026-08-07).</b> 데모-only는 완결(무익), 실패 데이터가 후보 구분을 처음 만들었고, "
+    "그 구분이 성공률로 전환되는지의 16시드 CI가 수집 중이다. 갈림길: CI가 0 위로 → 목표 달성 · CI가 0을 포갬 → "
+    "margin 순위 손실로 '옳게 구분하기'를 학습시키는 다음 단계.</div>"
+)
+(C / "timeline.html").write_text(
+    f"<!doctype html><meta charset='utf-8'><title>RLT critic takeaway timeline</title><style>{tl_css}</style>{tl_content}"
+)
+(C / "timeline_artifact.html").write_text(
+    f"<title>RLT critic — Takeaway 타임라인</title><style>{tl_css}</style>{tl_content}"
+)
+print("wrote timeline(.html/_artifact.html)")
+
 print(
     f"wrote master_report(.html/_artifact.html): {(C / 'master_report_artifact.html').stat().st_size // 1024} KB, "
     f"{len(dates)} dates / {len(ENTRIES)} experiments"
