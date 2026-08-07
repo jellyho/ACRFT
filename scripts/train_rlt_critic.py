@@ -338,6 +338,12 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_
             k_cql = jax.random.fold_in(rng, 13)
             sel = jnp.argsort(jax.random.uniform(k_cql, (idx.shape[0], data.cand.shape[1])), axis=-1)[:, :n]
             a_c = jnp.take_along_axis(data.cand[idx], sel[:, :, None, None], axis=1)  # [B, n, H, A]
+            if cfg.cql_swap:
+                # other states' DEMONSTRATED chunks as extra negatives (roll the batch): on-manifold
+                # actions that are wrong *for this state* - the binding contrast.
+                a_swap = jnp.roll(data.chunk[idx], 1, axis=0)[:, None]  # [B, 1, H, A]
+                a_c = jnp.concatenate([a_c, a_swap], axis=1)
+                n = n + 1
             z_c = jnp.repeat(data.token[idx][:, None], n, axis=1)  # [B, n, D]
             q_c = net.apply(params, z_c, a_c)  # [K, B, n(, P)(, atoms)]
             q_c = hl.from_logits(q_c) if cfg.num_atoms > 1 else q_c
@@ -442,6 +448,10 @@ def main() -> None:
         "N>10, Cal-QL survives to 50). Calibrated: the push-down is clamped at the frame's "
         "mc_return so it never drives Q below what the data proved achievable (Cal-QL).",
     )
+    ap.add_argument("--cql-swap", action="store_true",
+                    help="add OTHER STATES' demonstrated chunks (batch shuffle) as CQL negatives - "
+                    "trains the state-action BINDING the candidate-only push-down misses (measured: "
+                    "demo-vs-other ranking 0.53 with candidates alone).")
     ap.add_argument("--cql-candidates", type=int, default=4,
                     help="candidates per step in the CQL term (cost: extra forward x this).")
     ap.add_argument("--layernorm-v", action="store_true",
