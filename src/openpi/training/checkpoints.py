@@ -131,16 +131,19 @@ def _only_norm_stats_dir(assets_dir: epath.Path, wanted: str) -> epath.Path:
     """
     # epath refuses "**" (on GCS it would fan out into thousands of RPCs), and an asset_id is at
     # most "<org>/<name>", so enumerate the three depths it can actually sit at.
-    found = sorted({
-        p.parent
-        for pattern in ("norm_stats.json", "*/norm_stats.json", "*/*/norm_stats.json")
-        for p in assets_dir.glob(pattern)
-    })
+    found = sorted(
+        {
+            p.parent
+            for pattern in ("norm_stats.json", "*/norm_stats.json", "*/*/norm_stats.json")
+            for p in assets_dir.glob(pattern)
+        }
+    )
     if len(found) == 1:
         logging.warning(
             "No norm stats under asset_id %r; using the only ones this checkpoint has, at %s. "
             "Pass the matching asset_id explicitly to silence this.",
-            wanted, found[0],
+            wanted,
+            found[0],
         )
         return found[0]
     if len(found) > 1:

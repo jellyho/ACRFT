@@ -147,8 +147,7 @@ def load(directory: pathlib.Path | str) -> dict[str, NormStats]:
         # (the data-scaling study gives each point its own). Naming what the checkpoint does
         # carry turns that into a one-line fix instead of a hunt through the config.
         raise FileNotFoundError(
-            f"Norm stats file not found at: {path}\n"
-            f"{_available_assets_hint(pathlib.Path(directory))}"
+            f"Norm stats file not found at: {path}\n" f"{_available_assets_hint(pathlib.Path(directory))}"
         )
     return deserialize_json(path.read_text())
 
@@ -159,9 +158,7 @@ def _available_assets_hint(missing: pathlib.Path) -> str:
     # org-prefixed repo id), so search the whole assets tree rather than one level.
     for root in missing.parents:
         if root.name == "assets":
-            found = sorted(
-                str(p.parent.relative_to(root)) for p in root.rglob("norm_stats.json")
-            )
+            found = sorted(str(p.parent.relative_to(root)) for p in root.rglob("norm_stats.json"))
             if found:
                 return (
                     f"This checkpoint has norm stats under: {', '.join(found)}\n"
