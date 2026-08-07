@@ -630,9 +630,11 @@ entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "�
 <table class='num'><tr><th>arm</th><th>arm 성공</th><th>잡내 vla 성공</th></tr>{_abs_rows if _abs_rows else "<tr><td colspan=3>평가 도착 대기</td></tr>"}</table>
 <p><b>잠정 해석 (도착분 기준 — 표는 재생성 시점의 도착 JSON으로 자동 재계산).</b>
 IQL 계열 5팔(iql/iql_a101/iql_a201/iql_online/iql_demo)과 qc_demo가 먼저 도착했고 <b>전부 null</b> —
-CI가 모두 0을 포함하며, 점추정은 −0.065~+0.013 사이. v11(demo-only 16시드)과 v12(mixed 16시드)의 null 판정과 정합적이다.
+CI가 모두 0을 포함하며, 점추정은 −0.065~+0.040 사이. v11(demo-only 16시드)과 v12(mixed 16시드)의 null 판정과 정합적이다.
 atoms 51→201 증가도, 타깃넷 EMA→online도 IQL에서는 판정을 바꾸지 않았다.
-TD 계열 7팔(mixed)은 학습이 XLA 컴파일 segfault로 지연 중 — 아래 '침묵사 규명' 탭 참조. td_max_demo는 학습 완료, 평가 진행 중.</p>
+<b>td_max_demo 잠정(n=3):</b> Δ̄=−0.127 — v11에서 확정된 TD 해악 시그니처가 FINAL에서도 재현되는 중 (4번째 시드 도착 후 CI 확정).
+TD 계열 7팔(mixed)은 XLA segfault 해결 후 <b>전 팔 학습 재가동</b>(qc는 완료 임박) — '침묵사 규명' 탭 참조.
+06:00 무결 감사: v11·v12의 공표 수치를 원본 JSON에서 재계산해 일치 확인(TD −0.167 CI[−0.214,−0.119] 재현).</p>
 """)
 
 # ============================================== 08-07 TD 침묵사 + K-수집
