@@ -198,9 +198,12 @@ def main():
         lse = torch.logsumexp(torch.cat([pos, sim], dim=1), dim=1, keepdim=True)
         l_nce_x = (lse - pos).mean()
         # view term: each camera embedding predicts its own frame among all frames in the batch.
-        ci = int(rng.integers(0, ncam))
-        view = zc[:, ci] @ za.T / args.tau
-        l_nce_v = F.cross_entropy(view, torch.arange(len(ar), device=dev))
+        if ncam > 1:
+            ci = int(rng.integers(0, ncam))
+            view = zc[:, ci] @ za.T / args.tau
+            l_nce_v = F.cross_entropy(view, torch.arange(len(ar), device=dev))
+        else:  # single-source cache (e.g. the RLT token): no other view to be consistent with
+            l_nce_v = torch.zeros((), device=dev)
         l_nce = args.nce_x_weight * l_nce_x + l_nce_v
 
         l_vc = vicreg(zf_a)
