@@ -116,6 +116,9 @@ class VLA:
             return model.extract_token_and_base_actions(rng, obs, num_samples=num_samples, num_steps=flow_steps)
 
         self._extract = _extract
+        # Optional post-extraction transform of the token (e.g. the HILP phi readout, so a critic
+        # trained on phi(z) can be evaluated at rollout without touching the VLA side).
+        self.token_transform = None
         probe = self._out(
             {
                 "state": np.zeros((1, self.model_config.action_dim), np.float32),
@@ -141,7 +144,10 @@ class VLA:
         obs = _model.Observation.from_dict(inp)
         self._rng[0], k = jax.random.split(self._rng[0])
         z, base = self._extract(k, obs)
-        return np.asarray(z, np.float32), self._decode(np.asarray(base[0], np.float32))
+        z = np.asarray(z, np.float32)
+        if self.token_transform is not None:
+            z = self.token_transform(z)
+        return z, self._decode(np.asarray(base[0], np.float32))
 
 
 def proprio_stats(critic_path):
@@ -277,6 +283,9 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--checkpoint", required=True, type=pathlib.Path)
     ap.add_argument("--critic", type=pathlib.Path, default=None, help="Trained critic params.msgpack.")
+    ap.add_argument("--phi", type=pathlib.Path, default=None,
+                    help="HILP phi readout (phi.pt): apply phi to the extracted token before the "
+                    "critic, for critics trained on the phi space.")
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
         "--modes",
@@ -348,6 +357,21 @@ def main() -> None:
         seed=args.seed,
         model_overrides=_vla_ov,
     )
+
+    if args.phi is not None:
+        import torch as _torch
+
+        _sd = _torch.load(args.phi, map_location="cpu")
+        _w0 = _sd["0.weight"].numpy(); _b0 = _sd["0.bias"].numpy()
+        _w2 = _sd["2.weight"].numpy(); _b2 = _sd["2.bias"].numpy()
+
+        def _phi_fn(z, _w0=_w0, _b0=_b0, _w2=_w2, _b2=_b2):
+            h = z @ _w0.T + _b0
+            h = 0.5 * h * (1.0 + np.tanh(0.7978845608 * (h + 0.044715 * h ** 3)))  # gelu(tanh approx)
+            return (h @ _w2.T + _b2).astype(np.float32)
+
+        shared_vla.token_transform = _phi_fn
+        logger.info(f"phi adapter active: token {_w0.shape[1]} -> {_w2.shape[0]}")
 
     for mode in args.modes:
         policy, H, macro = build_policy(
