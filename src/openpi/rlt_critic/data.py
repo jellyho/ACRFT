@@ -18,7 +18,10 @@ class Data:
 
     token: jax.Array  # [T, D]      rl_token (+ z-scored proprio)
     chunk: jax.Array  # [T, H, A]   executed demo chunk - the `a` in Q(s, a)
-    cand: jax.Array  # [T, N, H, A] VLA candidates - what the td bootstrap maxes over
+    # VLA candidates - what the td bootstrap maxes over. Stored SPLIT along N so no single device
+    # array crosses 2**31 elements: XLA's gather codegen segfaults at compile on sm_86/Blackwell
+    # once the source buffer exceeds int32 element count (mixed data: 807634*16*16*12 = 2.48e9).
+    cand_parts: tuple  # k x [T, N/k, H, A]
     reward: jax.Array  # [T]
     episode: jax.Array  # [T]
     mc_return: jax.Array  # [T]     discounted return the behaviour policy actually collected
@@ -32,6 +35,41 @@ class Data:
     action_std: np.ndarray  # [A]
     proprio_mean: np.ndarray
     proprio_std: np.ndarray
+
+    def cand_at(self, idx: jax.Array) -> jax.Array:
+        """cand[idx] -> [*idx.shape, N, H, A], gathering each sub-int32 part separately."""
+        return jnp.concatenate([p[idx] for p in self.cand_parts], axis=idx.ndim)
+
+
+_DATA_ARRAYS = ("token", "chunk", "cand_parts", "reward", "episode", "mc_return", "done", "done_cum", "alive")
+_DATA_STATS = ("action_mean", "action_std", "proprio_mean", "proprio_std")
+
+
+def _data_flatten(d: Data):
+    # Registered as a pytree so the training step takes Data as a traced ARGUMENT - a closed-over
+    # array is baked into the compiled program as a constant, duplicating the dataset on device.
+    children = tuple(getattr(d, f) for f in _DATA_ARRAYS)
+    aux = (
+        d.horizon,
+        d.action_dim,
+        d.num_samples,
+        *(tuple(np.asarray(getattr(d, f), np.float64).tolist()) for f in _DATA_STATS),
+    )
+    return children, aux
+
+
+def _data_unflatten(aux, children):
+    h, a, n, *stats = aux
+    return Data(
+        **dict(zip(_DATA_ARRAYS, children, strict=True)),
+        horizon=h,
+        action_dim=a,
+        num_samples=n,
+        **{f: np.asarray(v, np.float32) for f, v in zip(_DATA_STATS, stats, strict=True)},
+    )
+
+
+jax.tree_util.register_pytree_node(Data, _data_flatten, _data_unflatten)
 
 
 def _terminals(done, episode):
@@ -92,10 +130,15 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
     chunk = (chunk - a_mu) / a_sd
     cand = (cand - a_mu) / a_sd
 
+    # Split candidates along N into parts each under 2**31 elements (see Data.cand_parts).
+    n_parts = int(np.ceil(cand.size / (2**31 - 1)))
+    n_parts = next(k for k in range(n_parts, N + 1) if N % k == 0)
+    if n_parts > 1:
+        logger.info(f"cand {cand.size:,} elements > int32: splitting into {n_parts} device arrays")
     data = Data(
         token=jnp.asarray(obs),
         chunk=jnp.asarray(chunk),
-        cand=jnp.asarray(cand),
+        cand_parts=tuple(jnp.asarray(np.ascontiguousarray(c)) for c in np.split(cand, n_parts, axis=1)),
         reward=jnp.asarray(rd("reward", (full,))),
         episode=jnp.asarray(rd("episode_index", (full,), np.int32)),
         mc_return=jnp.asarray(rd("mc_return", (full,), np.float32)),
@@ -108,6 +151,6 @@ def load_data(path: pathlib.Path, *, max_frames: int = 0) -> Data:
         proprio_mean=p_mu,
         proprio_std=p_sd,
     )
-    gb = sum(x.size * x.itemsize for x in (data.token, data.chunk, data.cand)) / 1e9
+    gb = sum(x.size * x.itemsize for x in (data.token, data.chunk, *data.cand_parts)) / 1e9
     logger.info(f"loaded {T} frames ({gb:.2f} GB): token {obs.shape[1]}, chunk {H}x{A}, N={N}, actions normalised")
     return data

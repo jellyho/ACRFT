@@ -229,8 +229,8 @@ def main() -> None:
     diag = _training.make_diag(data, cfg, net, hl)
 
     @jax.jit
-    def run_chunk(carry, rng):
-        return jax.lax.scan(step_fn, carry, jax.random.split(rng, STEPS_PER_DISPATCH))
+    def run_chunk(carry, rng, d):
+        return jax.lax.scan(lambda c, r: step_fn(d, c, r), carry, jax.random.split(rng, STEPS_PER_DISPATCH))
 
     out_dir = cfg.out or (cfg.data / f"critic_{cfg.kind}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -262,7 +262,7 @@ def main() -> None:
 
     t0 = time.perf_counter()
     for s in range(start_step, cfg.steps, STEPS_PER_DISPATCH):
-        carry, infos = run_chunk(carry, jax.random.fold_in(rng, s))
+        carry, infos = run_chunk(carry, jax.random.fold_in(rng, s), data)
         step = s + STEPS_PER_DISPATCH
         if s % LOG_EVERY == 0:
             info = jax.tree.map(lambda x: float(jnp.mean(x)), infos)

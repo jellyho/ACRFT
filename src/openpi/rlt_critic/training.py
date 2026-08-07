@@ -18,7 +18,7 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
     lo, hi = float(support[0]), float(support[1])
     clamp = lambda x: jnp.clip(x, lo, hi)  # noqa: E731  - the value support bounds every estimate
 
-    def targets(idx, tgt_params, v_params):
+    def targets(data, idx, tgt_params, v_params):
         """Per-prefix regression target y and its validity mask, for a batch of start frames."""
         # Rewards inside the window, cut at the episode boundary.
         window = jnp.clip(idx[:, None] + jnp.arange(H)[None, :], 0, T - 1)
@@ -41,7 +41,7 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         else:
             # TD/CalQL: V(s') from the stored candidates via the chosen bootstrap OPERATOR.
             q = net.apply(
-                tgt_params, jnp.repeat(data.token[next_idx][:, :, None], data.num_samples, 2), data.cand[next_idx]
+                tgt_params, jnp.repeat(data.token[next_idx][:, :, None], data.num_samples, 2), data.cand_at(next_idx)
             )
             q = hl.from_logits(q) if cfg.num_atoms > 1 else q  # [K, B, P, N(, P')]
             q = jnp.min(q, axis=0)
@@ -76,8 +76,8 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             y = jnp.maximum(y, data.mc_return[idx][:, None])
         return clamp(y), valid
 
-    def loss_fn(params, tgt_params, idx, v_params):
-        y, valid = targets(idx, jax.lax.stop_gradient(tgt_params), jax.lax.stop_gradient(v_params))
+    def loss_fn(params, tgt_params, idx, v_params, data):
+        y, valid = targets(data, idx, jax.lax.stop_gradient(tgt_params), jax.lax.stop_gradient(v_params))
         y = jax.lax.stop_gradient(y)
         w = valid.astype(jnp.float32)[None]  # [1, B, P]
         n_valid = jnp.maximum(jnp.sum(valid), 1.0)
@@ -120,7 +120,7 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             # candidate-axis signal every inference-time trick failed to fake - logsumexp gives
             # every candidate a gradient proportional to how loudly it currently outbids the demo.
             zc = jnp.repeat(data.token[idx][:, None], data.num_samples, axis=1)
-            q_c = net.apply(params, zc, data.cand[idx])
+            q_c = net.apply(params, zc, data.cand_at(idx))
             q_c = hl.from_logits(q_c) if cfg.num_atoms > 1 else q_c  # [K, B, N, P]
             q_d = hl.from_logits(pred) if cfg.num_atoms > 1 else pred  # [K, B, P] (pred computed above)
             lse = jax.nn.logsumexp(q_c / cfg.cql_temp, axis=2) * cfg.cql_temp  # [K, B, P]
@@ -166,13 +166,15 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
     tx = optax.adam(cfg.lr)
     tx_v = optax.adam(cfg.lr)
 
-    def step(carry, rng):
+    def step(data, carry, rng):
         # v_params rides along under --objective td as an empty pytree: one carry shape, one jit.
+        # `data` is a traced pytree argument, NOT a closure: closed-over arrays get baked into the
+        # program as constants, which duplicates the whole dataset on device (and OOMs TD+mixed).
         params, tgt_params, opt_state, v_params, v_opt_state = carry
         idx = jax.random.randint(rng, (cfg.batch_size,), 0, T)
         boot_params = params if cfg.bootstrap == "online" else tgt_params
         (_, info), (grads, v_grads) = jax.value_and_grad(loss_fn, argnums=(0, 3), has_aux=True)(
-            params, boot_params, idx, v_params
+            params, boot_params, idx, v_params, data
         )
         updates, opt_state = tx.update(grads, opt_state)
         params = optax.apply_updates(params, updates)
@@ -200,7 +202,7 @@ def make_diag(data, cfg, net, hl):
     @jax.jit
     def diag_slice(p, idx):
         z = data.token[idx]
-        qa = net.apply(p, jnp.repeat(z[:, None], data.num_samples, axis=1), data.cand[idx])
+        qa = net.apply(p, jnp.repeat(z[:, None], data.num_samples, axis=1), data.cand_at(idx))
         qa = hl.from_logits(qa) if cfg.num_atoms > 1 else qa
         qa = jnp.min(qa, axis=0)  # ensemble -> [S, N(, P)]
         q_demo = net.apply(p, z[:, None], data.chunk[idx][:, None])
