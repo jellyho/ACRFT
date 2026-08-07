@@ -608,6 +608,8 @@ for a, m in FINAL_ARMS:
             S += sum(t["success"] for t in j[m]["trials"]); V += sum(t["success"] for t in j["vla"]["trials"]); N += len(j[m]["trials"])
     if N:
         _abs_rows += f"<tr><td>{a}</td><td>{S}/{N} ({S / N:.3f})</td><td>{V}/{N} ({V / N:.3f})</td></tr>"
+    else:
+        _abs_rows += f"<tr><td>{a}</td><td colspan=2 class='pending'>평가 대기 (학습 재가동 — td-segv 리포트 참조)</td></tr>"
 entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "진행 중", f"""
 {spec([("공통", "γ0.995 · 100k · b256 · seed0 · mc_floor · z-score · 타깃τ0.005 · IQL τ0.9 · 배포=공통 joint argmax"),
        ("요인", "A 방법×부트스트랩(max/softmax/aqcmax) · B atoms(51/101/201) · C 타깃넷(EMA/online) · D 데이터(mixed/demo)"),
@@ -686,6 +688,99 @@ entry("08-07", "video-gallery", "HUD 롤아웃 비디오 갤러리", "살아있�
 </table>
 """)
 
+# ================================================================== 육하원칙 + 상호 연결
+# 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
+# date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
+META = {
+    "flow": dict(date="2026-08-08", who="워커B(Claude)", where="요약 뷰 — 클러스터 전체",
+        what="프로젝트 전체 타임라인과 현재 위치", how="각 완결 리포트의 결론을 시간축 노드로 요약",
+        why="개별 실험이 어떤 흐름에서 나왔는지 한눈에 보기 위해", links=["v11", "v12", "final"]),
+    "genesis": dict(date="2026-07-30", who="워커B · VLA π0.5@70k 동결 · TD critic v1–v5", where="3090 풀",
+        what="첫 TD critic 세대들과 BoN16 배포의 첫 성적", how="TD 부트스트랩 학습 → BoN 롤아웃 페어드 평가",
+        why="RLT 임베딩 위 가치기반 후보 선택이 성립하는지 첫 검증", links=["vbias", "families"]),
+    "vbias": dict(date="2026-08-01", who="워커B · TD critic", where="3090 풀",
+        what="TD 타깃이 목표거리 d에 따라 갖는 구조적 바이어스 b(d)", how="거리별 Q 잔차 프로브 회귀",
+        why="genesis 적자의 원인 후보를 계통적으로 분리", links=["genesis", "wcurse"]),
+    "families": dict(date="2026-08-02", who="워커B · TD/QC/IQL/AQC critic", where="3090 풀",
+        what="방법 패밀리별 롤아웃 총결산", how="동일 데이터·동일 장면 페어드 비교",
+        why="방법 선택 근거 — TD 적자 확인 후 IQL 전환의 문서화", links=["genesis", "v11"]),
+    "wcurse": dict(date="2026-08-03", who="워커B", where="3090 풀 (프로브)",
+        what="argmax 선택의 winner's curse 정량화", how="후보 Q 분산 분해(상태 vs 후보축) + 두 argmax(후보/프리픽스) 분리",
+        why="BoN이 이득을 못 내는 구조적 이유 규명", links=["vbias", "duel", "aqc"]),
+    "duel": dict(date="2026-08-03", who="워커B · dueling ARQ", where="3090 풀",
+        what="dueling 게이지 자유도로 인한 학습 실패 2회와 해법", how="zero-mean advantage로 (V+c, A−c) 게이지 고정",
+        why="V+A 분해 도입 시 절대 레벨이 유일하게 정의되도록", links=["wcurse"]),
+    "singlefit": dict(date="2026-08-05", who="워커B · TD critic", where="3090 1노드",
+        what="단일 궤적 과적합으로 terminal 처리 검증", how="1궤적 fit 후 Q@goal, corr(Q,mc) 확인",
+        why="--terminal-uses-mc 누락이 학습 전체를 망치던 버그의 최소 재현", links=["ladders", "fullfit"]),
+    "ladders": dict(date="2026-08-05", who="워커B", where="3090 풀 (스윕)",
+        what="데이터 사다리 1→64 에피소드 × objective × γ", how="각 조합 학습 후 fit 지표 격자",
+        why="필요 데이터 규모와 discount 선택 근거", links=["singlefit", "fullfit", "v11"]),
+    "fullfit": dict(date="2026-08-05", who="워커B", where="3090 풀",
+        what="full-data critic 품질 검수", how="fit 지표 + 궤적 시각화 게이트",
+        why="롤아웃 평가 투입 전 최소 품질 게이트", links=["ladders", "highpower"]),
+    "highpower": dict(date="2026-08-05", who="워커B", where="3090 풀 (n↑ 롤아웃)",
+        what="고검정력 롤아웃 판정 (softcand·e70 재현·softmax)", how="시드·트라이얼 수 증대로 CI 폭 축소",
+        why="작은 효과도 걸러낼 검정력 확보", links=["fullfit", "randh", "v11"]),
+    "randh": dict(date="2026-08-06", who="워커B · critic vs 동전던지기", where="3090 풀",
+        what="랜덤 h 대조 실험 — critic의 능동 손실 분리", how="randh 모드 페어드 롤아웃",
+        why="critic 선택이 무작위보다 못한지(능동적 해악) 판정", links=["highpower", "autopsy"]),
+    "aqc": dict(date="2026-08-06", who="워커B · AQC critic", where="3090 풀",
+        what="AQC(베이스라인 보정 argmax) 구현과 demo-only 판정", how="b_h 학습 + z_ε(Q−b) 배포, h-collapse 교정",
+        why="프리픽스 헤드 간 계통 바이어스 제거", links=["wcurse", "v11"]),
+    "autopsy": dict(date="2026-08-06", who="워커B", where="평가 로그 (3090 풀)",
+        what="실패 유형 부검", how="env 술어 단계 로그(stage_flags)로 프로그램적 분류",
+        why="어디서 지는지 — grasp 0%·엔드게임 2/3 — 개선 표적화", links=["randh", "failpipe", "kper"]),
+    "pools": dict(date="2026-08-06", who="워커B", where="평가 JSON 재분석",
+        what="장면 풀이 성공률에 주는 효과", how="한 체크포인트를 풀별로 분해",
+        why="풀 혼동이 ±0.1 흔들던 비교 방법론의 교정", links=["v11", "highpower"]),
+    "failpipe": dict(date="2026-08-06", who="워커B", where="3090 풀",
+        what="실패 롤아웃 수집·주석 파이프라인 + in-dist 장면 재현", how="dump-traj → annotate_rollouts → memmap",
+        why="v12 mixed 데이터의 재료 — 실패를 본 critic 만들기", links=["autopsy", "v12"]),
+    "v11": dict(date="2026-08-07", who="워커B · 4방법 × 16시드", where="3090 풀 (64런)",
+        what="demo-only 공정 비교 완결", how="method-only-diff 체크포인트, in-job 페어드, run-level 95% t-CI",
+        why="사전등록 판정 — TD 확실 해악, IQL/QC/AQC null → 남은 지렛대는 데이터", links=["families", "aqc", "pools", "final"]),
+    "v12": dict(date="2026-08-07", who="워커B · iql/aqc × mixed", where="a6000 풀 (17GB 상주)",
+        what="혼합 데이터 판정 — 밴드 개방과 성공률", how="v11 프로토콜 + held-out 프로브(시드 9100)",
+        why="실패 데이터가 후보 구분을 여는지 — 열림(10–30×) but 성공률 null", links=["failpipe", "v11", "kper", "final"]),
+    "final": dict(date="2026-08-07", who="워커B · 14팔 × 4시드", where="a6000(학습)+3090(평가) 풀",
+        what="전 요인 사전등록 스윕 (방법×부트스트랩×atoms×타깃넷×데이터)", how="공통 레시피 고정, 팔당 4×50 페어드, 동일 장면",
+        why="파편화된 실험을 하나의 정당한 비교로 — 최종 판정", links=["v11", "v12", "td-segv", "video-gallery"]),
+    "td-segv": dict(date="2026-08-08", who="워커B", where="A6000·3090·PRO6000·RTX6000ADA 교차 검증",
+        what="TD+mixed 학습 침묵사의 근본 원인", how="가설 기각 사다리(6단계) + faulthandler + A/B 진단",
+        why="FINAL의 TD 계열 7팔이 전멸하던 인프라 병목 제거", links=["final"]),
+    "kper": dict(date="2026-08-08", who="워커B · VLA 동결", where="a6000 풀 (수집) + 3090 풀 (주석)",
+        what="K-per-scene 데이터 — 주방당 정책시드 3롤아웃", how="--policy-seed 분리, 150주방 × 3, 8샤드 주석",
+        why="장면 정체성 암기 지름길 차단 (혼합결과 주방 45%)", links=["v12", "autopsy"]),
+    "video-gallery": dict(date="2026-08-08", who="워커B", where="HF Space 서빙",
+        what="대표 롤아웃 HUD 비디오", how="팔당 6장면 fvid 잡, 성공/실패 페어 선별",
+        why="숫자 판정을 눈으로 검증 — 밴드·V·commit 패널 동행 확인", links=["v11", "v12", "final"]),
+}
+
+_titles = {e[1]: e[2] for e in ENTRIES}
+
+
+def _decorate(eid, body):
+    m = META.get(eid)
+    if not m:
+        return body
+    w6 = (
+        "<table class='spec w6'>"
+        + "".join(
+            f"<tr><th>{k}</th><td>{m[f]}</td></tr>"
+            for k, f in [("누가", "who"), ("언제", "date"), ("어디서", "where"), ("무엇을", "what"), ("어떻게", "how"), ("왜", "why")]
+        )
+        + "</table>"
+    )
+    links = "".join(
+        f"<span class='xref' data-eid='{l}'>{_titles.get(l, l)}</span>" for l in m.get("links", []) if l in _titles
+    )
+    tail = f"<p class='xrefs'><b>연결된 리포트</b> {links}</p>" if links else ""
+    return w6 + body + tail
+
+
+ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
+
 # ------------------------------------------------------------------ assemble
 dates = list(dict.fromkeys(d for d, *_ in ENTRIES))
 date_btns = "".join(
@@ -739,6 +834,12 @@ th{background:var(--accink)}.spec th{width:110px}.num td:nth-child(n+2){text-ali
 .chip.live{background:#e0e7ff;color:#3730a3}
 .good{color:#15803d}.bad{color:#b91c1c}.missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
 code{background:var(--accink);padding:1px 5px;border-radius:4px}
+h1,h2,h3{font-family:Georgia,'Times New Roman',serif;letter-spacing:-.01em}
+.w6 th{width:64px;font-weight:600}.w6{border-left:3px solid var(--acc)}
+td.pending{color:var(--muted);font-style:italic}
+.xrefs{margin-top:14px;border-top:1px dashed var(--line);padding-top:8px}
+.xref{display:inline-block;border:1px solid var(--acc);color:var(--acc);border-radius:99px;padding:2px 11px;margin:2px 4px 2px 0;font-size:.85em;cursor:pointer}
+.xref:hover{background:var(--accink)}
 """
 js = f"""
 const ND={[len([1 for dd, *_ in ENTRIES if dd == d]) for d in dates]};
@@ -756,6 +857,11 @@ function showExp(i,k){{
   document.getElementById('eb-'+i+'-'+k).classList.add('on');
 }}
 window.addEventListener('load',()=>showDate(0));
+const EIDMAP={{{",".join(f'"{eid}":[{i},{k}]' for i, d in enumerate(dates) for k, eid in enumerate([e[1] for e in ENTRIES if e[0] == d]))}}};
+document.addEventListener('click',e=>{{
+  const x=e.target.closest('.xref'); if(!x) return;
+  const m=EIDMAP[x.dataset.eid]; if(m){{showDate(m[0]);showExp(m[0],m[1]);window.scrollTo(0,0);}}
+}});
 """
 content = (
     f"<h1>RLT critic — 실험 마스터 리포트</h1>"
