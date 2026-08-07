@@ -99,6 +99,11 @@ uv run scripts/train_rlt_critic.py --data data/rlt_critic/PrepareCoffee --kind a
 
 # Evaluate a policy checkpoint (sim rollouts, every checkpoint)
 examples/robocasa/run_eval.sh PrepareCoffee
+
+# Serve a trained checkpoint to a robot / sim client (see "Serving a policy")
+uv run scripts/serve_policy.py --port 8000 policy:checkpoint \
+    --policy.config pi05_robocasa_PrepareCoffee_rlt \
+    --policy.dir checkpoints/pi05_robocasa_PrepareCoffee_rlt/PrepareCoffee_rlt/100000
 ```
 
 ---
@@ -169,6 +174,65 @@ writing `summary.csv` + a plot. Override the config/exp to evaluate an RLT run:
 CONFIG=pi05_robocasa_PrepareCoffee_rlt EXP=PrepareCoffee_rlt examples/robocasa/run_eval.sh PrepareCoffee
 uv run examples/robocasa/plot_eval.py --task PrepareCoffee   # success-rate-vs-checkpoint plot
 ```
+
+---
+
+## Serving a policy
+
+`scripts/serve_policy.py` loads a checkpoint and serves it over a websocket, so a robot (or a
+sim client) can send an observation and get an action chunk back. It speaks openpi's protocol,
+so any openpi client works unchanged.
+
+```bash
+# YAM, relative-joint actions (the default convention)
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_rlt \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s200/100000 \
+    --policy.asset-id jellyho/yam_lego_taxi_s200
+
+# same checkpoint family, absolute joint targets
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_none_rlt \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_none_rlt_s200/100000 \
+    --policy.asset-id jellyho/yam_lego_taxi_s200
+```
+
+It is up when the log reads:
+
+```
+Serving pi05_yam_lego_taxi_rlt: {'action_horizon': 30}
+Creating server (host: ..., ip: ...)
+```
+
+`action_horizon` is read off the train config and sent to the client as metadata, so nobody has
+to hard-code the chunk size per robot. A checkpoint trained at 30 served to a client assuming 16
+raises nothing — it silently throws away half of every chunk.
+
+### `--policy.asset-id`
+
+Norm stats live inside the checkpoint at `assets/<asset_id>/norm_stats.json`, and `asset_id`
+defaults to the data config's `repo_id`. That default does not hold for the data-scaling study:
+each point trains on a different subset of episodes, so it needs its own stats, which is why
+`compute_norm_stats.py` takes `--asset-id` and `train.py` takes the matching
+`--data.assets.asset-id`. Serving has to name the same one.
+
+Get it wrong and it fails at load with the path it looked for, plus what the checkpoint actually
+has:
+
+```
+FileNotFoundError: Norm stats file not found at: .../assets/jellyho/yam_lego_taxi/norm_stats.json
+This checkpoint has norm stats under: jellyho/yam_lego_taxi_s200
+Serve with --policy.asset-id <one of those>, or set AssetsConfig(asset_id=...) in the train config.
+```
+
+Nothing is missing when that happens — the stats are there under a name the loader was not asked
+for. Omit the flag entirely for a checkpoint trained without an `--asset-id` override.
+
+Only the checkpoint step you serve has to be on disk (~13 GB), not the whole run.
 
 ---
 
