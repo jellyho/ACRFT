@@ -39,7 +39,7 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             v_out = v_net.apply(v_params, data.token[next_idx])
             v_next = clamp(v_out[..., 0] if getattr(cfg, "aqc_baseline", False) else v_out)  # [B, P]
         else:
-            # TD: V(s') = max over the stored candidates (and prefixes) of the ensemble-min Q.
+            # TD/CalQL: V(s') = max over the stored candidates (and prefixes) of the ensemble-min Q.
             q = net.apply(
                 tgt_params, jnp.repeat(data.token[next_idx][:, :, None], data.num_samples, 2), data.cand[next_idx]
             )
@@ -81,6 +81,19 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         loss = jnp.sum(per * w) / (n_valid * pred.shape[0] + 1e-8)
 
         info = {}
+        if cfg.objective == "calql":
+            # CO-RFT / CalQL conservative term on the candidate pool: push the 16 sampled chunks
+            # DOWN relative to the demonstrated chunk, per prefix. This is the training-time
+            # candidate-axis signal every inference-time trick failed to fake - logsumexp gives
+            # every candidate a gradient proportional to how loudly it currently outbids the demo.
+            zc = jnp.repeat(data.token[idx][:, None], data.num_samples, axis=1)
+            q_c = net.apply(params, zc, data.cand[idx])
+            q_c = hl.from_logits(q_c) if cfg.num_atoms > 1 else q_c  # [K, B, N, P]
+            q_d = hl.from_logits(pred) if cfg.num_atoms > 1 else pred  # [K, B, P] (pred computed above)
+            lse = jax.nn.logsumexp(q_c / cfg.cql_temp, axis=2) * cfg.cql_temp  # [K, B, P]
+            cql = jnp.sum((lse - q_d) * w) / (n_valid * pred.shape[0] + 1e-8)
+            loss = loss + cfg.cql_alpha * cql
+            info = {"cql": cql, "cand_minus_demo": jnp.mean(jnp.mean(q_c, axis=2) - q_d)}
         if cfg.objective == "iql":
             # Expectile regression: V chases an upper quantile of Q(z, a_demo) - the stand-in for
             # max_a Q that never proposes an action and never takes an arg-max.

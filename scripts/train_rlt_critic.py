@@ -66,21 +66,23 @@ def parse_args():
     obj = ap.add_argument_group("objective")
     obj.add_argument(
         "--objective",
-        choices=["td", "iql"],
+        choices=["td", "iql", "calql"],
         default="td",
         help="td bootstraps max Q over stored candidates; iql bootstraps an expectile-trained V "
         "(no candidate array, no arg-max)",
     )
     obj.add_argument("--expectile", type=float, default=0.7, help="iql: 0.5 = mean, ->1 approaches max_a Q")
     obj.add_argument(
+        "--cql-alpha", type=float, default=1.0, help="calql: weight of the conservative candidate-suppression term"
+    )
+    obj.add_argument("--cql-temp", type=float, default=0.1, help="calql: logsumexp temperature over the 16 candidates")
+    obj.add_argument(
         "--aqc-baseline",
         action="store_true",
         help="iql: also train per-prefix baselines b_h(z) (extra value-net heads) for AQC-style "
         "commit-length selection: score = (Q_h - b_h) / gamma^h at deployment.",
     )
-    obj.add_argument(
-        "--baseline-expectile", type=float, default=0.9, help="expectile for the per-prefix baselines"
-    )
+    obj.add_argument("--baseline-expectile", type=float, default=0.9, help="expectile for the per-prefix baselines")
     obj.add_argument(
         "--dueling",
         action="store_true",
@@ -94,8 +96,9 @@ def parse_args():
     obj.add_argument(
         "--discount",
         type=float,
-        default=None,
-        help="defaults to the annotation's; anything else auto-builds the matching dataset",
+        default=0.995,
+        help="project default 0.995 (2026-08-07); auto-builds the matching dataset variant. "
+        "Pass the annotation's own discount explicitly to opt out.",
     )
 
     trn = ap.add_argument_group("training")
@@ -205,9 +208,7 @@ def main() -> None:
     num_prefixes = 1 if cfg.kind == "qc" else data.chunk.shape[1] // cfg.macro_group_size
     cfg.num_prefixes = num_prefixes
     v_out_dim = 1 + num_prefixes if cfg.aqc_baseline else 1
-    v_net = (
-        _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), out_dim=v_out_dim) if cfg.objective == "iql" else None
-    )
+    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), out_dim=v_out_dim) if cfg.objective == "iql" else None
     v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
     step_fn, tx, tx_v = _training.make_update(data, cfg, net, hl, support, v_net=v_net)
     carry = (params, params, tx.init(params), v_params, tx_v.init(v_params))
