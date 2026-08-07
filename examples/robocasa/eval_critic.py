@@ -169,7 +169,81 @@ def proprio_stats(critic_path):
     return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
 
 
-def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None):
+class DynCommit:
+    """sigma-rule commitment from a phi-space DynV1 ensemble (docs/reports/mbac_design_notes.md).
+
+    Decides HOW FAR to execute the selected chunk: roll the ensemble along it (one forward, one
+    prediction per macro-step) and cut at the first step whose disagreement spikes above
+    tau_mult x the running median of recent per-slot disagreements. The relative rule is the
+    hysteresis: persistent OOD inflates the baseline and commitment recovers, only spikes
+    relative to the current regime cut early. Torch stays on CPU - five d=288 models are
+    negligible next to the VLA and must not contend for the sim's GPU memory.
+    """
+
+    def __init__(self, ensemble_path, tau_mult=2.0, window=64):
+        import collections
+
+        import torch as _t
+
+        self._t = _t
+        ck = _t.load(ensemble_path, map_location="cpu")
+        import sys as _sys
+
+        _sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "scripts"))
+        from train_cheapz_dynamics_v1 import DynV1
+
+        cfg = ck["cfg"]
+        self.stride, self.hist = cfg["stride"], cfg["hist"]
+        self.zmu = np.asarray(ck["zmu"], np.float32)
+        self.zsd = np.asarray(ck["zsd"], np.float32)
+        zdim = len(self.zmu)
+        self.models = []
+        for sd in ck["members"]:
+            act_seg = sd["a_in.weight"].shape[1]
+            m = DynV1(zdim, act_seg, hist=self.hist,
+                      horizon_macro=len(ck["members"][0]["pos"]) - self.hist,
+                      prior_scale=cfg["prior_scale"])
+            m.load_state_dict(sd)
+            m.eval()
+            self.models.append(m)
+        self.hm = self.models[0].hm
+        self.tau_mult = tau_mult
+        self.recent = collections.deque(maxlen=window)
+        self.zbuf = collections.deque(maxlen=32)  # (sim_step, standardized z) at past replans
+        self.simstep = 0  # advanced by the policy fn; reset per trial via reset()
+
+    def reset(self):
+        # per-trial: history must not leak across scene resets. The sigma baseline (self.recent)
+        # deliberately survives - it calibrates the model's noise floor, not the episode.
+        self.zbuf.clear()
+        self.simstep = 0
+
+    def commit(self, z_phi, chunk, sim_step):
+        zn = ((np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd)
+        self.zbuf.append((sim_step, zn))
+        # history slots at t-(hist-1)s .. t: nearest recorded replan-time z per slot (the model was
+        # trained on true stride-s history; replans land every 2-16 steps so nearest is close).
+        slots = []
+        for j in range(self.hist - 1, -1, -1):
+            want = sim_step - j * self.stride
+            near = min(self.zbuf, key=lambda p: abs(p[0] - want))
+            slots.append(near[1])
+        t = self._t
+        zh = t.from_numpy(np.stack(slots)[None])                       # [1, hist, z]
+        H, A = chunk.shape
+        a = t.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32).reshape(1, self.hm, self.stride * A))
+        with t.no_grad():
+            mus = t.stack([m(zh, a)[0] for m in self.models])          # [M,1,hm,z]
+        sig = t.var(mus, dim=0).sum(-1)[0].numpy()                     # [hm]
+        base = float(np.median(self.recent)) if self.recent else float(np.median(sig))
+        self.recent.extend(sig.tolist())
+        over = sig > self.tau_mult * base
+        k = int(np.argmax(over)) + 1 if over.any() else self.hm
+        return max(1, k) * self.stride, sig
+
+
+def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None,
+                   dyn=None):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
 
@@ -184,8 +258,16 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
 
     def fn(element):
         z, cand = vla.token_and_candidates(element)
+        z_phi = np.asarray(z, np.float32)  # pre-proprio: the dyn ensemble lives in phi space
         if mode == "vla":
             return cand[0], vla.H, None
+        if mode == "mbacv":
+            # commitment-only ablation: the VLA's own first sample, cut by the sigma rule. Isolates
+            # the adaptive-commitment axis from selection entirely.
+            n_exec, sig = dyn.commit(z_phi, cand[0], dyn.simstep)
+            dyn.simstep += n_exec
+            k = n_exec // dyn.stride - 1
+            return cand[0], n_exec, Replan(sig[None], cand, 0, k, n_exec, float(sig[k]))
         if mode == "rand":
             # The control the other modes were missing. `bon` beating `vla` would only show that
             # picking a different sample helps — not that the CRITIC picked it. Drawing uniformly
@@ -219,6 +301,13 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
             choice = int(np.argmax(flat))
         if mode == "bon":
             i, pp = choice, q.shape[1] - 1
+        elif mode == "mbac":
+            # selection = critic at full horizon (as bon); commitment = dyn sigma rule.
+            i = int(np.argmax(q[:, -1]))
+            n_exec, _sig = dyn.commit(z_phi, cand[i], dyn.simstep)
+            dyn.simstep += n_exec
+            pp = min(n_exec // dyn.stride - 1, q.shape[1] - 1)
+            return cand[i], n_exec, Replan(q, cand, i, int(pp), n_exec, float(q[i, -1]))
         elif mode == "prefix":
             i, pp = 0, choice
         else:
@@ -242,6 +331,7 @@ def build_policy(
     softmax_temp=0.0,
     model_overrides=None,
     vla=None,
+    dyn=None,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
 
@@ -265,13 +355,13 @@ def build_policy(
         model_overrides=model_overrides,
     )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
-    if mode == "vla":
-        return make_policy_fn(vla, None, None, mode=mode, **kw), vla.H, None
+    if mode in ("vla", "mbacv"):
+        return make_policy_fn(vla, None, None, mode=mode, dyn=dyn, **kw), vla.H, None
     score, _, macro = _critic.load_trained(critic_path, action_dim=vla.raw_dim, horizon=vla.H)
     pro = proprio_stats(critic_path)
     if pro is not None:
         logger.info(f"critic reads proprio: +{len(pro[0])} dims appended to the token")
-    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, proprio=pro, **kw), vla.H, macro
+    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, proprio=pro, dyn=dyn, **kw), vla.H, macro
 
 
 def main() -> None:
@@ -286,12 +376,18 @@ def main() -> None:
     ap.add_argument("--phi", type=pathlib.Path, default=None,
                     help="HILP phi readout (phi.pt): apply phi to the extracted token before the "
                     "critic, for critics trained on the phi space.")
+    ap.add_argument("--dyn", type=pathlib.Path, default=None,
+                    help="DynV1 ensemble (ensemble_v1.pt) trained on the SAME phi space as --phi; "
+                    "required by the mbac/mbacv modes (sigma-rule commitment).")
+    ap.add_argument("--dyn-tau", type=float, default=2.0,
+                    help="Cut when a macro-step's ensemble disagreement exceeds tau x the running "
+                    "median. Higher = longer commitment.")
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
         "--modes",
         nargs="+",
         default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "vla"],
+        choices=["critic", "bon", "prefix", "rand", "vla", "mbac", "mbacv"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
@@ -334,8 +430,10 @@ def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
     args = ap.parse_args()
 
-    if "vla" not in args.modes and args.critic is None:
-        ap.error("--critic is required unless --modes vla")
+    if args.critic is None and any(m in args.modes for m in ("critic", "bon", "prefix", "rand", "mbac")):
+        ap.error("--critic is required for critic/bon/prefix/rand/mbac modes")
+    if args.dyn is None and any(m in args.modes for m in ("mbac", "mbacv")):
+        ap.error("--dyn is required for the mbac/mbacv modes")
 
     if args.path_scale is None:
         import action_overlay as _ov0
@@ -373,6 +471,12 @@ def main() -> None:
         shared_vla.token_transform = _phi_fn
         logger.info(f"phi adapter active: token {_w0.shape[1]} -> {_w2.shape[0]}")
 
+    dyn_commit = None
+    if args.dyn is not None:
+        dyn_commit = DynCommit(args.dyn, tau_mult=args.dyn_tau)
+        logger.info(f"dyn commitment active: stride {dyn_commit.stride}, hist {dyn_commit.hist}, "
+                    f"tau x{dyn_commit.tau_mult}")
+
     for mode in args.modes:
         policy, H, macro = build_policy(
             args.config,
@@ -386,6 +490,7 @@ def main() -> None:
             model_overrides=_vla_ov,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
+            dyn=dyn_commit,
         )
         trace, frames, box = [], [], {"trial": 0, "proj": None}
         record = args.video_dir is not None
@@ -440,6 +545,8 @@ def main() -> None:
             logger.info(
                 f"[{_mode}] trial {trial + 1}/{args.num_trials}: {'SUCCESS' if success else 'failure'} in {steps} steps"
             )
+            if dyn_commit is not None:
+                dyn_commit.reset()
             if _rec and trial < args.num_videos and _frames:
                 import imageio
 
