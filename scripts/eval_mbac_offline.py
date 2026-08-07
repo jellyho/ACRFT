@@ -46,7 +46,9 @@ def main():
     meta = json.loads((args.annot / "meta.json").read_text())
     n, H, A = meta["num_frames"], meta["horizon"], meta["action_dim"]
     z_raw = np.load(args.z_dir / "z.npy").astype(np.float32)
-    ck = torch.load(args.ensemble, map_location="cpu")
+    # weights_only=False: the trainer stores zmu/zsd as numpy arrays, which the torch>=2.6
+    # weights-only unpickler rejects. The file is our own artifact, not an untrusted download.
+    ck = torch.load(args.ensemble, map_location="cpu", weights_only=False)
     zmu, zsd = ck["zmu"], ck["zsd"]
     cfg = ck["cfg"]
     s, hist, M = cfg["stride"], cfg["hist"], cfg["members"]

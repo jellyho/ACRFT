@@ -186,7 +186,9 @@ class DynCommit:
         import torch as _t
 
         self._t = _t
-        ck = _t.load(ensemble_path, map_location="cpu")
+        # weights_only=False: the trainer stores zmu/zsd as numpy arrays (rejected by the
+        # torch>=2.6 weights-only unpickler); the ensemble is our own artifact.
+        ck = _t.load(ensemble_path, map_location="cpu", weights_only=False)
         import sys as _sys
 
         _sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "scripts"))
