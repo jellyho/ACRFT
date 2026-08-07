@@ -39,13 +39,34 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             v_out = v_net.apply(v_params, data.token[next_idx])
             v_next = clamp(v_out[..., 0] if getattr(cfg, "aqc_baseline", False) else v_out)  # [B, P]
         else:
-            # TD/CalQL: V(s') = max over the stored candidates (and prefixes) of the ensemble-min Q.
+            # TD/CalQL: V(s') from the stored candidates via the chosen bootstrap OPERATOR.
             q = net.apply(
                 tgt_params, jnp.repeat(data.token[next_idx][:, :, None], data.num_samples, 2), data.cand[next_idx]
             )
             q = hl.from_logits(q) if cfg.num_atoms > 1 else q  # [K, B, P, N(, P')]
             q = jnp.min(q, axis=0)
-            v_next = clamp(jnp.max(q.reshape(*landing.shape, -1), axis=-1))
+            flat = q.reshape(*landing.shape, -1)  # [B, P, N*P']
+            op = getattr(cfg, "boot_op", "max")
+            if op == "softmax":
+                # Smooth max: T*logsumexp(q/T) - shrinks the winner's-curse tilt of the hard max
+                # while staying an upper bound on the mean; T -> 0 recovers max.
+                t = cfg.boot_temp
+                v_next = clamp(t * jax.nn.logsumexp(flat / t, axis=-1) - t * jnp.log(flat.shape[-1]))
+            elif op == "aqcmax":
+                # AQC-style max: subtract each prefix head's own baseline b_h before the arg-max, so
+                # no head wins on its systematic bias; add the winner's baseline back to stay a value.
+                b = v_net.apply(v_params, data.token[next_idx])[..., 1:]  # [B, P, P']
+                qp = q if q.ndim == 4 else q[..., None]  # [B, P, N, P']
+                adv = qp - b[:, :, None, :]
+                a_flat = adv.reshape(*landing.shape, -1)
+                idx_best = jnp.argmax(a_flat, axis=-1)
+                h_best = idx_best % qp.shape[-1]
+                v_next = clamp(
+                    jnp.take_along_axis(a_flat, idx_best[..., None], -1)[..., 0]
+                    + jnp.take_along_axis(b, h_best[..., None], -1)[..., 0]
+                )
+            else:
+                v_next = clamp(jnp.max(flat, axis=-1))
 
         # A terminal state's value is exactly its own reward - substitute the known value.
         v_next = jnp.where(data.done[next_idx] > 0, data.reward[next_idx], v_next)
@@ -81,6 +102,18 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         loss = jnp.sum(per * w) / (n_valid * pred.shape[0] + 1e-8)
 
         info = {}
+        if cfg.objective != "iql" and getattr(cfg, "aqc_baseline", False) and v_net is not None:
+            # TD + aqcmax bootstrap: train the per-prefix baselines here too (same expectile recipe
+            # as the IQL/AQC path) - the bootstrap operator above reads heads 1..P.
+            q_demo_t = net.apply(jax.lax.stop_gradient(tgt_params), data.token[idx], data.chunk[idx])
+            q_demo_t = hl.from_logits(q_demo_t) if cfg.num_atoms > 1 else q_demo_t
+            q_demo_t = jnp.min(q_demo_t, axis=0)
+            b_all = v_net.apply(v_params, data.token[idx])[..., 1:]
+            u_b = jax.lax.stop_gradient(q_demo_t) - b_all
+            w_b = jnp.abs(cfg.baseline_expectile - (u_b < 0).astype(jnp.float32))
+            b_loss = jnp.sum(w_b * jnp.square(u_b) * valid) / n_valid
+            loss = loss + b_loss
+            info |= {"b_loss": b_loss}
         if cfg.objective == "calql":
             # CO-RFT / CalQL conservative term on the candidate pool: push the 16 sampled chunks
             # DOWN relative to the demonstrated chunk, per prefix. This is the training-time

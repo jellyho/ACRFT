@@ -113,6 +113,14 @@ def parse_args():
         help="which params score the bootstrap (online = no target network)",
     )
     trn.add_argument("--target-tau", type=float, default=0.005)
+    trn.add_argument(
+        "--boot-op",
+        choices=["max", "softmax", "aqcmax"],
+        default="max",
+        help="td/calql: bootstrap operator over the candidate pool - hard max, smooth logsumexp max, "
+        "or AQC-style baseline-corrected max (trains per-prefix baseline heads alongside)",
+    )
+    trn.add_argument("--boot-temp", type=float, default=0.05, help="softmax bootstrap temperature")
 
     arch = ap.add_argument_group("architecture")
     arch.add_argument("--kind", choices=["qc", "arq"], default="arq")
@@ -207,8 +215,14 @@ def main() -> None:
 
     num_prefixes = 1 if cfg.kind == "qc" else data.chunk.shape[1] // cfg.macro_group_size
     cfg.num_prefixes = num_prefixes
+    if cfg.boot_op == "aqcmax":
+        cfg.aqc_baseline = True
     v_out_dim = 1 + num_prefixes if cfg.aqc_baseline else 1
-    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), out_dim=v_out_dim) if cfg.objective == "iql" else None
+    v_net = (
+        _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), out_dim=v_out_dim)
+        if (cfg.objective == "iql" or cfg.boot_op == "aqcmax")
+        else None
+    )
     v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
     step_fn, tx, tx_v = _training.make_update(data, cfg, net, hl, support, v_net=v_net)
     carry = (params, params, tx.init(params), v_params, tx_v.init(v_params))
