@@ -583,6 +583,37 @@ entry(
 """,
 )
 
+
+# =========================================================== 08-07 FINAL
+FINAL_ARMS = [
+    ("td_max", "critic"), ("td_soft", "critic"), ("td_aqcmax", "critic"), ("iql", "critic"), ("qc", "critic"),
+    ("td_max_a101", "critic"), ("td_max_a201", "critic"), ("iql_a101", "critic"), ("iql_a201", "critic"),
+    ("td_max_online", "critic"), ("iql_online", "critic"),
+    ("td_max_demo", "critic"), ("iql_demo", "critic"), ("qc_demo", "critic"),
+]
+_frows = "".join(ci_row(a, run_level(f"final/{a}", m, ("f",))) for a, m in FINAL_ARMS)
+_abs_rows = ""
+for a, m in FINAL_ARMS:
+    import glob as _g
+    S = V = N = 0
+    for f in sorted(_g.glob(str(C / f"critic_runs/final/{a}/rollout/f_s*.json"))):
+        j = json.loads(pathlib.Path(f).read_text())
+        if m in j:
+            S += sum(t["success"] for t in j[m]["trials"]); V += sum(t["success"] for t in j["vla"]["trials"]); N += len(j[m]["trials"])
+    if N:
+        _abs_rows += f"<tr><td>{a}</td><td>{S}/{N} ({S / N:.3f})</td><td>{V}/{N} ({V / N:.3f})</td></tr>"
+entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "진행 중", f"""
+{spec([("공통", "γ0.995 · 100k · b256 · seed0 · mc_floor · z-score · 타깃τ0.005 · IQL τ0.9 · 배포=공통 joint argmax"),
+       ("요인", "A 방법×부트스트랩(max/softmax/aqcmax) · B atoms(51/101/201) · C 타깃넷(EMA/online) · D 데이터(mixed/demo)"),
+       ("평가", "arm당 시드 4개(5000–5300)×50장면 잡내 페어드 — 전 arm 동일 장면이라 arm 간도 페어드 · arm당 HUD 비디오 6장면"),
+       ("판정", "사전 등록: 95% t-CI(n=4)가 0을 벗어나는가 · 절대 성공률 병기")])}
+<h3>상대 성적 (arm − 잡내 vla)</h3>
+<table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_frows}</table>
+<h3>절대 성공률</h3>
+<table class='num'><tr><th>arm</th><th>arm 성공</th><th>잡내 vla 성공</th></tr>{_abs_rows if _abs_rows else "<tr><td colspan=3>평가 도착 대기</td></tr>"}</table>
+<p><b>해석(작성 중).</b> 도착분이 쌓이는 대로 요인별 forest plot과 실패 단계 분포, 비디오 갤러리를 이 탭에 추가한다.</p>
+""")
+
 # ------------------------------------------------------------------ assemble
 dates = list(dict.fromkeys(d for d, *_ in ENTRIES))
 date_btns = "".join(
