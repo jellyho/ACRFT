@@ -189,16 +189,14 @@ uv run scripts/serve_policy.py \
     --port 8000 \
     policy:checkpoint \
     --policy.config pi05_yam_lego_taxi_rlt \
-    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s200/100000 \
-    --policy.asset-id jellyho/yam_lego_taxi_s200
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s200/100000
 
 # same checkpoint family, absolute joint targets
 uv run scripts/serve_policy.py \
     --port 8000 \
     policy:checkpoint \
     --policy.config pi05_yam_lego_taxi_none_rlt \
-    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_none_rlt_s200/100000 \
-    --policy.asset-id jellyho/yam_lego_taxi_s200
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_none_rlt_s200/100000
 ```
 
 It is up when the log reads:
@@ -212,25 +210,33 @@ Creating server (host: ..., ip: ...)
 to hard-code the chunk size per robot. A checkpoint trained at 30 served to a client assuming 16
 raises nothing — it silently throws away half of every chunk.
 
-### `--policy.asset-id`
+### `--policy.asset-id` (usually unnecessary)
 
 Norm stats live inside the checkpoint at `assets/<asset_id>/norm_stats.json`, and `asset_id`
 defaults to the data config's `repo_id`. That default does not hold for the data-scaling study:
-each point trains on a different subset of episodes, so it needs its own stats, which is why
+each point trains on a different subset of episodes and so needs its own stats, which is why
 `compute_norm_stats.py` takes `--asset-id` and `train.py` takes the matching
-`--data.assets.asset-id`. Serving has to name the same one.
+`--data.assets.asset-id`. Nothing in the checkpoint records which name was used, so serving
+cannot derive it.
 
-Get it wrong and it fails at load with the path it looked for, plus what the checkpoint actually
-has:
+It does not have to. A save writes exactly one `asset_id`, so a checkpoint has exactly one set
+of norm stats, and when the config's name does not match, the only one present is the only one
+it could have meant. Loading takes it and says so:
 
 ```
-FileNotFoundError: Norm stats file not found at: .../assets/jellyho/yam_lego_taxi/norm_stats.json
-This checkpoint has norm stats under: jellyho/yam_lego_taxi_s200
-Serve with --policy.asset-id <one of those>, or set AssetsConfig(asset_id=...) in the train config.
+WARNING No norm stats under asset_id 'jellyho/yam_lego_taxi'; using the only ones this
+        checkpoint has, at .../assets/jellyho/yam_lego_taxi_s200.
 ```
 
-Nothing is missing when that happens — the stats are there under a name the loader was not asked
-for. Omit the flag entirely for a checkpoint trained without an `--asset-id` override.
+So the commands above work without the flag. Pass it to pin the choice and silence the warning,
+or when a checkpoint really does carry several — which takes deliberately saving twice into one
+step directory. Then the choice matters, and guessing would quietly normalise with the wrong
+statistics rather than fail, so loading refuses and lists them:
+
+```
+FileNotFoundError: No norm stats under asset_id 'jellyho/yam_lego_taxi', and this checkpoint
+has several to choose from: jellyho/a, jellyho/b. Pass the right one (serving: --policy.asset-id).
+```
 
 Only the checkpoint step you serve has to be on disk (~13 GB), not the whole run.
 

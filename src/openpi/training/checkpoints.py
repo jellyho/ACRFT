@@ -109,9 +109,47 @@ def restore_state(
 
 def load_norm_stats(assets_dir: epath.Path | str, asset_id: str) -> dict[str, _normalize.NormStats] | None:
     norm_stats_dir = epath.Path(assets_dir) / asset_id
+    if not (norm_stats_dir / "norm_stats.json").exists():
+        norm_stats_dir = _only_norm_stats_dir(epath.Path(assets_dir), asset_id)
     norm_stats = _normalize.load(norm_stats_dir)
     logging.info(f"Loaded norm stats from {norm_stats_dir}")
     return norm_stats
+
+
+def _only_norm_stats_dir(assets_dir: epath.Path, wanted: str) -> epath.Path:
+    """Fall back to the checkpoint's own asset dir when it is the only one there.
+
+    ``asset_id`` defaults to the data config's ``repo_id``, and nothing in a checkpoint records
+    which one it was saved under -- so a run that overrode it (the data-scaling study gives each
+    point its own stats) writes to a name serving has no way to derive. The stats are present and
+    correct; only the name disagrees.
+
+    When exactly one asset dir in the checkpoint has norm stats, that ambiguity is not real: it is
+    the only thing the loader could have meant, so take it and say so. With several, the choice
+    matters and guessing could silently normalise with the wrong statistics, so raise and list
+    them instead.
+    """
+    # epath refuses "**" (on GCS it would fan out into thousands of RPCs), and an asset_id is at
+    # most "<org>/<name>", so enumerate the three depths it can actually sit at.
+    found = sorted({
+        p.parent
+        for pattern in ("norm_stats.json", "*/norm_stats.json", "*/*/norm_stats.json")
+        for p in assets_dir.glob(pattern)
+    })
+    if len(found) == 1:
+        logging.warning(
+            "No norm stats under asset_id %r; using the only ones this checkpoint has, at %s. "
+            "Pass the matching asset_id explicitly to silence this.",
+            wanted, found[0],
+        )
+        return found[0]
+    if len(found) > 1:
+        names = ", ".join(str(p.relative_to(assets_dir)) for p in found)
+        raise FileNotFoundError(
+            f"No norm stats under asset_id {wanted!r}, and this checkpoint has several to "
+            f"choose from: {names}. Pass the right one (serving: --policy.asset-id)."
+        )
+    return assets_dir / wanted  # nothing anywhere: let the loader report the path it wanted
 
 
 class Callback(Protocol):
