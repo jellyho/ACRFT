@@ -330,6 +330,28 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_
                 "v_minus_q": jnp.sum((v - qd) * valid) / jnp.maximum(jnp.sum(valid), 1.0),
             }
 
+        if cfg.cql_alpha > 0:
+            # Push down candidate-chunk Q relative to the demonstrated chunk, clamped at mc_return
+            # (Cal-QL): the ONLY term in this file that gives Q an action-contrast on success-only
+            # data. Candidates come from the stored per-frame policy samples.
+            n = min(cfg.cql_candidates, data.cand.shape[1])
+            k_cql = jax.random.fold_in(rng, 13)
+            sel = jnp.argsort(jax.random.uniform(k_cql, (idx.shape[0], data.cand.shape[1])), axis=-1)[:, :n]
+            a_c = jnp.take_along_axis(data.cand[idx], sel[:, :, None, None], axis=1)  # [B, n, H, A]
+            z_c = jnp.repeat(data.token[idx][:, None], n, axis=1)  # [B, n, D]
+            q_c = net.apply(params, z_c, a_c)  # [K, B, n(, P)(, atoms)]
+            q_c = hl.from_logits(q_c) if cfg.num_atoms > 1 else q_c
+            if cfg.kind == "qc":
+                q_c = q_c[..., None]  # [K, B, n, 1]
+            mc = data.mc_return[idx][None, :, None, None]
+            q_c = jnp.maximum(q_c, mc)  # calibration clamp
+            lse = jax.nn.logsumexp(q_c, axis=2) - jnp.log(n)  # [K, B, P]
+            q_data = hl.from_logits(pred) if cfg.num_atoms > 1 else pred  # [K, B, P]
+            cql_gap = (lse - q_data) * w
+            cql_loss = jnp.sum(cql_gap) / (jnp.sum(w) * pred.shape[0] + 1e-8)
+            loss = loss + cfg.cql_alpha * cql_loss
+            extra = extra | {"cql_gap": jnp.sum(cql_gap) / (jnp.sum(w) * pred.shape[0] + 1e-8)}
+
         return loss, extra | {
             "loss": loss,
             "q_mean": q_mean,
@@ -405,6 +427,21 @@ def main() -> None:
         "bias of maxing over N*P noisy estimates (measured on the td runs: V over-estimated by "
         "+0.025 far from the goal, ~0 near it, which is what tilts the per-prefix targets).",
     )
+    ap.add_argument(
+        "--cql-alpha",
+        type=float,
+        default=0.0,
+        help="CQL push-down: penalize logsumexp of Q over stored candidate chunks minus Q of the "
+        "demonstrated chunk. THE action-contrast term: success-only data has no bad outcomes, so "
+        "without it Q degenerates to a state-value (measured: candidate spread ~0.001, best-of-N "
+        "a no-op) and the argmax exploits extrapolation noise (V-GPS Tab.10: IQL ranking dies at "
+        "N>10, Cal-QL survives to 50). Calibrated: the push-down is clamped at the frame's "
+        "mc_return so it never drives Q below what the data proved achievable (Cal-QL).",
+    )
+    ap.add_argument("--cql-candidates", type=int, default=4,
+                    help="candidates per step in the CQL term (cost: extra forward x this).")
+    ap.add_argument("--layernorm-v", action="store_true",
+                    help="LayerNorm inside the V-net hidden layers (RLPD stabilizer).")
     ap.add_argument(
         "--expectile",
         type=float,
@@ -595,7 +632,7 @@ def main() -> None:
     act_scale = jnp.std(data.cand.reshape(-1, data.cand.shape[-1]), axis=0)[None, None, None, None, :]
     # An empty pytree under --objective td: the V network is built only when something reads it, but
     # it still occupies its slot in the carry so both objectives compile to the same scan signature.
-    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims)) if cfg.objective == "iql" else None
+    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), use_ln=cfg.layernorm_v) if cfg.objective == "iql" else None
     v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
     if v_net is not None:
         logger.info(

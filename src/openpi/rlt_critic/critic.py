@@ -32,9 +32,14 @@ import jax
 import jax.numpy as jnp
 
 
-def _mlp(x, dims, *, out_dim):
+def _mlp(x, dims, *, out_dim, use_ln: bool = False):
+    # use_ln: LayerNorm after each hidden Dense (RLPD's stabilizer - bounds Q extrapolation off the
+    # narrow demo manifold, which is exactly our data). Off by default so old checkpoints load.
     for d in dims:
-        x = nn.gelu(nn.Dense(d)(x))
+        h = nn.Dense(d)(x)
+        if use_ln:
+            h = nn.LayerNorm()(h)
+        x = nn.gelu(h)
     return nn.Dense(out_dim)(x)
 
 
@@ -149,10 +154,11 @@ class ValueNet(nn.Module):
     """
 
     hidden_dims: tuple[int, ...] = (512, 512, 512)
+    use_ln: bool = False
 
     @nn.compact
     def __call__(self, obs):
-        return jnp.squeeze(_mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=1), -1)  # [...]
+        return jnp.squeeze(_mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=1, use_ln=self.use_ln), -1)  # [...]
 
 
 class Ensemble(nn.Module):
