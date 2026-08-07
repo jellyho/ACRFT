@@ -28,6 +28,12 @@ class Checkpoint:
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
     dir: str
+    # Which assets dir inside the checkpoint holds this run's norm stats, when it is not the
+    # config's default (`asset_id or repo_id`). The data-scaling study needs this: each point
+    # trains on a different subset, so it computes and trains with its own `--asset-id`, and
+    # serving has to ask for the same one. Without it a scaling checkpoint fails to load with
+    # "Norm stats file not found" while the stats sit right there under their own name.
+    asset_id: str | None = None
 
 
 @dataclasses.dataclass
@@ -85,6 +91,16 @@ def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
     match args.policy:
         case Checkpoint():
             train_config = _config.get_config(args.policy.config)
+            if args.policy.asset_id is not None:
+                # Same override compute_norm_stats and train already take, so all three stages
+                # can name the same assets dir.
+                train_config = dataclasses.replace(
+                    train_config,
+                    data=dataclasses.replace(
+                        train_config.data,
+                        assets=dataclasses.replace(train_config.data.assets, asset_id=args.policy.asset_id),
+                    ),
+                )
             return (
                 _policy_config.create_trained_policy(train_config, args.policy.dir, default_prompt=args.default_prompt),
                 train_config,
