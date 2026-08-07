@@ -559,7 +559,7 @@ def main() -> None:
         on_transition = None
         if args.dump_traj is not None:
             args.dump_traj.mkdir(parents=True, exist_ok=True)
-            _tb = {"imgs": [], "wrist": [], "right": [], "states": [], "actions": [], "trial": 0}
+            _tb = {"imgs": [], "wrist": [], "right": [], "states": [], "actions": [], "stages": [], "trial": 0}
 
             def on_transition(obs, action, step, *, _tb=_tb, _mode=mode):
                 import io as _io
@@ -577,6 +577,7 @@ def main() -> None:
                     buf.append(b.getvalue())
                 _tb["states"].append(np.asarray(el["observation/state"], np.float32))
                 _tb["actions"].append(np.asarray(action, np.float32))
+                _tb.setdefault("stages", []).append(_ro.stage_flags(env))
 
             _orig_on_trial = on_trial
 
@@ -589,6 +590,7 @@ def main() -> None:
                     right=np.array(_tb["right"], dtype=object),
                     states=np.stack(_tb["states"]),
                     actions=np.stack(_tb["actions"]),
+                    stages=np.array(_tb.get("stages", []), dtype=object),
                     success=bool(success),
                     steps=int(steps),
                     task=args.task,
@@ -597,7 +599,7 @@ def main() -> None:
                     prompt=str(env.get_ep_meta().get("lang", args.task)),
                 )
                 logger.info(f"  traj -> {f.name} ({steps} steps, {'succ' if success else 'FAIL'})")
-                for k in ("imgs", "wrist", "right", "states", "actions"):
+                for k in ("imgs", "wrist", "right", "states", "actions", "stages"):
                     _tb[k].clear()
                 if _prev is not None:
                     _prev(trial, success, steps)
