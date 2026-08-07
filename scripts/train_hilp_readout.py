@@ -15,6 +15,8 @@ ap.add_argument("--steps", type=int, default=30000)
 ap.add_argument("--gamma", type=float, default=0.98)
 ap.add_argument("--tau", type=float, default=0.9)
 ap.add_argument("--dim", type=int, default=128)
+ap.add_argument("--heldout-frac", type=float, default=0.0,
+                help="fraction of EPISODES excluded from TD training (generalization check)")
 ap.add_argument("--seed", type=int, default=0)
 a = ap.parse_args()
 
@@ -30,6 +32,14 @@ eps_u, starts = np.unique(ep, return_index=True)
 ends = np.r_[starts[1:], n]
 ep_end = np.zeros(n, dtype=np.int64)
 for e,s,t in zip(eps_u, starts, ends): ep_end[s:t] = t-1
+held = np.array([], dtype=eps_u.dtype)
+train_mask = np.ones(n, dtype=bool)
+if a.heldout_frac > 0:
+    perm = rng.permutation(eps_u)
+    held = perm[: max(1, int(len(eps_u) * a.heldout_frac))]
+    train_mask = ~np.isin(ep, held)
+    print(f"holding out {len(held)} episodes from TD training", flush=True)
+train_rows = np.flatnonzero(train_mask)
 
 phi = nn.Sequential(nn.Linear(D,256), nn.GELU(), nn.Linear(256,a.dim)).to(dev)
 tgt = nn.Sequential(nn.Linear(D,256), nn.GELU(), nn.Linear(256,a.dim)).to(dev)
@@ -39,11 +49,11 @@ opt = torch.optim.AdamW(phi.parameters(), lr=3e-4, weight_decay=1e-5)
 
 for step in range(a.steps):
     B = 512
-    s = rng.integers(0, n-1, B); s = np.where(s+1 <= ep_end[s], s, s-1)
+    s = rng.choice(train_rows, B); s = np.where(s+1 <= ep_end[s], s, s-1)
     nx = s+1
     u = rng.random(B)
     fut = np.minimum(s + rng.geometric(1-a.gamma, B), ep_end[s])
-    g = np.where(u<0.2, nx, np.where(u<0.7, fut, rng.integers(0,n,B)))
+    g = np.where(u<0.2, nx, np.where(u<0.7, fut, rng.choice(train_rows, B)))
     si,ni,gi = (torch.from_numpy(x).to(dev) for x in (s,nx,g))
     v  = -torch.norm(phi(z_t[si]) - phi(z_t[gi]), dim=-1)
     with torch.no_grad():
@@ -63,4 +73,5 @@ torch.save(phi.state_dict(), a.out/"phi.pt")
 with torch.no_grad():
     ph = np.concatenate([phi(z_t[i:i+8192]).cpu().numpy() for i in range(0,n,8192)])
 np.save(a.out/"z.npy", ph)  # probe scripts read z.npy — phi IS the space here
+np.save(a.out/"held_episodes.npy", held)
 print("saved phi-space as z.npy for probing")
