@@ -220,6 +220,19 @@ class DynCommit:
         self.zbuf.clear()
         self.simstep = 0
 
+    def sigma_candidates(self, z_phi, cands):
+        """One-macro-step disagreement per candidate [N]. E3 measured binding PEAKS at one
+        macro-step (.837 at k=4), so the veto only needs the first slot - and one batched forward
+        over all N candidates costs the same as one chunk."""
+        zn = ((np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd)
+        t = self._t
+        N, H, A = cands.shape
+        zh = t.from_numpy(np.tile(zn[None, None], (N, self.hist, 1)))
+        a = t.from_numpy(np.ascontiguousarray(cands, dtype=np.float32).reshape(N, self.hm, self.stride * A))
+        with t.no_grad():
+            mus = t.stack([m(zh, a)[0] for m in self.models])      # [M,N,hm,z]
+        return t.var(mus, dim=0).sum(-1)[:, 0].numpy()             # [N] first-slot sigma
+
     def commit(self, z_phi, chunk, sim_step):
         zn = ((np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd)
         self.zbuf.append((sim_step, zn))
@@ -303,9 +316,17 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
             choice = int(np.argmax(flat))
         if mode == "bon":
             i, pp = choice, q.shape[1] - 1
-        elif mode == "mbac":
+        elif mode in ("mbac", "mbacf"):
             # selection = critic at full horizon (as bon); commitment = dyn sigma rule.
-            i = int(np.argmax(q[:, -1]))
+            # mbacf first vetoes the high-sigma half of the candidates: E2 measured that one-step
+            # disagreement alone tells behaviourally consistent chunks from inconsistent ones
+            # (binding .817), so the critic only ranks chunks the model recognises - bounding how
+            # far the arg-max can wander into exploitable actions.
+            qsel = np.array(q[:, -1])
+            if mode == "mbacf":
+                sig_c = dyn.sigma_candidates(z_phi, cand)
+                qsel[sig_c > np.median(sig_c)] = -np.inf
+            i = int(np.argmax(qsel))
             n_exec, _sig = dyn.commit(z_phi, cand[i], dyn.simstep)
             dyn.simstep += n_exec
             pp = min(n_exec // dyn.stride - 1, q.shape[1] - 1)
@@ -389,7 +410,7 @@ def main() -> None:
         "--modes",
         nargs="+",
         default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "vla", "mbac", "mbacv"],
+        choices=["critic", "bon", "prefix", "rand", "vla", "mbac", "mbacv", "mbacf"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
@@ -432,9 +453,9 @@ def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
     args = ap.parse_args()
 
-    if args.critic is None and any(m in args.modes for m in ("critic", "bon", "prefix", "rand", "mbac")):
+    if args.critic is None and any(m in args.modes for m in ("critic", "bon", "prefix", "rand", "mbac", "mbacf")):
         ap.error("--critic is required for critic/bon/prefix/rand/mbac modes")
-    if args.dyn is None and any(m in args.modes for m in ("mbac", "mbacv")):
+    if args.dyn is None and any(m in args.modes for m in ("mbac", "mbacv", "mbacf")):
         ap.error("--dyn is required for the mbac/mbacv modes")
 
     if args.path_scale is None:
