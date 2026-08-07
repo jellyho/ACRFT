@@ -67,7 +67,8 @@ def run_level(root, mode, prefixes):
 
 def ci_row(name, ds):
     if len(ds) < 2:
-        return f"<tr><td>{name}</td><td colspan=4>n={len(ds)} — 수집 중</td></tr>"
+        reason = "학습 진행 중 (segfault 해결 후 재가동, td-segv 참조)" if len(ds) == 0 else f"n={len(ds)} — 시드 도착 중"
+        return f"<tr><td>{name}</td><td colspan=4 class='pending'>{reason}</td></tr>"
     n, m = len(ds), ds.mean()
     se = ds.std(ddof=1) / np.sqrt(n)
     t = TCRIT.get(n, 2.1)
@@ -184,9 +185,11 @@ entry(
     f"""
 <div class='sub'>처음부터 지금까지의 발견과 흐름만. 카드 = 국면의 takeaway, 파란 줄 = 다음 국면으로 이어진 논리. 상세는 날짜 탭에.</div>
 <div class='tl'>{_tl_items}</div>
-<div class='now'><b>현재 위치 (2026-08-07).</b> 데모-only는 완결(무익), 실패 데이터가 후보 구분을 처음 만들었고,
-그 구분이 성공률로 전환되는지의 16시드 CI가 수집 중이다. 갈림길: CI가 0 위로 → 목표 달성 · CI가 0을 포갬 →
-다음 수: in-distribution 평가와 AQC식 보상 성형(v13). [갱신 08-07: v12 16런 CI = 효과 없음(iql −0.017) — 구분은 생겼으나 전환 실패]</div>
+<div class='now'><b>현재 위치 (2026-08-08).</b> 데모-only(v11)와 mixed(v12) 모두 성공률 판정 null로 완결 —
+실패 데이터가 후보 구분(밴드 개방)은 만들었으나 성공률 전환에는 실패. 현재 세 갈래가 병행 중:
+① FINAL 전 요인 스윕(IQL 계열 null 확정, TD 계열은 XLA segfault 근본 해결 후 학습 재가동),
+② 장면 정체성 지름길을 차단한 K-per-scene 데이터(v14, 60.5만 프레임)로 재학습,
+③ CalQL(후보축 학습 신호) 검증. 다음 벤치마크로 GR1 tabletop 시뮬레이션 스택 가동 완료.</div>
 """,
 )
 
@@ -572,7 +575,7 @@ entry(
                 ("데이터", "annot/mixed = 데모 279,534 + 롤아웃 528,100 프레임(실패 249궤적 포함)"),
                 ("VLA", "<b>동결</b> — 실패 데이터는 critic(~10M)만 학습. 후보 분포 불변, 이득 귀속은 100% 가치-기반 선택"),
                 ("학습", "v11과 동일 레시피, method=iql/aqc — a6000(데이터 17GB 상주)"),
-                ("평가", "v11 동일 프로토콜, 시드 16개 목표 (수집 중)"),
+                ("평가", "v11 동일 프로토콜, 시드 16개 완결 (iql/aqc 각 n=16)"),
                 (
                     "사고록",
                     "3090 메모리 초과 → a6000 이전 · make_diag 통짜 jit가 스텝5000에서 무로그 사망 → 256슬라이스 샤딩 픽스 커밋",
@@ -593,7 +596,7 @@ entry(
 학습 실패 궤적의 평평한 V=0은 자기-학습-데이터 평가의 아티팩트였다. held-out 실패 t05/t07/t09에서는
 <b>진행에 따라 V가 0.6~1.0까지 상승했다가 실수 시점에 붕괴 후 0 유지</b> — 기대했던 V^π 형태가 일반화 데이터에서 처음 관측됐다.
 즉 혼합 critic은 진행·실패-시점 감지를 실제로 배웠다. 남은 한계: held-out 성공 t01을 거의 끝까지 저평가(err 0.147) —
-낯선 주방의 성공을 못 믿는 보수 편향. K-per-scene 데이터(주방당 4롤아웃, 수집 중)가 정확히 이 지점을 겨냥한다.</p>
+낯선 주방의 성공을 못 믿는 보수 편향. K-per-scene 데이터(수집 완료 → v14, 'K-per-scene' 리포트 참조)가 정확히 이 지점을 겨냥한다.</p>
 """,
 )
 
@@ -771,6 +774,45 @@ META = {
 
 _titles = {e[1]: e[2] for e in ENTRIES}
 
+# 실험별 관련 영상 (Space videos/ 에서 서빙). 항목: (경로, 한 줄 설명)
+VIDEOS = {
+    "v11": [
+        ("videos/v11_demoonly_critic_success.mp4", "demo-only critic 성공 — 닫힌 밴드(후보 무구분)의 전형"),
+        ("videos/v11_demoonly_critic_fail.mp4", "demo-only critic 실패 — 같은 닫힌 밴드에서의 실패 사례"),
+    ],
+    "aqc": [
+        ("videos/aqc_demoonly_success.mp4", "AQC 배포 규칙 성공 — h-collapse 교정 후 commit 패널"),
+        ("videos/aqc_demoonly_fail.mp4", "AQC 실패 사례 — 같은 규칙의 한계"),
+    ],
+    "v12": [
+        ("videos/v12_mixed_critic_success.mp4", "mixed critic 성공 — 열린 밴드와 V의 동행"),
+        ("videos/v12_mixed_vla_fail_same_scene.mp4", "같은 장면의 vla 실패 — 페어드 비교 실사례"),
+        ("videos/v12_mixed_critic_fail_a.mp4", "mixed critic 실패(머그 이탈형) — 실패 순간 밴드·V 반응"),
+        ("videos/heldout_fail_rise_collapse_t05.mp4", "held-out 실패의 상승→붕괴 V — 일반화 증거"),
+        ("videos/heldout_fail_rise_collapse_t07.mp4", "held-out 상승→붕괴 두 번째 사례"),
+    ],
+    "final": [
+        ("videos/final_td_max_demo/PrepareCoffee_critic_t00_fail.mp4", "td_max_demo critic 실패 (t00)"),
+        ("videos/final_td_max_demo/PrepareCoffee_vla_t00_succ.mp4", "같은 장면(t00) vla 성공 — TD 해악 시그니처 비교"),
+        ("videos/final_td_max_demo/PrepareCoffee_critic_t03_succ.mp4", "td_max_demo critic 성공 사례 (t03)"),
+    ],
+}
+VIDEOS["autopsy"] = VIDEOS["v12"][2:3]  # 실패 유형 실사례
+VIDEOS["kper"] = [("videos/v12_mixed_vla_fail_same_scene.mp4", "같은 주방이 실패하는 사례 — K-per-scene이 겨냥하는 혼합 결과의 실체")]
+
+
+def _video_block(eid):
+    vids = VIDEOS.get(eid)
+    if not vids:
+        return ""
+    rows = "".join(
+        f"<tr><td><video controls preload='none' style='max-width:100%' src='{src}'></video></td><td>{cap}</td></tr>"
+        for src, cap in vids
+    )
+    return ("<h3>관련 영상</h3><p class='sub'>HUD 읽는 법: 회색 밴드 = 후보 16개 Q 분포(q01–q99), 파란 선 = 실행 chunk의 Q, "
+            "빨간 선 = V(z). 전체 아카이브는 '비디오 갤러리' 리포트 참조.</p>"
+            f"<table class='num'><tr><th>영상</th><th>보는 포인트</th></tr>{rows}</table>")
+
 
 def _decorate(eid, body):
     m = META.get(eid)
@@ -787,7 +829,8 @@ def _decorate(eid, body):
     links = "".join(
         f"<span class='xref' data-eid='{l}'>{_titles.get(l, l)}</span>" for l in m.get("links", []) if l in _titles
     )
-    tail = f"<p class='xrefs'><b>연결된 리포트</b> {links}</p>" if links else ""
+    tail = _video_block(eid)
+    tail += f"<p class='xrefs'><b>연결된 리포트</b> {links}</p>" if links else ""
     return w6 + body + tail
 
 
@@ -907,14 +950,6 @@ tl_css = (
 .next{margin-top:8px;font-size:.88em;color:var(--acc);font-weight:600}
 .now{border:2px solid var(--acc);border-radius:12px;padding:14px 18px;margin-top:10px;background:var(--accink)}
 """
-)
-tl_content = (
-    "<h1>RLT critic — Takeaway 타임라인</h1>"
-    "<div class='sub'>실험별 상세는 마스터 리포트에, 여기는 처음부터 지금까지의 발견과 흐름만. 각 카드 = 한 국면의 takeaway, 파란 줄 = 다음 국면으로 이어진 논리.</div>"
-    f"<div class='tl'>{tl_items}</div>"
-    "<div class='now'><b>현재 위치 (2026-08-07).</b> 데모-only는 완결(무익), 실패 데이터가 후보 구분을 처음 만들었고, "
-    "그 구분이 성공률로 전환되는지의 16시드 CI가 수집 중이다. 갈림길: CI가 0 위로 → 목표 달성 · CI가 0을 포갬 → "
-    "다음 수: in-distribution 평가와 AQC식 보상 성형(v13). [갱신 08-07: v12 16런 CI = 효과 없음(iql −0.017) — 구분은 생겼으나 전환 실패]</div>"
 )
 
 print(
