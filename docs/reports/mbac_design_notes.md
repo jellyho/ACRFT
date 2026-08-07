@@ -239,3 +239,35 @@ a sigma veto bounds how far the critic can wander into exploitable chunks.
 Implementation is three lines in the mbac branch (score sigma per candidate,
 mask top-half sigma, argmax Q on the rest) - queue as `mbacf` after the first
 mbac numbers land.
+
+## Iteration 6 (07:10) — the full paired table: authority, not accuracy, is the variable
+
+All 60 paired trials in (seed 0, scene-paired, shared vla baseline 21/30):
+
+| arm | rate | vs vla | p (McNemar) |
+|---|---|---|---|
+| control prefix (raw token, plain IQL) | .800 | +6/-3 | .51 |
+| phi bon / phi prefix / vla | .700 | +5/-5 | 1.0 |
+| control bon | .600 | +3/-6 | .51 |
+| control critic | .567 | +5/-9 | .42 |
+| **phi critic (full authority)** | **.300** | **+2/-14** | **.004** |
+
+The night's only significant result is a NEGATIVE one, and it is instructive:
+the *better* critic (action-sensitivity .524 vs .001, binding .996) is
+CATASTROPHIC when given full authority (candidate x prefix arg-max), while the
+action-blind one was merely useless. Offline binding fixed what the critic
+knows; it did not fix what the arg-max DOES with 128 (16x8) options against an
+imperfect Q. The action-blind critic couldn't act on its opinions; the calswap
+critic acts on them boldly and is wrong at the tails. worker-B's harm table,
+reproduced with a sharper instrument.
+
+phi bon exactly matches vla (5 swaps each way) - selection-only authority is
+now *safe* (control bon was mildly harmful) but not yet profitable: the
+candidates at N=16 are too similar for ranking to matter on PrepareCoffee, or
+Q's tail noise cancels its median signal.
+
+This makes tonight's remaining arms (34652: mbacv / mbac / mbacf) precisely
+the right experiment: they test whether BOUNDED authority - commitment-only
+(mbacv), sigma-vetoed selection (mbacf), or both (mbac) - is where the gain
+lives. If mbacv > vla while phi-critic collapsed, the lesson generalizes:
+give learned components narrow, verifiable authority.
