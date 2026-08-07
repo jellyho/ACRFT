@@ -235,7 +235,7 @@ entry(
             ]
         )
     }
-{img(P / "2_value_bias.png", "value bias by distance")}
+<p class="sub">아래 그림은 08-01 원본(v3 스윕)이며 원시 데이터가 남아있지 않아 스타일 재생성 대상에서 제외 — 아카이브 원본 유지.</p>{img(P / "2_value_bias.png", "value bias by distance")}
 <p><b>해석.</b> TD critic의 b(d)는 원거리에서 크게 양수(최대 5.07× 팽창) — 타깃이 거리 구조로 기울어 있었다.
 이 기울기는 커밋 길이 선택(h축)을 오염시켜, 이후 측정에서 joint argmax의 61%가 최단 h=2로 붕괴하는 원인이 된다.
 γ를 0.999로 올리면 캘리브레이션은 좋아지지만(±0.01) 롤아웃은 나아지지 않는 것도 이때 확인 —
@@ -642,6 +642,29 @@ atoms 51→201 증가도, 타깃넷 EMA→online도 IQL에서는 판정을 바�
 06:00 무결 감사: v11·v12의 공표 수치를 원본 JSON에서 재계산해 일치 확인(TD −0.167 CI[−0.214,−0.119] 재현).</p>
 """)
 
+# ============================================== 08-08 아침 종합
+entry("08-07", "morning-0808", "밤샘 종합 보고 (08-08 아침) — 무엇이 풀렸고 무엇이 남았나", "살아있음", """
+<p><b>한 줄 요약.</b> 닷새를 막던 TD+mixed 학습 불능이 근본 원인(int32 초과 후보 버퍼) 수준에서 해결되어 FINAL 스윕
+전 팔이 재가동됐고, 장면 암기 지름길을 차단한 v14 데이터가 완성됐으며, 보고 체계는 육하원칙·상호연결·백색 카드로 재설계됐다.
+성공률 판정에서 VLA를 이긴 팔은 아직 없다.</p>
+<h3>과학적 성과</h3>
+<table class='num'><tr><th>항목</th><th>내용</th><th>상태</th></tr>
+<tr><td>TD+mixed 침묵사</td><td>후보 버퍼 2.48×10⁹ 원소 &gt; INT32_MAX → sm_86/Blackwell gather 코드젠 segfault. 부차 발견: 클로저 캡처로 17GB가 XLA 상수로 복제(메모리 2배). 분할(cand_at)+pytree 인자화 픽스, 수치·RNG 불변</td><td class='good'>해결·실전 확인</td></tr>
+<tr><td>qc (mixed, n=4)</td><td>Δ̄=−0.020 CI[−0.174,+0.134]</td><td>null 완결</td></tr>
+<tr><td>td_max_demo (n=4)</td><td>Δ̄=−0.190 CI[−0.407,+0.027] — v11 TD 해악(−0.167, n=16)과 방향·크기 일치</td><td>null(검정력 한계)</td></tr>
+<tr><td>K-per-scene 수집</td><td>450/450, 주방 45%가 혼합 결과 — 암기 지름길 차단 확인</td><td class='good'>완료</td></tr>
+<tr><td>v14 데이터</td><td>demos+kroll 병합 605,684 프레임/964 에피소드 (merge_annot.py, episode offset 처리)</td><td class='good'>완료 · 3팔 학습중(iql_v14 99k)</td></tr>
+<tr><td>무결 감사</td><td>v11·v12 공표 수치를 원본 JSON에서 재계산 — 일치</td><td class='good'>통과</td></tr></table>
+<h3>인프라·보고 체계</h3>
+<p>ft2 6팔(td_max/td_soft/td_aqcmax/a101/a201/online) 65–72k/100k — 오전 중 완주하면 평가 4시드+비디오 체인이 자동 개시된다.
+calql_mixed 45k, calql_noprop 학습 완료→평가 4시드 방금 제출. 보고 체계: 전 리포트 육하원칙 헤더 + 상호연결 52개 +
+데일리 스레드 + 마인드맵 + 백색 종이 카드 + 실험별 영상 임베드(24개) + plot 표준화(plot_style.py, 간결 타이틀) +
+방법론 문서화(repo CLAUDE.md). 그림은 리포트 생성 때마다 원본 JSON에서 자동 재생성.</p>
+<h3>오늘 낮 계획</h3>
+<p>① ft2 완주 → FINAL 14팔 표 완성·최종 판정문 작성 ② v14 3팔 판정(장면 지름길 제거가 밴드→성공률 전환을 만드는가)
+③ calql 2팔 판정(후보축 학습 신호의 첫 성공률 검증) ④ GR1 tabletop Teleop-Sim 데이터 다운로드 개시.</p>
+""")
+
 # ============================================== 08-07 TD 침묵사 + K-수집
 entry("08-07", "td-segv", "TD+mixed 침묵사 규명 — XLA 컴파일 segfault", "진행 중", f"""
 {spec([("증상", "TD·QC·CalQL × mixed(17GB) 학습이 'ARQ critic: 10.22M params' 직후 트레이스백 없이 사망 — r1(96G)/r2(180G)/r3(250G) 전멸"),
@@ -709,6 +732,9 @@ entry("08-07", "video-gallery", "HUD 롤아웃 비디오 갤러리", "살아있�
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "morning-0808": dict(date="2026-08-08", who="워커B(Claude)", where="클러스터 전체 + HF Space",
+        what="밤샘(08-07 밤~08-08 아침) 작업 종합", how="각 리포트의 완결 결과를 표로 집약",
+        why="아침에 전체 상황을 한 번에 파악할 수 있도록", links=["td-segv", "final", "kper", "v12"]),
     "flow": dict(date="2026-08-08", who="워커B(Claude)", where="요약 뷰 — 클러스터 전체",
         what="프로젝트 전체 타임라인과 현재 위치", how="각 완결 리포트의 결론을 시간축 노드로 요약",
         why="개별 실험이 어떤 흐름에서 나왔는지 한눈에 보기 위해", links=["v11", "v12", "final"]),
