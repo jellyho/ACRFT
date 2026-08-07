@@ -19,6 +19,7 @@
 # ============================================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.." && source slurm/env.sh
+IFS='|' read -r BIG_PART BIG_QOS <<< "$(QOS=big_qos acrft_tier big)"
 _EXC="$(acrft_exclude_list)"
 MIX=$CACHE_DIR/annot/mixed
 DEMO=$CACHE_DIR/annot/noprop
@@ -46,7 +47,8 @@ DATA[td_max_demo]=$DEMO; FLAGS[td_max_demo]="--objective td --boot-op max --num-
 DATA[iql_demo]=$DEMO;    FLAGS[iql_demo]="--objective iql --expectile 0.9 --num-atoms 51"
 DATA[qc_demo]=$DEMO;     FLAGS[qc_demo]="--objective td --boot-op max --kind qc --num-atoms 51"
 
-EVAL_PARTS="suma_a6000,gigabyte_a6000,tyan_a6000,asus_6000ada"
+EVAL_PARTS="${BIG_PART}"
+EVAL_QOS="big_qos"
 for ARM in td_max td_soft td_aqcmax iql qc td_max_a101 td_max_a201 iql_a101 iql_a201 \
            td_max_online iql_online td_max_demo iql_demo qc_demo; do
   TJ=$(RUN=$ARM DATA=${DATA[$ARM]} SWEEP=$SWEEP STEPS=100000 FLAGS="${FLAGS[$ARM]} $BASE_FLAGS" \
@@ -54,7 +56,7 @@ for ARM in td_max td_soft td_aqcmax iql qc td_max_a101 td_max_a201 iql_a101 iql_
     -o "$SLURM_LOGS/final_${ARM}_%j.out" slurm/train_critic.sbatch)
   CK=$CACHE_DIR/critic_runs/$SWEEP/$ARM/params.msgpack
   for SEED in $EVAL_SEEDS; do
-    sbatch --parsable -J "fev_${ARM}_s$SEED" -p "$EVAL_PARTS" -q base_qos \
+    sbatch --parsable -J "fev_${ARM}_s$SEED" -p "$EVAL_PARTS" -q "$EVAL_QOS" \
       --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=16:00:00 --dependency=afterok:$TJ \
       ${_EXC:+--exclude="$_EXC"} -o "$SLURM_LOGS/fev_${ARM}_s${SEED}_%j.out" \
       --wrap "cd $ACRFT_REPO && source slurm/env.sh && uv run --no-sync examples/robocasa/eval_critic.py \
@@ -63,7 +65,7 @@ for ARM in td_max td_soft td_aqcmax iql qc td_max_a101 td_max_a201 iql_a101 iql_
         --out $CACHE_DIR/critic_runs/$SWEEP/$ARM/rollout/f_s${SEED}.json \
         --vla-override rlt_decoder_mode=parallel --vla-override rlt_include_proprio=false" >/dev/null
   done
-  sbatch --parsable -J "fvid_${ARM}" -p "$EVAL_PARTS" -q base_qos \
+  sbatch --parsable -J "fvid_${ARM}" -p "$EVAL_PARTS" -q "$EVAL_QOS" \
     --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=8:00:00 --dependency=afterok:$TJ \
     ${_EXC:+--exclude="$_EXC"} -o "$SLURM_LOGS/fvid_${ARM}_%j.out" \
     --wrap "cd $ACRFT_REPO && source slurm/env.sh && uv run --no-sync examples/robocasa/eval_critic.py \
