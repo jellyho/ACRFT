@@ -145,3 +145,25 @@ be learned if E1 shows the σ rule leaves oracle gain on the table.
 - Where this meets AC-RFT: the RFT loop can fine-tune the VLA on its own
   rollouts *with* adaptive commitment in the loop, making chunk-length a
   first-class part of the behaviour being reinforced.
+
+## Iteration 3 (04:50) — first rollout evidence + mbac implementation landed
+
+Control rollout (action-blind plain-IQL critic, 30 paired trials, seed 0):
+prefix .800 > vla .700 > bon .600 > critic .567 (no pair significant at n=30;
+prefix-vs-critic p=.065 comes closest). Two readings:
+
+- bon ≈ critic ≈ vla: the offline action-sensitivity ~0 verdict survives contact
+  with the simulator — an action-blind critic's BoN is a no-op minus noise. The
+  negative control behaved exactly as the diagnostics predicted.
+- prefix (+.10, n.s.) is the only mode above baseline, and offline it commits
+  the SHORTest prefix 88% of the time — i.e. it approximates "replan every 2
+  steps". Weak but directionally consistent with commitment mattering more than
+  selection for this checkpoint. The mbacv ablation (VLA sample + sigma-rule
+  commitment, no selection at all) is now the decisive experiment: if mbacv
+  recovers prefix's gain with ~8-step mean commits, adaptive commitment is real
+  and cheap; if not, prefix's edge was frequent-replanning noise.
+
+Implementation: `eval_critic --modes mbac mbacv --dyn <ensemble> --dyn-tau 2.0`
+landed (DynCommit, CPU torch, relative-median hysteresis, per-trial reset).
+Blocked on phi_dyn_v1 (job 34635, running) / the hist=1 deployment variant
+(34641, queued).
