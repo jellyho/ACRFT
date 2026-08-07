@@ -145,36 +145,34 @@ def main():
     ax.legend(fontsize=8, frameon=True, framealpha=0.9, title="scene pool", title_fontsize=8)
     ax.grid(axis="y", alpha=0.25)
 
-    # ---- panel 2: generational flip, old pool, IQL joint argmax
+    # ---- panel 2: pool-by-pool decomposition of ONE checkpoint (v11_iql)
+    # The point: a single pool can read +0.10 while the overall verdict is null - pool variance
+    # dwarfs method effects, so no claim may rest on one pool. (The earlier v6-vs-v11 "generation
+    # flip" panel was removed: generations differ in normalisation/steps/code at once, and the
+    # bar invited a "+10%" misreading.)
     ax = axes[1]
-    gens = []
-    v6 = []
-    for f in sorted(glob.glob(str(C / "critic_runs/v6_iql/iql_e70/rollout/replay_s*.json"))):
-        j = json.loads(pathlib.Path(f).read_text())
-        v6.append(
-            np.mean([t["success"] for t in j["critic"]["trials"]]) - np.mean([t["success"] for t in j["vla"]["trials"]])
-        )
-    v11 = [d for d, lbl, _ in run_deltas("v11_std/iql", "critic") if lbl == "scenes 0-300"]
-    gens = [
-        ("v6 iql_e70\n200k · raw actions\n(yesterday's replay)", v6, "#9ca3af"),
-        ("v11 iql\n100k · z-scored actions\n(fair set)", v11, "#2563eb"),
-    ]
-    for i, (name, vals, color) in enumerate(gens):
+    POOL_SEEDS = {"scenes 0-300": "old", "scenes 3000-3300": "std", "scenes 4000-4700": "nseed/ev"}
+    ds = run_deltas("v11_std/iql", "critic")
+    groups = {}
+    for d, lbl, color in ds:
+        groups.setdefault(lbl, ([], color))[0].append(d)
+    xs = []
+    for i, (lbl, (vals, color)) in enumerate(groups.items()):
         vals = np.array(vals)
-        if len(vals) == 0:
-            continue
-        ax.scatter(
-            np.full(len(vals), i) + np.linspace(-0.08, 0.08, len(vals)), vals, s=48, color=color, alpha=0.85, zorder=3
-        )
-        n = len(vals)
-        se = vals.std(ddof=1) / np.sqrt(n) if n > 1 else 0
-        ax.errorbar(i, vals.mean(), yerr=TCRIT.get(n, 2.8) * se, color="black", capsize=6, lw=2.2, zorder=4)
-        ax.text(i, vals.mean() + 0.012, f"{vals.mean():+.3f}", ha="center", fontsize=9)
+        ax.scatter(np.full(len(vals), i) + np.linspace(-0.09, 0.09, len(vals)), vals, s=46,
+                   color=color, alpha=0.85, zorder=3)
+        ax.scatter([i], [vals.mean()], marker="_", s=700, color="black", zorder=4)
+        ax.text(i, vals.mean() + 0.015, f"{vals.mean():+.3f}", ha="center", fontsize=9)
+        xs.append((i, f"{lbl}\n(n={len(vals)})"))
+    overall = np.array([d for d, _, _ in ds])
+    ax.axhline(overall.mean(), color="#1d4ed8", lw=1.6, ls="-",
+               label=f"overall mean of 16 runs {overall.mean():+.3f} (CI includes 0 = no effect)")
     ax.axhline(0, color="#888", lw=1.2, ls="--")
-    ax.set_xticks(range(len(gens)))
-    ax.set_xticklabels([g[0] for g in gens], fontsize=8)
+    ax.set_xticks([i for i, _ in xs])
+    ax.set_xticklabels([t for _, t in xs], fontsize=8)
     ax.set_ylabel("Δ success rate vs in-job vla")
-    ax.set_title("Same rule, same scenes (pool 0-300):\ncheckpoint generation flips the sign")
+    ax.set_title("One checkpoint (v11 iql), pool by pool:\na single pool can read +0.10 while the verdict is null")
+    ax.legend(fontsize=8, frameon=False, loc="lower right")
     ax.grid(axis="y", alpha=0.25)
 
     out = C / "plots/16_run_level.png"
