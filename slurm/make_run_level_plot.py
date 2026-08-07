@@ -177,11 +177,6 @@ def main():
     ax.set_title("Same rule, same scenes (pool 0-300):\ncheckpoint generation flips the sign")
     ax.grid(axis="y", alpha=0.25)
 
-    fig.text(0.01, -0.02,
-        "How to read: each dot = one 30-scene seed-run's (method - vla) success gap; black bar = mean +- 95% CI over runs. "
-        "CI fully below 0 = method reliably HURTS (td). CI straddling 0 = no effect (demo-only iql/qc/aqc). "
-        "Green columns (MIXED +failures) are still collecting runs - the project succeeds if their CI rises above 0.",
-        fontsize=9.5, color="#334155")
     out = C / "plots/16_run_level.png"
     fig.savefig(out)
     print(f"saved {out}")
