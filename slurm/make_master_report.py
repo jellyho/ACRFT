@@ -26,6 +26,14 @@ from PIL import Image
 C = pathlib.Path(os.environ.get("CACHE_DIR", "/scratch/jellyho/acrft"))
 TCRIT = {2: 12.7, 3: 4.30, 4: 3.18, 8: 2.36, 10: 2.26, 15: 2.14, 16: 2.13}
 
+# JSON 기반 figure는 리포트 생성 때마다 원본 데이터에서 재생성 — 그림과 데이터가 어긋날 수 없다.
+try:
+    import make_figures
+
+    make_figures.main()
+except Exception as _e:  # noqa: BLE001  - 그림 실패가 리포트 생성을 막으면 안 된다
+    print(f"[make_figures 건너뜀: {_e}]")
+
 
 def img(path, alt=""):
     p = pathlib.Path(path)
@@ -616,6 +624,7 @@ entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "�
        ("평가", "arm당 시드 4개(5000–5300)×50장면 잡내 페어드 — 전 arm 동일 장면이라 arm 간도 페어드 · arm당 HUD 비디오 6장면"),
        ("판정", "사전 등록: 95% t-CI(n=4)가 0을 벗어나는가 · 절대 성공률 병기")])}
 <h3>상대 성적 (arm − 잡내 vla)</h3>
+{img(P / "20_final_forest.png", "FINAL forest")}
 <table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_frows}</table>
 <h3>절대 성공률</h3>
 <table class='num'><tr><th>arm</th><th>arm 성공</th><th>잡내 vla 성공</th></tr>{_abs_rows if _abs_rows else "<tr><td colspan=3>평가 도착 대기</td></tr>"}</table>
