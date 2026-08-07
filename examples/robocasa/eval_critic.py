@@ -369,6 +369,14 @@ def main() -> None:
         "_pardec_noprop checkpoint needs rlt_decoder_mode=parallel and rlt_include_proprio=False.",
     )
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
+    ap.add_argument(
+        "--policy-seed",
+        type=int,
+        default=None,
+        help="Sampling seed for the VLA (and rand modes), decoupled from the scene seed. Running the "
+        "SAME scene seed under different policy seeds yields multiple rollouts per kitchen - the "
+        "mixture that stops a critic from reading outcomes off scene identity.",
+    )
     ap.add_argument("--camera-size", type=int, default=256)
     ap.add_argument(
         "--scenes-from-extras",
@@ -427,6 +435,7 @@ def main() -> None:
     results = {}
     # One VLA for every mode. See build_policy: a per-mode rebuild leaks the previous model onto the
     # device and breaks offscreen rendering for every mode after the first.
+    _pseed = args.policy_seed if args.policy_seed is not None else args.seed
     _vla_ov = {}
     for kv in args.vla_override:
         k, _, v = kv.partition("=")
@@ -436,7 +445,7 @@ def main() -> None:
         args.checkpoint,
         num_samples=args.num_samples,
         flow_steps=args.num_flow_steps,
-        seed=args.seed,
+        seed=_pseed,
         model_overrides=_vla_ov,
     )
 
@@ -448,7 +457,7 @@ def main() -> None:
             mode=mode,
             num_samples=args.num_samples,
             flow_steps=args.num_flow_steps,
-            seed=args.seed,
+            seed=_pseed,
             query_noise=args.query_noise,
             model_overrides=_vla_ov,
             vla=shared_vla,
