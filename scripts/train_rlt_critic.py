@@ -347,7 +347,11 @@ def make_update(data: Data, cfg, net, hl, act_scale, meta_support=(0.0, 1.0), v_
             q_c = jnp.maximum(q_c, mc)  # calibration clamp
             lse = jax.nn.logsumexp(q_c, axis=2) - jnp.log(n)  # [K, B, P]
             q_data = hl.from_logits(pred) if cfg.num_atoms > 1 else pred  # [K, B, P]
-            cql_gap = (lse - q_data) * w
+            # stop_gradient: the naive lse - q_data is also minimized by INFLATING the demo Q
+            # (linear gain beats the Bellman term's quadratic cost up to ~alpha/2 — observed:
+            # q_mean 1.33 on a [0,1] support). Detaching q_data leaves a pure push-down of the
+            # candidates; the demo chunk's level is anchored by the Bellman + mc-floor losses.
+            cql_gap = (lse - jax.lax.stop_gradient(q_data)) * w
             cql_loss = jnp.sum(cql_gap) / (jnp.sum(w) * pred.shape[0] + 1e-8)
             loss = loss + cfg.cql_alpha * cql_loss
             extra = extra | {"cql_gap": jnp.sum(cql_gap) / (jnp.sum(w) * pred.shape[0] + 1e-8)}
