@@ -200,3 +200,42 @@ which is exactly what actions move. Three consequences:
 Interim from the phi+calswap rollout (34633): critic mode opened 4/4 (control
 was .567 over 30). Too early to celebrate at n=4; the full paired table lands
 this hour.
+
+## Iteration 5 (06:30) — E1-E3 results: disagreement binds, value-through-model breaks
+
+Offline battery on held-out episodes (n=8000 anchors each):
+
+**E2 — binding without CQL.** phi space: `binding_by_disagreement = .817`
+(sig ratio 1.61); v4b: .780 (1.10). The ensemble alone tells the demo chunk
+from another state's demo chunk four times out of five — no CQL anywhere.
+But `binding_by_goal_distance = .371` — *below* chance: ranking by predicted
+terminal-state closeness to goal actively prefers the WRONG chunk. Value
+estimated through the model is not just weak, it is inverted; the model's
+prediction under an inconsistent action drifts in a way that mimics progress.
+The selection/commitment split is confirmed from both sides: sigma is a real
+signal, model-predicted value is a trap.
+
+**E3 — visibility is immediate.** Disagreement binding at k=4/8/12/16:
+.837/.815/.807/.798. It PEAKS at one macro-step and decays slightly — the
+trust signal does not need depth (revises iteration 2's "only long horizons"
+assumption, which was about R2, i.e. mean accuracy, not about sigma).
+
+**E1 — adaptive cutting beats the fixed frontier, narrowly.** phi space,
+quantile-tau on cumulative sigma: q0.3 gives mean_k 14.2 with terminal error
+4.13 vs 4.19 interpolated on the fixed-k frontier at the same k — a real but
+thin margin. Cuts land where they should: anchors cut early show error slope
+3.01 vs 2.00 for late-cut (the rule finds genuinely unpredictable states), and
+cut positions pile up in the late-progress bins (881/934 of cuts in the last
+60% — the grasp/place/button phases). v4b sigma almost never cuts (97-100%
+full commit): yet another way the DINO-space model is blunt where phi is sharp.
+
+**Design consequence — sigma-filtered BoN.** .817 binding suggests sigma's
+best role may be *selection veto*, not just commitment: among N candidates,
+drop those whose one-step disagreement spikes (behaviourally inconsistent),
+critic-argmax the survivors. This directly targets tonight's live failure -
+the phi+calswap critic in full-authority `critic` mode is collapsing in sim
+(7/25 after a 4/4 start vs .70 vla) exactly as worker-B's table predicted;
+a sigma veto bounds how far the critic can wander into exploitable chunks.
+Implementation is three lines in the mbac branch (score sigma per candidate,
+mask top-half sigma, argmax Q on the rest) - queue as `mbacf` after the first
+mbac numbers land.
