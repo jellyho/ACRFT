@@ -43,16 +43,39 @@ def main():
     s = int(rng.choice(np.flatnonzero((ep == A) & (prog > 0.05) & (prog < 0.2))))
     g = int(rng.choice(np.flatnonzero((ep == B) & (prog > 0.8) & (prog < 0.98))))
 
-    pool = np.arange(0, n, 2)
+    pool = np.arange(0, n, 5)
+    # make sure the endpoints are in the pool
+    pool = np.unique(np.concatenate([pool, [s, g]]))
     phi_pool = phi[pool]
 
-    # walk + retrieval
-    ts = np.linspace(0, 1, args.steps)
-    picks = []
-    for t in ts:
-        target = (1 - t) * phi[s] + t * phi[g]
-        picks.append(int(pool[np.argmin(np.linalg.norm(phi_pool - target[None], axis=1))]))
-    picks = np.array(picks)
+    # GEODESIC walk: straight-line interpolation cuts through empty (off-manifold) space and the
+    # nearest-neighbour snaps to the endpoints (measured: the ride was a binary A->B jump). Build a
+    # kNN graph over real frames and take the shortest path instead - every step is a real frame and
+    # the route must traverse the funnel through actual intermediate states.
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import dijkstra
+    from sklearn.neighbors import NearestNeighbors
+
+    nn = NearestNeighbors(n_neighbors=12).fit(phi_pool)
+    dist, idx_nn = nn.kneighbors(phi_pool)
+    m = len(pool)
+    rowi = np.repeat(np.arange(m), idx_nn.shape[1] - 1)
+    colj = idx_nn[:, 1:].reshape(-1)
+    w = dist[:, 1:].reshape(-1)
+    graph = csr_matrix((w, (rowi, colj)), shape=(m, m))
+    src = int(np.flatnonzero(pool == s)[0]); dst = int(np.flatnonzero(pool == g)[0])
+    dmat, pred = dijkstra(graph, directed=False, indices=src, return_predecessors=True)
+    if not np.isfinite(dmat[dst]):
+        raise SystemExit("no path in kNN graph - increase n_neighbors")
+    path = [dst]
+    while path[-1] != src:
+        path.append(int(pred[path[-1]]))
+    path = path[::-1]
+    node_rows = pool[np.array(path)]
+    # resample the path evenly to the video length
+    sel = np.linspace(0, len(node_rows) - 1, args.steps).astype(int)
+    picks = node_rows[sel]
+    print(f"geodesic: {len(node_rows)} nodes, episodes visited: {sorted(set(int(x) for x in ep[node_rows]))[:12]}")
 
     # 2-D map: t-SNE over background + walk-relevant frames
     bg = rng.choice(n, size=args.bg_frames, replace=False)
