@@ -857,10 +857,8 @@ for i, d in enumerate(dates):
         )
     )
 css = """
-:root{--bg:#fafaf9;--ink:#1c1917;--muted:#64748b;--line:#e7e5e4;--acc:#3730a3;--accink:#eef2ff;--panel:#fff}
-@media (prefers-color-scheme: dark){:root{--bg:#131316;--ink:#e7e5e4;--muted:#94a3b8;--line:#33333a;--acc:#818cf8;--accink:#1e1b4b;--panel:#1b1b1f}}
-:root[data-theme="dark"]{--bg:#131316;--ink:#e7e5e4;--muted:#94a3b8;--line:#33333a;--acc:#818cf8;--accink:#1e1b4b;--panel:#1b1b1f}
-:root[data-theme="light"]{--bg:#fafaf9;--ink:#1c1917;--muted:#64748b;--line:#e7e5e4;--acc:#3730a3;--accink:#eef2ff;--panel:#fff}
+/* 프로페셔널·깔끔: 배경은 항상 백색 (다크 테마 비활성 — 2026-08-08 지시) */
+:root,:root[data-theme="dark"],:root[data-theme="light"]{--bg:#ffffff;--ink:#1a1a1a;--muted:#5f6b7a;--line:#e2e2e2;--acc:#3730a3;--accink:#eef2ff;--panel:#fff}
 body{font-family:system-ui,sans-serif;max-width:1100px;margin:0 auto;padding:20px 16px;color:var(--ink);background:var(--bg);line-height:1.65}
 h1{font-size:1.45em;margin:0 0 4px}h2{font-size:1.2em;margin:0.2em 0 0.6em}
 .sub{color:var(--muted);font-size:.92em;margin-bottom:14px}
@@ -876,8 +874,6 @@ td,th{border:1px solid var(--line);padding:5px 10px;text-align:left;vertical-ali
 th{background:var(--accink)}.spec th{width:110px}.num td:nth-child(n+2){text-align:right;font-variant-numeric:tabular-nums}
 .chip{font-size:.72em;border-radius:99px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .chip.done{background:#dcfce7;color:#15803d}.chip.run{background:#fef9c3;color:#a16207}
-:root[data-theme="dark"] .chip.done{background:#14532d;color:#bbf7d0}
-:root[data-theme="dark"] .chip.run{background:#713f12;color:#fef08a}
 .tl{position:relative;margin:14px 0 14px 8px;border-left:3px solid var(--acc);padding-left:22px}
 .node{position:relative;margin-bottom:20px}
 .node:before{content:'';position:absolute;left:-31px;top:6px;width:13px;height:13px;border-radius:50%;background:var(--acc)}

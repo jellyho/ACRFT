@@ -22,27 +22,33 @@ MARK = "워커B"
 DATE_MAP = {"~08-01": "2026-08-01", "08-02~03": "2026-08-03", "08-05": "2026-08-05",
             "08-06": "2026-08-06", "08-07": "2026-08-07", "타임라인": "2026-08-08"}
 WBX_STYLE = """<style id="wbx-style">
-.wbx{line-height:1.68}.wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;max-width:100%;background:var(--card2)}
-.wbx td,.wbx th{border:1px solid var(--line);padding:5px 10px;text-align:left;vertical-align:top}
-.wbx th{background:var(--card)}.wbx img{max-width:100%;border:1px solid var(--line);border-radius:8px;margin:8px 0}
-.wbx h2,.wbx h3{margin:.6em 0 .4em;letter-spacing:-.01em}.wbx .missing{background:#3a3320;padding:6px 10px;border-radius:6px}
-.wbx code{background:var(--card);padding:1px 5px;border-radius:4px}
-.wbx .tl{position:relative;margin:14px 0 14px 8px;border-left:3px solid var(--blue);padding-left:22px}
+/* 워커B 리포트 = 흰 종이 카드 (프로페셔널·깔끔, 허브 테마와 무관하게 백색 지면) */
+.wbx{line-height:1.68;background:#ffffff;color:#1a1a1a;border:1px solid #e2e2e2;border-radius:12px;
+  padding:26px 30px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.wbx a{color:#3730a3}
+.wbx h2,.wbx h3{margin:.7em 0 .4em;letter-spacing:-.01em;color:#111;font-family:Georgia,'Times New Roman',serif}
+.wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;max-width:100%;background:#fff;color:#1a1a1a}
+.wbx td,.wbx th{border:1px solid #e2e2e2;padding:5px 10px;text-align:left;vertical-align:top}
+.wbx th{background:#f3f4f8}.wbx img{max-width:100%;border:1px solid #e2e2e2;border-radius:8px;margin:8px 0;background:#fff}
+.wbx .missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
+.wbx code{background:#f3f4f8;padding:1px 5px;border-radius:4px;color:#1a1a1a}
+.wbx .tl{position:relative;margin:14px 0 14px 8px;border-left:3px solid #3730a3;padding-left:22px}
 .wbx .node{position:relative;margin-bottom:18px}
-.wbx .node:before{content:'';position:absolute;left:-31px;top:6px;width:12px;height:12px;border-radius:50%;background:var(--blue)}
-.wbx .when{font-size:.82em;color:var(--muted)}.wbx .card{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
-.wbx .next{margin-top:6px;font-size:.88em;color:var(--blue);font-weight:600}
-.wbx .now{border:2px solid var(--blue);border-radius:10px;padding:12px 16px;margin-top:8px}
-.wbx .good{color:var(--green)}.wbx .bad{color:var(--red)}.wbx .chip{display:none}
-.wbx .w6{border-left:3px solid var(--blue)}.wbx .w6 th{width:64px}
-.wbx td.pending{color:var(--muted);font-style:italic}
-.wbx .xrefs{margin-top:14px;border-top:1px dashed var(--line);padding-top:8px}
-.wbx .xref{display:inline-block;border:1px solid var(--blue);color:var(--blue);border-radius:99px;padding:2px 11px;margin:2px 4px 2px 0;font-size:.85em;cursor:pointer}
-.wbx .xref:hover{background:var(--card)}
-.wbx .day{margin-bottom:18px}.wbx .day h3{border-bottom:1px solid var(--line);padding-bottom:4px}
-.wbx .day li{margin:6px 0}.wbx .day .sm{color:var(--muted);font-size:.88em}
-.wbx .day a{color:var(--blue);cursor:pointer;text-decoration:none}.wbx .day a:hover{text-decoration:underline}
-.wbx svg text{fill:currentColor}
+.wbx .node:before{content:'';position:absolute;left:-31px;top:6px;width:12px;height:12px;border-radius:50%;background:#3730a3}
+.wbx .when{font-size:.82em;color:#5f6b7a}.wbx .card{background:#fafafa;border:1px solid #e2e2e2;border-radius:10px;padding:10px 14px}
+.wbx .next{margin-top:6px;font-size:.88em;color:#3730a3;font-weight:600}
+.wbx .now{border:2px solid #3730a3;border-radius:10px;padding:12px 16px;margin-top:8px;background:#eef2ff}
+.wbx .good{color:#15803d}.wbx .bad{color:#b91c1c}.wbx .chip{display:none}
+.wbx .sub{color:#5f6b7a;font-size:.92em}
+.wbx .w6{border-left:3px solid #3730a3}.wbx .w6 th{width:64px}
+.wbx td.pending{color:#5f6b7a;font-style:italic}
+.wbx .xrefs{margin-top:14px;border-top:1px dashed #e2e2e2;padding-top:8px}
+.wbx .xref{display:inline-block;border:1px solid #3730a3;color:#3730a3;border-radius:99px;padding:2px 11px;margin:2px 4px 2px 0;font-size:.85em;cursor:pointer;background:#fff}
+.wbx .xref:hover{background:#eef2ff}
+.wbx .day{margin-bottom:18px}.wbx .day h3{border-bottom:1px solid #e2e2e2;padding-bottom:4px}
+.wbx .day li{margin:6px 0}.wbx .day .sm{color:#5f6b7a;font-size:.88em}
+.wbx .day a{color:#3730a3;cursor:pointer;text-decoration:none}.wbx .day a:hover{text-decoration:underline}
+.wbx svg text{fill:#1a1a1a}
 </style>"""
 
 # 마인드맵 컬럼(연구 국면) 배치와 컬럼 색 (seaborn deep — 논문 팔레트)
