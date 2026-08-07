@@ -76,7 +76,7 @@ def fig_16_v11():
         return
     apply()
     fig, ax = plt.subplots(figsize=(7.2, 3.6))
-    forest(ax, rows, "v11 demo-only, 16 seeds x 50 scenes, paired within job")
+    forest(ax, rows, "v11 demo-only")
     fig.savefig(P / "16_run_level.png")
     plt.close(fig)
     print("16_run_level.png")
@@ -91,7 +91,7 @@ def fig_20_final():
         rows.append((f"{a}  (n={len(r)})", [x[0] for x in r]))
     apply()
     fig, ax = plt.subplots(figsize=(7.2, 6.4))
-    forest(ax, rows[::-1], "FINAL campaign - arm vs in-job VLA (4 seeds x 50 scenes each)")
+    forest(ax, rows[::-1], "FINAL campaign")
     fig.savefig(P / "20_final_forest.png")
     plt.close(fig)
     print("20_final_forest.png")
@@ -114,7 +114,7 @@ def fig_18_band():
     ax.bar(xs, meds, color=colors, width=0.62)
     ax.set_xticks(xs, labels, rotation=20, ha="right", fontsize=9)
     ax.set_ylabel("candidate band  q99 − q01")
-    ax.set_title("Candidate-band opening across critic generations")
+    ax.set_title("Candidate-band opening")
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(color=PALETTE[0], label="closed (< 0.03)"),
                        Patch(color=PALETTE[2], label="opened (mixed-data critics)")], loc="upper left")
@@ -166,7 +166,7 @@ def fig_15_autopsy():
         ax.bar(xs + i * w - 0.4 + w / 2, v, width=w * 0.92, label=g, color=PALETTE[i])
     ax.set_xticks(xs, ["no grasp", "grasped,\nnot placed", "placed,\nno press", "machine on,\nnot success"], fontsize=9.5)
     ax.set_ylabel("share of failures")
-    ax.set_title("Failure autopsy - where losses happen (programmatic stage rules)")
+    ax.set_title("Failure stages")
     ax.legend()
     fig.savefig(P / "15_autopsy.png")
     plt.close(fig)

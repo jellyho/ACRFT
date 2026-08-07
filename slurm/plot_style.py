@@ -24,8 +24,10 @@ def apply():
         "font.family": "sans-serif",
         "font.sans-serif": ["DejaVu Sans", "Helvetica", "Arial"],
         "font.size": 11,
-        "axes.titlesize": 12.5,
-        "axes.titleweight": "bold",
+        # 타이틀은 간결하게(정보는 본문 산문으로) — regular weight, 본문보다 약간 큰 정도
+        "axes.titlesize": 12,
+        "axes.titleweight": "normal",
+        "axes.titlepad": 10,
         "axes.labelsize": 11.5,
         "axes.edgecolor": GRAY,
         "axes.labelcolor": "#1a1a1a",

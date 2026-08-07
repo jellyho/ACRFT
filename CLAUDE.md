@@ -1,0 +1,55 @@
+# ACRFT 실험 보고 · 게시 방법론
+
+이 저장소의 실험 보고는 **HF Space 허브(`jellyho/acrft-reports`, private)** 로 게시된다.
+링크는 반드시 `https://huggingface.co/spaces/jellyho/acrft-reports` 를 쓴다
+(`*.hf.space` 직링크는 private이라 익명 401).
+
+## 단일 진실 원천: `slurm/make_master_report.py`
+
+- 모든 리포트는 `ENTRIES` 리스트의 `entry(date, eid, title, status, body)` 한 건이다.
+  body는 HTML 조각. 상태는 `완결` / `진행 중` / `살아있음`.
+- **육하원칙**: 모든 entry는 `META[eid]`에 who/when(date)/where/what/how/why를 채운다.
+  `_decorate()`가 표준 5W1H 헤더 표를 자동 삽입하므로 body에 중복 작성하지 않는다.
+- **상호 연결**: `META[eid]["links"] = [연관 eid...]` — 근거로 삼거나 후속으로 이어지는
+  리포트를 연결한다. 렌더 시 클릭 가능한 칩이 되고, 허브의 마인드맵 간선이 된다.
+- **date는 실제 ISO 날짜**: 허브 목록의 시간순 정렬에 그대로 쓰인다.
+- 수치 표는 원본 JSON에서 **자동 재계산**한다(`run_level()`/`ci_row()` 패턴).
+  손으로 옮겨 적은 숫자는 감사(audit)에서 어긋나기 쉬우니 금지.
+- 빈 칸 금지: 데이터 미도착 칸은 "평가 대기 (사유/참조)"를 명시한다.
+
+## 그림: `slurm/plot_style.py` + `slurm/make_figures.py`
+
+- 스타일은 Seohong Park 논문 관례: 흰 배경, y-그리드만, 위/오른쪽 스파인 제거,
+  seaborn deep 팔레트, 프레임 없는 legend, CI는 음영 밴드 또는 오차막대.
+- **타이틀은 아주 간결하게** (예: "v11 demo-only"). 조건·n·프로토콜 등 추가 정보는
+  리포트 본문 산문과 spec 표에 쓴다. regular weight (bold 금지).
+- 모든 색은 legend/colorbar로 의미를 밝힌다.
+- JSON 기반 그림은 `make_figures.py`가 리포트 생성 때마다 원본에서 재생성한다 —
+  그림과 데이터가 어긋날 수 없게. GPU가 필요한 프로브 그림도 스크립트로 남겨
+  언제든 재생성 가능해야 한다 (일회성 손그림 금지).
+
+## 게시 흐름: `slurm/sync_hub.py`
+
+```
+uv run --no-sync python slurm/sync_hub.py
+```
+
+1. `make_master_report`를 import (→ 로컬 master_report.html + figure 재생성).
+2. Space의 `index.html`에서 `const REPORTS = [...]`를 파싱, 기존 워커B 엔트리를 교체.
+   **다른 워커의 엔트리는 절대 건드리지 않는다.**
+3. 상단 고정 2건을 자동 생성: 🧵 데일리 스레드(일자별 포스트 다이제스트),
+   🗺️ 마인드맵(국면 5컬럼 × links 간선 SVG, 노드 클릭 이동).
+4. PR 생성 후 즉시 머지.
+
+비디오는 생성 즉시 HF dataset `jellyho/acrft-rollout-videos`(아카이브)와
+Space `videos/`(갤러리 서빙)에 `upload_folder`로 올린다 — 배치 대기 금지.
+
+## 보고 원칙
+
+- **즉시성**: 새 정보(평가 도착, 원인 규명, 사고)가 생기면 그 사이클에 게시한다.
+  "평가 JSON이 없다"는 재게시를 거를 이유가 아니다 — 조사 결과·수집 통계도 산출물이다.
+- **전체 provenance**: 체크포인트·데이터·장면 풀·페어링·n을 항상 명시.
+- 비교는 method-only-diff 체크포인트끼리만. 페어드 비교는 in-job vla와만.
+- 판정은 run(시드)-level Δ̄ ± 95% t-CI. 잠정치는 "잠정(n=k)" 라벨을 단다.
+- 분류(성공/실패/단계)는 항상 프로그램적으로 — 육안 분류 금지.
+- 사고·버그도 리포트에 남긴다(가설 기각 사다리 표 형식이 좋다: td-segv 탭 참조).
