@@ -210,7 +210,9 @@ def draw_cohort(axes, cname, modes, order):
     handles = [plt.Rectangle((0, 0), 1, 1, color=colors[m], alpha=0.65) for m in order]
     ax.legend(handles, order, frameon=False, fontsize=8)
 
-    axes[0].annotate(cname, xy=(0, 1.10), xycoords="axes fraction", fontsize=11, fontweight="bold")
+    axes[0].annotate(
+        f"COHORT: {cname}\n(compare modes WITHIN this row only - different row = different scenes & checkpoint)",
+        xy=(-0.08, 1.10), xycoords="axes fraction", fontsize=12, fontweight="bold", color="#7c2d12")
 
 
 if __name__ == "__main__":
