@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>밤샘 실험 보고서 — Cheap-z & Model-Based AC</title>
+<style>
+  :root {
+    --bg: #0f1117; --card: #181c25; --card2: #1f2430;
+    --text: #e6e9ef; --muted: #9aa3b2; --line: #2a3140;
+    --green: #4ade80; --red: #f87171; --yellow: #fbbf24; --blue: #60a5fa; --purple: #c084fc;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Pretendard', -apple-system, 'Segoe UI', sans-serif; line-height: 1.7; padding: 40px 16px; }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 26px; margin-bottom: 6px; }
+  h2 { font-size: 20px; margin: 0 0 14px 0; display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 15px; color: var(--blue); margin: 18px 0 8px 0; }
+  .date { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px 26px; margin-bottom: 22px; }
+  .num { display: inline-flex; width: 28px; height: 28px; border-radius: 50%; background: var(--blue); color: #0b0e14; font-weight: 700; font-size: 14px; align-items: center; justify-content: center; flex-shrink: 0; }
+  .tldr { background: linear-gradient(135deg, #1a2436, #16202e); border: 1px solid #2e4160; }
+  .tldr h2 { color: var(--yellow); }
+  p { margin-bottom: 10px; }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  .hl-g { color: var(--green); font-weight: 600; }
+  .hl-r { color: var(--red); font-weight: 600; }
+  .hl-y { color: var(--yellow); font-weight: 600; }
+  .hl-b { color: var(--blue); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+  td { padding: 8px 10px; border-bottom: 1px solid #222836; }
+  tr.win td { background: rgba(74, 222, 128, 0.07); }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+  .bar-label { width: 150px; flex-shrink: 0; color: var(--muted); }
+  .bar-track { flex: 1; background: #232937; height: 18px; border-radius: 9px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 9px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; font-weight: 700; color: #0b0e14; }
+  .verdict { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; }
+  .v-pass { background: rgba(74,222,128,.15); color: var(--green); border: 1px solid rgba(74,222,128,.4); }
+  .v-fail { background: rgba(248,113,113,.15); color: var(--red); border: 1px solid rgba(248,113,113,.4); }
+  .v-partial { background: rgba(251,191,36,.15); color: var(--yellow); border: 1px solid rgba(251,191,36,.4); }
+  .flow { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; margin: 14px 0; }
+  .flow-box { flex: 1; min-width: 150px; background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 13px; text-align: center; }
+  .flow-box .t { font-weight: 700; margin-bottom: 4px; }
+  .flow-arrow { display: flex; align-items: center; color: var(--muted); font-size: 18px; }
+  .qa { background: var(--card2); border-left: 3px solid var(--purple); border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 12px 0; font-size: 14px; }
+  .qa .q { color: var(--purple); font-weight: 700; margin-bottom: 4px; }
+  code { background: #232937; padding: 1px 6px; border-radius: 5px; font-size: 12.5px; color: #a5d6ff; }
+  .phase { display: flex; gap: 12px; margin: 10px 0; }
+  .phase-badge { flex-shrink: 0; width: 74px; text-align: center; background: var(--card2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 4px; font-size: 12px; font-weight: 700; color: var(--blue); height: fit-content; }
+  .footnote { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; margin-top: 8px; }
+  ul { padding-left: 20px; margin-bottom: 10px; }
+  li { margin-bottom: 5px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🌙 밤샘 실험 보고서 — 싼 표현(cheap-z)과 Model-Based AC</h1>
+<div class="date">2026-08-07 아침 · PrepareCoffee 514 에피소드 / 279,534 프레임에서 전부 직접 측정</div>
+
+<!-- ============ TL;DR ============ -->
+<div class="card tldr">
+  <h2>⚡ 세 줄 요약</h2>
+  <p><span class="num" style="background:var(--green)">1</span>&nbsp; <b>성공:</b> 22M짜리 frozen DINOv2 + <b>15분 학습한 헤드</b>가, 3B VLA에서 뽑던 토큰을 <span class="hl-g">모든 값-probe에서 이겼습니다</span>. 인코더 크기 1/130, annotation 파이프라인 삭제.</p>
+  <p><span class="num" style="background:var(--red)">2</span>&nbsp; <b>반전:</b> 그런데 진짜 병목은 표현이 아니라 critic이었습니다. <span class="hl-r">성공 데모만 있는 데이터에선 어떤 IQL critic도 action을 구분 못 합니다</span> (best-of-N이 사실상 동전던지기였음을 측정으로 확인).</p>
+  <p><span class="num" style="background:var(--blue)">3</span>&nbsp; <b>해법:</b> dynamics 모델 앙상블의 <b>"불일치(disagreement)"</b>가 유일하게 action을 구분하는 오프라인 신호였습니다 → <span class="hl-b">model-based AC로 가는 근거가 이론이 아니라 측정으로 확보됨</span>.</p>
+</div>
+
+<!-- ============ 배경 ============ -->
+<div class="card">
+  <h2><span class="num">0</span> 왜 이걸 했나</h2>
+  <p>지금까지 critic의 입력 z는 <b>3B VLA의 hidden state</b>에서 뽑았습니다. 문제 세 가지:</p>
+  <ul>
+    <li>💸 <b>비쌈</b> — critic 실험 하나 하려면 데이터셋 전체에 3B forward를 돌리는 annotation이 필요 (수 시간, 이번에도 4번 실패)</li>
+    <li>🏠 <b>외형 편향</b> — SigLIP feature는 "어떻게 생겼나"의 함수라, 부엌마다 다른 RoboCasa에선 z가 "몇 번째 데모인가"를 외워버림 (episode 판별 100%)</li>
+    <li>🐢 <b>느린 반복</b> — 표현을 바꾸려면 VLA를 하루 재학습</li>
+  </ul>
+  <p>그래서 어젯밤 목표: <b>"LeRobot 데이터에서 바로 학습하는 싸고 좋은 표현"</b>을 찾고, 월드모델까지 활용하는 그림 그리기.</p>
+</div>
+
+<!-- ============ 결과 1 ============ -->
+<div class="card">
+  <h2><span class="num">1</span> cheap-z: 싼 표현이 이겼다 <span class="verdict v-pass">성공</span></h2>
+
+  <div class="flow">
+    <div class="flow-box"><div class="t">frozen DINOv2-small</div><div class="muted">22M, 3캠 공유<br>전체 feature 1회 캐시 (25분)</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="t">작은 헤드 (15분 학습)</div><div class="muted">VIP-I 값기하 + 교차뷰/교차에피소드 InfoNCE + VICReg + episode 적대자 + TD항</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="t">z (256차원)</div><div class="muted">critic 입력<br>비디오 디코드 불필요</div></div>
+  </div>
+
+  <h3>값-probe 리더보드 (mc-return R², 높을수록 좋음)</h3>
+  <div class="bar-row"><div class="bar-label">VLA-z (3B)</div><div class="bar-track"><div class="bar-fill" style="width:73.4%; background:var(--muted)">0.734</div></div></div>
+  <div class="bar-row"><div class="bar-label">raw DINOv2 (그냥)</div><div class="bar-track"><div class="bar-fill" style="width:61%; background:#5b6472">0.610</div></div></div>
+  <div class="bar-row"><div class="bar-label"><b>cheap-z v5b ⭐</b></div><div class="bar-track"><div class="bar-fill" style="width:76.2%; background:var(--green)">0.762</div></div></div>
+
+  <h3>episode-기억 정도 (kNN purity, 낮을수록 좋음 — "이웃이 같은 데모 프레임인 비율")</h3>
+  <div class="bar-row"><div class="bar-label">raw DINOv2</div><div class="bar-track"><div class="bar-fill" style="width:69.8%; background:var(--red)">0.698</div></div></div>
+  <div class="bar-row"><div class="bar-label">VLA-z (3B)</div><div class="bar-track"><div class="bar-fill" style="width:42%; background:var(--yellow)">0.420</div></div></div>
+  <div class="bar-row"><div class="bar-label"><b>cheap-z v5b ⭐</b></div><div class="bar-track"><div class="bar-fill" style="width:15.4%; background:var(--green)">0.154</div></div></div>
+
+  <div class="qa">
+    <div class="q">Q. 어떻게 15분짜리가 3B를 이기지?</div>
+    문헌(probing 연구 2605.28527)이 예고한 결과입니다: frozen DINOv2는 VLA feature에 R² 0.04 차이까지 접근합니다. 나머지 갭은 <b>우리 데이터에 맞춘 목적함수</b>(값 기하 + episode 불변성)가 채웠습니다. 반대로 VLA-z는 appearance 편향을 그대로 상속하는 비용을 치릅니다.
+  </div>
+
+  <p class="muted">⚠️ 정직한 미해결 하나: "반쪽-분할 stitching probe"(다른 데모의 앞/뒤를 조합하는 질의)에선 아직 VLA-z가 우위 (ρ 0.47 vs 0.25). 원인도 알고(우리 손실이 MC-계열이라 stitch가 구조적으로 안 됨 — 문헌 예측 그대로) 다음 시도 3개도 정해뒀습니다. §4 참고.</p>
+</div>
+
+<!-- ============ 결과 2 ============ -->
+<div class="card">
+  <h2><span class="num">2</span> 반전: critic이 action을 안 보고 있었다 <span class="verdict v-fail">발견</span></h2>
+
+  <p>오프라인 진단 배터리를 두 critic(VLA-z용, cheap-z용)에 돌렸더니 <b>둘 다 동일하게</b>:</p>
+
+  <div class="qa" style="border-left-color: var(--red)">
+    <div class="q" style="color:var(--red)">진단 결과 (원문)</div>
+    "FAIL — action sensitivity ≈ 0: the critic ignores the action, <b>best-of-N is a no-op</b>"<br>
+    <span class="muted">후보 16개 chunk 간 Q값 차이가 0.001 수준 — 사실상 무작위 선택과 같았음</span>
+  </div>
+
+  <h3>왜 이런 일이?</h3>
+  <div class="flow">
+    <div class="flow-box"><div class="t">데모 514개가 전부 성공</div><div class="muted">모든 시연 action이<br>성공으로 이어짐</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="t">데이터에 "대조"가 없음</div><div class="muted">좋은 action vs 나쁜 action<br>비교쌍이 존재하지 않음</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="t">Q(z, a) → V(z)로 퇴화</div><div class="muted">action을 무시해도<br>학습 loss는 완벽히 내려감</div></div>
+  </div>
+
+  <p>이건 우리 버그가 아니라 <b>성공-only 오프라인 데이터의 구조적 한계</b>입니다. 문헌도 정확히 이래서 장치를 답니다 — V-GPS는 "IQL 랭킹은 후보 10개 넘으면 붕괴"를 ablation으로 보였고, RoboMonkey는 가짜 나쁜-action을 합성해서 학습하고, WCM은 dynamics로 critic을 접지합니다.</p>
+  <p class="muted">💡 의미: 지금까지의 best-of-N 실험들에서 "critic이 고른다"는 부분이 사실상 작동하지 않았을 가능성이 큽니다. 이걸 밤에 발견한 게 오히려 다행.</p>
+</div>
+
+<!-- ============ 결과 3 ============ -->
+<div class="card">
+  <h2><span class="num">3</span> 해법의 실마리: dynamics의 "불일치"가 답이었다 <span class="verdict v-pass">발견</span></h2>
+
+  <p>그럼 뭐가 action을 구분하나? 세 가지 채점 방식을 같은 조건에서 비교했습니다:</p>
+
+  <table>
+    <tr><th>채점 방식</th><th>후보 간 변별력<br>(스프레드)</th><th>시연 chunk vs<br>엉뚱한 chunk 구분</th><th>판정</th></tr>
+    <tr><td>Q(z, a) — 기존 model-free</td><td>0.0013</td><td>실패</td><td><span class="verdict v-fail">action 무시</span></td></tr>
+    <tr><td>V(d(z, a)) — 값을 dynamics에 통과</td><td>0.0011</td><td>AUC 0.50 (동전)</td><td><span class="verdict v-fail">역시 무시</span></td></tr>
+    <tr class="win"><td><b>dynamics 앙상블 disagreement</b></td><td><b>0.0253 (20배)</b></td><td><b>AUC 0.58, margin +0.09</b></td><td><span class="verdict v-pass">유일한 신호</span></td></tr>
+  </table>
+
+  <div class="qa">
+    <div class="q">Q. disagreement가 뭐고 왜 작동하지?</div>
+    dynamics 모델 5개를 독립적으로 학습시키고, 같은 (상태, action chunk)에 대해 <b>5개의 미래 예측이 서로 얼마나 갈리는지</b>를 잽니다. 시연된 것과 비슷한 chunk → 5개가 다 봤던 패턴 → 예측 일치. 이상한 chunk → 학습 데이터에 없음 → 예측이 제각각. 즉 <b>"이 상태에서 이 행동이 시연자스러운가"</b>를 재는 겁니다. 성공-only 데이터가 가르칠 수 있는 건 "어느 게 더 성공하나"(대조 없음)가 아니라 정확히 이것뿐입니다.
+  </div>
+
+  <h3>dynamics 모델 자체 품질 검증도 통과</h3>
+  <ul>
+    <li>모든 예측 길이에서 "변화 없음" 기준선을 이김 (16스텝 예측에서 31% 낮은 오차)</li>
+    <li><b>disagreement ↔ 실제 오차 상관 ρ 0.70~0.78</b> → <span class="hl-b">"예측이 자신 있는 만큼만 커밋한다"</span>는 adaptive chunking 규칙이 성립 가능</li>
+  </ul>
+</div>
+
+<!-- ============ 큰 그림 ============ -->
+<div class="card">
+  <h2><span class="num">4</span> 그래서, 최종 그림</h2>
+
+  <div class="flow">
+    <div class="flow-box" style="border-color:#3b82f6"><div class="t">🖼️ cheap-z (v5b)</div><div class="muted">frozen DINOv2 + 15분 헤드<br>critic 관측 입력</div></div>
+    <div class="flow-arrow">+</div>
+    <div class="flow-box" style="border-color:#a855f7"><div class="t">🔮 dynamics 앙상블</div><div class="muted">chunk-조건 1-jump 예측<br>(긴 상상 rollout은 금지 — 문헌이 실패 문서화)</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:#22c55e"><div class="t">🎯 Model-Based AC</div><div class="muted">chunk 선택: disagreement 채점<br>커밋 길이: 불확실성 게이트</div></div>
+  </div>
+
+  <h3>단계별 계획</h3>
+  <div class="phase"><div class="phase-badge">Phase 0<br><span class="muted" style="font-weight:400">이번 주</span></div><div>
+    <b>오프라인 마감.</b> critic에 Cal-QL 캘리브레이션(우리가 이미 가진 MC return으로 <code>max(Q, MC)</code>) + LayerNorm. dynamics v1 (조사로 확정한 레시피: macro-stride 4, 불확실성 헤드). stitching 갭 해소 시도 3종.
+  </div></div>
+  <div class="phase"><div class="phase-badge">Phase 1<br><span class="muted" style="font-weight:400">온라인</span></div><div>
+    <b>정책은 얼리고 critic만 온라인 정제.</b> rollout에서 드디어 <span class="hl-y">실패 데이터</span>가 들어옴 → 그제서야 값-기반 랭킹이 살아남. 워밍업→50/50 버퍼 등 검증된 안정화 스택 사용.
+  </div></div>
+  <div class="phase"><div class="phase-badge">Phase 2<br><span class="muted" style="font-weight:400">VLA 개선</span></div><div>
+    <b>VLA 자체를 개선.</b> Q-gradient로 chunk을 다듬고 그 결과를 flow에 증류 (Q-VGM 방식: 이미 로깅된 ~500 에피소드로 π0.5를 79→92.5% 올린 선례). <span class="hl-r">flow에 PPO 직접 적용은 금지</span> — 실기기에서 아무도 안 하고, 하는 논문은 시뮬 전용.
+  </div></div>
+</div>
+
+<!-- ============ 부록 ============ -->
+<div class="card">
+  <h2><span class="num">5</span> 부록: 어젯밤 실제로 돌린 것들</h2>
+  <table>
+    <tr><th>시간대</th><th>실험</th><th>결과</th></tr>
+    <tr><td>저녁</td><td>ridge-probe 하네스 (VLA-z vs raw DINO)</td><td>갭 0.124 확인 → 헤드 목표치 설정</td></tr>
+    <tr><td>저녁</td><td>DINOv2 feature 전체 캐시 (279k×3캠)</td><td>25분 — 이후 모든 실험에서 비디오 디코드 소멸</td></tr>
+    <tr><td>밤</td><td>표현 스윕 v1→v5 (총 9 run, 각 8~15분)</td><td>v5b 챔피언 (mc 0.762 / purity 0.154)</td></tr>
+    <tr><td>밤</td><td>critic A/B/C (IQL 150k × 3: VLA-z, v2c, v4b)</td><td>전부 action-blind → §2 발견</td></tr>
+    <tr><td>새벽</td><td>dynamics v0 앙상블 + 캘리브레이션</td><td>ρ 0.70~0.78 통과</td></tr>
+    <tr><td>새벽</td><td>model-based 채점 3방식 비교</td><td>disagreement만 유효 → §3 발견</td></tr>
+    <tr><td>새벽</td><td>stitching probe (반쪽-분할)</td><td>VLA-z 우위 확인 — 미해결 항목으로 등록</td></tr>
+    <tr><td>병행</td><td>심층 문헌조사 3건 (dynamics 구현 / VLA-RL 메커니즘 / 오프라인 계측)</td><td>전부 1차 소스 검증 완료, 로드맵에 반영</td></tr>
+  </table>
+
+  <h3>파일 위치</h3>
+  <ul class="muted" style="font-size:13px">
+    <li>전체 보고서(상세 수치·인용): <code>docs/overnight_report_2026-08-07.md</code></li>
+    <li>설계 문서: <code>docs/cheap_z_and_model_based_ac.md</code></li>
+    <li>코드: <code>scripts/train_cheap_z.py</code> (표현), <code>train_cheapz_dynamics.py</code> (dynamics), <code>probe_cheap_z.py</code> / <code>probe_stitching.py</code> / <code>eval_modelbased_scorer.py</code> (계측)</li>
+    <li>병행 트랙: GarnishPancake mae0.5 학습 중 (13k/100k) · mae0.5 임베딩 비교용 z-only annotation 재제출됨</li>
+  </ul>
+
+  <div class="footnote">
+    모든 수치는 동일 20k 프레임·동일 episode 분할에서 측정. "VLA-z"는 rlt5_pardec_noprop@70k 체크포인트의 RL 토큰.
+    실험은 전부 slurm으로 실행, 코드는 커밋됨 (<code>7cf2b41</code> 외).
+  </div>
+</div>
+
+</div>
+</body>
+</html>

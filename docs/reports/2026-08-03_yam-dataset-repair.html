@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>YAM 데이터셋 프레임 결손 진단·수리</title>
+<style>
+:root{--bg:#0f1117;--card:#181c25;--card2:#1f2430;--text:#e6e9ef;--muted:#9aa3b2;--line:#2a3140;
+--green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#60a5fa;--purple:#c084fc}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Pretendard',-apple-system,'Segoe UI',sans-serif;line-height:1.7;padding:40px 16px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:24px;margin-bottom:6px} h2{font-size:18px;margin:22px 0 10px 0;color:var(--blue)}
+.date{color:var(--muted);font-size:13px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px}
+p{margin-bottom:10px;font-size:14.5px} ul{padding-left:20px;margin-bottom:10px} li{margin-bottom:5px;font-size:14px}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+th{text-align:left;color:var(--muted);padding:7px 9px;border-bottom:1px solid var(--line);font-size:12px}
+td{padding:7px 9px;border-bottom:1px solid #222836}
+tr.win td{background:rgba(74,222,128,.07)}
+code{background:#232937;padding:1px 6px;border-radius:5px;font-size:12px;color:#a5d6ff}
+.g{color:var(--green);font-weight:600}.r{color:var(--red);font-weight:600}.y{color:var(--yellow);font-weight:600}.b{color:var(--blue);font-weight:600}
+.tag{display:inline-block;padding:1px 9px;border-radius:20px;font-size:11.5px;font-weight:700;margin-right:6px;background:rgba(96,165,250,.13);color:var(--blue);border:1px solid rgba(96,165,250,.35)}
+.back{font-size:13px;margin-bottom:18px}.back a{color:var(--muted);text-decoration:none}
+.qa{background:var(--card2);border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:11px 15px;margin:10px 0;font-size:13.5px}
+.qa .q{color:var(--purple);font-weight:700;margin-bottom:3px}
+</style></head><body><div class="wrap">
+<div class="back"><a href="index.html">← 실험 리포트 허브</a></div>
+<h1>YAM 데이터셋 프레임 결손 진단·수리</h1><div class="date">2026-08-02 ~ 08-03 · <span class="tag">YAM</span><span class="tag">데이터</span><span class="tag">인프라</span></div>
+
+<div class="card"><h2>무슨 일이었나</h2>
+<p>YAM lego-taxi 데이터셋의 일부 mp4가 <b>메타데이터가 주장하는 것보다 짧게</b> 인코딩되어 있었습니다
+(GPU/스트리밍 인코더가 에피소드 꼬리 프레임을 떨어뜨림). 학습 로더가 프레임 조회 시점에 죽거나,
+조용히 어긋난 프레임을 읽을 수 있는 상태였습니다.</p>
+<h2>한 일</h2>
+<ul>
+<li><code>scripts/scan_yam_video_alignment.py</code> — 결손이 <b>꼬리가 아니라 내부 join 지점</b>에도 있음을 특정</li>
+<li><code>scripts/repair_yam_dataset.py</code> — 메타데이터/비디오 정합 수리</li>
+<li>norm stats 계산이 버릴 비디오를 디코드하던 낭비 제거 (<code>791f96c</code>)</li>
+<li>진단·수리 노트: <code>docs/yam_dataset_issues.md</code></li>
+</ul>
+<h2>영향</h2>
+<p>이후 데이터셋 소유자가 수리판(235 eps)을 재업로드 → 스케일링 실험(s200)의 기반이 됨.</p>
+</div>
+</div></body></html>

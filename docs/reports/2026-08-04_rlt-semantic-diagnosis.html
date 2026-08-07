@@ -1,0 +1,48 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>RLT 토큰 진단: episode-identity 병리와 대응 목적함수</title>
+<style>
+:root{--bg:#0f1117;--card:#181c25;--card2:#1f2430;--text:#e6e9ef;--muted:#9aa3b2;--line:#2a3140;
+--green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#60a5fa;--purple:#c084fc}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Pretendard',-apple-system,'Segoe UI',sans-serif;line-height:1.7;padding:40px 16px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:24px;margin-bottom:6px} h2{font-size:18px;margin:22px 0 10px 0;color:var(--blue)}
+.date{color:var(--muted);font-size:13px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px}
+p{margin-bottom:10px;font-size:14.5px} ul{padding-left:20px;margin-bottom:10px} li{margin-bottom:5px;font-size:14px}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+th{text-align:left;color:var(--muted);padding:7px 9px;border-bottom:1px solid var(--line);font-size:12px}
+td{padding:7px 9px;border-bottom:1px solid #222836}
+tr.win td{background:rgba(74,222,128,.07)}
+code{background:#232937;padding:1px 6px;border-radius:5px;font-size:12px;color:#a5d6ff}
+.g{color:var(--green);font-weight:600}.r{color:var(--red);font-weight:600}.y{color:var(--yellow);font-weight:600}.b{color:var(--blue);font-weight:600}
+.tag{display:inline-block;padding:1px 9px;border-radius:20px;font-size:11.5px;font-weight:700;margin-right:6px;background:rgba(96,165,250,.13);color:var(--blue);border:1px solid rgba(96,165,250,.35)}
+.back{font-size:13px;margin-bottom:18px}.back a{color:var(--muted);text-decoration:none}
+.qa{background:var(--card2);border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:11px 15px;margin:10px 0;font-size:13.5px}
+.qa .q{color:var(--purple);font-weight:700;margin-bottom:3px}
+</style></head><body><div class="wrap">
+<div class="back"><a href="index.html">← 실험 리포트 허브</a></div>
+<h1>RLT 토큰 진단: episode-identity 병리와 대응 목적함수</h1><div class="date">2026-08-03 ~ 08-04 · <span class="tag">RLT</span><span class="tag">표현</span><span class="tag">진단</span><span class="tag">RoboCasa</span></div>
+
+<div class="card"><h2>질문</h2>
+<p>"RoboCasa는 시멘틱하게 비슷해도 비주얼이 달라서 모든 trajectory가 구분되어버린다 —
+z_rl이 semantic을 못 담는 것 아닌가?" (stitching이 안 되는 원인 추적)</p>
+<h2>측정 (scripts/latent_semantics.py, n=576, 체크포인트 8개)</h2>
+<table>
+<tr><th>지표</th><th>z_rl (mae0.5@80k)</th><th>chance</th><th>해석</th></tr>
+<tr><td>progress R² (held-out ep)</td><td class="g">0.82~0.91</td><td>0</td><td>phase는 <b>잘 담김</b> — 가설의 절반은 기각</td></tr>
+<tr><td>episode 선형 probe acc</td><td class="r">1.00</td><td>0.04</td><td>episode 정체가 <b>완벽히</b> 들어있음</td></tr>
+<tr><td>kNN same-episode purity</td><td class="r">0.60</td><td>0.04</td><td>이웃 geometry를 episode가 지배 → stitching 불가</td></tr>
+</table>
+<p>추가 발견: <b>학습할수록 악화</b>(purity 0.28→0.60), <b>MAE mask 비율을 올려도 안 고쳐짐</b>
+(0/0.5/0.75 전부 ep_acc≈1.0) — 재구성 목적함수의 본질적 문제.</p>
+<h2>구현한 대응 (pi0_rlt.py)</h2>
+<ul>
+<li><code>+action</code> — 시연 chunk 회귀 (gradient 흐름; detached probe와 구분)</li>
+<li><code>+behsim</code> — PSE식 행동-유사도 InfoNCE (motor-bias 한계 인지 후 보류)</li>
+<li><code>+epadv</code> — DANN gradient-reversal episode 적대자 (순서-무가정; 이후 cheap-z에 재사용됨)</li>
+</ul>
+<p class="qa"><span class="q">후일담</span> 이 진단 하네스와 epadv 설계가 08-07 cheap-z 파이프라인의 토대가 됨.
+semantic arm 학습은 GPU 우선순위 조정으로 보류.</p>
+</div>
+</div></body></html>

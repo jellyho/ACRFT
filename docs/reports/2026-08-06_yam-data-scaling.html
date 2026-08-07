@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>YAM 데이터-스케일링: s100/s200 × joint/none 완주</title>
+<style>
+:root{--bg:#0f1117;--card:#181c25;--card2:#1f2430;--text:#e6e9ef;--muted:#9aa3b2;--line:#2a3140;
+--green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#60a5fa;--purple:#c084fc}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Pretendard',-apple-system,'Segoe UI',sans-serif;line-height:1.7;padding:40px 16px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:24px;margin-bottom:6px} h2{font-size:18px;margin:22px 0 10px 0;color:var(--blue)}
+.date{color:var(--muted);font-size:13px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px}
+p{margin-bottom:10px;font-size:14.5px} ul{padding-left:20px;margin-bottom:10px} li{margin-bottom:5px;font-size:14px}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+th{text-align:left;color:var(--muted);padding:7px 9px;border-bottom:1px solid var(--line);font-size:12px}
+td{padding:7px 9px;border-bottom:1px solid #222836}
+tr.win td{background:rgba(74,222,128,.07)}
+code{background:#232937;padding:1px 6px;border-radius:5px;font-size:12px;color:#a5d6ff}
+.g{color:var(--green);font-weight:600}.r{color:var(--red);font-weight:600}.y{color:var(--yellow);font-weight:600}.b{color:var(--blue);font-weight:600}
+.tag{display:inline-block;padding:1px 9px;border-radius:20px;font-size:11.5px;font-weight:700;margin-right:6px;background:rgba(96,165,250,.13);color:var(--blue);border:1px solid rgba(96,165,250,.35)}
+.back{font-size:13px;margin-bottom:18px}.back a{color:var(--muted);text-decoration:none}
+.qa{background:var(--card2);border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:11px 15px;margin:10px 0;font-size:13.5px}
+.qa .q{color:var(--purple);font-weight:700;margin-bottom:3px}
+</style></head><body><div class="wrap">
+<div class="back"><a href="index.html">← 실험 리포트 허브</a></div>
+<h1>YAM 데이터-스케일링: s100/s200 × joint/none 완주</h1><div class="date">2026-08-04 ~ 08-06 · <span class="tag">YAM</span><span class="tag">스케일링</span><span class="tag">BC</span><span class="tag">완료</span></div>
+
+<div class="card"><h2>목표</h2>
+<p>성공 데모가 +100개 늘 때마다 BC 성공률이 얼마나 변하는지 — 스케일링 곡선의 첫 두 점.</p>
+<h2>설정</h2>
+<table>
+<tr><th>run</th><th>데이터</th><th>성공 에피소드</th><th>delta</th></tr>
+<tr><td>s100_joint / s100_none</td><td>구 119-ep</td><td>100 (success-only)</td><td>relative / absolute</td></tr>
+<tr><td>s200_joint / s200_none</td><td>수리판 235-ep (별도 root)</td><td>200 (success-only)</td><td>relative / absolute</td></tr>
+</table>
+<ul>
+<li><b>success-only 필터</b> 신규 구현 (<code>--data.success-only</code>, outcomes.jsonl 기반)</li>
+<li><b>스케일링 점마다 자기 norm stats</b> (<code>ASSET_ID</code> 격리 — 공유 stats 사용자 지시로 기각)</li>
+<li>4 run 전부 <b>100k step 완주</b>. 체크포인트 50k~100k 전부 HF 공개 업로드·검증:
+<code>jellyho/pi05_yam_lego_taxi_{rlt,none_rlt}_{s100,s200}</code></li>
+</ul>
+<h2>운영 사건일지 (교훈)</h2>
+<ul>
+<li>💥 디스크 full로 3 run 사망 → 체크포인트가 44G(params 12+opt 32)임을 파악, 옛 opt-state 자동 정리 도입</li>
+<li>🧟 squeue엔 R인데 실제론 죽은 <b>좀비 job</b> 발견 → 로그 mtime 기반 감시로 전환</li>
+<li>♻️ &gt;50k 체크포인트 자동 아카이브(HF 업로드 검증 후 로컬 삭제) 파이프라인 구축</li>
+</ul>
+<p>다음: 데이터 +100 모이면 s300을 동일 규약으로. 성공률 측정은 실기기 배포(i2rt_rllab serving 검토 완료).</p>
+</div>
+</div></body></html>

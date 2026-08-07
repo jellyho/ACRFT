@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AC-RFT 실험 리포트 허브</title>
+<style>
+  :root{--bg:#0f1117;--card:#181c25;--card2:#1f2430;--text:#e6e9ef;--muted:#9aa3b2;--line:#2a3140;
+  --green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#60a5fa;--purple:#c084fc}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Pretendard',-apple-system,'Segoe UI',sans-serif;line-height:1.6;padding:40px 16px}
+  .wrap{max-width:880px;margin:0 auto}
+  h1{font-size:26px;margin-bottom:4px}
+  .sub{color:var(--muted);font-size:13.5px;margin-bottom:24px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;align-items:center}
+  #search{flex:1;min-width:220px;background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;color:var(--text);font-size:14px;outline:none}
+  #search:focus{border-color:var(--blue)}
+  .chip{padding:5px 13px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;
+    background:var(--card);border:1px solid var(--line);color:var(--muted);user-select:none;transition:.15s}
+  .chip:hover{border-color:var(--blue);color:var(--blue)}
+  .chip.on{background:rgba(96,165,250,.15);border-color:var(--blue);color:var(--blue)}
+  .entry{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 22px;margin-bottom:12px;text-decoration:none;color:var(--text);transition:.15s}
+  .entry:hover{border-color:var(--blue);transform:translateY(-1px)}
+  .entry .top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .entry .title{font-size:16.5px;font-weight:700}
+  .entry .date{color:var(--muted);font-size:12.5px;white-space:nowrap}
+  .entry .summary{color:var(--muted);font-size:13.5px;margin:6px 0 8px 0}
+  .tag{display:inline-block;padding:1px 9px;border-radius:20px;font-size:11px;font-weight:700;margin-right:5px;
+    background:rgba(96,165,250,.13);color:var(--blue);border:1px solid rgba(96,165,250,.35)}
+  .tag.done{background:rgba(74,222,128,.13);color:var(--green);border-color:rgba(74,222,128,.35)}
+  .tag.ongoing{background:rgba(251,191,36,.13);color:var(--yellow);border-color:rgba(251,191,36,.35)}
+  .tag.finding{background:rgba(192,132,252,.13);color:var(--purple);border-color:rgba(192,132,252,.35)}
+  .count{color:var(--muted);font-size:12.5px;margin-bottom:10px}
+  .empty{color:var(--muted);text-align:center;padding:40px 0}
+  .howto{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px 16px;
+    font-size:12.5px;color:var(--muted);margin-top:26px}
+  code{background:#232937;padding:1px 6px;border-radius:5px;font-size:11.5px;color:#a5d6ff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧪 AC-RFT 실험 리포트 허브</h1>
+  <div class="sub">그동안의 실험을 날짜·이름·태그로 찾아볼 수 있습니다. 새 리포트는 아래 규약대로 추가됩니다.</div>
+
+  <div class="controls">
+    <input id="search" type="text" placeholder="검색 (제목·요약·태그)…">
+    <span class="chip" data-tag="__all" >전체</span>
+  </div>
+  <div id="chips" class="controls" style="margin-top:-8px"></div>
+  <div class="count" id="count"></div>
+  <div id="list"></div>
+
+  <div class="howto">
+    <b>새 리포트 추가 규약</b> — ① <code>docs/reports/YYYY-MM-DD_slug.html</code>로 리포트 저장(자기완결 HTML)
+    ② 이 파일의 <code>REPORTS</code> 배열 맨 앞에 항목 추가 <code>{date, title, summary, tags, file, status}</code>.
+    status: <code>done</code>(완료) / <code>ongoing</code>(진행중) / <code>finding</code>(발견 중심).
+  </div>
+</div>
+
+<script>
+const REPORTS = [
+  {
+    date: "2026-08-07",
+    title: "🌙 밤샘: cheap-z가 VLA 토큰을 이기다 + critic action-blind 발견",
+    summary: "22M frozen DINOv2 + 15분 헤드가 3B VLA hidden 토큰을 모든 값-probe에서 상회 (mc R² 0.762 vs 0.734). 성공-only 데모에선 IQL critic이 action을 무시함을 측정으로 확인 — dynamics 앙상블 disagreement만 유일한 오프라인 랭킹 신호. Model-based AC 로드맵 확정.",
+    tags: ["cheap-z", "표현", "critic", "dynamics", "RoboCasa"],
+    file: "2026-08-07_cheapz-overnight.html",
+    status: "finding"
+  },
+  {
+    date: "2026-08-06",
+    title: "태스크 2 확장(GarnishPancake) + mae0.5 annotation 트랙",
+    summary: "경향성 확인용 두 번째 태스크 학습 시작(동일 mae0.5 레시피). mae0.5 annotation은 4회 실패 후 z-only 경량판으로 우회 — 완료 시 HF 자동 업로드.",
+    tags: ["RoboCasa", "RLT"],
+    file: "2026-08-06_garnish-annotation-track.html",
+    status: "ongoing"
+  },
+  {
+    date: "2026-08-06",
+    title: "YAM 데이터-스케일링 s100/s200 완주",
+    summary: "성공 데모 100 vs 200 × delta joint/none = 4 run 전부 100k 완주. success-only 필터·점별 norm stats 신규 구현. 체크포인트 50k~100k 전부 HF 공개. 디스크 full·좀비 job 사건과 자동 아카이브 파이프라인.",
+    tags: ["YAM", "스케일링", "BC"],
+    file: "2026-08-06_yam-data-scaling.html",
+    status: "done"
+  },
+  {
+    date: "2026-08-04",
+    title: "RLT 토큰 진단: episode-identity 병리",
+    summary: "z_rl은 phase를 잘 담지만(progress R² 0.82+) episode 정체가 완벽히 들어있고(probe 1.00) 학습할수록 악화 — stitching 불가의 실측 원인. MAE로는 안 고쳐짐. 대응 목적함수(+action/+behsim/+epadv) 구현.",
+    tags: ["RLT", "표현", "진단", "RoboCasa"],
+    file: "2026-08-04_rlt-semantic-diagnosis.html",
+    status: "finding"
+  },
+  {
+    date: "2026-08-03",
+    title: "YAM 데이터셋 프레임 결손 진단·수리",
+    summary: "mp4가 메타데이터보다 짧은 결손을 내부 join 지점까지 특정하고 수리 도구 제작. 이후 수리판 235-ep 재업로드의 기반.",
+    tags: ["YAM", "데이터", "인프라"],
+    file: "2026-08-03_yam-dataset-repair.html",
+    status: "done"
+  },
+];
+
+const statusLabel = {done: "완료", ongoing: "진행중", finding: "핵심발견"};
+const allTags = [...new Set(REPORTS.flatMap(r => r.tags))];
+let activeTag = "__all", query = "";
+
+const chipsEl = document.getElementById("chips");
+allTags.forEach(t => {
+  const c = document.createElement("span");
+  c.className = "chip"; c.dataset.tag = t; c.textContent = t;
+  chipsEl.appendChild(c);
+});
+
+function render() {
+  const list = document.getElementById("list");
+  const q = query.toLowerCase();
+  const rows = REPORTS
+    .filter(r => activeTag === "__all" || r.tags.includes(activeTag))
+    .filter(r => !q || (r.title + r.summary + r.tags.join(" ")).toLowerCase().includes(q))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  document.getElementById("count").textContent = `${rows.length}개 리포트`;
+  list.innerHTML = rows.length ? "" : '<div class="empty">조건에 맞는 리포트가 없습니다</div>';
+  rows.forEach(r => {
+    const a = document.createElement("a");
+    a.className = "entry"; a.href = r.file;
+    a.innerHTML = `
+      <div class="top"><span class="title">${r.title}</span><span class="date">${r.date}</span></div>
+      <div class="summary">${r.summary}</div>
+      <div><span class="tag ${r.status}">${statusLabel[r.status] || r.status}</span>${r.tags.map(t => `<span class="tag">${t}</span>`).join("")}</div>`;
+    list.appendChild(a);
+  });
+}
+
+document.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+  document.querySelectorAll(".chip").forEach(x => x.classList.remove("on"));
+  c.classList.add("on"); activeTag = c.dataset.tag; render();
+}));
+document.querySelector('[data-tag="__all"]').classList.add("on");
+document.getElementById("search").addEventListener("input", e => { query = e.target.value; render(); });
+render();
+</script>
+</body>
+</html>
