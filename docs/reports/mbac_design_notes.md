@@ -72,6 +72,65 @@ nothing (worker-B's table is a warning about exactly this).
   a function of rollout depth k — the minimum commit horizon at which
   model-based ranking is informative. Expect ≥2 macro-steps given the R² curve.
 
+## Iteration 2 (03:50) — replan cost, hysteresis, and the sim integration path
+
+### Replan cost, measured rather than assumed
+
+From tonight's rollout_control log: ~1 min per 1000-step trial with a replan
+every 16 steps → ≈62 replans/trial ≈ 1 s per 16-step block, VLA inference
+(10 flow steps, N=16 candidates) plus sim inside that. Two consequences:
+
+- **Latency, not throughput, is the argument.** On a real robot (YAM) the sim
+  cost vanishes but inference latency stays; at k=16 the arm runs open-loop for
+  16 control steps between corrections. Adaptive k is not about saving compute
+  (worst case it replans MORE) — it is about *spending* the replan budget where
+  the model says the plan decays fastest, and coasting where it doesn't.
+- So the objective for π_k is not `Δprogress − c·replans` with a made-up c;
+  the honest offline objective is **terminal prediction error at matched mean
+  commitment** (E1's metric). If adaptive-k dominates the fixed-k frontier
+  (lower error at the same mean k), it buys reactivity for free; c only decides
+  the operating point on that frontier.
+
+### σ-hysteresis: preventing the k=4 doom loop
+
+Off-distribution, σ is high everywhere (desired: replan often when lost). But a
+pure threshold can lock at k_min forever — replanning cannot *reduce* σ if the
+state itself is OOD; each replan re-derives the same alarm. Design:
+
+- Cut rule uses **relative** disagreement: τ_t = τ · median(σ over the last W
+  replans). Persistent OOD inflates the baseline, so the rule re-normalizes and
+  k recovers; only *spikes* relative to the recent regime trigger early cuts.
+  This mirrors how AUSE was the right calibration metric (ranking, not scale).
+- Floor stays k=4 (one macro-step): even in full alarm the arm executes 4 steps
+  — thrash-free by construction, since replanning below the model's stride
+  gives the model no new information anyway.
+
+### Sim integration is a small delta, not a new harness
+
+`eval_critic` already supports per-replan variable `n_exec` (the prefix mode
+returns `(chunk, n_exec, Replan)`). A new mode `mbac`:
+
+1. selection: Cal-QL+swap critic argmax over N candidates at full horizon
+   (unchanged from `bon`);
+2. commitment: run the φ-dyn ensemble on the winner (one forward, 4 macro
+   slots, numpy or torch-CPU — 5 tiny models, negligible next to the VLA);
+   n_exec = 4·k*, k* from the hysteresis rule.
+
+This reuses the existing HUD/trace fields (`n_exec`, `best_prefix`) so the
+per-trial traces stay comparable with tonight's fixed-k runs — the paired
+comparison extends to a 3rd arm without touching the harness.
+
+### Where this meets AC-RFT (the RL part, sharpened)
+
+The RFT loop fine-tunes the VLA on its own successful rollouts. If those
+rollouts run under MB-AC commitment, the *data distribution itself* becomes
+adaptive-chunked: chunks that survived long commits appear as long coherent
+segments, alarm regions appear as dense replan boundaries. Fine-tuning on that
+data teaches the VLA to produce chunks that are *stable where the model can
+verify them* — a virtuous cycle where the dynamics model shapes the policy
+without ever backpropagating through it. π_k (proposal v1) then only needs to
+be learned if E1 shows the σ rule leaves oracle gain on the table.
+
 ## Open questions for later iterations
 
 - Replan cost model: on L40S, one VLA replan ≈ 10 flow steps ≈ ~0.4 s vs 16
