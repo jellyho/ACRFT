@@ -617,7 +617,45 @@ entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "�
 <table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_frows}</table>
 <h3>절대 성공률</h3>
 <table class='num'><tr><th>arm</th><th>arm 성공</th><th>잡내 vla 성공</th></tr>{_abs_rows if _abs_rows else "<tr><td colspan=3>평가 도착 대기</td></tr>"}</table>
-<p><b>해석(작성 중).</b> 도착분이 쌓이는 대로 요인별 forest plot과 실패 단계 분포, 비디오 갤러리를 이 탭에 추가한다.</p>
+<p><b>잠정 해석 (도착분 기준 — 표는 재생성 시점의 도착 JSON으로 자동 재계산).</b>
+IQL 계열 5팔(iql/iql_a101/iql_a201/iql_online/iql_demo)과 qc_demo가 먼저 도착했고 <b>전부 null</b> —
+CI가 모두 0을 포함하며, 점추정은 −0.065~+0.013 사이. v11(demo-only 16시드)과 v12(mixed 16시드)의 null 판정과 정합적이다.
+atoms 51→201 증가도, 타깃넷 EMA→online도 IQL에서는 판정을 바꾸지 않았다.
+TD 계열 7팔(mixed)은 학습이 XLA 컴파일 segfault로 지연 중 — 아래 '침묵사 규명' 탭 참조. td_max_demo는 학습 완료, 평가 진행 중.</p>
+""")
+
+# ============================================== 08-07 TD 침묵사 + K-수집
+entry("08-07", "td-segv", "TD+mixed 침묵사 규명 — XLA 컴파일 segfault", "진행 중", f"""
+{spec([("증상", "TD·QC·CalQL × mixed(17GB) 학습이 'ARQ critic: 10.22M params' 직후 트레이스백 없이 사망 — r1(96G)/r2(180G)/r3(250G) 전멸"),
+       ("판정 도구", "PYTHONFAULTHANDLER=1 + slurm ExitCode"),
+       ("공정성", "동일 데이터·동일 배치의 IQL은 같은 노드(node26/28)에서 정상 학습 — 노드가 아니라 TD 프로그램이 원인")])}
+<table class='num'><tr><th>가설</th><th>실험</th><th>결과</th></tr>
+<tr><td>호스트 RAM 부족</td><td>mem 96→180→250G 증량</td><td class='bad'>기각 — 전부 사망, 1TB 노드(node58)에서도 사망</td></tr>
+<tr><td>노드 불량</td><td>IQL을 같은 노드에서 학습</td><td class='bad'>기각 — IQL은 정상</td></tr>
+<tr><td>정체 확인</td><td>faulthandler 스택</td><td><b>XLA backend_compile 내부 SIGSEGV(exit 139)</b> — 컴파일러 크래시</td></tr>
+<tr><td>공유 컴파일 캐시 오염</td><td>캐시 on/off A/B</td><td class='bad'>기각 — 둘 다 segfault</td></tr>
+<tr><td>autotune/병렬컴파일/배치형상</td><td>autotune0 · 직렬컴파일 · b64 3종</td><td class='bad'>기각 — 전부 segfault</td></tr>
+<tr><td>cuDNN fMHA / Triton gemm 코드젠</td><td>플래그 off 3종(A6000)</td><td>진행 중</td></tr></table>
+<p><b>아키텍처 의존성.</b> 유일한 통과는 RTX6000ADA(node52, 500스텝 진단 EXIT=0). A6000(sm_86)·RTXPRO6000(Blackwell) 전멸.
+IQL과 TD의 차이는 16후보 forward(어텐션·gemm이 후보축으로 16×) — 후보축이 있는 프로그램만 특정 아키텍처 컴파일에서 죽는다.
+CalQL도 후보축을 쓰므로 같이 죽는다(demo-only CalQL은 정상 학습 중, node44).</p>
+<p><b>영향과 우회.</b> FINAL의 TD 계열 7팔 + calql_mixed가 지연. 우회 경로: ① 플래그 판정 시 해당 플래그로 A6000 함대 재제출,
+② 실패 시 node52 파티션(RTX6000ADA×8, 현재 만석) 직렬 통과. 학습 외 파이프(평가·비디오·주석)는 영향 없음.</p>
+""")
+
+entry("08-07", "kper", "K-per-scene 수집 완료 — 장면 정체성 지름길 제거 데이터", "진행 중", f"""
+{spec([("동기", "기존 mixed는 주방당 롤아웃 1개 → 결과를 장면 정체성으로 외울 수 있음(암기 지름길). 같은 주방을 정책시드만 바꿔 K번 굴리면 지름길 차단"),
+       ("수집", "--policy-seed 분리(커밋 922d7d4) · 주방 150개(장면시드 1000–1400×30) × 정책시드 3 = 450 롤아웃 · VLA 동결 그대로"),
+       ("사고록", "1차 15잡 중 11잡 bad-node 사망 + 덤프 파일명에 정책시드 누락으로 p1/p2/p3 상호 덮어쓰기 발견 → 잡별 하위디렉토리로 재수집(450/450 완료)")])}
+<table class='num'><tr><th>지표</th><th>값</th></tr>
+<tr><td>VLA 성공률 (450 롤아웃)</td><td>0.676</td></tr>
+<tr><td>혼합 결과 주방 (성공·실패 공존)</td><td><b>68/150 (45%)</b></td></tr>
+<tr><td>전부 성공 주방</td><td>63/150</td></tr>
+<tr><td>전부 실패 주방</td><td>19/150</td></tr></table>
+<p><b>해석.</b> 주방의 45%에서 같은 장면이 성공도 실패도 한다 — 이 68개 주방에서는 critic이 장면 정체성으로 결과를 맞힐 수 없고,
+상태·행동에서 신호를 찾아야만 한다. held-out 프로브에서 확인된 보수 편향(낯선 성공 저평가)도 이 데이터가 직접 겨냥한다.
+현재 450궤적 × 프레임당 VLA 16후보 주석을 8샤드로 병렬 진행 중(annot/kroll) → 완료 시 데모와 병합해 <b>v14 mixed</b>로
+FINAL 승자 방법을 재학습한다.</p>
 """)
 
 
