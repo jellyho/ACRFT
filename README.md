@@ -183,7 +183,13 @@ uv run examples/robocasa/plot_eval.py --task PrepareCoffee   # success-rate-vs-c
 sim client) can send an observation and get an action chunk back. It speaks openpi's protocol,
 so any openpi client works unchanged.
 
+`uv run` resolves the project from the working directory, so run it from **this repo** —
+from a robot/client checkout it tries to build that project's dependencies instead and fails
+with something unrelated (`Failed to build ruckig`).
+
 ```bash
+cd /path/to/ACRFT
+
 # YAM, relative-joint actions (the default convention)
 uv run scripts/serve_policy.py \
     --port 8000 \
