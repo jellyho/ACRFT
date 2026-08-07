@@ -63,6 +63,14 @@
 const REPORTS = [
   {
     date: "2026-08-07",
+    title: "🔬 Phase 0: RLT-HILP φ 발견과 critic action-감각 부활",
+    summary: "frozen RLT 토큰 위 TD-only φ(readout)가 판을 뒤집음: stitch 0.78, 선형 episode-판별 붕괴(0.28), 값 VLA-z 이상. Cal-QL이 critic action-blindness 절반 해소(sensitivity 0→0.48), binding 처방 투입. 시각화 4종(고리 vs 깔때기, 실프레임 stitching) 수록.",
+    tags: ["cheap-z", "HILP", "critic", "시각화", "RoboCasa"],
+    file: "2026-08-07_phase0-hilp-critic.html",
+    status: "finding"
+  },
+  {
+    date: "2026-08-07",
     title: "🌙 밤샘: cheap-z가 VLA 토큰을 이기다 + critic action-blind 발견",
     summary: "22M frozen DINOv2 + 15분 헤드가 3B VLA hidden 토큰을 모든 값-probe에서 상회 (mc R² 0.762 vs 0.734). 성공-only 데모에선 IQL critic이 action을 무시함을 측정으로 확인 — dynamics 앙상블 disagreement만 유일한 오프라인 랭킹 신호. Model-based AC 로드맵 확정.",
     tags: ["cheap-z", "표현", "critic", "dynamics", "RoboCasa"],
