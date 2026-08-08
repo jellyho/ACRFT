@@ -22,7 +22,13 @@ MARK = "워커B"
 DATE_MAP = {"~08-01": "2026-08-01", "08-02~03": "2026-08-03", "08-05": "2026-08-05",
             "08-06": "2026-08-06", "08-07": "2026-08-07", "타임라인": "2026-08-08"}
 WBX_STYLE = """<style id="wbx-style">
-/* 워커B 리포트 = 흰 종이 카드 (프로페셔널·깔끔, 허브 테마와 무관하게 백색 지면) */
+/* ===== 허브 전면 백색 테마 (2026-08-08 지시: 메인 페이지·버튼까지 전부 라이트) =====
+   허브 공통 CSS 변수를 라이트 팔레트로 오버라이드 — 구조·콘텐츠는 불변, 색만 교체 */
+:root{--bg:#ffffff !important;--card:#f4f5f8 !important;--card2:#fafafa !important;
+  --text:#1a1a1a !important;--muted:#5f6b7a !important;--line:#e2e2e2 !important;
+  --green:#15803d !important;--red:#b91c1c !important;--yellow:#a16207 !important;--blue:#3730a3 !important}
+body{background:#ffffff}
+/* 워커B 리포트 = 흰 종이 카드 (프로페셔널·깔끔) */
 .wbx{line-height:1.68;background:#ffffff;color:#1a1a1a;border:1px solid #e2e2e2;border-radius:12px;
   padding:26px 30px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
 .wbx a{color:#3730a3}
@@ -97,51 +103,38 @@ def build_thread(merged_reports):
 
 
 def build_mindmap(eid_idx):
-    """실험 리포트를 국면 컬럼 × 연결 간선의 그래프로 — 클릭하면 해당 리포트로 이동."""
-    W, COLW, NH, TOP = 1180, 236, 44, 64
-    pos = {}
-    height = TOP + 30 + max(len(c[1]) for c in MM_COLS) * (NH + 22)
-    nodes, edges = [], []
-    for ci, (label, eids) in enumerate(MM_COLS):
-        x = 14 + ci * COLW
-        nodes.append(f"<text x='{x + 100}' y='34' text-anchor='middle' font-size='15' font-weight='700'>{label}</text>")
-        nodes.append(f"<line x1='{x}' y1='46' x2='{x + 200}' y2='46' stroke='{MM_COLORS[ci]}' stroke-width='2.5'/>")
-        for ni, eid in enumerate(eids):
-            if eid not in eid_idx:
-                continue
-            y = TOP + ni * (NH + 22)
-            pos[eid] = (x, y, ci)
-            title = mm.META[eid]["what"] if eid in mm.META else eid
-            short = title if len(title) <= 17 else title[:16] + "…"
-            nodes.append(
-                f"<g style='cursor:pointer' onclick='openReport({eid_idx[eid]})'>"
-                f"<rect x='{x}' y='{y}' width='200' height='{NH}' rx='9' fill='none' stroke='{MM_COLORS[ci]}' stroke-width='1.6'/>"
-                f"<text x='{x + 100}' y='{y + 19}' text-anchor='middle' font-size='12.5' font-weight='600'>{eid}</text>"
-                f"<text x='{x + 100}' y='{y + 35}' text-anchor='middle' font-size='10' opacity='.75'>{short}</text></g>"
-            )
-    seen = set()
+    """인터랙티브 force-directed 관계도 — META의 links에서 자동 생성, 드래그·호버·클릭.
+
+    새 포스트가 META에 links만 채우면 노드·간선이 스스로 자란다. 국면(컬럼) 배정은 초기 x 편향과
+    색으로만 쓰이고, 배정 없는 새 eid는 자동으로 '신규' 색을 받는다."""
+    cat = {}
+    for ci, (_, eids) in enumerate(MM_COLS):
+        for e in eids:
+            cat[e] = ci
+    phases = [c[0] for c in MM_COLS] + ["신규"]
+    nodes = []
+    for eid, i in eid_idx.items():
+        m = mm.META.get(eid, {})
+        nodes.append({"id": eid, "idx": i, "cat": cat.get(eid, len(MM_COLS)),
+                      "what": m.get("what", eid), "date": m.get("date", "")})
+    links, seen = [], set()
     for eid, m in mm.META.items():
         for tgt in m.get("links", []):
-            if eid not in pos or tgt not in pos or (tgt, eid) in seen:
-                continue
-            seen.add((eid, tgt))
-            (x1, y1, c1), (x2, y2, c2) = pos[eid], pos[tgt]
-            if c1 == c2:
-                xa, ya, xb, yb = x1 + 200, y1 + NH / 2, x2 + 200, y2 + NH / 2
-                path = f"M{xa},{ya} C{xa + 26},{ya} {xb + 26},{yb} {xb},{yb}"
-            else:
-                if c1 > c2:
-                    (x1, y1, c1), (x2, y2, c2) = (x2, y2, c2), (x1, y1, c1)
-                xa, ya, xb, yb = x1 + 200, y1 + NH / 2, x2, y2 + NH / 2
-                path = f"M{xa},{ya} C{(xa + xb) / 2},{ya} {(xa + xb) / 2},{yb} {xb},{yb}"
-            edges.append(f"<path d='{path}' fill='none' stroke='{MM_COLORS[c1]}' stroke-width='1.1' opacity='.45'/>")
-    svg = (
-        f"<div style='overflow-x:auto'><svg viewBox='0 0 {W} {height}' width='100%' "
-        f"style='min-width:980px;color:inherit'>{''.join(edges)}{''.join(nodes)}</svg></div>"
+            if eid in eid_idx and tgt in eid_idx and (tgt, eid) not in seen and (eid, tgt) not in seen:
+                seen.add((eid, tgt))
+                links.append([eid, tgt])
+    data = json.dumps({"nodes": nodes, "links": links, "colors": MM_COLORS + ["#64b5cd"], "phases": phases},
+                      ensure_ascii=False)
+    legend = "".join(
+        f"<span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:{(MM_COLORS + ['#64b5cd'])[i]};margin-right:5px'></span>{p}</span>"
+        for i, p in enumerate(phases)
     )
     return (
-        "<p>실험 리포트의 관계도. 컬럼 = 연구 국면(시간순), 간선 = '연결된 리포트' 관계, 노드 클릭 = 해당 리포트로 이동.</p>"
-        + svg
+        "<p>실험 리포트의 관계도 — 간선은 각 리포트의 '연결된 리포트'에서 자동 생성된다. "
+        "<b>노드를 드래그</b>해 재배치하고, <b>호버</b>로 연결을 강조하고, <b>클릭</b>하면 리포트가 열린다.</p>"
+        f"<p class='sub'>{legend}</p>"
+        f"<div id='wb-graph' style='width:100%;height:640px;border:1px solid #e2e2e2;border-radius:10px;background:#fff'></div>"
+        f"<script id='wb-graph-data' type='application/json'>{data}</script>"
     )
 
 
@@ -234,6 +227,64 @@ function wbView(v){
   document.querySelectorAll('#home .controls').forEach(e=>e.hidden=(v!=='list'));
   document.getElementById('wb-thread').hidden=(v!=='thread');
   document.getElementById('wb-map').hidden=(v!=='map');
+  if(v==='map') wbGraphInit();
+}
+// ---- 인터랙티브 관계도: 자체 force-directed 시뮬레이션 (드래그·호버·클릭)
+let _wbG=null;
+function wbGraphInit(){
+  if(_wbG) return; const box=document.getElementById('wb-graph'); if(!box) return;
+  const D=JSON.parse(document.getElementById('wb-graph-data').textContent);
+  const Wd=box.clientWidth||1200, H=box.clientHeight||640, NS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(NS,'svg'); svg.setAttribute('width','100%'); svg.setAttribute('height','100%');
+  box.appendChild(svg);
+  const ncat=D.phases.length;
+  const N=D.nodes.map((n,i)=>({...n,
+    x:(Wd*0.12)+(n.cat+0.5)*(Wd*0.76)/ncat+40*(Math.random()-0.5),
+    y:H*0.18+H*0.64*Math.random(), vx:0, vy:0}));
+  const byId={}; N.forEach(n=>byId[n.id]=n);
+  const L=D.links.map(([a,b])=>({a:byId[a],b:byId[b]})).filter(l=>l.a&&l.b);
+  const adj={}; L.forEach(l=>{(adj[l.a.id]=adj[l.a.id]||new Set()).add(l.b.id);(adj[l.b.id]=adj[l.b.id]||new Set()).add(l.a.id);});
+  const eEls=L.map(l=>{const p=document.createElementNS(NS,'line');
+    p.setAttribute('stroke',D.colors[l.a.cat]); p.setAttribute('stroke-width','1.3'); p.setAttribute('opacity','.38');
+    svg.appendChild(p); return p;});
+  const nEls=N.map(n=>{
+    const g=document.createElementNS(NS,'g'); g.style.cursor='grab';
+    const c=document.createElementNS(NS,'circle');
+    c.setAttribute('r', 14+3*((adj[n.id]&&adj[n.id].size)||0));
+    c.setAttribute('fill','#fff'); c.setAttribute('stroke',D.colors[n.cat]); c.setAttribute('stroke-width','2.4');
+    const t=document.createElementNS(NS,'text'); t.textContent=n.id;
+    t.setAttribute('text-anchor','middle'); t.setAttribute('dy','-1.4em');
+    t.setAttribute('font-size','12'); t.setAttribute('font-weight','600'); t.setAttribute('fill','#1a1a1a');
+    const ti=document.createElementNS(NS,'title'); ti.textContent=n.what+' ('+n.date+')';
+    g.appendChild(c); g.appendChild(t); g.appendChild(ti); svg.appendChild(g);
+    g.addEventListener('mouseenter',()=>{
+      eEls.forEach((e,i)=>e.setAttribute('opacity',(L[i].a===n||L[i].b===n)?'0.95':'0.08'));
+      nEls.forEach((m,i)=>m.g.setAttribute('opacity',(N[i]===n||(adj[n.id]&&adj[n.id].has(N[i].id)))?'1':'0.25'));});
+    g.addEventListener('mouseleave',()=>{
+      eEls.forEach(e=>e.setAttribute('opacity','.38')); nEls.forEach(m=>m.g.setAttribute('opacity','1'));});
+    return {g,c,t,n};});
+  let drag=null, moved=0, alpha=1;
+  nEls.forEach(({g,n})=>{
+    g.addEventListener('pointerdown',ev=>{drag={n,dx:n.x-ev.clientX,dy:n.y-ev.clientY}; moved=0; alpha=Math.max(alpha,.35); g.setPointerCapture(ev.pointerId);});
+    g.addEventListener('pointermove',ev=>{if(!drag||drag.n!==n)return; n.x=ev.clientX+drag.dx; n.y=ev.clientY+drag.dy; n.vx=n.vy=0; moved++; alpha=Math.max(alpha,.3);});
+    g.addEventListener('pointerup',()=>{if(moved<4) openReport(n.idx); drag=null;});});
+  function tick(){
+    if(alpha>0.005){
+      for(let i=0;i<N.length;i++) for(let j=i+1;j<N.length;j++){
+        const a=N[i],b=N[j]; let dx=b.x-a.x,dy=b.y-a.y; let d2=dx*dx+dy*dy||1; if(d2<40000){
+          const f=1800/d2; const d=Math.sqrt(d2); dx/=d; dy/=d;
+          a.vx-=f*dx; a.vy-=f*dy; b.vx+=f*dx; b.vy+=f*dy;}}
+      L.forEach(({a,b})=>{const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1,f=0.012*(d-130);
+        a.vx+=f*dx/d; a.vy+=f*dy/d; b.vx-=f*dx/d; b.vy-=f*dy/d;});
+      N.forEach(n=>{ n.vx+=0.004*((Wd*0.12)+(n.cat+0.5)*(Wd*0.76)/ncat-n.x); n.vy+=0.002*(H/2-n.y);
+        if(drag&&drag.n===n) return;
+        n.x+=n.vx*=0.86; n.y+=n.vy*=0.86;
+        n.x=Math.max(30,Math.min(Wd-30,n.x)); n.y=Math.max(34,Math.min(H-24,n.y));});
+      alpha*=0.985;}
+    eEls.forEach((e,i)=>{e.setAttribute('x1',L[i].a.x);e.setAttribute('y1',L[i].a.y);e.setAttribute('x2',L[i].b.x);e.setAttribute('y2',L[i].b.y);});
+    nEls.forEach(({g,n})=>g.setAttribute('transform','translate('+n.x+','+n.y+')'));
+    requestAnimationFrame(tick);}
+  _wbG=true; tick();
 }
 </script>""")
     m = re.search(r'(<div class="sub">[^<]*</div>)', out)
