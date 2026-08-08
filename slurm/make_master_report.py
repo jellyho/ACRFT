@@ -888,8 +888,11 @@ demo_winrate = 데모가 이기는 후보 비율(0.5면 action-blind), band = �
 <table class='num'><tr><th>좌표</th><th>demo_winrate</th><th>band</th></tr>
 <tr><td>raw 2048</td><td>0.479</td><td>0.025</td></tr>
 <tr><td>PCA-128</td><td>0.481</td><td>0.031</td></tr>
-<tr><td>φ-128</td><td>0.487</td><td>0.023</td></tr></table>
-<p><b>판정.</b> 세 좌표 모두 winrate≈0.5 — <b>합성 model-based Q도 action-blind다.</b> 행동 정보가 3배인 좌표에서도
+<tr><td>φ-128</td><td>0.487</td><td>0.023</td></tr>
+<tr><td>φ-128+proprio</td><td>0.485</td><td>0.023</td></tr></table>
+<p><b>판정.</b> 네 좌표 모두 winrate≈0.5 — <b>합성 model-based Q도 action-blind다.</b>
+φ+proprio(사용자 질문의 마지막 갈래)는 proprio 정보를 실제로 더 보존하지만(R² .546→.617) 합성 게이트는
+똑같이 닫혀 있다(winrate .485) — 보존된 proprio가 후보 구별로 이어지지 않는다. 행동 정보가 3배인 좌표에서도
 f의 착지점 차이가 V의 해상도 아래로 사라진다. 롤아웃 없이 오프라인 게이트에서 기각 — 단순 구성 v1(f, V 재사용,
 트릭 0)은 이 과제의 오프라인 데이터에서 닫혀 있다. <b>사고록:</b> ① 스크립트가 no-action 변형을 저장하던 버그를
 게이트 전에 발견·수정(하마터면 action-blind 모델로 합성 판정할 뻔), ② node23 CUDA 런타임 붕괴 → bad-node 등록.</p>
