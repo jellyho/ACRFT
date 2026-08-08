@@ -60,12 +60,24 @@ def main():
     ap.add_argument("--p-future", type=float, default=0.7, help="P(goal from same-episode future) vs random frame")
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--use-proprio",
+        action="store_true",
+        help="append z-scored proprio to the token before phi - the reachability geometry then has "
+        "access to joint state (whether that helps or hurts episode-invariance is the ablation)",
+    )
     cfg = ap.parse_args()
 
     meta = json.loads((cfg.data / "meta.json").read_text())
     T, D = meta["num_frames"], meta["token_dim"]
     tok = np.asarray(np.memmap(cfg.data / "rl_token.dat", dtype=np.float32, mode="r", shape=(T, D)))
-    ep = np.asarray(np.memmap(cfg.data / "episode_index.dat", dtype=np.int32, mode="r", shape=(T,)))
+    if cfg.use_proprio:
+        pd_ = meta["proprio_dim"]
+        pro = np.asarray(np.memmap(cfg.data / "proprio.dat", dtype=np.float32, mode="r", shape=(T, pd_)))
+        mu, sd = pro.mean(0), pro.std(0)
+        pro = np.where(sd > 1e-6, (pro - mu) / np.where(sd > 1e-6, sd, 1.0), 0.0).astype(np.float32)
+        tok = np.concatenate([tok, pro], axis=1)
+        D = tok.shape[1]
     # per-frame episode end (inclusive) for future-goal sampling
     ends = np.zeros(T, np.int64)
     idxs = np.flatnonzero(np.concatenate([ep[1:] != ep[:-1], [True]]))
