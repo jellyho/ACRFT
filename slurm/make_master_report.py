@@ -857,6 +857,36 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 """,
 )
 
+# ============================================== 08-09 GR1 이식 계획
+entry(
+    "08-07",
+    "gr1-port",
+    "GR1 tabletop 이식 계획 — 질문이 유효한 무대로",
+    "진행 중",
+    """
+<p><b>왜 GR1인가.</b> 이틀간 모든 경로가 "PrepareCoffee + 과제특화 미세조정 VLA에서는 후보 간 캘 가치 차이가 없다"로
+수렴했다(model-based 리포트 참조). AQC 논문의 세팅이기도 한 GR1 tabletop은 ① 고정 탁상(장면 일반화 아님)
+② 양팔 휴머노이드의 정밀 조작이라 행동 선택이 결과를 가르고 ③ 베이스 성공률에 headroom이 있다 —
+가치 기반 선택이라는 질문 자체가 유효한 무대다.</p>
+<h3>준비 완료</h3>
+<table class='num'><tr><th>항목</th><th>상태</th></tr>
+<tr><td>시뮬레이터 (robosuite-gr1 fork + robocasa-gr1-tabletop)</td><td>08-07 스모크 통과 (.venv-gr1, gym 등록 확인)</td></tr>
+<tr><td>데이터 (Teleop-Sim, 5태스크)</td><td>12G 다운로드·검증 완료 — 태스크당 1,000 에피소드, LeRobot 포맷, ego_view 256², state/action 44d, 20fps</td></tr></table>
+<h3>필요한 변경 (config 초안 조사 결과)</h3>
+<table class='num'><tr><th>변경</th><th>내용</th><th>난이도</th></tr>
+<tr><td>action_dim 44</td><td>π0.5 기본 action_dim=32 &lt; GR1 44 → in/out 프로젝션 재초기화 필요(KeepMissing 로더가 처리, 새 프로젝션은 BC 미세조정으로 학습)</td><td>중</td></tr>
+<tr><td>데이터 config</td><td>단일 ego_view 카메라(RoboCasa는 3캠) 매핑 + state 44d repack + norm stats 재계산</td><td>중</td></tr>
+<tr><td>RLT 파이프라인</td><td>주석·critic·평가는 과제 무관 설계라 그대로 — env id만 gr1_unified/*로</td><td>하</td></tr></table>
+<h3>학습 자원 — 사용자 결정 필요</h3>
+<table class='num'><tr><th>옵션</th><th>내용</th><th>비고</th></tr>
+<tr><td>A. node200 (B200, 다른 머신)</td><td>기존 VLA 미세조정이 돌던 인프라(train_rlt.slurm, /data5) — 가장 빠름</td><td>워커A 머신 자원 — 승인 필요, torch/B200 이슈 이력 참고</td></tr>
+<tr><td>B. 이 클러스터 PRO6000/A6000</td><td>3B 미세조정을 bf16 + batch 축소로 — PRO6000(96GB)이면 무난, A6000(48GB)은 빠듯</td><td>큐 경쟁, 검증 안 된 경로</td></tr></table>
+<p><b>순서:</b> 자원 결정 → config 구현·norm stats → 1태스크(PnPCanToDrawerClose) 파일럿 미세조정 →
+주석 → FINAL 레시피 critic → 페어드 평가. 파일럿에서 베이스 성공률(=headroom)과 rand-vs-vla 갭(=후보 스프레드)을
+먼저 재서, 이 무대가 정말 질문에 유효한지부터 확인한다 — PrepareCoffee의 교훈.</p>
+""",
+)
+
 # ============================================== 08-09 model-based 본질 회귀
 entry(
     "08-07",
