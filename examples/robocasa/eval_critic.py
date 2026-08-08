@@ -328,7 +328,11 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
             qsel = np.array(q[:, -1])
             if mode == "mbacf":
                 sig_c = dyn.sigma_candidates(z_phi, cand)
-                qsel[sig_c > np.median(sig_c)] = -np.inf
+                veto = sig_c > np.median(sig_c)
+                # candidate 0 is the pure policy sample - never veto it, so the worst case
+                # degrades to vla instead of to "best of the leftovers" (worker-B 9a8ce85).
+                veto[0] = False
+                qsel[veto] = -np.inf
             i = int(np.argmax(qsel))
             n_exec, _sig = dyn.commit(z_phi, cand[i], dyn.simstep)
             dyn.simstep += n_exec
