@@ -47,6 +47,8 @@ phi = json.loads((S / "rollout_rltphi.json").read_text())
 mbc = json.loads((S / "rollout_mbac.json").read_text())
 tau13_p = S / "rollout_mbacv_tau13.json"
 tau13 = json.loads(tau13_p.read_text()) if tau13_p.exists() else None
+rep2_p = S / "rollout_rep2_seed30.json"
+rep2 = json.loads(rep2_p.read_text()) if rep2_p.exists() else None
 
 succ = {}
 for tag, d in (("ctl", ctl), ("phi", phi), ("mbac", mbc)):
@@ -165,6 +167,39 @@ rows_html = "\n".join(
     f"<tr><td>{LABELS[k]}</td>{cell(k)}</tr>" for k in order if k in succ)
 E2 = bat["E2"]
 
+REP2_HTML = ""
+if rep2:
+    sv = lambda d, m: [t["success"] for t in d[m]["trials"]]
+    v2 = sv(rep2, "vla")
+    vla60 = base + v2
+    pooled = {
+        "prefix": sv(ctl, "prefix") + sv(rep2, "prefix"),
+        "mbacv tau1.3": sv(tau13, "mbacv") + sv(rep2, "mbacv"),
+    }
+    rows = ""
+    for name, arm in pooled.items():
+        w, ll, p = mcnemar(arm, vla60)
+        rows += (f"<tr><td>{name}</td><td style='text-align:right'>{sum(arm)}/60 = {sum(arm)/60:.3f}</td>"
+                 f"<td style='text-align:right'>+{w}/-{ll}</td><td style='text-align:right'>{p:.2f}</td></tr>")
+    r2rows = ""
+    for m in ("mbacv", "mbacf", "prefix"):
+        w, ll, p = mcnemar(sv(rep2, m), v2)
+        r2rows += (f"<tr><td>{m} (tau1.3)</td><td style='text-align:right'>{sum(sv(rep2,m))}/30</td>"
+                   f"<td style='text-align:right'>+{w}/-{ll}</td><td style='text-align:right'>{p:.2f}</td></tr>")
+    REP2_HTML = f"""<div class='card'><h3>재현 — 새 장면 30개(seed 30-59)가 밤의 양성 신호를 지웠다</h3>
+<p>모든 유망 arm을 새 장면에서 자체 vla 기준선({sum(v2)}/30 = {sum(v2)/30:.3f})과 함께 다시 돌렸다.
+prefix의 +.10도, mbacv tau1.3의 +.067도 부호가 뒤집혔다:</p>
+<table class='num'><tr><th>arm (rep2)</th><th>success</th><th>paired +/-</th><th>p</th></tr>{r2rows}</table>
+<p>설정이 일치하는 arm을 60 paired trials로 합산하면 정확히 동률이다:</p>
+<table class='num'><tr><th>arm (pooled 60)</th><th>success</th><th>paired +/-</th><th>p</th></tr>{rows}</table>
+<p>결론을 정직하게 다시 쓰면: <b>충분한 검정력에서 살아남은 효과는 전권 critic의 유의미한 해(-.40, p=.004) 하나뿐이고,
+모든 양성은 seed 노이즈였다.</b> 30-trial arm의 잡음 폭은 ±.1 — worker-B의 16-시드 CI 런들이 먼저 보여준 그대로이며,
+앞으로 +.1은 재현 없이 축하하지 않는다. bounded authority가 산 것은 성공률이 아니라 <b>강건함</b>이다
+(어느 arm도 해를 끼치지 않았다 — 전권 모드는 그러지 못했다). 이 태스크·이 체크포인트에서 적응 청킹의 지렛대가
+작은 이유: 실패가 청크 사이가 아니라 청크 안에서 결정되고(잘못된 파지, 버튼 미스), 같은 flow에서 나온 N=16 후보는
+선택이 갈릴 만큼 다르지 않다. 다음 지렛대: 더 약한 체크포인트(후보 다양성↑), 접촉 분기점이 많은 태스크(GarnishPancake),
+그리고 커밋이 배포 선택이 아니라 <b>학습 분포</b>를 바꾸는 AC-RFT 루프.</p></div>"""
+
 def _git(*args):
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
@@ -189,7 +224,7 @@ html = f"""<!doctype html><meta charset='utf-8'><title>overnight 2026-08-08 — 
 <div class='card'><h3>TL;DR</h3>
 <p>오프라인에서 전 조건을 통과한 Cal-QL+swap critic(φ-공간, binding .996, action-sensitivity .524)을 시뮬레이터에 세웠다.
 결과는 권한 순서대로다: <b>전권(full-authority) critic 모드는 밤의 유일한 유의미 결과인 파국</b>(.300 vs vla .700, McNemar p=.004),
-선택-만(bon) 권한은 무해·무익(.700 동률), σ-veto BoN(mbacf)이 .767로 최상단이지만 아직 유의하지 않다.
+선택-만(bon) 권한은 무해·무익(.700 동률), σ-커밋(tau1.3)이 .767로 출발했으나 <b>새 장면 재현에서 소거됐다</b>(합산 60 trials에서 vla와 정확히 동률).
 한편 φ-공간 dynamics 앙상블은 CQL 없이 disagreement만으로 binding .817을 달성 — 커밋(어디까지 실행할지)과
 거부권(어느 후보를 걸러낼지)이라는 <b>좁고 검증가능한 권한</b>이 모델의 올바른 자리라는 것이 오늘 밤의 논지다.</p></div>
 
@@ -212,6 +247,8 @@ binding을 고친 critic(B)은 <span class='bad'>전권 모드에서 .300으로 
 Q의 꼬리 노이즈를 자신 있게 착취하고, 커밋 분포는 59%가 2스텝인 스래싱이 된다(아래 그림).
 같은 critic이 선택-만(bon) 권한에서는 vla와 정확히 동률(각각 5승) — <b>아는 것</b>은 고쳐졌지만
 <b>행동으로 옮기는 방식</b>이 병목이라는 뜻. worker-B의 23-config 피해 테이블과 같은 결론을 더 날카로운 도구로 재현했다.</p></div>
+
+{REP2_HTML}
 
 <div class='card'><h3>질문 2 — 커밋(how far)은 누가 정해야 하는가</h3>
 <img src='data:image/jpeg;base64,{FIG2}'>
