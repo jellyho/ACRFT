@@ -71,6 +71,7 @@ def main():
     meta = json.loads((cfg.data / "meta.json").read_text())
     T, D = meta["num_frames"], meta["token_dim"]
     tok = np.asarray(np.memmap(cfg.data / "rl_token.dat", dtype=np.float32, mode="r", shape=(T, D)))
+    ep = np.asarray(np.memmap(cfg.data / "episode_index.dat", dtype=np.int32, mode="r", shape=(T,)))
     if cfg.use_proprio:
         pd_ = meta["proprio_dim"]
         pro = np.asarray(np.memmap(cfg.data / "proprio.dat", dtype=np.float32, mode="r", shape=(T, pd_)))
