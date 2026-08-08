@@ -218,6 +218,7 @@ def make_policy_fn(
     history=0,
     history_stride=8,
     token_tf=None,
+    sigma_veto=0.0,
 ):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
@@ -287,8 +288,18 @@ def make_policy_fn(
             drift = rng.standard_normal((scored.shape[0], 1, scored.shape[2])) * ramp
             scored = scored + query_noise * sd * (off + drift)
         zc = jnp.repeat(jnp.asarray(z)[:, None], cand.shape[0], axis=1)  # [1, N, D]
-        q = np.asarray(score(zc, jnp.asarray(scored)[None]))
-        q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
+        q_ens = np.asarray(score(zc, jnp.asarray(scored)[None]))  # [K, 1, N, P]
+        q = np.min(q_ens, axis=0)[0]  # ensemble-min -> [N, P]
+        if sigma_veto > 0:
+            # sigma-veto: the winner's curse harvests overestimation where the ensemble disagrees.
+            # Veto the top fraction by disagreement at each candidate's own best column, but never
+            # veto candidate 0 (the pure policy sample) - the fallback must stay executable.
+            dis = np.abs(q_ens[:, 0] - q_ens[:, 0].mean(axis=0)).mean(axis=0).max(axis=-1)  # [N]
+            n_veto = int(sigma_veto * len(dis))
+            if n_veto > 0:
+                order = np.argsort(-dis)
+                veto = [i for i in order[:n_veto] if i != 0]
+                q[veto, :] = -np.inf
         flat = q[:, -1] if mode == "bon" else (q[0] if mode == "prefix" else q.reshape(-1))
         if softmax_temp > 0:  # sample instead of arg-max
             w = np.exp((flat - flat.max()) / softmax_temp)
@@ -367,6 +378,7 @@ def build_policy(
     model_overrides=None,
     vla=None,
     noise_scales=None,
+    sigma_veto=0.0,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
 
@@ -420,6 +432,7 @@ def build_policy(
             history=_ccfg.get("history", 0) or 0,
             history_stride=_ccfg.get("history_stride", 8) or 8,
             token_tf=load_token_transform(critic_path),
+            sigma_veto=sigma_veto,
             **kw,
         ),
         vla.H,
@@ -462,6 +475,14 @@ def main() -> None:
         "_pardec_noprop checkpoint needs rlt_decoder_mode=parallel and rlt_include_proprio=False.",
     )
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
+    ap.add_argument(
+        "--sigma-veto",
+        type=float,
+        default=0.0,
+        help="axis-2 conservatism at selection: drop the fraction of candidates with the LARGEST "
+        "ensemble disagreement (|Q1-Q2| at the joint-argmax column) before the argmax - the "
+        "high-sigma candidates are where the winner's curse harvests overestimation.",
+    )
     ap.add_argument(
         "--noise-scales",
         default=None,
@@ -560,6 +581,7 @@ def main() -> None:
             seed=_pseed,
             query_noise=args.query_noise,
             noise_scales=args.noise_scales,
+            sigma_veto=args.sigma_veto,
             model_overrides=_vla_ov,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
