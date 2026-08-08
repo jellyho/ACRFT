@@ -109,6 +109,7 @@ class VLA:
         )
         model = self.model_config.load(_model.restore_params(checkpoint / "params", dtype=jnp.bfloat16))
         model.eval()
+        self._model = model  # probes rebuild _extract with different sampling settings on ONE loaded model
         self.H = self.model_config.action_horizon
         self._rng = [jax.random.key(seed)]
 
