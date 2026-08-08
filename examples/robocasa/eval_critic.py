@@ -73,7 +73,7 @@ class VLA:
     params every evaluation, instead of reloading the 3B model each time.
     """
 
-    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None):
+    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None, noise_scale=1.0):
         train_config = _config.get_config(config_name)
         if model_overrides:
             # Some checkpoints were trained with model flags that are NOT baked into the registered
@@ -114,7 +114,9 @@ class VLA:
 
         @jax.jit
         def _extract(rng, obs):
-            return model.extract_token_and_base_actions(rng, obs, num_samples=num_samples, num_steps=flow_steps)
+            return model.extract_token_and_base_actions(
+                rng, obs, num_samples=num_samples, num_steps=flow_steps, noise_scale=noise_scale
+            )
 
         self._extract = _extract
         probe = self._out(

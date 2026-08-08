@@ -691,6 +691,35 @@ entry("08-07", "calql", "CalQL(CO-RFT) — 후보축 학습 신호의 성공률 
 실패 데이터 위에서 CQL 항이 작동해야 CO-RFT의 전제가 성립한다.</p>
 """)
 
+# ============================================== 08-08 논문 리뷰
+entry("08-07", "papers-value-steering", "논문 리뷰 — 가치 기반 VLA 조향 3편 (\"robo-value-RL\" 탐색 결과)", "완결", """
+<p class='sub'>요청받은 "robo-value-RL" 제목의 논문은 arXiv·웹 검색에서 확인되지 않았다. 같은 주제(동결 VLA를 가치함수로
+조향)의 최근접 논문 3편을 리뷰한다 — 셋 다 우리 FINAL null 판정의 해석에 직접 걸린다.</p>
+<h3>① V-GPS — Steering Your Generalists (arXiv:2410.13816)</h3>
+<p>우리와 같은 구도(동결 정책 + 오프라인 가치함수 + 테스트타임 재순위)의 원조. Cal-QL로 가치함수를 학습하고
+정책에서 <b>K=50 후보</b>를 뽑아 재순위. OpenVLA·Octo 등 5개 정책 × 12과제에서 일관된 개선을 보고.
+<b>우리와의 차이가 곧 교훈:</b> (a) K=50 vs 우리 16 — 꼬리 샘플 확보량이 3배, (b) 그들의 베이스는 혼합 품질
+대규모 데이터로 학습된 제너럴리스트라 정책 자체가 차선(=선택 여지가 큼); 우리 π0.5는 과제 데모로 강하게
+미세조정되어 후보가 균질하다. BoN의 이득은 "베이스가 데이터 대비 차선일 때"에 몰린다는 방증.</p>
+<h3>② Q-VGM — Q-Guided Value-Gradient Matching (arXiv:2606.08015)</h3>
+<p>롤아웃 데이터로 Cal-QL critic을 학습(우리 calql 팔과 동일 구성)한 뒤, <b>BoN 대신 critic의 행동-그래디언트를
+flow-matching 디노이징의 속도장에 주입</b>해 생성 자체를 고가치 방향으로 민다. 논문 자신의 진단이 우리 FINAL
+결론과 일치: "재순위의 이산적 선택은 이미 생성된 후보를 다듬을 수 없다" — 16개 이산 후보의 스프레드가 작으면
+선택으로는 이득이 없고, 연속 그래디언트 조향은 그 한계를 우회한다. <b>우리 스택에 이식 가능성 높음:</b>
+π0.5도 flow-matching이고 CalQL critic·후보 z-score 인프라가 이미 있다 — critic의 ∂Q/∂a를 디노이징 스텝에
+더하는 velocity correction 실험이 가능.</p>
+<h3>③ Frozen VLA 가치 프로빙 (arXiv:2605.28527)</h3>
+<p>동결 VLA 표현 위 선형 프로브로 가치류 신호가 <b>이미 디코딩 가능</b>함을 보임(π0.5 비전 인코더 R²=0.551,
+matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>headroom 있는 과제에서만</b>
+(push-plate +17.7pp, 반면 near-ceiling 과제는 0). 우리 관측과 정합: critic은 진행·실패 감지를 배웠지만
+(held-out 상승→붕괴 V), 후보가 균질한 과제에서 성공률은 안 움직인다.</p>
+<h3>종합 Takeaway — 우리 로드맵 반영</h3>
+<table class='num'><tr><th>교훈</th><th>근거</th><th>우리 액션</th></tr>
+<tr><td>BoN은 후보 스프레드가 전제</td><td>V-GPS K=50·차선 베이스에서만 이득, 우리 null</td><td>후보 다양화 프로브(21번, 실행중) + N 증대 검토</td></tr>
+<tr><td>이산 선택 → 연속 조향</td><td>Q-VGM: 재순위는 후보를 다듬지 못함</td><td><b>∂Q/∂a velocity correction 실험 설계</b> (기존 CalQL critic 재사용)</td></tr>
+<tr><td>가치 신호 자체는 존재</td><td>프로빙 R²=0.55, 우리 held-out rise-collapse</td><td>critic 학습은 성공 — 병목은 배포 방식이라는 확신 강화</td></tr></table>
+""")
+
 # ============================================== 08-08 아침 종합
 entry("08-07", "morning-0808", "밤샘 종합 보고 (08-08 아침) — 무엇이 풀렸고 무엇이 남았나", "살아있음", """
 <p><b>한 줄 요약.</b> 닷새를 막던 TD+mixed 학습 불능이 근본 원인(int32 초과 후보 버퍼) 수준에서 해결되어 FINAL 스윕
@@ -787,6 +816,9 @@ META = {
     "calql": dict(date="2026-08-08", who="워커B · CalQL(CO-RFT) critic", where="3090/a6000 풀",
         what="최초의 학습-시간 후보축 신호(CQL 항)의 성공률 판정", how="demo-only 8시드 + mixed(학습중) 페어드 평가",
         why="모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지", links=["v12", "final", "wcurse"]),
+    "papers-value-steering": dict(date="2026-08-08", who="워커B(리뷰)", where="arXiv",
+        what="가치 기반 VLA 조향 논문 3편 리뷰 (V-GPS·Q-VGM·frozen-VLA 프로빙)", how="원문 정독 후 FINAL 결론과 대조",
+        why="'robo-value-RL' 탐색 요청 — FINAL null의 해석과 다음 수(그래디언트 조향)의 문헌 근거", links=["final", "calql", "wcurse"]),
     "morning-0808": dict(date="2026-08-08", who="워커B(Claude)", where="클러스터 전체 + HF Space",
         what="밤샘(08-07 밤~08-08 아침) 작업 종합", how="각 리포트의 완결 결과를 표로 집약",
         why="아침에 전체 상황을 한 번에 파악할 수 있도록", links=["td-segv", "final", "kper", "v12"]),
