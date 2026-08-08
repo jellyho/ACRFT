@@ -19,6 +19,9 @@
 - 수치 표는 원본 JSON에서 **자동 재계산**한다(`run_level()`/`ci_row()` 패턴).
   손으로 옮겨 적은 숫자는 감사(audit)에서 어긋나기 쉬우니 금지.
 - 빈 칸 금지: 데이터 미도착 칸은 "평가 대기 (사유/참조)"를 명시한다.
+- **pre-commit 필수**: 훅이 `.git/hooks/pre-commit`에 설치되어 있다(ruff --fix / ruff-format /
+  uv-lock). 커밋이 훅에서 실패하면 고치고 다시 커밋 — `--no-verify` 우회 금지. 훅 파이썬이
+  miniconda 3.12를 잡으면 깨지므로 `uvx --python 3.11 pre-commit`으로 재설치한다.
 - **git 스탬프 필수**: 모든 게시는 branch@hash(+dirty)를 포함한다 — 5W1H 헤더의 '코드' 행에
   자동 삽입되고(`GIT_STAMP`), 허브 커밋 메시지에도 붙는다. 게시 전 커밋을 먼저 하는 습관을 권장
   (dirty 스탬프는 재현 불가능한 게시라는 뜻이다).
