@@ -857,6 +857,38 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 """,
 )
 
+# ============================================== 08-08 phi 임베딩 사다리
+entry(
+    "08-07",
+    "phi-ladder",
+    "임베딩 사다리 — 차원인가 기하인가 (HILP φ 재현)",
+    "진행 중",
+    """
+<p><b>동기.</b> RLT 토큰의 episode-정체성 병리(장면 암기 지름길의 표현 측 원인)를 워커A는 HILP식 TD readout(φ)으로
+공격했다. 사용자 질문 두 개가 설계를 정했다: "φ의 이점이 그냥 128차원이라 작아서는 아닌가?"(차원 교란) →
+PCA-128 통제군 추가, "도달성 거리만 남기면 디테일이 사라지는 것 아닌가?" → 디코더·상태변수 프로브 예정.
+<b>실험은 엄밀하게, 한 번에 한 컴포넌트씩</b>: critic 레시피(FINAL iql) 완전 고정, 임베딩만 교체.</p>
+<h3>φ 재현 (in-repo, train_hilp_readout.py)</h3>
+<p>frozen 토큰 위 goal-조건 expectile TD로 V(s,g)=−‖φ(s)−φ(g)‖ 학습, 교차-에피소드 goal 샘플링(p_future=0.7).
+<b>사고록:</b> ① 무-proprio 런이 loss=NaN 발산 — grad clip으로도 재발 → 근본 원인은 <b>‖·‖의 0점 NaN 그래디언트</b>
+(정지 프레임의 완전 동일 토큰 쌍이 norm 0을 침). proprio 버전이 살아남은 이유도 이것(proprio가 중복을 깨줌).
+ε-safe distance로 해결, 두 변형 재학습 완료(loss 0.77/0.75). ② 완료 마커를 `;`로 체인하면 실패도 DONE으로
+찍힌다 — `&&` 게이팅으로 교정.</p>
+<h3>검증 배터리 (60ep × 40프레임, latent_semantics 지표)</h3>
+<table class='num'><tr><th>지표</th><th>raw 2048</th><th>PCA-128 (차원 통제)</th><th>φ-128</th><th>φ-128+proprio</th></tr>
+<tr><td>kNN episode purity ↓ (우연 .016)</td><td>.601</td><td>.517</td><td><b>.388</b></td><td>.396</td></tr>
+<tr><td>교차-ep phase 오차 ↓ (우연 .342)</td><td>.102</td><td>.102</td><td><b>.089</b></td><td>.089</td></tr>
+<tr><td>episode 판별 acc ↓ (우연 .017)</td><td>.990</td><td>.920</td><td><b>.756</b></td><td>.753</td></tr>
+<tr><td>progress R² (에피소드 held-out) ↑</td><td>.760</td><td>.749</td><td>.747</td><td>.732</td></tr>
+<tr><td>Kendall τ (교차-비디오 정렬) ↑</td><td>.545</td><td>.568</td><td>.480</td><td>.496</td></tr></table>
+<p><b>판독.</b> ① <b>"작아서"는 기각</b> — PCA-128은 episode 정체를 조금만 지운다(acc .92). φ는 같은 차원에서
+훨씬 깊게 지우며(.756) progress를 보존(.747): 효과는 차원이 아니라 TD 기하다. ② 단 워커A 보고치(ep .28,
+stitch .78)에는 못 미치고 Kendall τ는 raw보다 낮다 — 재현 레시피의 차이가 있고, 원본 체크포인트 교차검증(경로 A)이
+필요하다. ③ proprio 유무는 무차이. ④ critic 사다리(iql 고정: RLT2048 = FINAL iql / PCA-128 / φ-128)
+학습 완료(128d는 8~17분), 평가 8잡 진행 중 — token_transform을 라이브 토큰에 재생하는 배선 포함.</p>
+""",
+)
+
 # ============================================== 08-08 conservatism 종합 프레임
 entry(
     "08-07",
