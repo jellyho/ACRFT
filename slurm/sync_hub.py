@@ -50,6 +50,12 @@ WBX_STYLE = """<style id="wbx-style">
 .wbx .day li{margin:6px 0}.wbx .day .sm{color:#5f6b7a;font-size:.88em}
 .wbx .day a{color:#3730a3;cursor:pointer;text-decoration:none}.wbx .day a:hover{text-decoration:underline}
 .wbx svg text{fill:#1a1a1a}
+/* 와이드 레이아웃 + 상단 탭 (2026-08-08 지시: 가로로 넓게, 스레드·관계도는 별도 탭) */
+.wrap{max-width:1560px !important;padding-left:28px;padding-right:28px}
+.wb-tab{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;
+  padding:9px 18px;font-size:.95em;cursor:pointer}
+.wb-tab.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+#wb-thread .wbx,#wb-map .wbx{margin-top:4px}
 </style>"""
 
 # 마인드맵 컬럼(연구 국면) 배치와 컬럼 색 (seaborn deep — 논문 팔레트)
@@ -165,17 +171,9 @@ def main():
         }, f'<div class="wbx">{body}</div>'))
     ours.sort(key=lambda x: x[1]["date"], reverse=True)
 
-    latest = max(o[1]["date"] for o in ours)
-    # 자리 확보: 0=스레드, 1=마인드맵, 2.. = 우리+기존
-    thread_r = {"date": latest, "title": f"🧵 [{MARK}] 데일리 스레드 — 일자별 포스트 한눈에",
-                "summary": "매일 어떤 리포트가 올라갔는지 날짜별 다이제스트. 제목 클릭으로 이동.",
-                "tags": [MARK, "인덱스"], "status": "living"}
-    mindmap_r = {"date": latest, "title": f"🗺️ [{MARK}] 실험 마인드맵 — 리포트 관계도",
-                 "summary": "연구 국면 5컬럼 × 상호 연결 간선의 그래프 뷰. 노드 클릭으로 이동.",
-                 "tags": [MARK, "인덱스"], "status": "living"}
-
-    merged = [(thread_r, None), (mindmap_r, None)] + [(r, b) for _, r, b in ours] + keep
-    eid_idx = {eid: 2 + i for i, (eid, _, _) in enumerate(ours)}
+    # 스레드·마인드맵은 리스트 항목이 아니라 별도 탭(#wb-thread/#wb-map)으로 상주한다.
+    merged = [(r, b) for _, r, b in ours] + keep
+    eid_idx = {eid: i for i, (eid, _, _) in enumerate(ours)}
 
     # ---- xref 활성화: data-eid → openReport(idx)
     def activate(body):
@@ -186,9 +184,7 @@ def main():
             return "<span class='xref' style='opacity:.5'"
         return re.sub(r"<span class='xref' data-eid='([^']+)'", sub, body)
 
-    bodies = [f'<div class="wbx">{build_thread([r for r, _ in merged])}</div>',
-              f'<div class="wbx">{build_mindmap(eid_idx)}</div>']
-    bodies += [activate(b) for _, _, b in ours]
+    bodies = [activate(b) for _, _, b in ours]
     bodies += [b for _, b in keep]
 
     new_reports = [r for r, _ in merged]
@@ -211,13 +207,40 @@ def main():
     out = out[:first] + "".join(new_blocks) + out[last_m.end():]
     out = re.sub(r'<style id="wbx-style">[\s\S]*?</style>', "", out)
     out = out.replace("</head>", WBX_STYLE + "</head>", 1)
+    # 이전 정렬 패치 원복(스레드·마인드맵이 리스트에서 빠졌으므로 불필요)
+    out = out.replace(
+        '.sort((a,b)=>{const p=t=>t.tags&&t.tags.includes("인덱스")?1:0;'
+        "if(p(a)!==p(b))return p(b)-p(a);return b.date.localeCompare(a.date);});",
+        ".sort((a,b)=>b.date.localeCompare(a.date));", 1)
 
-    # 인덱스(스레드·마인드맵) 엔트리를 홈 리스트 최상단에 고정 — 날짜 정렬보다 우선.
-    old_sort = ".sort((a,b)=>b.date.localeCompare(a.date));"
-    new_sort = (".sort((a,b)=>{const p=t=>t.tags&&t.tags.includes(\"인덱스\")?1:0;"
-                "if(p(a)!==p(b))return p(b)-p(a);return b.date.localeCompare(a.date);});")
-    if new_sort not in out:
-        out = out.replace(old_sort, new_sort, 1)
+    # ---- 상단 탭 + 상주 뷰(#wb-thread/#wb-map) 주입 (이전 주입분은 마커로 제거 후 재주입)
+    out = re.sub(r"<!--wb-tabs-->[\s\S]*?<!--/wb-tabs-->", "", out)
+    out = re.sub(r"<!--wb-views-->[\s\S]*?<!--/wb-views-->", "", out)
+    out = re.sub(r'<script id="wb-tabs-js">[\s\S]*?</script>', "", out)
+    tabs = ('<!--wb-tabs--><div id="wb-tabbar" style="display:flex;gap:8px;margin:14px 0">'
+            '<button class="wb-tab on" data-v="list" onclick="wbView(\'list\')">📋 리포트 목록</button>'
+            '<button class="wb-tab" data-v="thread" onclick="wbView(\'thread\')">🧵 데일리 스레드</button>'
+            '<button class="wb-tab" data-v="map" onclick="wbView(\'map\')">🗺️ 관계도</button>'
+            '</div><!--/wb-tabs-->')
+    views = ("<!--wb-views-->"
+             f'<div id="wb-thread" hidden><div class="wbx">{build_thread([r for r, _ in merged])}</div></div>'
+             f'<div id="wb-map" hidden><div class="wbx">{build_mindmap(eid_idx)}</div></div>'
+             "<!--/wb-views-->")
+    js = ("""<script id="wb-tabs-js">
+function wbView(v){
+  document.querySelectorAll('.wb-tab').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
+  const listy=['list','count','chips'];
+  listy.forEach(id=>{const e=document.getElementById(id); if(e) e.hidden=(v!=='list');});
+  document.querySelectorAll('#home .controls').forEach(e=>e.hidden=(v!=='list'));
+  document.getElementById('wb-thread').hidden=(v!=='thread');
+  document.getElementById('wb-map').hidden=(v!=='map');
+}
+</script>""")
+    m = re.search(r'(<div class="sub">[^<]*</div>)', out)
+    out = out[:m.end()] + tabs + out[m.end():]
+    i_list = out.find('<div id="list"></div>')
+    out = out[:i_list + len('<div id="list"></div>')] + views + out[i_list + len('<div id="list"></div>'):]
+    out = out.replace("</body>", js + "</body>", 1)
 
     tmp = pathlib.Path("/scratch/jellyho/acrft/hub_index_new.html")
     tmp.write_text(out)
