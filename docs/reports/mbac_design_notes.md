@@ -552,3 +552,52 @@ Results: crushes MBRL baselines on long-horizon (cube-octuple 30 vs 0, puzzle-4x
   transfer - measure with W2 (MMD/coverage).
 - prefix-critic transformer (8c) remains compatible: it can BE p_psi and Q's
   backbone jointly; MAC just tells us what training signal to feed the Q head.
+
+## Iteration 10 — IQL x model-based: the survey, and the policy-free design
+
+Read IQL-TD-MPC (arXiv 2306.00867, Chitnis et al.) in full; skimmed LEQ
+(2407.00699) via MAC's related work. The IQL x MBRL landscape:
+
+- **IQL-TD-MPC**: IQL's in-sample V (expectile) + Q inside TD-MPC's latent
+  world model. Their two load-bearing fixes: (1) values stay in-sample, and
+  (2) planning scores ONLY policy samples - they set the number of random
+  action sequences n_r = 0 because MPPI refinement "exploits the models'
+  blind spots". Same conclusion as MAC's rejection sampling, discovered
+  independently: never optimize actions against a learned model/value, only
+  SELECT among in-distribution samples.
+- **LEQ**: model rollouts + LOWER-expectile Q targets - expectile machinery
+  applied to imagined returns (conservatism via tau<0.5 instead of penalties).
+  The direct "IQL-flavored MVE" relative. MAC outperformed it, but via the
+  chunk model + flow sampler, not by abandoning expectiles.
+- **COMBO**: CQL + model (uniform pessimism on imagined states) - we already
+  know how the CQL flavor behaves from calswap.
+
+**Our two constraints**: no policy net (VLA is the policy but cannot run in
+imagination - image inputs), and VLA rollouts too expensive anyway.
+
+**Resolution - we have a frozen policy ARCHIVE**: the annotation stores 16
+VLA chunk samples at every dataset state. For one-chunk expansion no live
+policy is needed at all. For depth, two policy-free options:
+  (a) MAC's own answer: one-step distilled chunk head pi_hat(phi, z) trained
+      from the stored (phi, 16 candidates) pairs - the VLA is never called in
+      imagination (this is EXACTLY why MAC distills pi_omega);
+  (b) retrieval continuation: at imagined phihat, kNN to the nearest dataset
+      state in phi space and continue with ITS stored candidates -
+      in-sample by construction, the n_r=0 principle taken to its limit.
+
+**The concrete algorithm (in-sample MAC / "MAC-lite")**:
+1. r_hat(phi, a) reward head from progress labels (small).
+2. Precompute phihat(phi_t, a_i) for ALL stored candidates once
+   (280k x 16 forwards of the small dyn model - minutes, offline).
+3. V: keep IQL expectile (in-sample, policy-free, already have).
+4. Q: one-chunk model-based expansion target
+       Q(phi, a_i) <- r_hat(phi, a_i) + gamma^n * V(phihat(phi, a_i))
+   for all 16 candidates - action-sensitivity from the MODEL's counterfactual
+   landing states, conservatism from V's in-sample training, no CQL, no
+   penalty, no OOD queries (candidates are VLA-in-distribution).
+   Optionally H=2-3 depth via (a)/(b), gated by the W3 imagination check.
+5. Deployment: bon unchanged - argmax over the VLA's live 16 samples by Q.
+Clean A/B against calswap: same selection rule, different Q.
+
+Cost: one small head + one precompute pass + a target-swap in
+train_rlt_critic. Everything else exists.
