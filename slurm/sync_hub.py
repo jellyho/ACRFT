@@ -27,7 +27,8 @@ WBX_STYLE = """<style id="wbx-style">
   padding:26px 30px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
 .wbx a{color:#3730a3}
 .wbx h2,.wbx h3{margin:.7em 0 .4em;letter-spacing:-.01em;color:#111;font-family:Georgia,'Times New Roman',serif}
-.wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;max-width:100%;background:#fff;color:#1a1a1a}
+.wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;background:#fff;color:#1a1a1a;
+  display:block;width:max-content;max-width:100%;overflow-x:auto}
 .wbx td,.wbx th{border:1px solid #e2e2e2;padding:5px 10px;text-align:left;vertical-align:top}
 .wbx th{background:#f3f4f8}.wbx img{max-width:100%;border:1px solid #e2e2e2;border-radius:8px;margin:8px 0;background:#fff}
 .wbx .missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
@@ -210,6 +211,13 @@ def main():
     out = out[:first] + "".join(new_blocks) + out[last_m.end():]
     out = re.sub(r'<style id="wbx-style">[\s\S]*?</style>', "", out)
     out = out.replace("</head>", WBX_STYLE + "</head>", 1)
+
+    # 인덱스(스레드·마인드맵) 엔트리를 홈 리스트 최상단에 고정 — 날짜 정렬보다 우선.
+    old_sort = ".sort((a,b)=>b.date.localeCompare(a.date));"
+    new_sort = (".sort((a,b)=>{const p=t=>t.tags&&t.tags.includes(\"인덱스\")?1:0;"
+                "if(p(a)!==p(b))return p(b)-p(a);return b.date.localeCompare(a.date);});")
+    if new_sort not in out:
+        out = out.replace(old_sort, new_sort, 1)
 
     tmp = pathlib.Path("/scratch/jellyho/acrft/hub_index_new.html")
     tmp.write_text(out)
