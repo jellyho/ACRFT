@@ -94,13 +94,15 @@ def build_thread(merged_reports):
     """일자별 포스트 다이제스트 — 어떤 날 무엇이 올라갔는지 한눈에."""
     by_day = {}
     for i, r in enumerate(merged_reports):
-        by_day.setdefault(r["date"], []).append((i, r))
+        by_day.setdefault(r["date"].split()[0], []).append((i, r))
     days = []
     for d in sorted(by_day, reverse=True):
+        entries = sorted(by_day[d], key=lambda x: x[1]["date"], reverse=True)
         items = "".join(
-            f"<li><a onclick='openReport({i});return false'>{r['title']}</a>"
+            f"<li><span class='sm'>{([*r['date'].split(), ''])[1]}</span> "
+            f"<a onclick='openReport({i});return false'>{r['title']}</a>"
             f"<div class='sm'>{r['summary'][:110]}</div></li>"
-            for i, r in by_day[d]
+            for i, r in entries
         )
         days.append(f"<div class='day'><h3>{d} <span class='sm'>({len(by_day[d])}건)</span></h3><ul>{items}</ul></div>")
     return "<p>일자별로 올라온 리포트 전부(양쪽 워커 포함). 제목을 누르면 해당 리포트로 이동한다.</p>" + "".join(days)

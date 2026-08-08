@@ -1122,7 +1122,7 @@ entry(
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
     "v14": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 08:40",
         "who": "워커B · iql/td_max/calql × mixed_v14",
         "where": "a6000 풀(학습) + 3090 풀(평가)",
         "what": "장면 지름길 제거 데이터(v14)가 판정을 바꾸는지",
@@ -1131,7 +1131,7 @@ META = {
         "links": ["kper", "v12", "final"],
     },
     "calql": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 08:45",
         "who": "워커B · CalQL(CO-RFT) critic",
         "where": "3090/a6000 풀",
         "what": "최초의 학습-시간 후보축 신호(CQL 항)의 성공률 판정",
@@ -1140,7 +1140,7 @@ META = {
         "links": ["v12", "final", "wcurse"],
     },
     "papers-value-steering": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 13:30",
         "who": "워커B(리뷰)",
         "where": "arXiv",
         "what": "Robo-ValueRL(arXiv:2607.09866) 정독 + 인접 3편(V-GPS·Q-VGM·프로빙) 리뷰",
@@ -1149,7 +1149,7 @@ META = {
         "links": ["final", "calql", "wcurse"],
     },
     "xworker-0808": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 14:10",
         "who": "워커B(리뷰) ← 워커A 리포트 7건",
         "where": "공유 허브",
         "what": "교차 워커 배움 — 상호 재현·McNemar 도입·표현/데이터 공격로 비교",
@@ -1158,7 +1158,7 @@ META = {
         "links": ["final", "kper", "papers-value-steering"],
     },
     "conservatism": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 15:20",
         "who": "워커B(종합)",
         "where": "전 판정 결과 재해석",
         "what": "보수성 2축 프레임 — 전 null의 통일 해석과 축2(추정 오차) 처방",
@@ -1167,7 +1167,7 @@ META = {
         "links": ["final", "calql", "v14", "wcurse", "papers-value-steering", "xworker-0808"],
     },
     "morning-0808": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 06:45",
         "who": "워커B(Claude)",
         "where": "클러스터 전체 + HF Space",
         "what": "밤샘(08-07 밤~08-08 아침) 작업 종합",
@@ -1176,7 +1176,7 @@ META = {
         "links": ["td-segv", "final", "kper", "v12"],
     },
     "flow": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 06:40",
         "who": "워커B(Claude)",
         "where": "요약 뷰 — 클러스터 전체",
         "what": "프로젝트 전체 타임라인과 현재 위치",
@@ -1185,7 +1185,7 @@ META = {
         "links": ["v11", "v12", "final"],
     },
     "genesis": {
-        "date": "2026-07-30",
+        "date": "2026-07-30 22:00",
         "who": "워커B · VLA π0.5@70k 동결 · TD critic v1–v5",
         "where": "3090 풀",
         "what": "첫 TD critic 세대들과 BoN16 배포의 첫 성적",
@@ -1194,7 +1194,7 @@ META = {
         "links": ["vbias", "families"],
     },
     "vbias": {
-        "date": "2026-08-01",
+        "date": "2026-08-01 14:00",
         "who": "워커B · TD critic",
         "where": "3090 풀",
         "what": "TD 타깃이 목표거리 d에 따라 갖는 구조적 바이어스 b(d)",
@@ -1203,7 +1203,7 @@ META = {
         "links": ["genesis", "wcurse"],
     },
     "families": {
-        "date": "2026-08-02",
+        "date": "2026-08-02 20:00",
         "who": "워커B · TD/QC/IQL/AQC critic",
         "where": "3090 풀",
         "what": "방법 패밀리별 롤아웃 총결산",
@@ -1212,7 +1212,7 @@ META = {
         "links": ["genesis", "v11"],
     },
     "wcurse": {
-        "date": "2026-08-03",
+        "date": "2026-08-03 15:00",
         "who": "워커B",
         "where": "3090 풀 (프로브)",
         "what": "argmax 선택의 winner's curse 정량화",
@@ -1221,7 +1221,7 @@ META = {
         "links": ["vbias", "duel", "aqc"],
     },
     "duel": {
-        "date": "2026-08-03",
+        "date": "2026-08-03 18:00",
         "who": "워커B · dueling ARQ",
         "where": "3090 풀",
         "what": "dueling 게이지 자유도로 인한 학습 실패 2회와 해법",
@@ -1230,7 +1230,7 @@ META = {
         "links": ["wcurse"],
     },
     "singlefit": {
-        "date": "2026-08-05",
+        "date": "2026-08-05 04:00",
         "who": "워커B · TD critic",
         "where": "3090 1노드",
         "what": "단일 궤적 과적합으로 terminal 처리 검증",
@@ -1239,7 +1239,7 @@ META = {
         "links": ["ladders", "fullfit"],
     },
     "ladders": {
-        "date": "2026-08-05",
+        "date": "2026-08-05 11:00",
         "who": "워커B",
         "where": "3090 풀 (스윕)",
         "what": "데이터 사다리 1→64 에피소드 × objective × γ",
@@ -1248,7 +1248,7 @@ META = {
         "links": ["singlefit", "fullfit", "v11"],
     },
     "fullfit": {
-        "date": "2026-08-05",
+        "date": "2026-08-05 15:00",
         "who": "워커B",
         "where": "3090 풀",
         "what": "full-data critic 품질 검수",
@@ -1257,7 +1257,7 @@ META = {
         "links": ["ladders", "highpower"],
     },
     "highpower": {
-        "date": "2026-08-05",
+        "date": "2026-08-05 21:00",
         "who": "워커B",
         "where": "3090 풀 (n↑ 롤아웃)",
         "what": "고검정력 롤아웃 판정 (softcand·e70 재현·softmax)",
@@ -1266,7 +1266,7 @@ META = {
         "links": ["fullfit", "randh", "v11"],
     },
     "randh": {
-        "date": "2026-08-06",
+        "date": "2026-08-06 10:00",
         "who": "워커B · critic vs 동전던지기",
         "where": "3090 풀",
         "what": "랜덤 h 대조 실험 — critic의 능동 손실 분리",
@@ -1275,7 +1275,7 @@ META = {
         "links": ["highpower", "autopsy"],
     },
     "aqc": {
-        "date": "2026-08-06",
+        "date": "2026-08-06 14:00",
         "who": "워커B · AQC critic",
         "where": "3090 풀",
         "what": "AQC(베이스라인 보정 argmax) 구현과 demo-only 판정",
@@ -1284,7 +1284,7 @@ META = {
         "links": ["wcurse", "v11"],
     },
     "autopsy": {
-        "date": "2026-08-06",
+        "date": "2026-08-06 17:00",
         "who": "워커B",
         "where": "평가 로그 (3090 풀)",
         "what": "실패 유형 부검",
@@ -1293,7 +1293,7 @@ META = {
         "links": ["randh", "failpipe", "kper"],
     },
     "pools": {
-        "date": "2026-08-06",
+        "date": "2026-08-06 19:00",
         "who": "워커B",
         "where": "평가 JSON 재분석",
         "what": "장면 풀이 성공률에 주는 효과",
@@ -1302,7 +1302,7 @@ META = {
         "links": ["v11", "highpower"],
     },
     "failpipe": {
-        "date": "2026-08-06",
+        "date": "2026-08-06 22:00",
         "who": "워커B",
         "where": "3090 풀",
         "what": "실패 롤아웃 수집·주석 파이프라인 + in-dist 장면 재현",
@@ -1311,7 +1311,7 @@ META = {
         "links": ["autopsy", "v12"],
     },
     "v11": {
-        "date": "2026-08-07",
+        "date": "2026-08-07 03:00",
         "who": "워커B · 4방법 × 16시드",
         "where": "3090 풀 (64런)",
         "what": "demo-only 공정 비교 완결",
@@ -1320,7 +1320,7 @@ META = {
         "links": ["families", "aqc", "pools", "final"],
     },
     "v12": {
-        "date": "2026-08-07",
+        "date": "2026-08-07 10:00",
         "who": "워커B · iql/aqc × mixed",
         "where": "a6000 풀 (17GB 상주)",
         "what": "혼합 데이터 판정 — 밴드 개방과 성공률",
@@ -1338,7 +1338,7 @@ META = {
         "links": ["v11", "v12", "td-segv", "video-gallery"],
     },
     "td-segv": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 02:50",
         "who": "워커B",
         "where": "A6000·3090·PRO6000·RTX6000ADA 교차 검증",
         "what": "TD+mixed 학습 침묵사의 근본 원인",
@@ -1347,7 +1347,7 @@ META = {
         "links": ["final"],
     },
     "kper": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 00:40",
         "who": "워커B · VLA 동결",
         "where": "a6000 풀 (수집) + 3090 풀 (주석)",
         "what": "K-per-scene 데이터 — 주방당 정책시드 3롤아웃",
@@ -1356,7 +1356,7 @@ META = {
         "links": ["v12", "autopsy"],
     },
     "video-gallery": {
-        "date": "2026-08-08",
+        "date": "2026-08-08 09:00",
         "who": "워커B",
         "where": "HF Space 서빙",
         "what": "대표 롤아웃 HUD 비디오",
