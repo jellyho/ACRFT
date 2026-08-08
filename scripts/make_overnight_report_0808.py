@@ -9,6 +9,7 @@ import io
 import json
 import math
 import pathlib
+import subprocess
 import sys
 
 import matplotlib
@@ -164,6 +165,14 @@ rows_html = "\n".join(
     f"<tr><td>{LABELS[k]}</td>{cell(k)}</tr>" for k in order if k in succ)
 E2 = bat["E2"]
 
+def _git(*args):
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+GIT_BRANCH = _git("branch", "--show-current")
+GIT_HASH = _git("rev-parse", "--short", "HEAD")
+GIT_DIRTY = " (+uncommitted)" if _git("status", "--porcelain") else ""
+GIT_STAMP = f"git: {GIT_BRANCH} @ {GIT_HASH}{GIT_DIRTY}"
+
 css = (ROOT / "docs/reports/_template_house.html").read_text().split("<style>")[1].split("</style>")[0]
 html = f"""<!doctype html><meta charset='utf-8'><title>overnight 2026-08-08 — critic authority & MB-AC</title>
 <style>{css}</style>
@@ -226,7 +235,7 @@ hist=1 배포판이 hist=3와 동급이라 롤아웃 통합도 깨끗하다.</p>
 <li>AC-RFT 통합: MB-AC 커밋 하에서 수집한 롤아웃으로 RFT — 데이터 분포 자체가 adaptive-chunked</li>
 </ul></div>
 
-<div class='sub'>원시 데이터: .scratch/rollout_{{control,rltphi,mbac}}.json · mbac_offline_phi.json · phi_dyn_v1{{,_h1}}/report.json · 설계 노트: docs/reports/mbac_design_notes.md</div>
+<div class='sub'>원시 데이터: .scratch/rollout_{{control,rltphi,mbac}}.json · mbac_offline_phi.json · phi_dyn_v1{{,_h1}}/report.json · 설계 노트: docs/reports/mbac_design_notes.md · {GIT_STAMP}</div>
 """
 out = ROOT / "docs/reports/2026-08-08_overnight-authority-mbac.html"
 out.write_text(html)
