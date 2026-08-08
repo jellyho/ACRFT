@@ -16,9 +16,9 @@ import json
 import os
 import pathlib
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -37,9 +37,8 @@ POOLS = {
     "nseed": ("scenes 4000-4700", "#16a34a"),
     "ev": ("mixed-eval scenes (0-300+3000-3300)", "#9333ea"),
 }
-TCRIT = {
-    k: v
-    for k, v in zip(
+TCRIT = dict(
+    zip(
         range(2, 40),
         [
             12.7,
@@ -83,7 +82,7 @@ TCRIT = {
         ],
         strict=False,
     )
-}
+)
 
 
 def run_deltas(root, mode):
@@ -151,22 +150,27 @@ def main():
     # flip" panel was removed: generations differ in normalisation/steps/code at once, and the
     # bar invited a "+10%" misreading.)
     ax = axes[1]
-    POOL_SEEDS = {"scenes 0-300": "old", "scenes 3000-3300": "std", "scenes 4000-4700": "nseed/ev"}
     ds = run_deltas("v11_std/iql", "critic")
     groups = {}
     for d, lbl, color in ds:
         groups.setdefault(lbl, ([], color))[0].append(d)
     xs = []
-    for i, (lbl, (vals, color)) in enumerate(groups.items()):
-        vals = np.array(vals)
-        ax.scatter(np.full(len(vals), i) + np.linspace(-0.09, 0.09, len(vals)), vals, s=46,
-                   color=color, alpha=0.85, zorder=3)
+    for i, (lbl, (raw_vals, color)) in enumerate(groups.items()):
+        vals = np.array(raw_vals)
+        ax.scatter(
+            np.full(len(vals), i) + np.linspace(-0.09, 0.09, len(vals)), vals, s=46, color=color, alpha=0.85, zorder=3
+        )
         ax.scatter([i], [vals.mean()], marker="_", s=700, color="black", zorder=4)
         ax.text(i, vals.mean() + 0.015, f"{vals.mean():+.3f}", ha="center", fontsize=9)
         xs.append((i, f"{lbl}\n(n={len(vals)})"))
     overall = np.array([d for d, _, _ in ds])
-    ax.axhline(overall.mean(), color="#1d4ed8", lw=1.6, ls="-",
-               label=f"overall mean of 16 runs {overall.mean():+.3f} (CI includes 0 = no effect)")
+    ax.axhline(
+        overall.mean(),
+        color="#1d4ed8",
+        lw=1.6,
+        ls="-",
+        label=f"overall mean of 16 runs {overall.mean():+.3f} (CI includes 0 = no effect)",
+    )
     ax.axhline(0, color="#888", lw=1.2, ls="--")
     ax.set_xticks([i for i, _ in xs])
     ax.set_xticklabels([t for _, t in xs], fontsize=8)

@@ -15,6 +15,7 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
 
     def _obs(d, i):
         return d.obs_at(i, history=_hk, history_stride=_hs)
+
     H = data.horizon
     prefixes = jnp.arange(cfg.macro_group_size, H + 1, cfg.macro_group_size) if cfg.kind == "arq" else jnp.array([H])
     step_discount = cfg.discount ** jnp.arange(H, dtype=jnp.float32)  # gamma^i, i < H

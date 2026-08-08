@@ -15,12 +15,18 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import make_master_report as mm  # noqa: E402  (importing builds ENTRIES and regenerates local reports)
+import make_master_report as mm
 
 SPACE = "jellyho/acrft-reports"
 MARK = "워커B"
-DATE_MAP = {"~08-01": "2026-08-01", "08-02~03": "2026-08-03", "08-05": "2026-08-05",
-            "08-06": "2026-08-06", "08-07": "2026-08-07", "타임라인": "2026-08-08"}
+DATE_MAP = {
+    "~08-01": "2026-08-01",
+    "08-02~03": "2026-08-03",
+    "08-05": "2026-08-05",
+    "08-06": "2026-08-06",
+    "08-07": "2026-08-07",
+    "타임라인": "2026-08-08",
+}
 WBX_STYLE = """<style id="wbx-style">
 /* ===== 허브 전면 백색 테마 (2026-08-08 지시: 메인 페이지·버튼까지 전부 라이트) =====
    허브 공통 CSS 변수를 라이트 팔레트로 오버라이드 — 구조·콘텐츠는 불변, 색만 교체 */
@@ -77,7 +83,8 @@ MM_COLORS = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3"]
 
 def summary_of(body: str) -> str:
     m = re.search(r"<p><b>(?:해석|결과|관측|잠정|근본|Takeaway)[^<]*</b>\s*([\s\S]{0,600}?)</p>", body) or re.search(
-        r"<p>([\s\S]{0,600}?)</p>", body)
+        r"<p>([\s\S]{0,600}?)</p>", body
+    )
     txt = re.sub(r"<[^>]+>", "", m.group(1) if m else body)
     txt = re.sub(r"\s+", " ", txt).strip()
     return (txt[:180] + "…") if len(txt) > 180 else txt
@@ -96,10 +103,7 @@ def build_thread(merged_reports):
             for i, r in by_day[d]
         )
         days.append(f"<div class='day'><h3>{d} <span class='sm'>({len(by_day[d])}건)</span></h3><ul>{items}</ul></div>")
-    return (
-        "<p>일자별로 올라온 리포트 전부(양쪽 워커 포함). 제목을 누르면 해당 리포트로 이동한다.</p>"
-        + "".join(days)
-    )
+    return "<p>일자별로 올라온 리포트 전부(양쪽 워커 포함). 제목을 누르면 해당 리포트로 이동한다.</p>" + "".join(days)
 
 
 def build_mindmap(eid_idx, summaries=None):
@@ -115,19 +119,27 @@ def build_mindmap(eid_idx, summaries=None):
     nodes = []
     for eid, i in eid_idx.items():
         m = mm.META.get(eid, {})
-        nodes.append({"id": eid, "idx": i, "cat": cat.get(eid, len(MM_COLS)),
-                      "what": m.get("what", eid), "date": m.get("date", ""),
-                      "sum": (summaries or {}).get(eid, "")})
+        nodes.append(
+            {
+                "id": eid,
+                "idx": i,
+                "cat": cat.get(eid, len(MM_COLS)),
+                "what": m.get("what", eid),
+                "date": m.get("date", ""),
+                "sum": (summaries or {}).get(eid, ""),
+            }
+        )
     links, seen = [], set()
     for eid, m in mm.META.items():
         for tgt in m.get("links", []):
             if eid in eid_idx and tgt in eid_idx and (tgt, eid) not in seen and (eid, tgt) not in seen:
                 seen.add((eid, tgt))
                 links.append([eid, tgt])
-    data = json.dumps({"nodes": nodes, "links": links, "colors": MM_COLORS + ["#64b5cd"], "phases": phases},
-                      ensure_ascii=False)
+    data = json.dumps(
+        {"nodes": nodes, "links": links, "colors": [*MM_COLORS, "#64b5cd"], "phases": phases}, ensure_ascii=False
+    )
     legend = "".join(
-        f"<span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:{(MM_COLORS + ['#64b5cd'])[i]};margin-right:5px'></span>{p}</span>"
+        f"<span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:{([*MM_COLORS, '#64b5cd'])[i]};margin-right:5px'></span>{p}</span>"
         for i, p in enumerate(phases)
     )
     return (
@@ -140,7 +152,9 @@ def build_mindmap(eid_idx, summaries=None):
 
 
 def main():
-    from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
+    from huggingface_hub import CommitOperationAdd
+    from huggingface_hub import HfApi
+    from huggingface_hub import hf_hub_download
 
     api = HfApi()
     idx = pathlib.Path(hf_hub_download(SPACE, "index.html", repo_type="space", force_download=True)).read_text()
@@ -153,16 +167,25 @@ def main():
     sec_pat = re.compile(r'<section class="report" id="r(\d+)"[\s\S]*?</section>\n?')
     blocks = [m.group(0) for m in sec_pat.finditer(idx)]
     assert len(blocks) == len(reports), f"섹션 {len(blocks)} vs 엔트리 {len(reports)} 불일치"
-    keep = [(r, b) for r, b in zip(reports, blocks) if MARK not in json.dumps(r, ensure_ascii=False)]
+    keep = [(r, b) for r, b in zip(reports, blocks, strict=True) if MARK not in json.dumps(r, ensure_ascii=False)]
 
     # ---- ours from ENTRIES (real per-eid dates from META)
     ours = []
     for date, eid, title, status, body in mm.ENTRIES:
         iso = mm.META.get(eid, {}).get("date") or DATE_MAP.get(date, "2026-08-08")
-        ours.append((eid, {
-            "date": iso, "title": f"🧪 [{MARK}] {title}", "summary": summary_of(body),
-            "tags": [MARK, "RoboCasa"], "status": "living" if status != "완결" else "finding",
-        }, f'<div class="wbx">{body}</div>'))
+        ours.append(
+            (
+                eid,
+                {
+                    "date": iso,
+                    "title": f"🧪 [{MARK}] {title}",
+                    "summary": summary_of(body),
+                    "tags": [MARK, "RoboCasa"],
+                    "status": "living" if status != "완결" else "finding",
+                },
+                f'<div class="wbx">{body}</div>',
+            )
+        )
     ours.sort(key=lambda x: x[1]["date"], reverse=True)
 
     # 스레드·마인드맵은 리스트 항목이 아니라 별도 탭(#wb-thread/#wb-map)으로 상주한다.
@@ -176,6 +199,7 @@ def main():
             if e in eid_idx:
                 return f"<span class='xref' onclick='openReport({eid_idx[e]})'"
             return "<span class='xref' style='opacity:.5'"
+
         return re.sub(r"<span class='xref' data-eid='([^']+)'", sub, body)
 
     def wrap_tables(body):
@@ -195,37 +219,43 @@ def main():
 
     new_blocks = []
     for i, b in enumerate(bodies):
-        new_blocks.append(rebuild(i, b) if b.startswith("<section") else f'<section class="report" id="r{i}" hidden>{b}</section>\n')
+        new_blocks.append(
+            rebuild(i, b) if b.startswith("<section") else f'<section class="report" id="r{i}" hidden>{b}</section>\n'
+        )
 
     # ---- assemble
     out = idx[:arr_start] + json.dumps(new_reports, ensure_ascii=False) + idx[arr_end:]
     first = out.find('<section class="report"')
-    last_m = None
-    for last_m in re.finditer(r"</section>\n?", out):
-        pass
-    out = out[:first] + "".join(new_blocks) + out[last_m.end():]
+    last_end = max(mm_.end() for mm_ in re.finditer(r"</section>\n?", out))
+    out = out[:first] + "".join(new_blocks) + out[last_end:]
     out = re.sub(r'<style id="wbx-style">[\s\S]*?</style>', "", out)
     out = out.replace("</head>", WBX_STYLE + "</head>", 1)
     # 이전 정렬 패치 원복(스레드·마인드맵이 리스트에서 빠졌으므로 불필요)
     out = out.replace(
         '.sort((a,b)=>{const p=t=>t.tags&&t.tags.includes("인덱스")?1:0;'
         "if(p(a)!==p(b))return p(b)-p(a);return b.date.localeCompare(a.date);});",
-        ".sort((a,b)=>b.date.localeCompare(a.date));", 1)
+        ".sort((a,b)=>b.date.localeCompare(a.date));",
+        1,
+    )
 
     # ---- 상단 탭 + 상주 뷰(#wb-thread/#wb-map) 주입 (이전 주입분은 마커로 제거 후 재주입)
     out = re.sub(r"<!--wb-tabs-->[\s\S]*?<!--/wb-tabs-->", "", out)
     out = re.sub(r"<!--wb-views-->[\s\S]*?<!--/wb-views-->", "", out)
     out = re.sub(r'<script id="wb-tabs-js">[\s\S]*?</script>', "", out)
-    tabs = ('<!--wb-tabs--><div id="wb-tabbar" style="display:flex;gap:8px;margin:14px 0">'
-            '<button class="wb-tab on" data-v="list" onclick="wbView(\'list\')">📋 리포트 목록</button>'
-            '<button class="wb-tab" data-v="thread" onclick="wbView(\'thread\')">🧵 데일리 스레드</button>'
-            '<button class="wb-tab" data-v="map" onclick="wbView(\'map\')">🗺️ 관계도</button>'
-            '</div><!--/wb-tabs-->')
-    views = ("<!--wb-views-->"
-             f'<div id="wb-thread" hidden><div class="wbx">{build_thread([r for r, _ in merged])}</div></div>'
-             f'<div id="wb-map" hidden><div class="wbx">{build_mindmap(eid_idx, {e: r["summary"] for e, r, _ in ours})}</div></div>'
-             "<!--/wb-views-->")
-    js = ("""<script id="wb-tabs-js">
+    tabs = (
+        '<!--wb-tabs--><div id="wb-tabbar" style="display:flex;gap:8px;margin:14px 0">'
+        '<button class="wb-tab on" data-v="list" onclick="wbView(\'list\')">📋 리포트 목록</button>'
+        '<button class="wb-tab" data-v="thread" onclick="wbView(\'thread\')">🧵 데일리 스레드</button>'
+        '<button class="wb-tab" data-v="map" onclick="wbView(\'map\')">🗺️ 관계도</button>'
+        "</div><!--/wb-tabs-->"
+    )
+    views = (
+        "<!--wb-views-->"
+        f'<div id="wb-thread" hidden><div class="wbx">{build_thread([r for r, _ in merged])}</div></div>'
+        f'<div id="wb-map" hidden><div class="wbx">{build_mindmap(eid_idx, {e: r["summary"] for e, r, _ in ours})}</div></div>'
+        "<!--/wb-views-->"
+    )
+    js = """<script id="wb-tabs-js">
 function wbView(v){
   document.querySelectorAll('.wb-tab').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
   const listy=['list','count','chips'];
@@ -305,19 +335,22 @@ function wbGraphInit(){
     requestAnimationFrame(tick);}
   _wbG=true; tick();
 }
-</script>""")
+</script>"""
     m = re.search(r'(<div class="sub">[^<]*</div>)', out)
-    out = out[:m.end()] + tabs + out[m.end():]
+    out = out[: m.end()] + tabs + out[m.end() :]
     i_list = out.find('<div id="list"></div>')
-    out = out[:i_list + len('<div id="list"></div>')] + views + out[i_list + len('<div id="list"></div>'):]
+    out = out[: i_list + len('<div id="list"></div>')] + views + out[i_list + len('<div id="list"></div>') :]
     out = out.replace("</body>", js + "</body>", 1)
 
     tmp = pathlib.Path("/scratch/jellyho/acrft/hub_index_new.html")
     tmp.write_text(out)
-    res = api.create_commit(repo_id=SPACE, repo_type="space",
+    res = api.create_commit(
+        repo_id=SPACE,
+        repo_type="space",
         operations=[CommitOperationAdd(path_in_repo="index.html", path_or_fileobj=str(tmp))],
         commit_message=f"worker-B: {len(ours)} entries [{mm.GIT_STAMP}]",
-        create_pr=True)
+        create_pr=True,
+    )
     num = int(res.pr_url.rstrip("/").split("/")[-1])
     api.merge_pull_request(SPACE, num, repo_type="space")
     print(f"허브 동기화: 스레드+마인드맵+우리 {len(ours)} + 기존 {len(keep)} = {len(merged)} 엔트리, PR#{num} 머지")

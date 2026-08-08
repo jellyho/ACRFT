@@ -25,8 +25,17 @@ def main():
         assert len(set(map(str, vals))) == 1, f"meta mismatch on {k}: {vals}"
     out.mkdir(parents=True, exist_ok=True)
 
-    streams = set.intersection(*(set(f.stem for f in p.glob("*.dat")) for p in parts))
-    assert {"rl_token", "action_chunk", "base_action", "reward", "episode_index", "done", "proprio", "mc_return"} <= streams, streams
+    streams = set.intersection(*({f.stem for f in p.glob("*.dat")} for p in parts))
+    assert {
+        "rl_token",
+        "action_chunk",
+        "base_action",
+        "reward",
+        "episode_index",
+        "done",
+        "proprio",
+        "mc_return",
+    } <= streams, streams
 
     for name in sorted(streams):
         if name == "episode_index":
@@ -36,7 +45,7 @@ def main():
                 w.write((p / f"{name}.dat").read_bytes())
 
     ep_off, chunks = 0, []
-    for p, m in zip(parts, metas):
+    for p, m in zip(parts, metas, strict=True):
         ep = np.fromfile(p / "episode_index.dat", dtype=np.int32)
         assert len(ep) == m["num_frames"], (p, len(ep), m["num_frames"])
         chunks.append(ep + ep_off)
@@ -46,7 +55,7 @@ def main():
     meta = dict(metas[0])
     meta["num_frames"] = sum(m["num_frames"] for m in metas)
     meta["source"] = " + ".join(str(p) for p in parts)
-    meta["mixture"] = {str(p): m["num_frames"] for p, m in zip(parts, metas)}
+    meta["mixture"] = {str(p): m["num_frames"] for p, m in zip(parts, metas, strict=True)}
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
     print(f"{out}: {meta['num_frames']:,} frames, {ep_off:,} episodes, streams={sorted(streams)}")
 

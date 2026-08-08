@@ -73,7 +73,9 @@ class VLA:
     params every evaluation, instead of reloading the 3B model each time.
     """
 
-    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None, noise_scale=1.0):
+    def __init__(
+        self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None, noise_scale=1.0
+    ):
         train_config = _config.get_config(config_name)
         if model_overrides:
             # Some checkpoints were trained with model flags that are NOT baked into the registered
@@ -168,8 +170,20 @@ def proprio_stats(critic_path):
 
 
 def make_policy_fn(
-    vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, vfn=None, bfn=None,
-    gamma=0.99, history=0, history_stride=8
+    vla,
+    score,
+    macro,
+    *,
+    mode,
+    query_noise=0.0,
+    softmax_temp=0.0,
+    seed=0,
+    proprio=None,
+    vfn=None,
+    bfn=None,
+    gamma=0.99,
+    history=0,
+    history_stride=8,
 ):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.

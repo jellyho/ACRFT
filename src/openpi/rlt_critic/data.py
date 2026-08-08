@@ -57,7 +57,18 @@ class Data:
         return jnp.concatenate([*hists, self.token[idx]], axis=-1)
 
 
-_DATA_ARRAYS = ("token", "chunk", "cand_parts", "reward", "episode", "mc_return", "done", "done_cum", "alive", "ep_start")
+_DATA_ARRAYS = (
+    "token",
+    "chunk",
+    "cand_parts",
+    "reward",
+    "episode",
+    "mc_return",
+    "done",
+    "done_cum",
+    "alive",
+    "ep_start",
+)
 _DATA_STATS = ("action_mean", "action_std", "proprio_mean", "proprio_std")
 
 

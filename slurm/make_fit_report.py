@@ -11,9 +11,9 @@ import glob
 import html
 import io
 import json
+from math import comb
 import os
 import pathlib
-from math import comb
 
 C = pathlib.Path(os.environ.get("CACHE_DIR", "/scratch/jellyho/acrft"))
 PLOTS = C / "plots"
@@ -30,7 +30,7 @@ def _mcnemar(a, b):
     ab = sum(1 for x, y in zip(a, b, strict=True) if x and not y)
     ba = sum(1 for x, y in zip(a, b, strict=True) if y and not x)
     n = ab + ba
-    p = min(1.0, sum(comb(n, k) for k in range(0, min(ab, ba) + 1)) * 2 / 2**n) if n else 1.0
+    p = min(1.0, sum(comb(n, k) for k in range(min(ab, ba) + 1)) * 2 / 2**n) if n else 1.0
     return ab, ba, p
 
 
@@ -71,9 +71,9 @@ def rollout_stats():
 
 def rate_chart(rates):
     """One grouped bar chart per experiment family — success rates with Wilson 95% intervals."""
-    import matplotlib
+    import matplotlib as mpl
 
-    matplotlib.use("Agg")
+    mpl.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
 

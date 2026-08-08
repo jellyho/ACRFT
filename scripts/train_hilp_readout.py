@@ -132,8 +132,9 @@ def main():
 
     cfg.out.mkdir(parents=True, exist_ok=True)
     (cfg.out / "phi.msgpack").write_bytes(fser.to_bytes(params))
-    (cfg.out / "config.json").write_text(json.dumps({**vars(cfg), "data": str(cfg.data), "out": str(cfg.out),
-                                                     "token_dim": D}, indent=2, default=str))
+    (cfg.out / "config.json").write_text(
+        json.dumps({**vars(cfg), "data": str(cfg.data), "out": str(cfg.out), "token_dim": D}, indent=2, default=str)
+    )
     logger.info(f"saved phi to {cfg.out} ({(time.perf_counter() - t0) / 60:.1f} min)")
 
 

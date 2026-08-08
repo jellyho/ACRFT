@@ -21,9 +21,9 @@ OUT = C / "report_week.html"
 
 
 def _mpl():
-    import matplotlib
+    import matplotlib as mpl
 
-    matplotlib.use("Agg")
+    mpl.use("Agg")
     import matplotlib.pyplot as plt
 
     return plt
@@ -65,9 +65,11 @@ def family_delta_chart():
         fam = run_dir.parent.name
         obj = cfg.get("objective", "td")
         vla = np.mean(modes["vla"])
-        for m in ("critic", "prefix"):
-            if m in modes:
-                rows.append(dict(family=fam, obj=obj, mode=m, delta=float(np.mean(modes[m]) - vla), n=len(modes[m])))
+        rows.extend(
+            {"family": fam, "obj": obj, "mode": m, "delta": float(np.mean(modes[m]) - vla), "n": len(modes[m])}
+            for m in ("critic", "prefix")
+            if m in modes
+        )
     fams = sorted(
         {r["family"] for r in rows},
         key=lambda f: (0 if any(r["family"] == f and r["obj"] == "td" for r in rows) else 1, f),
@@ -75,7 +77,7 @@ def family_delta_chart():
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.2), constrained_layout=True, dpi=180, sharey=True)
     for ax, mode, color in zip(axes, ("critic", "prefix"), ("#dc2626", "#2563eb"), strict=True):
         xs, labels = [], []
-        for i, fam in enumerate(fams):
+        for _i, fam in enumerate(fams):
             ds = [r["delta"] for r in rows if r["family"] == fam and r["mode"] == mode]
             if not ds:
                 continue

@@ -78,7 +78,7 @@ def main() -> None:
     own = list(range(si, len(files), sk))
     logger.info(f"{len(files)} trials / {total} frames total; shard {args.shard} owns {len(own)} trials")
 
-    from eval_critic import VLA  # noqa: E402  (single VLA loader shared with rollouts)
+    from eval_critic import VLA
 
     vla = VLA(
         args.config,

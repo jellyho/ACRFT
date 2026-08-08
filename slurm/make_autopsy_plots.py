@@ -11,15 +11,15 @@ Reads every autopsy-style JSON it can find and groups trials by mode; rerun afte
     uv run --no-sync python slurm/make_autopsy_plots.py     # -> $CACHE_DIR/plots/15_autopsy.png
 """
 
+from collections import Counter
 import glob
 import json
 import os
 import pathlib
-from collections import Counter
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -198,7 +198,7 @@ def draw_cohort(axes, cname, modes, order):
                 widths=width * 0.85,
                 patch_artist=True,
                 showfliers=False,
-                medianprops=dict(color="black"),
+                medianprops={"color": "black"},
             )
             bp["boxes"][0].set_facecolor(colors[m])
             bp["boxes"][0].set_alpha(0.65)
@@ -212,7 +212,12 @@ def draw_cohort(axes, cname, modes, order):
 
     axes[0].annotate(
         f"COHORT: {cname}\n(compare modes WITHIN this row only - different row = different scenes & checkpoint)",
-        xy=(-0.08, 1.10), xycoords="axes fraction", fontsize=12, fontweight="bold", color="#7c2d12")
+        xy=(-0.08, 1.10),
+        xycoords="axes fraction",
+        fontsize=12,
+        fontweight="bold",
+        color="#7c2d12",
+    )
 
 
 if __name__ == "__main__":

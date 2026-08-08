@@ -993,7 +993,13 @@ class Pi0RLT(Pi0):
         return jnp.transpose(chunks, (1, 0, 2, 3))  # [b, n, H, D]
 
     def extract_token_and_base_actions(
-        self, rng: at.KeyArrayLike, observation: _model.Observation, *, num_samples: int, num_steps: int = 10, noise_scale: float = 1.0
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        num_samples: int,
+        num_steps: int = 10,
+        noise_scale: float = 1.0,
     ) -> tuple[at.Float[at.Array, "b t"], at.Float[at.Array, "b n ah ad"]]:
         """RL token AND ``num_samples`` base-policy action chunks from ONE backbone forward.
 
@@ -1005,7 +1011,13 @@ class Pi0RLT(Pi0):
         z, img_mask, prefix_mask, kv_cache = self._prefix_forward(observation)
         z_rl = self._encode_rl_token(z, img_mask, observation.state)
         base = self._denoise_from_cache(
-            rng, observation, prefix_mask, kv_cache, num_samples=num_samples, num_steps=num_steps, noise_scale=noise_scale
+            rng,
+            observation,
+            prefix_mask,
+            kv_cache,
+            num_samples=num_samples,
+            num_steps=num_steps,
+            noise_scale=noise_scale,
         )
         return z_rl, base
 

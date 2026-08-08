@@ -18,7 +18,6 @@ import io
 import json
 import os
 import pathlib
-from collections import Counter
 
 import numpy as np
 from PIL import Image
@@ -31,7 +30,7 @@ try:
     import make_figures
 
     make_figures.main()
-except Exception as _e:  # noqa: BLE001  - 그림 실패가 리포트 생성을 막으면 안 된다
+except Exception as _e:
     print(f"[make_figures 건너뜀: {_e}]")
 
 
@@ -67,7 +66,9 @@ def run_level(root, mode, prefixes):
 
 def ci_row(name, ds):
     if len(ds) < 2:
-        reason = "학습 진행 중 (segfault 해결 후 재가동, td-segv 참조)" if len(ds) == 0 else f"n={len(ds)} — 시드 도착 중"
+        reason = (
+            "학습 진행 중 (segfault 해결 후 재가동, td-segv 참조)" if len(ds) == 0 else f"n={len(ds)} — 시드 도착 중"
+        )
         return f"<tr><td>{name}</td><td colspan=4 class='pending'>{reason}</td></tr>"
     n, m = len(ds), ds.mean()
     se = ds.std(ddof=1) / np.sqrt(n)
@@ -235,7 +236,9 @@ entry(
             ]
         )
     }
-<p class="sub">아래 그림은 08-01 원본(v3 스윕)이며 원시 데이터가 남아있지 않아 스타일 재생성 대상에서 제외 — 아카이브 원본 유지.</p>{img(P / "2_value_bias.png", "value bias by distance")}
+<p class="sub">아래 그림은 08-01 원본(v3 스윕)이며 원시 데이터가 남아있지 않아 스타일 재생성 대상에서 제외 — 아카이브 원본 유지.</p>{
+        img(P / "2_value_bias.png", "value bias by distance")
+    }
 <p><b>해석.</b> TD critic의 b(d)는 원거리에서 크게 양수(최대 5.07× 팽창) — 타깃이 거리 구조로 기울어 있었다.
 이 기울기는 커밋 길이 선택(h축)을 오염시켜, 이후 측정에서 joint argmax의 61%가 최단 h=2로 붕괴하는 원인이 된다.
 γ를 0.999로 올리면 캘리브레이션은 좋아지지만(±0.01) 롤아웃은 나아지지 않는 것도 이때 확인 —
@@ -293,7 +296,7 @@ entry(
     "duel",
     "Dueling 게이지 실패 두 번과 zero-mean 해법",
     "완결",
-    f"""
+    """
 <p>Q = V + A 분해는 게이지 자유도((V+c, A−c))가 있어 두 번 실패했다: ① detach-V 판은 |V|~200으로 표류,
 ② sigmoid 바운드 판은 V가 0에서 죽음. 해법은 <b>prefix 축 zero-mean advantage</b>(A에서 mean_h A를 빼 게이지를 V에 고정).
 이 기계는 이후 AQC의 per-h 베이스라인과 개념적으로 연결된다(Q_h − b_h가 곧 advantage).
@@ -573,7 +576,10 @@ entry(
         spec(
             [
                 ("데이터", "annot/mixed = 데모 279,534 + 롤아웃 528,100 프레임(실패 249궤적 포함)"),
-                ("VLA", "<b>동결</b> — 실패 데이터는 critic(~10M)만 학습. 후보 분포 불변, 이득 귀속은 100% 가치-기반 선택"),
+                (
+                    "VLA",
+                    "<b>동결</b> — 실패 데이터는 critic(~10M)만 학습. 후보 분포 불변, 이득 귀속은 100% 가치-기반 선택",
+                ),
                 ("학습", "v11과 동일 레시피, method=iql/aqc — a6000(데이터 17GB 상주)"),
                 ("평가", "v11 동일 프로토콜, 시드 16개 완결 (iql/aqc 각 n=16)"),
                 (
@@ -603,52 +609,94 @@ entry(
 
 # =========================================================== 08-07 FINAL
 FINAL_ARMS = [
-    ("td_max", "critic"), ("td_soft", "critic"), ("td_aqcmax", "critic"), ("iql", "critic"), ("qc", "critic"),
-    ("td_max_a101", "critic"), ("td_max_a201", "critic"), ("iql_a101", "critic"), ("iql_a201", "critic"),
-    ("td_max_online", "critic"), ("iql_online", "critic"),
-    ("td_max_demo", "critic"), ("iql_demo", "critic"), ("qc_demo", "critic"),
+    ("td_max", "critic"),
+    ("td_soft", "critic"),
+    ("td_aqcmax", "critic"),
+    ("iql", "critic"),
+    ("qc", "critic"),
+    ("td_max_a101", "critic"),
+    ("td_max_a201", "critic"),
+    ("iql_a101", "critic"),
+    ("iql_a201", "critic"),
+    ("td_max_online", "critic"),
+    ("iql_online", "critic"),
+    ("td_max_demo", "critic"),
+    ("iql_demo", "critic"),
+    ("qc_demo", "critic"),
 ]
 _frows = "".join(ci_row(a, run_level(f"final/{a}", m, ("f",))) for a, m in FINAL_ARMS)
 _abs_rows = ""
 for a, m in FINAL_ARMS:
     import glob as _g
+
     S = V = N = 0
     for f in sorted(_g.glob(str(C / f"critic_runs/final/{a}/rollout/f_s*.json"))):
         j = json.loads(pathlib.Path(f).read_text())
         if m in j:
-            S += sum(t["success"] for t in j[m]["trials"]); V += sum(t["success"] for t in j["vla"]["trials"]); N += len(j[m]["trials"])
+            S += sum(t["success"] for t in j[m]["trials"])
+            V += sum(t["success"] for t in j["vla"]["trials"])
+            N += len(j[m]["trials"])
     if N:
         _abs_rows += f"<tr><td>{a}</td><td>{S}/{N} ({S / N:.3f})</td><td>{V}/{N} ({V / N:.3f})</td></tr>"
     else:
-        _abs_rows += f"<tr><td>{a}</td><td colspan=2 class='pending'>평가 대기 (학습 재가동 — td-segv 리포트 참조)</td></tr>"
+        _abs_rows += (
+            f"<tr><td>{a}</td><td colspan=2 class='pending'>평가 대기 (학습 재가동 — td-segv 리포트 참조)</td></tr>"
+        )
 _mc_rows = ""
-from math import comb as _comb
+from math import comb as _comb  # noqa: E402 - local helper for the block below
+
 for a, m in FINAL_ARMS:
     b = c = n = 0
     for f in sorted(glob.glob(str(C / f"critic_runs/final/{a}/rollout/f_s*.json"))):
         j = json.loads(pathlib.Path(f).read_text())
         if m in j and "vla" in j:
-            for tc, tv in zip(j[m]["trials"], j["vla"]["trials"]):
+            for tc, tv in zip(j[m]["trials"], j["vla"]["trials"], strict=True):
                 n += 1
                 b += int(tc["success"] and not tv["success"])
                 c += int(tv["success"] and not tc["success"])
     if n == 0:
         continue
     mtot = b + c
-    pv = min(1.0, sum(_comb(mtot, k) for k in range(0, min(b, c) + 1)) * 2 / 2**mtot) if mtot else 1.0
-    mark = "<b class='bad'>유의한 해악</b>" if (pv < 0.05 and c > b) else ("<b class='good'>유의한 이득</b>" if (pv < 0.05 and b > c) else "무차이")
+    pv = min(1.0, sum(_comb(mtot, k) for k in range(min(b, c) + 1)) * 2 / 2**mtot) if mtot else 1.0
+    mark = (
+        "<b class='bad'>유의한 해악</b>"
+        if (pv < 0.05 and c > b)
+        else ("<b class='good'>유의한 이득</b>" if (pv < 0.05 and b > c) else "무차이")
+    )
     _mc_rows += f"<tr><td>{a}</td><td>+{b}</td><td>−{c}</td><td>{n}</td><td>{pv:.3f}</td><td>{mark}</td></tr>"
 
-entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "완결", f"""
-{spec([("공통", "γ0.995 · 100k · b256 · seed0 · mc_floor · z-score · 타깃τ0.005 · IQL τ0.9 · 배포=공통 joint argmax"),
-       ("요인", "A 방법×부트스트랩(max/softmax/aqcmax) · B atoms(51/101/201) · C 타깃넷(EMA/online) · D 데이터(mixed/demo)"),
-       ("평가", "arm당 시드 4개(5000–5300)×50장면 잡내 페어드 — 전 arm 동일 장면이라 arm 간도 페어드 · arm당 HUD 비디오 6장면"),
-       ("판정", "사전 등록: 95% t-CI(n=4)가 0을 벗어나는가 · 절대 성공률 병기")])}
+entry(
+    "08-07",
+    "final",
+    "FINAL 캠페인 — 전 요인 사전등록 스윕",
+    "완결",
+    f"""
+{
+        spec(
+            [
+                (
+                    "공통",
+                    "γ0.995 · 100k · b256 · seed0 · mc_floor · z-score · 타깃τ0.005 · IQL τ0.9 · 배포=공통 joint argmax",
+                ),
+                (
+                    "요인",
+                    "A 방법×부트스트랩(max/softmax/aqcmax) · B atoms(51/101/201) · C 타깃넷(EMA/online) · D 데이터(mixed/demo)",
+                ),
+                (
+                    "평가",
+                    "arm당 시드 4개(5000–5300)×50장면 잡내 페어드 — 전 arm 동일 장면이라 arm 간도 페어드 · arm당 HUD 비디오 6장면",
+                ),
+                ("판정", "사전 등록: 95% t-CI(n=4)가 0을 벗어나는가 · 절대 성공률 병기"),
+            ]
+        )
+    }
 <h3>상대 성적 (arm − 잡내 vla)</h3>
 {img(P / "20_final_forest.png", "FINAL forest")}
 <table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_frows}</table>
 <h3>절대 성공률</h3>
-<table class='num'><tr><th>arm</th><th>arm 성공</th><th>잡내 vla 성공</th></tr>{_abs_rows if _abs_rows else "<tr><td colspan=3>평가 도착 대기</td></tr>"}</table>
+<table class='num'><tr><th>arm</th><th>arm 성공</th><th>잡내 vla 성공</th></tr>{
+        _abs_rows if _abs_rows else "<tr><td colspan=3>평가 도착 대기</td></tr>"
+    }</table>
 <h3>최종 판정 (2026-08-08, 14/14팔 완결)</h3>
 <p><b>어떤 요인 조합도 VLA를 이기지 못했다.</b> run-level 95% t-CI(n=4)로는 14팔 전부 null이고,
 점추정 Δ̄는 −0.190 ~ +0.040 사이(14팔 평균 −0.051). 방법(TD/IQL/QC), 부트스트랩 연산자(max/softmax/aqcmax),
@@ -685,17 +733,35 @@ atoms 51→201 증가도, 타깃넷 EMA→online도 IQL에서는 판정을 바�
 <b>qc(mixed) 완결(n=4): Δ̄=−0.020 CI[−0.174,+0.134] — null.</b> segfault 해결 후 TD 계열 첫 완주 팔.
 나머지 TD 계열 6팔 + calql은 학습 진행 중(step 13k–27k/100k) — '침묵사 규명' 탭 참조.
 06:00 무결 감사: v11·v12의 공표 수치를 원본 JSON에서 재계산해 일치 확인(TD −0.167 CI[−0.214,−0.119] 재현).</p>
-""")
+""",
+)
 
 # ============================================== 08-08 v14 + CalQL 판정
 _v14_rows = "".join(ci_row(a, run_level(f"v14/{a}", "critic", ("f",))) for a in ["iql_v14", "td_max_v14", "calql_v14"])
 _cq_rows = "".join(ci_row(a, run_level(f"v13_calql/{a}", "critic", ("f",))) for a in ["calql_noprop", "calql_mixed"])
-entry("08-07", "v14", "v14 — 장면 지름길 제거 데이터 판정", "진행 중", f"""
-{spec([("데이터", "annot/mixed_v14 = 데모 514 에피소드 + K-per-scene 롤아웃 450 (605,684 프레임) — 주방당 정책시드 3롤아웃, 45% 주방이 혼합 결과"),
-       ("질문", "critic이 장면 정체성으로 결과를 외우는 지름길을 차단하면, v12에서 열린 후보 밴드가 성공률로 전환되는가"),
-       ("학습", "FINAL 공통 레시피 그대로 (γ0.995 · 100k · b256 · τ0.9 · mc_floor · z-score)"),
-       ("평가", "시드 4개(5000–5300) × 50장면, 잡내 vla 페어드 — FINAL과 동일 장면"),
-       ("판정", "run-level 95% t-CI가 0을 벗어나는가")])}
+entry(
+    "08-07",
+    "v14",
+    "v14 — 장면 지름길 제거 데이터 판정",
+    "진행 중",
+    f"""
+{
+        spec(
+            [
+                (
+                    "데이터",
+                    "annot/mixed_v14 = 데모 514 에피소드 + K-per-scene 롤아웃 450 (605,684 프레임) — 주방당 정책시드 3롤아웃, 45% 주방이 혼합 결과",
+                ),
+                (
+                    "질문",
+                    "critic이 장면 정체성으로 결과를 외우는 지름길을 차단하면, v12에서 열린 후보 밴드가 성공률로 전환되는가",
+                ),
+                ("학습", "FINAL 공통 레시피 그대로 (γ0.995 · 100k · b256 · τ0.9 · mc_floor · z-score)"),
+                ("평가", "시드 4개(5000–5300) × 50장면, 잡내 vla 페어드 — FINAL과 동일 장면"),
+                ("판정", "run-level 95% t-CI가 0을 벗어나는가"),
+            ]
+        )
+    }
 <table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_v14_rows}</table>
 <p><b>결과.</b> iql_v14(n=4): Δ̄=−0.035 CI[−0.083,+0.013] — <b>null</b>, CI가 좁아 "큰 효과가 숨어있다"고 볼 여지도 작다.
 td_max_v14(n=4): Δ̄=−0.110 CI[−0.378,+0.158] — null이나 시드 3/4가 음수로 TD의 음(−) 경향 유지.
@@ -703,22 +769,43 @@ td_max_v14(n=4): Δ̄=−0.110 CI[−0.378,+0.158] — null이나 시드 3/4가 
 그것만으로는 성공률이 움직이지 않는다. v12의 결론(밴드는 열리나 전환 실패)이 지름길 없는 데이터에서도 유지 —
 즉 병목은 데이터의 암기 가능성이 아니라 <b>후보 간 참 가치 격차 자체가 작은 것</b>(on-policy Q^π의 구조적 한계)일 가능성이 커졌다.
 calql_v14는 학습 중(74k).</p>
-""")
-entry("08-07", "calql", "CalQL(CO-RFT) — 후보축 학습 신호의 성공률 판정", "진행 중", f"""
-{spec([("동기", "지금까지의 모든 방법은 후보 축을 학습에서 쓰지 않았다(실행 행동만 회귀). CalQL의 CQL 항은 16후보를 데모 대비 밀어내리는 최초의 학습-시간 후보축 신호"),
-       ("구성", "TD 타깃 + mc_floor(CalQL 보정) + α·(T·logsumexp Q(z,cand)/T − Q(z,demo)), α=1.0, T=0.1"),
-       ("평가", "demo-only(noprop)는 시드 8개로 확장(5000–5700), mixed는 학습 중"),
-       ("판정", "run-level 95% t-CI")])}
+""",
+)
+entry(
+    "08-07",
+    "calql",
+    "CalQL(CO-RFT) — 후보축 학습 신호의 성공률 판정",
+    "진행 중",
+    f"""
+{
+        spec(
+            [
+                (
+                    "동기",
+                    "지금까지의 모든 방법은 후보 축을 학습에서 쓰지 않았다(실행 행동만 회귀). CalQL의 CQL 항은 16후보를 데모 대비 밀어내리는 최초의 학습-시간 후보축 신호",
+                ),
+                ("구성", "TD 타깃 + mc_floor(CalQL 보정) + α·(T·logsumexp Q(z,cand)/T − Q(z,demo)), α=1.0, T=0.1"),
+                ("평가", "demo-only(noprop)는 시드 8개로 확장(5000–5700), mixed는 학습 중"),
+                ("판정", "run-level 95% t-CI"),
+            ]
+        )
+    }
 <table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_cq_rows}</table>
 <p><b>결과 (완결).</b> calql_noprop(n=8): Δ̄=−0.018 CI[−0.103,+0.068] — null (초기 n=4의 쌍봉 ±0.1 분산은 시드가
 쌓이며 씻김). <b>calql_mixed(n=4): Δ̄=+0.015 CI[−0.069,+0.099], McNemar +37/−34 p=0.813 — null.</b>
 주목할 점 하나: 전 mixed 팔 중 유일하게 점추정이 양수이고 시드 3/4이 양수 — 학습-시간 후보축 신호(CQL 항)가
 방향은 옳게 미는 정황이나 크기가 잡음 이하다. conservatism 프레임으로 읽으면: 후보가 전부 in-support인 우리
 배포에서는 억압할 OOD가 등장하지 않아 다이얼이 공회전한다 — 'conservatism 스펙트럼' 리포트 참조.</p>
-""")
+""",
+)
 
 # ============================================== 08-08 논문 리뷰
-entry("08-07", "papers-value-steering", "논문 리뷰 — Robo-ValueRL + 가치 기반 VLA 조향 3편", "완결", """
+entry(
+    "08-07",
+    "papers-value-steering",
+    "논문 리뷰 — Robo-ValueRL + 가치 기반 VLA 조향 3편",
+    "완결",
+    """
 <h3>⓪ Robo-ValueRL (gewu-lab, arXiv:2607.09866) — 요청 논문</h3>
 <p><b>구도.</b> 오프라인→온라인 로봇 RL에서 가치함수를 "데이터 활용 인터페이스"로 쓴다. 3단: ① 히스토리 조건부
 가치 추정, ② 품질 조건부 정책 사전학습, ③ 온라인 잔차(residual) 적응. 결과: chip insertion BC 대비 +26%,
@@ -763,10 +850,16 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 <tr><td>이산 선택 → 연속 조향</td><td>Q-VGM: 재순위는 후보를 다듬지 못함</td><td><b>∂Q/∂a velocity correction 실험 설계</b> (기존 CalQL critic 재사용)</td></tr>
 <tr><td>가치의 용처는 학습-시간</td><td>Robo-ValueRL: BoN 없이 품질 조건화+잔차 어댑터로 +26~34%</td><td>히스토리 조건 critic·실패 페널티 타깃 도입, 어댑터 경로는 사용자 결정</td></tr>
 <tr><td>가치 신호 자체는 존재</td><td>프로빙 R²=0.55, 우리 held-out rise-collapse</td><td>critic 학습은 성공 — 병목은 배포 방식이라는 확신 강화</td></tr></table>
-""")
+""",
+)
 
 # ============================================== 08-08 conservatism 종합 프레임
-entry("08-07", "conservatism", "Conservatism 스펙트럼 — 전체 null의 통일 해석과 다음 수", "살아있음", f"""
+entry(
+    "08-07",
+    "conservatism",
+    "Conservatism 스펙트럼 — 전체 null의 통일 해석과 다음 수",
+    "살아있음",
+    f"""
 <p><b>주장.</b> 지금까지의 모든 판정(FINAL 14팔·v14·calql·randh·워커A 밤샘)은 "보수성 다이얼 위의 어디에 서
 있었는가"로 한 번에 설명된다. 그리고 위험은 축이 두 개라서, 한 축의 완벽한 안전이 다른 축을 지켜주지 않는다.</p>
 <h3>보수성이 사는 곳 — 방법별 위치</h3>
@@ -810,10 +903,16 @@ McNemar +30/−35 p=0.620 — <b>null</b>. 시드 3/4이 0 이상이나 s5300 �
 <p>BoN 기대 이득 ≈ (참 가치 스프레드 상위꼬리) − (오차 상위꼬리). 참 스프레드가 0에 가까우면(우리 측정: demo 밴드
 0.002–0.023, rand≈vla) 이득의 원천 자체가 없다. <b>따라서 정답은 한 쌍: 신호를 키우는 후보 다양화(canddiv 프로브)
 + 오차를 억누르는 위 장치들.</b> 다양화 없는 보수성 = 안전한 무익(지금), 보수성 없는 다양화 = curse 증폭.</p>
-""")
+""",
+)
 
 # ============================================== 08-08 교차 워커 배움
-entry("08-07", "xworker-0808", "교차 워커 리뷰 — 워커A에게서 배운 것 (08-08)", "완결", """
+entry(
+    "08-07",
+    "xworker-0808",
+    "교차 워커 리뷰 — 워커A에게서 배운 것 (08-08)",
+    "완결",
+    """
 <p class='sub'>같은 허브의 워커A 리포트 7건을 정독하고, 방법·결과·운영 관행에서 배울 것을 우리 스택에 반영한 기록.</p>
 <h3>① 서로 재현: BoN은 두 스택 모두에서 무익</h3>
 <p>워커A는 전혀 다른 표현(HILP φ 128d, TD readout)·다른 critic(Cal-QL+swap negatives, 오프라인 action-sensitivity
@@ -833,10 +932,16 @@ action을 구분하는 유일한 오프라인 신호"라는 측정은 우리 후
 <h3>④ 운영 관행</h3>
 <p>좀비 잡(squeue R인데 실제 사망)의 로그 mtime 감시 — 우리도 행 걸린 평가 2건을 겪었으므로 감시 루틴에 채택.
 체크포인트 자동 아카이브(HF 업로드 검증 후 로컬 삭제)도 디스크 사고 예방책으로 참고.</p>
-""")
+""",
+)
 
 # ============================================== 08-08 아침 종합
-entry("08-07", "morning-0808", "밤샘 종합 보고 (08-08 아침) — 무엇이 풀렸고 무엇이 남았나", "살아있음", """
+entry(
+    "08-07",
+    "morning-0808",
+    "밤샘 종합 보고 (08-08 아침) — 무엇이 풀렸고 무엇이 남았나",
+    "살아있음",
+    """
 <p><b>한 줄 요약.</b> 닷새를 막던 TD+mixed 학습 불능이 근본 원인(int32 초과 후보 버퍼) 수준에서 해결되어 FINAL 스윕
 전 팔이 재가동됐고, 장면 암기 지름길을 차단한 v14 데이터가 완성됐으며, 보고 체계는 육하원칙·상호연결·백색 카드로 재설계됐다.
 성공률 판정에서 VLA를 이긴 팔은 아직 없다.</p>
@@ -856,13 +961,31 @@ calql_mixed 45k, calql_noprop 학습 완료→평가 4시드 방금 제출. 보�
 <h3>오늘 낮 계획</h3>
 <p>① ft2 완주 → FINAL 14팔 표 완성·최종 판정문 작성 ② v14 3팔 판정(장면 지름길 제거가 밴드→성공률 전환을 만드는가)
 ③ calql 2팔 판정(후보축 학습 신호의 첫 성공률 검증) ④ GR1 tabletop Teleop-Sim 데이터 다운로드 개시.</p>
-""")
+""",
+)
 
 # ============================================== 08-07 TD 침묵사 + K-수집
-entry("08-07", "td-segv", "TD+mixed 침묵사 규명 — XLA 컴파일 segfault", "진행 중", f"""
-{spec([("증상", "TD·QC·CalQL × mixed(17GB) 학습이 'ARQ critic: 10.22M params' 직후 트레이스백 없이 사망 — r1(96G)/r2(180G)/r3(250G) 전멸"),
-       ("판정 도구", "PYTHONFAULTHANDLER=1 + slurm ExitCode"),
-       ("공정성", "동일 데이터·동일 배치의 IQL은 같은 노드(node26/28)에서 정상 학습 — 노드가 아니라 TD 프로그램이 원인")])}
+entry(
+    "08-07",
+    "td-segv",
+    "TD+mixed 침묵사 규명 — XLA 컴파일 segfault",
+    "진행 중",
+    f"""
+{
+        spec(
+            [
+                (
+                    "증상",
+                    "TD·QC·CalQL × mixed(17GB) 학습이 'ARQ critic: 10.22M params' 직후 트레이스백 없이 사망 — r1(96G)/r2(180G)/r3(250G) 전멸",
+                ),
+                ("판정 도구", "PYTHONFAULTHANDLER=1 + slurm ExitCode"),
+                (
+                    "공정성",
+                    "동일 데이터·동일 배치의 IQL은 같은 노드(node26/28)에서 정상 학습 — 노드가 아니라 TD 프로그램이 원인",
+                ),
+            ]
+        )
+    }
 <table class='num'><tr><th>가설</th><th>실험</th><th>결과</th></tr>
 <tr><td>호스트 RAM 부족</td><td>mem 96→180→250G 증량</td><td class='bad'>기각 — 전부 사망, 1TB 노드(node58)에서도 사망</td></tr>
 <tr><td>노드 불량</td><td>IQL을 같은 노드에서 학습</td><td class='bad'>기각 — IQL은 정상</td></tr>
@@ -887,12 +1010,33 @@ IQL과 TD의 차이는 16후보 forward(어텐션·gemm이 후보축으로 16×)
 CalQL도 후보축을 쓰므로 같이 죽는다(demo-only CalQL은 정상 학습 중, node44).</p>
 <p><b>영향과 우회.</b> FINAL의 TD 계열 7팔 + calql_mixed가 지연. 우회 경로: ① 플래그 판정 시 해당 플래그로 A6000 함대 재제출,
 ② 실패 시 node52 파티션(RTX6000ADA×8, 현재 만석) 직렬 통과. 학습 외 파이프(평가·비디오·주석)는 영향 없음.</p>
-""")
+""",
+)
 
-entry("08-07", "kper", "K-per-scene 수집 완료 — 장면 정체성 지름길 제거 데이터", "진행 중", f"""
-{spec([("동기", "기존 mixed는 주방당 롤아웃 1개 → 결과를 장면 정체성으로 외울 수 있음(암기 지름길). 같은 주방을 정책시드만 바꿔 K번 굴리면 지름길 차단"),
-       ("수집", "--policy-seed 분리(커밋 922d7d4) · 주방 150개(장면시드 1000–1400×30) × 정책시드 3 = 450 롤아웃 · VLA 동결 그대로"),
-       ("사고록", "1차 15잡 중 11잡 bad-node 사망 + 덤프 파일명에 정책시드 누락으로 p1/p2/p3 상호 덮어쓰기 발견 → 잡별 하위디렉토리로 재수집(450/450 완료)")])}
+entry(
+    "08-07",
+    "kper",
+    "K-per-scene 수집 완료 — 장면 정체성 지름길 제거 데이터",
+    "진행 중",
+    f"""
+{
+        spec(
+            [
+                (
+                    "동기",
+                    "기존 mixed는 주방당 롤아웃 1개 → 결과를 장면 정체성으로 외울 수 있음(암기 지름길). 같은 주방을 정책시드만 바꿔 K번 굴리면 지름길 차단",
+                ),
+                (
+                    "수집",
+                    "--policy-seed 분리(커밋 922d7d4) · 주방 150개(장면시드 1000–1400×30) × 정책시드 3 = 450 롤아웃 · VLA 동결 그대로",
+                ),
+                (
+                    "사고록",
+                    "1차 15잡 중 11잡 bad-node 사망 + 덤프 파일명에 정책시드 누락으로 p1/p2/p3 상호 덮어쓰기 발견 → 잡별 하위디렉토리로 재수집(450/450 완료)",
+                ),
+            ]
+        )
+    }
 <table class='num'><tr><th>지표</th><th>값</th></tr>
 <tr><td>VLA 성공률 (450 롤아웃)</td><td>0.676</td></tr>
 <tr><td>혼합 결과 주방 (성공·실패 공존)</td><td><b>68/150 (45%)</b></td></tr>
@@ -902,10 +1046,16 @@ entry("08-07", "kper", "K-per-scene 수집 완료 — 장면 정체성 지름길
 상태·행동에서 신호를 찾아야만 한다. held-out 프로브에서 확인된 보수 편향(낯선 성공 저평가)도 이 데이터가 직접 겨냥한다.
 현재 450궤적 × 프레임당 VLA 16후보 주석을 8샤드로 병렬 진행 중(annot/kroll) → 완료 시 데모와 병합해 <b>v14 mixed</b>로
 FINAL 승자 방법을 재학습한다.</p>
-""")
+""",
+)
 
 
-entry("08-07", "video-gallery", "HUD 롤아웃 비디오 갤러리", "살아있음", """
+entry(
+    "08-07",
+    "video-gallery",
+    "HUD 롤아웃 비디오 갤러리",
+    "살아있음",
+    """
 <p>대표 롤아웃 영상. HUD 읽는 법: 오른쪽 trace의 회색 밴드 = 후보 16개 Q 분포(q01–q99), 파란 선 = 실행된 chunk의 Q,
 빨간 선 = V(z), 왼쪽 grid = Q[후보, 커밋길이]와 선택 칸. 전체 아카이브:
 <a href="https://huggingface.co/datasets/jellyho/acrft-rollout-videos" target="_blank">acrft-rollout-videos</a>.</p>
@@ -919,102 +1069,267 @@ entry("08-07", "video-gallery", "HUD 롤아웃 비디오 갤러리", "살아있�
 <tr><td><video controls preload="none" style="max-width:100%" src="videos/final_td_max_demo/PrepareCoffee_critic_t00_fail.mp4"></video></td><td>FINAL td_max_demo critic 실패 (t00) — 같은 장면에서 vla는 성공. 6장면 잠정: critic 2/6 vs vla 4/6 (n=6 비디오잡, 판정은 4시드×50 평가로)</td></tr>
 <tr><td><video controls preload="none" style="max-width:100%" src="videos/final_td_max_demo/PrepareCoffee_vla_t00_succ.mp4"></video></td><td>위와 동일 장면(t00)의 vla 성공 — v11 TD 유해 시그니처(placed_no_press류)와의 비교용</td></tr>
 </table>
-""")
+""",
+)
 
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
-    "v14": dict(date="2026-08-08", who="워커B · iql/td_max/calql × mixed_v14", where="a6000 풀(학습) + 3090 풀(평가)",
-        what="장면 지름길 제거 데이터(v14)가 판정을 바꾸는지", how="FINAL 레시피 + 4시드 페어드 평가",
-        why="held-out 보수 편향의 원인 후보였던 암기 지름길을 제거한 첫 판정", links=["kper", "v12", "final"]),
-    "calql": dict(date="2026-08-08", who="워커B · CalQL(CO-RFT) critic", where="3090/a6000 풀",
-        what="최초의 학습-시간 후보축 신호(CQL 항)의 성공률 판정", how="demo-only 8시드 + mixed(학습중) 페어드 평가",
-        why="모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지", links=["v12", "final", "wcurse"]),
-    "papers-value-steering": dict(date="2026-08-08", who="워커B(리뷰)", where="arXiv",
-        what="Robo-ValueRL(arXiv:2607.09866) 정독 + 인접 3편(V-GPS·Q-VGM·프로빙) 리뷰", how="원문 정독 후 FINAL 결론·우리 스택과 대조",
-        why="'robo-value-RL' 탐색 요청 — FINAL null의 해석과 다음 수(그래디언트 조향)의 문헌 근거", links=["final", "calql", "wcurse"]),
-    "xworker-0808": dict(date="2026-08-08", who="워커B(리뷰) ← 워커A 리포트 7건", where="공유 허브",
-        what="교차 워커 배움 — 상호 재현·McNemar 도입·표현/데이터 공격로 비교", how="워커A 전 리포트 정독 후 즉시 반영",
-        why="워커끼리 서로 배우라는 지시 — 독립 스택의 결론 상호 검증", links=["final", "kper", "papers-value-steering"]),
-    "conservatism": dict(date="2026-08-08", who="워커B(종합)", where="전 판정 결과 재해석",
-        what="보수성 2축 프레임 — 전 null의 통일 해석과 축2(추정 오차) 처방", how="방법별 다이얼 위치 분류 + SNR 조건",
-        why="BoN이 완벽한 BC 정규화인데도 위험한 역설의 해소 — 다음 수(다양화+LCB+랭킹)의 논리적 근거", links=["final", "calql", "v14", "wcurse", "papers-value-steering", "xworker-0808"]),
-    "morning-0808": dict(date="2026-08-08", who="워커B(Claude)", where="클러스터 전체 + HF Space",
-        what="밤샘(08-07 밤~08-08 아침) 작업 종합", how="각 리포트의 완결 결과를 표로 집약",
-        why="아침에 전체 상황을 한 번에 파악할 수 있도록", links=["td-segv", "final", "kper", "v12"]),
-    "flow": dict(date="2026-08-08", who="워커B(Claude)", where="요약 뷰 — 클러스터 전체",
-        what="프로젝트 전체 타임라인과 현재 위치", how="각 완결 리포트의 결론을 시간축 노드로 요약",
-        why="개별 실험이 어떤 흐름에서 나왔는지 한눈에 보기 위해", links=["v11", "v12", "final"]),
-    "genesis": dict(date="2026-07-30", who="워커B · VLA π0.5@70k 동결 · TD critic v1–v5", where="3090 풀",
-        what="첫 TD critic 세대들과 BoN16 배포의 첫 성적", how="TD 부트스트랩 학습 → BoN 롤아웃 페어드 평가",
-        why="RLT 임베딩 위 가치기반 후보 선택이 성립하는지 첫 검증", links=["vbias", "families"]),
-    "vbias": dict(date="2026-08-01", who="워커B · TD critic", where="3090 풀",
-        what="TD 타깃이 목표거리 d에 따라 갖는 구조적 바이어스 b(d)", how="거리별 Q 잔차 프로브 회귀",
-        why="genesis 적자의 원인 후보를 계통적으로 분리", links=["genesis", "wcurse"]),
-    "families": dict(date="2026-08-02", who="워커B · TD/QC/IQL/AQC critic", where="3090 풀",
-        what="방법 패밀리별 롤아웃 총결산", how="동일 데이터·동일 장면 페어드 비교",
-        why="방법 선택 근거 — TD 적자 확인 후 IQL 전환의 문서화", links=["genesis", "v11"]),
-    "wcurse": dict(date="2026-08-03", who="워커B", where="3090 풀 (프로브)",
-        what="argmax 선택의 winner's curse 정량화", how="후보 Q 분산 분해(상태 vs 후보축) + 두 argmax(후보/프리픽스) 분리",
-        why="BoN이 이득을 못 내는 구조적 이유 규명", links=["vbias", "duel", "aqc"]),
-    "duel": dict(date="2026-08-03", who="워커B · dueling ARQ", where="3090 풀",
-        what="dueling 게이지 자유도로 인한 학습 실패 2회와 해법", how="zero-mean advantage로 (V+c, A−c) 게이지 고정",
-        why="V+A 분해 도입 시 절대 레벨이 유일하게 정의되도록", links=["wcurse"]),
-    "singlefit": dict(date="2026-08-05", who="워커B · TD critic", where="3090 1노드",
-        what="단일 궤적 과적합으로 terminal 처리 검증", how="1궤적 fit 후 Q@goal, corr(Q,mc) 확인",
-        why="--terminal-uses-mc 누락이 학습 전체를 망치던 버그의 최소 재현", links=["ladders", "fullfit"]),
-    "ladders": dict(date="2026-08-05", who="워커B", where="3090 풀 (스윕)",
-        what="데이터 사다리 1→64 에피소드 × objective × γ", how="각 조합 학습 후 fit 지표 격자",
-        why="필요 데이터 규모와 discount 선택 근거", links=["singlefit", "fullfit", "v11"]),
-    "fullfit": dict(date="2026-08-05", who="워커B", where="3090 풀",
-        what="full-data critic 품질 검수", how="fit 지표 + 궤적 시각화 게이트",
-        why="롤아웃 평가 투입 전 최소 품질 게이트", links=["ladders", "highpower"]),
-    "highpower": dict(date="2026-08-05", who="워커B", where="3090 풀 (n↑ 롤아웃)",
-        what="고검정력 롤아웃 판정 (softcand·e70 재현·softmax)", how="시드·트라이얼 수 증대로 CI 폭 축소",
-        why="작은 효과도 걸러낼 검정력 확보", links=["fullfit", "randh", "v11"]),
-    "randh": dict(date="2026-08-06", who="워커B · critic vs 동전던지기", where="3090 풀",
-        what="랜덤 h 대조 실험 — critic의 능동 손실 분리", how="randh 모드 페어드 롤아웃",
-        why="critic 선택이 무작위보다 못한지(능동적 해악) 판정", links=["highpower", "autopsy"]),
-    "aqc": dict(date="2026-08-06", who="워커B · AQC critic", where="3090 풀",
-        what="AQC(베이스라인 보정 argmax) 구현과 demo-only 판정", how="b_h 학습 + z_ε(Q−b) 배포, h-collapse 교정",
-        why="프리픽스 헤드 간 계통 바이어스 제거", links=["wcurse", "v11"]),
-    "autopsy": dict(date="2026-08-06", who="워커B", where="평가 로그 (3090 풀)",
-        what="실패 유형 부검", how="env 술어 단계 로그(stage_flags)로 프로그램적 분류",
-        why="어디서 지는지 — grasp 0%·엔드게임 2/3 — 개선 표적화", links=["randh", "failpipe", "kper"]),
-    "pools": dict(date="2026-08-06", who="워커B", where="평가 JSON 재분석",
-        what="장면 풀이 성공률에 주는 효과", how="한 체크포인트를 풀별로 분해",
-        why="풀 혼동이 ±0.1 흔들던 비교 방법론의 교정", links=["v11", "highpower"]),
-    "failpipe": dict(date="2026-08-06", who="워커B", where="3090 풀",
-        what="실패 롤아웃 수집·주석 파이프라인 + in-dist 장면 재현", how="dump-traj → annotate_rollouts → memmap",
-        why="v12 mixed 데이터의 재료 — 실패를 본 critic 만들기", links=["autopsy", "v12"]),
-    "v11": dict(date="2026-08-07", who="워커B · 4방법 × 16시드", where="3090 풀 (64런)",
-        what="demo-only 공정 비교 완결", how="method-only-diff 체크포인트, in-job 페어드, run-level 95% t-CI",
-        why="사전등록 판정 — TD 확실 해악, IQL/QC/AQC null → 남은 지렛대는 데이터", links=["families", "aqc", "pools", "final"]),
-    "v12": dict(date="2026-08-07", who="워커B · iql/aqc × mixed", where="a6000 풀 (17GB 상주)",
-        what="혼합 데이터 판정 — 밴드 개방과 성공률", how="v11 프로토콜 + held-out 프로브(시드 9100)",
-        why="실패 데이터가 후보 구분을 여는지 — 열림(10–30×) but 성공률 null", links=["failpipe", "v11", "kper", "final"]),
-    "final": dict(date="2026-08-07", who="워커B · 14팔 × 4시드", where="a6000(학습)+3090(평가) 풀",
-        what="전 요인 사전등록 스윕 (방법×부트스트랩×atoms×타깃넷×데이터)", how="공통 레시피 고정, 팔당 4×50 페어드, 동일 장면",
-        why="파편화된 실험을 하나의 정당한 비교로 — 최종 판정", links=["v11", "v12", "td-segv", "video-gallery"]),
-    "td-segv": dict(date="2026-08-08", who="워커B", where="A6000·3090·PRO6000·RTX6000ADA 교차 검증",
-        what="TD+mixed 학습 침묵사의 근본 원인", how="가설 기각 사다리(6단계) + faulthandler + A/B 진단",
-        why="FINAL의 TD 계열 7팔이 전멸하던 인프라 병목 제거", links=["final"]),
-    "kper": dict(date="2026-08-08", who="워커B · VLA 동결", where="a6000 풀 (수집) + 3090 풀 (주석)",
-        what="K-per-scene 데이터 — 주방당 정책시드 3롤아웃", how="--policy-seed 분리, 150주방 × 3, 8샤드 주석",
-        why="장면 정체성 암기 지름길 차단 (혼합결과 주방 45%)", links=["v12", "autopsy"]),
-    "video-gallery": dict(date="2026-08-08", who="워커B", where="HF Space 서빙",
-        what="대표 롤아웃 HUD 비디오", how="팔당 6장면 fvid 잡, 성공/실패 페어 선별",
-        why="숫자 판정을 눈으로 검증 — 밴드·V·commit 패널 동행 확인", links=["v11", "v12", "final"]),
+    "v14": {
+        "date": "2026-08-08",
+        "who": "워커B · iql/td_max/calql × mixed_v14",
+        "where": "a6000 풀(학습) + 3090 풀(평가)",
+        "what": "장면 지름길 제거 데이터(v14)가 판정을 바꾸는지",
+        "how": "FINAL 레시피 + 4시드 페어드 평가",
+        "why": "held-out 보수 편향의 원인 후보였던 암기 지름길을 제거한 첫 판정",
+        "links": ["kper", "v12", "final"],
+    },
+    "calql": {
+        "date": "2026-08-08",
+        "who": "워커B · CalQL(CO-RFT) critic",
+        "where": "3090/a6000 풀",
+        "what": "최초의 학습-시간 후보축 신호(CQL 항)의 성공률 판정",
+        "how": "demo-only 8시드 + mixed(학습중) 페어드 평가",
+        "why": "모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지",
+        "links": ["v12", "final", "wcurse"],
+    },
+    "papers-value-steering": {
+        "date": "2026-08-08",
+        "who": "워커B(리뷰)",
+        "where": "arXiv",
+        "what": "Robo-ValueRL(arXiv:2607.09866) 정독 + 인접 3편(V-GPS·Q-VGM·프로빙) 리뷰",
+        "how": "원문 정독 후 FINAL 결론·우리 스택과 대조",
+        "why": "'robo-value-RL' 탐색 요청 — FINAL null의 해석과 다음 수(그래디언트 조향)의 문헌 근거",
+        "links": ["final", "calql", "wcurse"],
+    },
+    "xworker-0808": {
+        "date": "2026-08-08",
+        "who": "워커B(리뷰) ← 워커A 리포트 7건",
+        "where": "공유 허브",
+        "what": "교차 워커 배움 — 상호 재현·McNemar 도입·표현/데이터 공격로 비교",
+        "how": "워커A 전 리포트 정독 후 즉시 반영",
+        "why": "워커끼리 서로 배우라는 지시 — 독립 스택의 결론 상호 검증",
+        "links": ["final", "kper", "papers-value-steering"],
+    },
+    "conservatism": {
+        "date": "2026-08-08",
+        "who": "워커B(종합)",
+        "where": "전 판정 결과 재해석",
+        "what": "보수성 2축 프레임 — 전 null의 통일 해석과 축2(추정 오차) 처방",
+        "how": "방법별 다이얼 위치 분류 + SNR 조건",
+        "why": "BoN이 완벽한 BC 정규화인데도 위험한 역설의 해소 — 다음 수(다양화+LCB+랭킹)의 논리적 근거",
+        "links": ["final", "calql", "v14", "wcurse", "papers-value-steering", "xworker-0808"],
+    },
+    "morning-0808": {
+        "date": "2026-08-08",
+        "who": "워커B(Claude)",
+        "where": "클러스터 전체 + HF Space",
+        "what": "밤샘(08-07 밤~08-08 아침) 작업 종합",
+        "how": "각 리포트의 완결 결과를 표로 집약",
+        "why": "아침에 전체 상황을 한 번에 파악할 수 있도록",
+        "links": ["td-segv", "final", "kper", "v12"],
+    },
+    "flow": {
+        "date": "2026-08-08",
+        "who": "워커B(Claude)",
+        "where": "요약 뷰 — 클러스터 전체",
+        "what": "프로젝트 전체 타임라인과 현재 위치",
+        "how": "각 완결 리포트의 결론을 시간축 노드로 요약",
+        "why": "개별 실험이 어떤 흐름에서 나왔는지 한눈에 보기 위해",
+        "links": ["v11", "v12", "final"],
+    },
+    "genesis": {
+        "date": "2026-07-30",
+        "who": "워커B · VLA π0.5@70k 동결 · TD critic v1–v5",
+        "where": "3090 풀",
+        "what": "첫 TD critic 세대들과 BoN16 배포의 첫 성적",
+        "how": "TD 부트스트랩 학습 → BoN 롤아웃 페어드 평가",
+        "why": "RLT 임베딩 위 가치기반 후보 선택이 성립하는지 첫 검증",
+        "links": ["vbias", "families"],
+    },
+    "vbias": {
+        "date": "2026-08-01",
+        "who": "워커B · TD critic",
+        "where": "3090 풀",
+        "what": "TD 타깃이 목표거리 d에 따라 갖는 구조적 바이어스 b(d)",
+        "how": "거리별 Q 잔차 프로브 회귀",
+        "why": "genesis 적자의 원인 후보를 계통적으로 분리",
+        "links": ["genesis", "wcurse"],
+    },
+    "families": {
+        "date": "2026-08-02",
+        "who": "워커B · TD/QC/IQL/AQC critic",
+        "where": "3090 풀",
+        "what": "방법 패밀리별 롤아웃 총결산",
+        "how": "동일 데이터·동일 장면 페어드 비교",
+        "why": "방법 선택 근거 — TD 적자 확인 후 IQL 전환의 문서화",
+        "links": ["genesis", "v11"],
+    },
+    "wcurse": {
+        "date": "2026-08-03",
+        "who": "워커B",
+        "where": "3090 풀 (프로브)",
+        "what": "argmax 선택의 winner's curse 정량화",
+        "how": "후보 Q 분산 분해(상태 vs 후보축) + 두 argmax(후보/프리픽스) 분리",
+        "why": "BoN이 이득을 못 내는 구조적 이유 규명",
+        "links": ["vbias", "duel", "aqc"],
+    },
+    "duel": {
+        "date": "2026-08-03",
+        "who": "워커B · dueling ARQ",
+        "where": "3090 풀",
+        "what": "dueling 게이지 자유도로 인한 학습 실패 2회와 해법",
+        "how": "zero-mean advantage로 (V+c, A−c) 게이지 고정",
+        "why": "V+A 분해 도입 시 절대 레벨이 유일하게 정의되도록",
+        "links": ["wcurse"],
+    },
+    "singlefit": {
+        "date": "2026-08-05",
+        "who": "워커B · TD critic",
+        "where": "3090 1노드",
+        "what": "단일 궤적 과적합으로 terminal 처리 검증",
+        "how": "1궤적 fit 후 Q@goal, corr(Q,mc) 확인",
+        "why": "--terminal-uses-mc 누락이 학습 전체를 망치던 버그의 최소 재현",
+        "links": ["ladders", "fullfit"],
+    },
+    "ladders": {
+        "date": "2026-08-05",
+        "who": "워커B",
+        "where": "3090 풀 (스윕)",
+        "what": "데이터 사다리 1→64 에피소드 × objective × γ",
+        "how": "각 조합 학습 후 fit 지표 격자",
+        "why": "필요 데이터 규모와 discount 선택 근거",
+        "links": ["singlefit", "fullfit", "v11"],
+    },
+    "fullfit": {
+        "date": "2026-08-05",
+        "who": "워커B",
+        "where": "3090 풀",
+        "what": "full-data critic 품질 검수",
+        "how": "fit 지표 + 궤적 시각화 게이트",
+        "why": "롤아웃 평가 투입 전 최소 품질 게이트",
+        "links": ["ladders", "highpower"],
+    },
+    "highpower": {
+        "date": "2026-08-05",
+        "who": "워커B",
+        "where": "3090 풀 (n↑ 롤아웃)",
+        "what": "고검정력 롤아웃 판정 (softcand·e70 재현·softmax)",
+        "how": "시드·트라이얼 수 증대로 CI 폭 축소",
+        "why": "작은 효과도 걸러낼 검정력 확보",
+        "links": ["fullfit", "randh", "v11"],
+    },
+    "randh": {
+        "date": "2026-08-06",
+        "who": "워커B · critic vs 동전던지기",
+        "where": "3090 풀",
+        "what": "랜덤 h 대조 실험 — critic의 능동 손실 분리",
+        "how": "randh 모드 페어드 롤아웃",
+        "why": "critic 선택이 무작위보다 못한지(능동적 해악) 판정",
+        "links": ["highpower", "autopsy"],
+    },
+    "aqc": {
+        "date": "2026-08-06",
+        "who": "워커B · AQC critic",
+        "where": "3090 풀",
+        "what": "AQC(베이스라인 보정 argmax) 구현과 demo-only 판정",
+        "how": "b_h 학습 + z_ε(Q−b) 배포, h-collapse 교정",
+        "why": "프리픽스 헤드 간 계통 바이어스 제거",
+        "links": ["wcurse", "v11"],
+    },
+    "autopsy": {
+        "date": "2026-08-06",
+        "who": "워커B",
+        "where": "평가 로그 (3090 풀)",
+        "what": "실패 유형 부검",
+        "how": "env 술어 단계 로그(stage_flags)로 프로그램적 분류",
+        "why": "어디서 지는지 — grasp 0%·엔드게임 2/3 — 개선 표적화",
+        "links": ["randh", "failpipe", "kper"],
+    },
+    "pools": {
+        "date": "2026-08-06",
+        "who": "워커B",
+        "where": "평가 JSON 재분석",
+        "what": "장면 풀이 성공률에 주는 효과",
+        "how": "한 체크포인트를 풀별로 분해",
+        "why": "풀 혼동이 ±0.1 흔들던 비교 방법론의 교정",
+        "links": ["v11", "highpower"],
+    },
+    "failpipe": {
+        "date": "2026-08-06",
+        "who": "워커B",
+        "where": "3090 풀",
+        "what": "실패 롤아웃 수집·주석 파이프라인 + in-dist 장면 재현",
+        "how": "dump-traj → annotate_rollouts → memmap",
+        "why": "v12 mixed 데이터의 재료 — 실패를 본 critic 만들기",
+        "links": ["autopsy", "v12"],
+    },
+    "v11": {
+        "date": "2026-08-07",
+        "who": "워커B · 4방법 × 16시드",
+        "where": "3090 풀 (64런)",
+        "what": "demo-only 공정 비교 완결",
+        "how": "method-only-diff 체크포인트, in-job 페어드, run-level 95% t-CI",
+        "why": "사전등록 판정 — TD 확실 해악, IQL/QC/AQC null → 남은 지렛대는 데이터",
+        "links": ["families", "aqc", "pools", "final"],
+    },
+    "v12": {
+        "date": "2026-08-07",
+        "who": "워커B · iql/aqc × mixed",
+        "where": "a6000 풀 (17GB 상주)",
+        "what": "혼합 데이터 판정 — 밴드 개방과 성공률",
+        "how": "v11 프로토콜 + held-out 프로브(시드 9100)",
+        "why": "실패 데이터가 후보 구분을 여는지 — 열림(10–30×) but 성공률 null",
+        "links": ["failpipe", "v11", "kper", "final"],
+    },
+    "final": {
+        "date": "2026-08-07",
+        "who": "워커B · 14팔 × 4시드",
+        "where": "a6000(학습)+3090(평가) 풀",
+        "what": "전 요인 사전등록 스윕 (방법×부트스트랩×atoms×타깃넷×데이터)",
+        "how": "공통 레시피 고정, 팔당 4×50 페어드, 동일 장면",
+        "why": "파편화된 실험을 하나의 정당한 비교로 — 최종 판정",
+        "links": ["v11", "v12", "td-segv", "video-gallery"],
+    },
+    "td-segv": {
+        "date": "2026-08-08",
+        "who": "워커B",
+        "where": "A6000·3090·PRO6000·RTX6000ADA 교차 검증",
+        "what": "TD+mixed 학습 침묵사의 근본 원인",
+        "how": "가설 기각 사다리(6단계) + faulthandler + A/B 진단",
+        "why": "FINAL의 TD 계열 7팔이 전멸하던 인프라 병목 제거",
+        "links": ["final"],
+    },
+    "kper": {
+        "date": "2026-08-08",
+        "who": "워커B · VLA 동결",
+        "where": "a6000 풀 (수집) + 3090 풀 (주석)",
+        "what": "K-per-scene 데이터 — 주방당 정책시드 3롤아웃",
+        "how": "--policy-seed 분리, 150주방 × 3, 8샤드 주석",
+        "why": "장면 정체성 암기 지름길 차단 (혼합결과 주방 45%)",
+        "links": ["v12", "autopsy"],
+    },
+    "video-gallery": {
+        "date": "2026-08-08",
+        "who": "워커B",
+        "where": "HF Space 서빙",
+        "what": "대표 롤아웃 HUD 비디오",
+        "how": "팔당 6장면 fvid 잡, 성공/실패 페어 선별",
+        "why": "숫자 판정을 눈으로 검증 — 밴드·V·commit 패널 동행 확인",
+        "links": ["v11", "v12", "final"],
+    },
 }
+
 
 def _git_stamp() -> str:
     """branch@hash(+dirty) at publish time — every posted report carries the code state."""
     import subprocess
 
     def g(*args):
-        return subprocess.run(["git", *args], capture_output=True, text=True,
-                              cwd=pathlib.Path(__file__).parent.parent).stdout.strip()
+        return subprocess.run(
+            ["git", *args], capture_output=True, text=True, cwd=pathlib.Path(__file__).parent.parent, check=False
+        ).stdout.strip()
 
     branch = g("rev-parse", "--abbrev-ref", "HEAD") or "?"
     sha = g("rev-parse", "--short", "HEAD") or "?"
@@ -1053,7 +1368,9 @@ VIDEOS = {
     ],
 }
 VIDEOS["autopsy"] = VIDEOS["v12"][2:3]  # 실패 유형 실사례
-VIDEOS["kper"] = [("videos/v12_mixed_vla_fail_same_scene.mp4", "같은 주방이 실패하는 사례 — K-per-scene이 겨냥하는 혼합 결과의 실체")]
+VIDEOS["kper"] = [
+    ("videos/v12_mixed_vla_fail_same_scene.mp4", "같은 주방이 실패하는 사례 — K-per-scene이 겨냥하는 혼합 결과의 실체")
+]
 
 
 def _video_block(eid):
@@ -1064,9 +1381,11 @@ def _video_block(eid):
         f"<tr><td><video controls preload='none' style='max-width:100%' src='{src}'></video></td><td>{cap}</td></tr>"
         for src, cap in vids
     )
-    return ("<h3>관련 영상</h3><p class='sub'>HUD 읽는 법: 회색 밴드 = 후보 16개 Q 분포(q01–q99), 파란 선 = 실행 chunk의 Q, "
-            "빨간 선 = V(z). 전체 아카이브는 '비디오 갤러리' 리포트 참조.</p>"
-            f"<table class='num'><tr><th>영상</th><th>보는 포인트</th></tr>{rows}</table>")
+    return (
+        "<h3>관련 영상</h3><p class='sub'>HUD 읽는 법: 회색 밴드 = 후보 16개 Q 분포(q01–q99), 파란 선 = 실행 chunk의 Q, "
+        "빨간 선 = V(z). 전체 아카이브는 '비디오 갤러리' 리포트 참조.</p>"
+        f"<table class='num'><tr><th>영상</th><th>보는 포인트</th></tr>{rows}</table>"
+    )
 
 
 def _decorate(eid, body):
@@ -1077,13 +1396,20 @@ def _decorate(eid, body):
         "<table class='spec w6'>"
         + "".join(
             f"<tr><th>{k}</th><td>{m[f]}</td></tr>"
-            for k, f in [("누가", "who"), ("언제", "date"), ("어디서", "where"), ("무엇을", "what"), ("어떻게", "how"), ("왜", "why")]
+            for k, f in [
+                ("누가", "who"),
+                ("언제", "date"),
+                ("어디서", "where"),
+                ("무엇을", "what"),
+                ("어떻게", "how"),
+                ("왜", "why"),
+            ]
         )
         + f"<tr><th>코드</th><td><code>{GIT_STAMP}</code> (게시 시점 repo 상태 — branch@hash)</td></tr>"
         + "</table>"
     )
     links = "".join(
-        f"<span class='xref' data-eid='{l}'>{_titles.get(l, l)}</span>" for l in m.get("links", []) if l in _titles
+        f"<span class='xref' data-eid='{lk}'>{_titles.get(lk, lk)}</span>" for lk in m.get("links", []) if lk in _titles
     )
     tail = _video_block(eid)
     tail += f"<p class='xrefs'><b>연결된 리포트</b> {links}</p>" if links else ""

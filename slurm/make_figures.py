@@ -15,14 +15,15 @@ import json
 import pathlib
 import sys
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from plot_style import PALETTE, apply  # noqa: E402
+from plot_style import PALETTE
+from plot_style import apply
 
 C = pathlib.Path("/scratch/jellyho/acrft")
 P = C / "plots"
@@ -46,16 +47,31 @@ def _runs(pattern, mode):
 def forest(ax, rows, title):
     """rows: [(label, deltas array)] bottom-up; point cloud + mean +/- 95% t-CI."""
     ys = np.arange(len(rows))
-    for y, (label, ds) in zip(ys, rows):
-        ds = np.asarray(ds, float)
+    for y, (_label, row_ds) in zip(ys, rows, strict=True):
+        ds = np.asarray(row_ds, float)
         color = PALETTE[y % len(PALETTE)]
-        ax.scatter(ds, np.full_like(ds, y) + np.random.default_rng(0).uniform(-0.13, 0.13, ds.size),
-                   s=22, alpha=0.45, color=color, linewidths=0)
+        ax.scatter(
+            ds,
+            np.full_like(ds, y) + np.random.default_rng(0).uniform(-0.13, 0.13, ds.size),
+            s=22,
+            alpha=0.45,
+            color=color,
+            linewidths=0,
+        )
         if len(ds) >= 2:
             m, se = ds.mean(), ds.std(ddof=1) / np.sqrt(len(ds))
             t = TCRIT.get(len(ds), 2.1)
-            ax.errorbar([m], [y], xerr=[[t * se], [t * se]], fmt="D", color=color,
-                        markersize=8, elinewidth=2.6, capsize=5, zorder=5)
+            ax.errorbar(
+                [m],
+                [y],
+                xerr=[[t * se], [t * se]],
+                fmt="D",
+                color=color,
+                markersize=8,
+                elinewidth=2.6,
+                capsize=5,
+                zorder=5,
+            )
     ax.axvline(0, color="#444444", linewidth=1.2, linestyle="--", zorder=1)
     ax.set_yticks(ys, [r[0] for r in rows])
     ax.set_xlabel("run-level Δ success rate (method − in-job VLA)")
@@ -83,8 +99,22 @@ def fig_16_v11():
 
 
 def fig_20_final():
-    arms = ["td_max", "td_soft", "td_aqcmax", "iql", "qc", "td_max_a101", "td_max_a201",
-            "iql_a101", "iql_a201", "td_max_online", "iql_online", "td_max_demo", "iql_demo", "qc_demo"]
+    arms = [
+        "td_max",
+        "td_soft",
+        "td_aqcmax",
+        "iql",
+        "qc",
+        "td_max_a101",
+        "td_max_a201",
+        "iql_a101",
+        "iql_a201",
+        "td_max_online",
+        "iql_online",
+        "td_max_demo",
+        "iql_demo",
+        "qc_demo",
+    ]
     rows = []
     for a in arms:
         r = _runs(f"critic_runs/final/{a}/rollout/f_s*.json", "critic")
@@ -116,8 +146,14 @@ def fig_18_band():
     ax.set_ylabel("candidate band  q99 − q01")
     ax.set_title("Candidate-band opening")
     from matplotlib.patches import Patch
-    ax.legend(handles=[Patch(color=PALETTE[0], label="closed (< 0.03)"),
-                       Patch(color=PALETTE[2], label="opened (mixed-data critics)")], loc="upper left")
+
+    ax.legend(
+        handles=[
+            Patch(color=PALETTE[0], label="closed (< 0.03)"),
+            Patch(color=PALETTE[2], label="opened (mixed-data critics)"),
+        ],
+        loc="upper left",
+    )
     fig.savefig(P / "18_band_open.png")
     plt.close(fig)
     print("18_band_open.png")
@@ -147,7 +183,7 @@ def fig_15_autopsy():
     fracs = {}
     for g, (pat, mode) in groups.items():
         trials = []
-        pat = pat.replace("nseed_s*", "*_s*")
+        pat = pat.replace("nseed_s*", "*_s*")  # noqa: PLW2901
         for f in sorted(C.glob(pat)):
             d = json.loads(f.read_text())
             if mode in d:
@@ -164,7 +200,9 @@ def fig_15_autopsy():
     w = 0.8 / len(fracs)
     for i, (g, v) in enumerate(fracs.items()):
         ax.bar(xs + i * w - 0.4 + w / 2, v, width=w * 0.92, label=g, color=PALETTE[i])
-    ax.set_xticks(xs, ["no grasp", "grasped,\nnot placed", "placed,\nno press", "machine on,\nnot success"], fontsize=9.5)
+    ax.set_xticks(
+        xs, ["no grasp", "grasped,\nnot placed", "placed,\nno press", "machine on,\nnot success"], fontsize=9.5
+    )
     ax.set_ylabel("share of failures")
     ax.set_title("Failure stages")
     ax.legend()

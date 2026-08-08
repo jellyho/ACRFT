@@ -495,10 +495,7 @@ def main() -> None:
         )
 
     # ---------------------------------------------------------------- 2. decomposition
-    P(
-        "<h2>2. Per-prefix target decomposition — the structure of the bias "
-        "<span class='pill p-done'>done</span></h2>"
-    )
+    P("<h2>2. Per-prefix target decomposition — the structure of the bias <span class='pill p-done'>done</span></h2>")
     P(
         "<p>The reward is sparse and terminal, so the true value is exactly <code>γ^d</code> (d = steps to "
         "goal). Expanding the target: <code>y_h = γ^d + γ^h·b</code> — if V̂ were exact, all eight per-prefix "
@@ -763,8 +760,7 @@ def main() -> None:
         ("Wilson interval", "95% CI for a binomial rate; stable near 0 and 1."),
         (
             "expectile τ",
-            "IQL's asymmetric-regression parameter. 0.5 = the mean (no improvement); approaching 1 "
-            "approaches max_a Q.",
+            "IQL's asymmetric-regression parameter. 0.5 = the mean (no improvement); approaching 1 approaches max_a Q.",
         ),
     ]:
         P(f"<dt>{html.escape(dt)}</dt><dd>{dd}</dd>")
