@@ -51,9 +51,8 @@ def dino_features(repo_id: str, rows: np.ndarray, batch: int = 64) -> np.ndarray
     Mean over PATCH tokens (not CLS): every comparison that isolates this (DINO-WM's encoder
     ablation, Theia) finds the spatial tokens carry the manipulation-relevant signal.
     """
-    import torch
     from lerobot.datasets import lerobot_dataset
-
+    import torch
     from transformers import AutoModel
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -62,7 +61,7 @@ def dino_features(repo_id: str, rows: np.ndarray, batch: int = 64) -> np.ndarray
     std = torch.tensor([0.229, 0.224, 0.225], device=dev).view(1, 3, 1, 1)
 
     ds = lerobot_dataset.LeRobotDataset(repo_id)
-    cams = [k for k in ds.meta.video_keys]
+    cams = list(ds.meta.video_keys)
     logger.info(f"cameras: {cams}")
 
     feats = np.empty((len(rows), 384 * len(cams)), dtype=np.float32)
@@ -89,7 +88,8 @@ def dino_features(repo_id: str, rows: np.ndarray, batch: int = 64) -> np.ndarray
 
 def probe(z: np.ndarray, ep: np.ndarray, mc: np.ndarray, prog: np.ndarray, seed: int = 0, k: int = 10) -> dict:
     """Held-out-by-episode ridge probes + episode decodability + kNN purity."""
-    from sklearn.linear_model import Ridge, RidgeClassifier
+    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import RidgeClassifier
     from sklearn.preprocessing import StandardScaler
 
     rng = np.random.default_rng(seed)

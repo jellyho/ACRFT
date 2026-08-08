@@ -37,7 +37,7 @@ import pathlib
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +82,12 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", type=pathlib.Path, default=pathlib.Path(".scratch/dino_cache_PrepareCoffee"))
-    ap.add_argument("--annot", type=pathlib.Path, default=pathlib.Path(".scratch/annot_noprop"),
-                    help="Annotation dir supplying per-frame progress/mc_return labels (indices align: both stride 1).")
+    ap.add_argument(
+        "--annot",
+        type=pathlib.Path,
+        default=pathlib.Path(".scratch/annot_noprop"),
+        help="Annotation dir supplying per-frame progress/mc_return labels (indices align: both stride 1).",
+    )
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/cheap_z_v1"))
     ap.add_argument("--steps", type=int, default=30000)
     ap.add_argument("--batch-eps", type=int, default=48, help="episodes per VIP batch")
@@ -94,8 +98,9 @@ def main():
     ap.add_argument("--prog-bin", type=float, default=0.05)
     ap.add_argument("--nce-x-weight", type=float, default=1.0, help="weight of the cross-episode term")
     ap.add_argument("--num-pos", type=int, default=1, help="cross-episode positives per anchor")
-    ap.add_argument("--epadv-weight", type=float, default=0.0,
-                    help="DANN-style episode adversary on z (gradient reversal); 0 = off")
+    ap.add_argument(
+        "--epadv-weight", type=float, default=0.0, help="DANN-style episode adversary on z (gradient reversal); 0 = off"
+    )
     # HILP-style expectile-TD metric term (2402.15567): V(s,g) = -||phi(z_s)-phi(z_g)|| trained with
     # a TD backup. The stitching probe showed our MC/alignment losses do not compose across unseen
     # (s,g) pairs (rho_stitch 0.24 vs VLA-z 0.47) - exactly what the taxonomy (2401.11237) predicts:
@@ -123,11 +128,11 @@ def main():
     # Episode row ranges (rows are dataset-ordered, episodes contiguous).
     eps_u, starts = np.unique(ep, return_index=True)
     ends = np.r_[starts[1:], n]
-    ep_range = {int(e): (int(s), int(t)) for e, s, t in zip(eps_u, starts, ends)}
+    ep_range = {int(e): (int(s), int(t)) for e, s, t in zip(eps_u, starts, ends)}  # noqa: B905
     logger.info(f"{n} frames, {len(eps_u)} episodes, {ncam} cams x {cam_dim}d")
 
     # Progress-bin index: bin -> row indices, for cross-episode positive lookup.
-    nb = int(round(1.0 / args.prog_bin))
+    nb = round(1.0 / args.prog_bin)
     bins = np.clip((prog / args.prog_bin).astype(np.int64), 0, nb - 1)
     bin_rows = [np.flatnonzero(bins == b) for b in range(nb)]
 
@@ -141,15 +146,16 @@ def main():
         # phi maps z -> metric space; gradient flows through the MAIN head too, so the TD geometry
         # shapes z itself (that is the point - stitching pressure on the representation).
         import copy
+
         head.hilp = nn.Sequential(nn.Linear(256, 256), nn.GELU(), nn.Linear(256, args.hilp_dim)).to(dev)
         opt.add_param_group({"params": head.hilp.parameters()})
         tgt_head = copy.deepcopy(head)
         for q in tgt_head.parameters():
-            q.requires_grad_(False)
+            q.requires_grad_(False)  # noqa: FBT003
         # episode start row per frame, for same-episode geometric-future goal sampling
         ep_start_of = np.zeros(n, dtype=np.int64)
         ep_end_of = np.zeros(n, dtype=np.int64)
-        for e, (s0, t0) in ep_range.items():
+        for e, (s0, t0) in ep_range.items():  # noqa: B007
             ep_start_of[s0:t0] = s0
             ep_end_of[s0:t0] = t0
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
@@ -165,11 +171,14 @@ def main():
         for e in es:
             s, t = ep_range[int(e)]
             k = int(rng.integers(s, t - 1))
-            o0.append(s); okk.append(k); ok1.append(k + 1); gg.append(t - 1)
+            o0.append(s)
+            okk.append(k)
+            ok1.append(k + 1)
+            gg.append(t - 1)
         rows = torch.tensor(o0 + okk + ok1 + gg, device=dev)
         _, z = embed(rows)
         B = args.batch_eps
-        z0, zk, zk1, zg = z[:B], z[B:2*B], z[2*B:3*B], z[3*B:]
+        z0, zk, zk1, zg = z[:B], z[B : 2 * B], z[2 * B : 3 * B], z[3 * B :]
         d0 = torch.norm(z0 - zg, dim=-1)
         dk = torch.norm(zk - zg, dim=-1)
         dk1 = torch.norm(zk1 - zg, dim=-1)
@@ -186,7 +195,7 @@ def main():
             p_rows[i] = rng.choice(pool, size=args.num_pos, replace=len(pool) < args.num_pos)
         ar = torch.from_numpy(a_rows).to(dev)
         pr = torch.from_numpy(p_rows.reshape(-1)).to(dev)
-        zc_a, zf_a = embed(ar)   # [B,C,256], [B,256]
+        zc_a, zf_a = embed(ar)  # [B,C,256], [B,256]
         _, zf_p = embed(pr)
         za = F.normalize(zf_a, dim=-1)
         zp = F.normalize(zf_p, dim=-1).view(len(a_rows), args.num_pos, -1)
@@ -213,9 +222,7 @@ def main():
             # DANN gradient reversal: identity forward, -1x gradient into z (same construction as
             # the epadv term in pi0_rlt).  The adversary head is created lazily on first use.
             if not hasattr(head, "epadv"):
-                head.epadv = nn.Sequential(
-                    nn.Linear(256, 256), nn.GELU(), nn.Linear(256, int(eps_u.max()) + 1)
-                ).to(dev)
+                head.epadv = nn.Sequential(nn.Linear(256, 256), nn.GELU(), nn.Linear(256, int(eps_u.max()) + 1)).to(dev)
                 opt.add_param_group({"params": head.epadv.parameters()})
             z_rev = (1.0 + 1.0) * zf_a.detach() - 1.0 * zf_a
             logits_ep = head.epadv(z_rev)
@@ -235,9 +242,11 @@ def main():
             fut = np.minimum(srow + rng.geometric(1 - args.gamma, size=B2), ep_end_of[srow] - 1)
             rnd = rng.integers(0, n, size=B2)
             grow = np.where(u < 0.2, nrow, np.where(u < 0.7, fut, rnd))
-            si = torch.from_numpy(srow).to(dev); ni = torch.from_numpy(nrow).to(dev)
+            si = torch.from_numpy(srow).to(dev)
+            ni = torch.from_numpy(nrow).to(dev)
             gi = torch.from_numpy(grow).to(dev)
-            _, zs = embed(si); _, zg = embed(gi)
+            _, zs = embed(si)
+            _, zg = embed(gi)
             with torch.no_grad():
                 f_n = tgt_head(feats_t[ni].float().view(-1, ncam, cam_dim))[1]
                 f_g = tgt_head(feats_t[gi].float().view(-1, ncam, cam_dim))[1]
@@ -246,14 +255,15 @@ def main():
             not_goal = (si != gi).float()
             td = (-not_goal) + args.gamma * v_next * not_goal - v
             w = torch.abs(args.hilp_tau - (td < 0).float())
-            l_hilp = (w * td ** 2).mean()
+            l_hilp = (w * td**2).mean()
             loss = loss + args.hilp_weight * l_hilp
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        opt.step(); sched.step()
+        opt.step()
+        sched.step()
         if args.hilp_weight > 0 and step % 5 == 0:
             with torch.no_grad():
-                for q, p_ in zip(tgt_head.parameters(), head.parameters()):
+                for q, p_ in zip(tgt_head.parameters(), head.parameters()):  # noqa: B905
                     q.mul_(0.995).add_(p_, alpha=0.005)
 
         if step % 1000 == 0:
@@ -277,6 +287,7 @@ def main():
     np.save(args.out / "z.npy", zs)
 
     import sys
+
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     from probe_cheap_z import probe
 
@@ -285,8 +296,10 @@ def main():
     res = probe(zs[rows], ep[rows], mc[rows], prog[rows])
     (args.out / "probe.json").write_text(json.dumps(res, indent=1))
     logger.info(f"PROBE cheap_z: {res}")
-    print(f"cheap_z  mc_R2 {res['mc_return_r2']:.3f}  prog_R2 {res['progress_r2']:.3f}  "
-          f"ep_acc {res['episode_acc']:.3f}  purity {res['knn_purity']:.3f}")
+    print(
+        f"cheap_z  mc_R2 {res['mc_return_r2']:.3f}  prog_R2 {res['progress_r2']:.3f}  "
+        f"ep_acc {res['episode_acc']:.3f}  purity {res['knn_purity']:.3f}"
+    )
     print("targets: mc_R2 >= 0.73 (VLA parity), purity << 0.42")
 
 

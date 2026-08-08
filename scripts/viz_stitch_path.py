@@ -13,9 +13,9 @@ import argparse
 import json
 import pathlib
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -54,8 +54,9 @@ def main():
         return np.transpose(np.asarray(x), (1, 2, 0))
 
     K = args.waypoints
-    fig, axes = plt.subplots(args.num_queries, K + 2, figsize=(2.1 * (K + 2), 2.6 * args.num_queries),
-                             facecolor="#0f1117")
+    fig, axes = plt.subplots(
+        args.num_queries, K + 2, figsize=(2.1 * (K + 2), 2.6 * args.num_queries), facecolor="#0f1117"
+    )
     if args.num_queries == 1:
         axes = axes[None]
 
@@ -74,20 +75,26 @@ def main():
             picks.append(int(pool[np.argmin(d)]))
 
         row = axes[q]
-        row[0].imshow(frame_img(s)); row[0].set_title(f"START\nep{A}  p={prog[s]:.2f}", color="#4ade80", fontsize=9)
+        row[0].imshow(frame_img(s))
+        row[0].set_title(f"START\nep{A}  p={prog[s]:.2f}", color="#4ade80", fontsize=9)
         for k, r in enumerate(picks):
             row[k + 1].imshow(frame_img(r))
             col = "#60a5fa" if ep[r] not in (A, B) else "#9aa3b2"
             row[k + 1].set_title(f"ep{ep[r]}  p={prog[r]:.2f}", color=col, fontsize=9)
-        row[K + 1].imshow(frame_img(g)); row[K + 1].set_title(f"GOAL\nep{B}  p={prog[g]:.2f}", color="#fbbf24", fontsize=9)
+        row[K + 1].imshow(frame_img(g))
+        row[K + 1].set_title(f"GOAL\nep{B}  p={prog[g]:.2f}", color="#fbbf24", fontsize=9)
         for ax in row:
-            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_xticks([])
+            ax.set_yticks([])
             for sp in ax.spines.values():
                 sp.set_color("#2a3140")
 
-    fig.suptitle("Walking phi-space from episode A's start to episode B's goal —\n"
-                 "each waypoint shows the nearest REAL frame from ANY episode (blue title = third episode)",
-                 color="w", fontsize=13)
+    fig.suptitle(
+        "Walking phi-space from episode A's start to episode B's goal —\n"
+        "each waypoint shows the nearest REAL frame from ANY episode (blue title = third episode)",
+        color="w",
+        fontsize=13,
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(args.out, dpi=130, facecolor="#0f1117")
     print(f"wrote {args.out}")

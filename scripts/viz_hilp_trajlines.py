@@ -12,22 +12,26 @@ import argparse
 import json
 import pathlib
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
+from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.collections import LineCollection
-
-from viz_hilp_space import load_rep, phi_of
+from viz_hilp_space import load_rep
+from viz_hilp_space import phi_of
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--reps", nargs="+", default=[
-        "RLT-token(VLA)=.scratch/annot_noprop",
-        "cheap-z+HILP(v7a)=.scratch/cheap_z_v7a",
-    ])
+    ap.add_argument(
+        "--reps",
+        nargs="+",
+        default=[
+            "RLT-token(VLA)=.scratch/annot_noprop",
+            "cheap-z+HILP(v7a)=.scratch/cheap_z_v7a",
+        ],
+    )
     ap.add_argument("--annot", type=pathlib.Path, default=pathlib.Path(".scratch/annot_noprop"))
     ap.add_argument("--episodes", type=int, default=12)
     ap.add_argument("--per-ep", type=int, default=80)
@@ -74,7 +78,7 @@ def main():
         # row 1: one polyline per episode, colored by episode
         ax = axes[0, c]
         for k in range(len(eps)):
-            seg = xy[bounds[k]:bounds[k + 1]]
+            seg = xy[bounds[k] : bounds[k + 1]]
             col = cmap_ep(k % 20)
             ax.plot(seg[:, 0], seg[:, 1], "-", color=col, lw=1.0, alpha=0.6)
             ax.scatter(seg[:, 0], seg[:, 1], color=col, s=9, alpha=0.9, linewidths=0)
@@ -85,19 +89,24 @@ def main():
         # row 2: same lines, segments colored by progress (shared ramp)
         ax = axes[1, c]
         for k in range(len(eps)):
-            seg = xy[bounds[k]:bounds[k + 1]]
-            pg = prog_s[bounds[k]:bounds[k + 1]]
+            seg = xy[bounds[k] : bounds[k + 1]]
+            pg = prog_s[bounds[k] : bounds[k + 1]]
             pts = seg.reshape(-1, 1, 2)
-            lc = LineCollection(np.concatenate([pts[:-1], pts[1:]], axis=1),
-                                cmap="viridis", norm=plt.Normalize(0, 1), alpha=0.85, linewidths=1.4)
+            lc = LineCollection(
+                np.concatenate([pts[:-1], pts[1:]], axis=1),
+                cmap="viridis",
+                norm=plt.Normalize(0, 1),
+                alpha=0.85,
+                linewidths=1.4,
+            )
             lc.set_array((pg[:-1] + pg[1:]) / 2)
             ax.add_collection(lc)
-            ax.scatter(seg[:, 0], seg[:, 1], c=pg, cmap="viridis", vmin=0, vmax=1,
-                       s=9, alpha=0.9, linewidths=0)
+            ax.scatter(seg[:, 0], seg[:, 1], c=pg, cmap="viridis", vmin=0, vmax=1, s=9, alpha=0.9, linewidths=0)
         ax.autoscale()
-        ax.set_title("same lines, colored by PROGRESS\n(all sharing one road = phase-organized)", color="w", fontsize=11)
-        fig.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(0, 1), cmap="viridis"),
-                     ax=ax, fraction=0.04)
+        ax.set_title(
+            "same lines, colored by PROGRESS\n(all sharing one road = phase-organized)", color="w", fontsize=11
+        )
+        fig.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(0, 1), cmap="viridis"), ax=ax, fraction=0.04)
 
     for ax in axes.ravel():
         ax.set_facecolor("#181c25")

@@ -13,9 +13,9 @@ import json
 import pathlib
 import subprocess
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -63,19 +63,20 @@ def main():
     colj = idx_nn[:, 1:].reshape(-1)
     w = dist[:, 1:].reshape(-1)
     graph = csr_matrix((w, (rowi, colj)), shape=(m, m))
-    src = int(np.flatnonzero(pool == s)[0]); dst = int(np.flatnonzero(pool == g)[0])
+    src = int(np.flatnonzero(pool == s)[0])
+    dst = int(np.flatnonzero(pool == g)[0])
     dmat, pred = dijkstra(graph, directed=False, indices=src, return_predecessors=True)
     if not np.isfinite(dmat[dst]):
         raise SystemExit("no path in kNN graph - increase n_neighbors")
     path = [dst]
     while path[-1] != src:
         path.append(int(pred[path[-1]]))
-    path = path[::-1]
+    path.reverse()
     node_rows = pool[np.array(path)]
     # resample the path evenly to the video length
     sel = np.linspace(0, len(node_rows) - 1, args.steps).astype(int)
     picks = node_rows[sel]
-    print(f"geodesic: {len(node_rows)} nodes, episodes visited: {sorted(set(int(x) for x in ep[node_rows]))[:12]}")
+    print(f"geodesic: {len(node_rows)} nodes, episodes visited: {sorted({int(x) for x in ep[node_rows]})[:12]}")
 
     # 2-D map: t-SNE over background + walk-relevant frames
     bg = rng.choice(n, size=args.bg_frames, replace=False)
@@ -116,9 +117,11 @@ def main():
         gs = fig.add_gridspec(1, 2, width_ratios=[1, 1.5], wspace=0.04)
         ax = fig.add_subplot(gs[0])
         ax.imshow(img(r))
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
         for sp in ax.spines.values():
-            sp.set_color(col_of(e)); sp.set_linewidth(5)
+            sp.set_color(col_of(e))
+            sp.set_linewidth(5)
         tagg = "START ep" if e == A else ("GOAL ep" if e == B else "via ep")
         ax.set_title(f"{tagg}{e}   progress {prog[r]:.2f}", color=col_of(e), fontsize=13)
 
@@ -129,22 +132,38 @@ def main():
         ax.scatter(*xy[pos_of[g]], marker="*", s=260, color="#fbbf24", edgecolors="w", zorder=5, label=f"goal (ep{B})")
         ax.scatter(*walk_xy[t], s=110, color=col_of(e), edgecolors="w", linewidths=1.4, zorder=6)
         ax.set_facecolor("#181c25")
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
         for sp in ax.spines.values():
             sp.set_color("#2a3140")
         ax.legend(facecolor="#181c25", labelcolor="w", fontsize=9, loc="lower right")
-        ax.set_title("walking phi from A's start to B's goal — nearest real frame at each step",
-                     color="w", fontsize=12)
+        ax.set_title("walking phi from A's start to B's goal — nearest real frame at each step", color="w", fontsize=12)
         fig.savefig(tmp / f"f{t:04d}.png", dpi=100, facecolor="#0f1117", bbox_inches="tight", pad_inches=0.15)
         plt.close(fig)
         if t % 20 == 0:
             print(f"frame {t}/{args.steps}", flush=True)
 
-    subprocess.run([
-        "ffmpeg", "-y", "-framerate", str(args.fps), "-i", str(tmp / "f%04d.png"),
-        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-crf", "22", str(args.out),
-    ], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(args.fps),
+            "-i",
+            str(tmp / "f%04d.png"),
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "22",
+            str(args.out),
+        ],
+        check=True,
+        capture_output=True,
+    )
     print(f"wrote {args.out}  (A=ep{A}, B=ep{B})")
 
 

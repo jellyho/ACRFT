@@ -26,7 +26,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from train_cheapz_dynamics_v1 import DynV1  # noqa: E402
+from train_cheapz_dynamics_v1 import DynV1
 
 
 def main():
@@ -51,7 +51,7 @@ def main():
     ck = torch.load(args.ensemble, map_location="cpu", weights_only=False)
     zmu, zsd = ck["zmu"], ck["zsd"]
     cfg = ck["cfg"]
-    s, hist, M = cfg["stride"], cfg["hist"], cfg["members"]
+    s, hist, _M = cfg["stride"], cfg["hist"], cfg["members"]
     hm = H // s
     z = (z_raw - zmu) / zsd
 
@@ -63,7 +63,8 @@ def main():
     eps_u = np.unique(ep)
     rng.shuffle(eps_u)
     held = set(eps_u[: max(1, int(len(eps_u) * args.heldout_frac))].tolist())
-    ep_start = np.zeros(n, dtype=np.int64); ep_end = np.zeros(n, dtype=np.int64)
+    ep_start = np.zeros(n, dtype=np.int64)
+    ep_end = np.zeros(n, dtype=np.int64)
     for e in eps_u:
         rows = np.flatnonzero(ep == e)
         ep_start[rows], ep_end[rows] = rows.min(), rows.max()
@@ -75,7 +76,9 @@ def main():
     models = []
     for sd in ck["members"]:
         m = DynV1(z.shape[1], s * A, hist=hist, horizon_macro=hm, prior_scale=cfg["prior_scale"]).to(dev)
-        m.load_state_dict(sd); m.eval(); models.append(m)
+        m.load_state_dict(sd)
+        m.eval()
+        models.append(m)
 
     z_t = torch.from_numpy(z).to(dev)
     r = torch.as_tensor(sub, device=dev)
@@ -89,14 +92,14 @@ def main():
     a_other = a_demo[perm]
 
     with torch.no_grad():
-        mus_d = torch.stack([m(zh, a_demo)[0] for m in models])   # [M,B,hm,z]
+        mus_d = torch.stack([m(zh, a_demo)[0] for m in models])  # [M,B,hm,z]
         mus_o = torch.stack([m(zh, a_other)[0] for m in models])
     mean_d, mean_o = mus_d.mean(0), mus_o.mean(0)
-    sig_d = torch.var(mus_d, dim=0).sum(-1)                        # [B,hm]
+    sig_d = torch.var(mus_d, dim=0).sum(-1)  # [B,hm]
     sig_o = torch.var(mus_o, dim=0).sum(-1)
-    err = torch.norm(mean_d - tgt, dim=-1)                         # [B,hm] true open-loop error (demo)
+    err = torch.norm(mean_d - tgt, dim=-1)  # [B,hm] true open-loop error (demo)
 
-    report = {"n": int(len(sub))}
+    report = {"n": len(sub)}
 
     # ---------------- E1: uncertainty-triggered commitment ----------------
     cum_sig = torch.cumsum(sig_d, dim=1)
@@ -106,22 +109,21 @@ def main():
     # taus swept so adaptive mean-k spans the fixed grid; cut = first j with cum sigma > tau
     for q in (0.3, 0.5, 0.7, 0.9):
         tau = torch.quantile(cum_sig[:, -1], q).item()
-        over = (cum_sig > tau)
+        over = cum_sig > tau
         first = torch.where(over.any(1), over.float().argmax(1), torch.full_like(r, hm - 1))
-        kstar = (first + 1).clamp(1, hm)                            # macro steps committed
+        kstar = (first + 1).clamp(1, hm)  # macro steps committed
         e_at_cut = err.gather(1, (kstar - 1)[:, None]).squeeze(1)
         e1[f"adaptive_q{q}"] = {
             "mean_k_steps": (kstar.float().mean() * s).item(),
             "err_at_commit": e_at_cut.mean().item(),
             "frac_full_commit": (kstar == hm).float().mean().item(),
-            "cut_progress_hist": np.histogram(prog[sub][(kstar < hm).cpu().numpy()],
-                                              bins=5, range=(0, 1))[0].tolist(),
+            "cut_progress_hist": np.histogram(prog[sub][(kstar < hm).cpu().numpy()], bins=5, range=(0, 1))[0].tolist(),
         }
     # superlinearity: error growth after the q=0.5 cut vs before, matched horizons
     tau = torch.quantile(cum_sig[:, -1], 0.5).item()
-    over = (cum_sig > tau)
+    over = cum_sig > tau
     first = torch.where(over.any(1), over.float().argmax(1), torch.full_like(r, hm - 1))
-    early = first <= 1                                              # cut at macro 1-2
+    early = first <= 1  # cut at macro 1-2
     if early.any() and (~early).any():
         e1["err_slope_cut_early"] = (err[early, -1] - err[early, 0]).mean().item()
         e1["err_slope_cut_late"] = (err[~early, -1] - err[~early, 0]).mean().item()
@@ -129,7 +131,7 @@ def main():
 
     # ---------------- E2: binding without CQL ----------------
     goal_rows = torch.as_tensor(ep_end[sub], device=dev)
-    goal = z_t[goal_rows]                                           # standardized phi of episode end
+    goal = z_t[goal_rows]  # standardized phi of episode end
     d_d = torch.norm(mean_d[:, -1] - goal, dim=-1)
     d_o = torch.norm(mean_o[:, -1] - goal, dim=-1)
     report["E2"] = {

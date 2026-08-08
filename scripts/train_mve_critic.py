@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from train_cheapz_dynamics_v1 import DynV1  # noqa: E402
+from train_cheapz_dynamics_v1 import DynV1
 
 
 def mlp(inp, out, hidden=512, depth=3):
@@ -50,8 +50,11 @@ def main():
     ap.add_argument("--r-steps", type=int, default=30000)
     ap.add_argument("--tau", type=float, default=0.7)
     ap.add_argument("--img-agg", choices=["min", "mean"], default="min")
-    ap.add_argument("--no-reward-head", action="store_true",
-                    help="Candidate targets use gamma^H*V(phihat) only - isolates the reward head's contribution.")
+    ap.add_argument(
+        "--no-reward-head",
+        action="store_true",
+        help="Candidate targets use gamma^H*V(phihat) only - isolates the reward head's contribution.",
+    )
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--heldout-frac", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
@@ -72,7 +75,10 @@ def main():
 
     phi = (np.load(args.z).astype(np.float32) - zmu) / zsd
     D = phi.shape[1]
-    mm = lambda name, shape, dt=np.float32: np.array(np.memmap(args.annot / name, dtype=dt, mode="r", shape=shape))
+
+    def mm(name, shape, dt=np.float32):
+        return np.array(np.memmap(args.annot / name, dtype=dt, mode="r", shape=shape))
+
     demo = mm("action_chunk.dat", (n, H, A))
     cand = mm("base_action.dat", (n, N, H, A))
     ep = mm("episode_index.dat", (n,), np.int32)
@@ -91,7 +97,7 @@ def main():
         ep_end[rows] = rows.max()
     # valid anchors: room for a full chunk (next state) inside the episode OR terminal within it
     nxt = np.arange(n) + H
-    term = mc > g ** H                          # success lands inside this chunk
+    term = mc > g**H  # success lands inside this chunk
     ok = (nxt <= ep_end) | term
     train_rows = np.flatnonzero(ok & ~np.isin(ep, list(held)))
     held_rows = np.flatnonzero(ok & np.isin(ep, list(held)))
@@ -116,17 +122,17 @@ def main():
     opt = torch.optim.AdamW(list(V.parameters()) + list(Qd.parameters()), lr=3e-4)
     for step in range(args.v_steps):
         r = tr[torch.randint(len(tr), (args.batch,), device=dev)]
-        q_tgt = rn_t[r] + (~term_t[r]) * (g ** H) * Vt(phi_t[nxt_t[r]]).squeeze(-1).detach()
+        q_tgt = rn_t[r] + (~term_t[r]) * (g**H) * Vt(phi_t[nxt_t[r]]).squeeze(-1).detach()
         q = Qd(torch.cat([phi_t[r], demo_t[r]], -1)).squeeze(-1)
         lq = ((q - q_tgt) ** 2).mean()
         adv = Qd(torch.cat([phi_t[r], demo_t[r]], -1)).squeeze(-1).detach() - V(phi_t[r]).squeeze(-1)
-        lv = (torch.abs(args.tau - (adv < 0).float()) * adv ** 2).mean()
+        lv = (torch.abs(args.tau - (adv < 0).float()) * adv**2).mean()
         opt.zero_grad(set_to_none=True)
         (lq + lv).backward()
         opt.step()
         if step % 200 == 0:
             with torch.no_grad():
-                for p_, q_ in zip(Vt.parameters(), V.parameters()):
+                for p_, q_ in zip(Vt.parameters(), V.parameters(), strict=False):
                     p_.mul_(0.99).add_(q_, alpha=0.01)
         if step % 10000 == 0:
             print(f"[V] {step}: lq {lq.item():.5f} lv {lv.item():.5f}", flush=True)
@@ -134,7 +140,7 @@ def main():
     # ---------------- stage 1b: reward head on demo transitions ----------------
     Rh = mlp(D + H * A, 1, hidden=256, depth=2).to(dev)
     opt = torch.optim.AdamW(Rh.parameters(), lr=3e-4)
-    for step in range(args.r_steps):
+    for _step in range(args.r_steps):
         r = tr[torch.randint(len(tr), (args.batch,), device=dev)]
         pred = Rh(torch.cat([phi_t[r], demo_t[r]], -1)).squeeze(-1)
         loss = ((pred - rn_t[r]) ** 2).mean()
@@ -155,22 +161,22 @@ def main():
     rows_all = np.flatnonzero(ok)
     with torch.no_grad():
         for i0 in range(0, len(rows_all), B):
-            r = torch.from_numpy(rows_all[i0:i0 + B]).to(dev)
+            r = torch.from_numpy(rows_all[i0 : i0 + B]).to(dev)
             b = len(r)
             zh = phi_t[r][:, None, :].expand(b, hist, D).reshape(b, 1 * hist, D)
-            a = torch.from_numpy(np.ascontiguousarray(cand[rows_all[i0:i0 + B]])).to(dev)  # [b,N,H,A]
+            a = torch.from_numpy(np.ascontiguousarray(cand[rows_all[i0 : i0 + B]])).to(dev)  # [b,N,H,A]
             a_seq = a.reshape(b * N, hm, s * A)
             zh_rep = zh.repeat_interleave(N, dim=0)
             vs = []
             for m in members:
                 mu, _ = m(zh_rep, a_seq)
-                vs.append(V(mu[:, -1]).squeeze(-1))          # V at the imagined chunk end
-            vs = torch.stack(vs)                              # [M, b*N]
+                vs.append(V(mu[:, -1]).squeeze(-1))  # V at the imagined chunk end
+            vs = torch.stack(vs)  # [M, b*N]
             v_img = vs.min(0).values if args.img_agg == "min" else vs.mean(0)
             rh = Rh(torch.cat([phi_t[r].repeat_interleave(N, 0), a.reshape(b * N, H * A)], -1)).squeeze(-1)
             if args.no_reward_head:
                 rh = torch.zeros_like(rh)
-            y[r] = (rh.clamp(0.0, 1.0) + (g ** H) * v_img).clamp(0.0, 1.0).view(b, N)
+            y[r] = (rh.clamp(0.0, 1.0) + (g**H) * v_img).clamp(0.0, 1.0).view(b, N)
             if i0 % (B * 16) == 0:
                 print(f"[img] {i0}/{len(rows_all)}", flush=True)
 
@@ -182,7 +188,7 @@ def main():
         # half the batch on demo (real target), half on a random candidate (imagined target)
         half = args.batch // 2
         rd, rc = r[:half], r[half:]
-        tgt_d = rn_t[rd] + (~term_t[rd]) * (g ** H) * V(phi_t[nxt_t[rd]]).squeeze(-1).detach()
+        tgt_d = rn_t[rd] + (~term_t[rd]) * (g**H) * V(phi_t[nxt_t[rd]]).squeeze(-1).detach()
         qd = Q(torch.cat([phi_t[rd], pro_t[rd], demo_t[rd]], -1)).squeeze(-1)
         ci = torch.randint(N, (len(rc),), device=dev)
         ac = torch.from_numpy(np.ascontiguousarray(cand[rc.cpu().numpy(), ci.cpu().numpy()])).to(dev)
@@ -195,10 +201,23 @@ def main():
             print(f"[Q] {step}: loss {loss.item():.5f}", flush=True)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    torch.save({"V": V.state_dict(), "Q": Q.state_dict(), "Rh": Rh.state_dict(),
-                "zmu": zmu, "zsd": zsd, "meta": {"annot": str(args.annot), "z": str(args.z),
-                "dyn": str(args.dyn), "img_agg": args.img_agg, "tau": args.tau}},
-               args.out / "mve_critic.pt")
+    torch.save(
+        {
+            "V": V.state_dict(),
+            "Q": Q.state_dict(),
+            "Rh": Rh.state_dict(),
+            "zmu": zmu,
+            "zsd": zsd,
+            "meta": {
+                "annot": str(args.annot),
+                "z": str(args.z),
+                "dyn": str(args.dyn),
+                "img_agg": args.img_agg,
+                "tau": args.tau,
+            },
+        },
+        args.out / "mve_critic.pt",
+    )
 
     # ---------------- diagnostics on held-out episodes ----------------
     hr = torch.from_numpy(held_rows[: min(4000, len(held_rows))]).to(dev)
@@ -211,7 +230,7 @@ def main():
         for i in range(N):
             a = torch.from_numpy(np.ascontiguousarray(cand[hr.cpu().numpy(), i])).to(dev)
             qc_all.append(Q(torch.cat([obs, a.reshape(len(hr), H * A)], -1)).squeeze(-1))
-        qc_all = torch.stack(qc_all, 1)                       # [B, N]
+        qc_all = torch.stack(qc_all, 1)  # [B, N]
     d = {}
     d["action_sensitivity"] = qc_all.std(1).mean().item()
     d["ranking_accuracy_demo_vs_other"] = (q_demo > q_other).float().mean().item()
@@ -222,6 +241,7 @@ def main():
     qr = q_demo.cpu().numpy()
     mr = mch.cpu().numpy()
     from scipy.stats import spearmanr
+
     d["spearman_q_demo_vs_mc"] = float(spearmanr(qr, mr).statistic)
     d["within_state_q_range"] = (qc_all.max(1).values - qc_all.min(1).values).mean().item()
     print("\n=== MVE critic diagnostics (held-out) ===")

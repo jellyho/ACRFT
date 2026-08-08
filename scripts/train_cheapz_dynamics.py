@@ -172,7 +172,9 @@ def main():
     (args.out / "report.json").write_text(json.dumps(report, indent=1))
     print(f"{'prefix':>6s} {'err':>8s} {'id-base':>8s} {'disag':>8s} {'rho(d,e)':>9s}")
     for p, r in report["per_prefix"].items():
-        print(f"{p:>6} {r['err']:8.4f} {r['err_baseline_identity']:8.4f} {r['disagreement']:8.4f} {r['spearman_disag_err']:9.3f}")
+        print(
+            f"{p:>6} {r['err']:8.4f} {r['err_baseline_identity']:8.4f} {r['disagreement']:8.4f} {r['spearman_disag_err']:9.3f}"
+        )
     print(f"OOD disagreement ratio (shuffled/matched, want >1): {report['ood_disagreement_ratio']:.2f}")
     print(f"wrote {args.out}")
 

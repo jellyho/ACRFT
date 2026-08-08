@@ -25,9 +25,9 @@ import logging
 import pathlib
 
 import numpy as np
+from scipy.stats import spearmanr
 import torch
 import torch.nn as nn
-from scipy.stats import spearmanr
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,7 @@ class DistHead(nn.Module):
 
     def __init__(self, zdim: int, out: int = 64):
         super().__init__()
-        self.phi = nn.Sequential(
-            nn.Linear(zdim, 256), nn.LayerNorm(256), nn.GELU(), nn.Linear(256, out)
-        )
+        self.phi = nn.Sequential(nn.Linear(zdim, 256), nn.LayerNorm(256), nn.GELU(), nn.Linear(256, out))
 
     def forward(self, zs, zg):
         return torch.norm(self.phi(zs) - self.phi(zg), dim=-1)
@@ -49,7 +47,7 @@ def train_and_probe(z, ep, prog, seed=0, steps=8000, batch=1024, dev="cpu"):
     rng = np.random.default_rng(seed)
     eps_u = np.unique(ep)
     rng.shuffle(eps_u)
-    A, B = set(eps_u[: len(eps_u) // 2].tolist()), set(eps_u[len(eps_u) // 2 :].tolist())
+    A, _B = set(eps_u[: len(eps_u) // 2].tolist()), set(eps_u[len(eps_u) // 2 :].tolist())
 
     # partition rows: A-first-half / A-second / B-first / B-second, by within-episode progress
     half = prog < 0.5
@@ -72,7 +70,7 @@ def train_and_probe(z, ep, prog, seed=0, steps=8000, batch=1024, dev="cpu"):
     net = DistHead(z.shape[1]).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=3e-4, weight_decay=1e-5)
 
-    for step in range(steps):
+    for _step in range(steps):
         es = rng.choice(train_eps, size=batch)
         s_idx = np.empty(batch, dtype=np.int64)
         g_idx = np.empty(batch, dtype=np.int64)
@@ -109,12 +107,13 @@ def train_and_probe(z, ep, prog, seed=0, steps=8000, batch=1024, dev="cpu"):
     for r in t1_pool:
         by_ep_t1.setdefault(int(ep[r]), []).append(r)
     s1, g1 = [], []
-    for e, v in by_ep_t1.items():
-        v = np.array(v)
+    for e, v in by_ep_t1.items():  # noqa: B007
+        v = np.array(v)  # noqa: PLW2901
         if len(v) < 8:
             continue
         idx = rng.choice(v, size=(min(40, len(v) // 2), 2))
-        s1.append(idx[:, 0]); g1.append(idx[:, 1])
+        s1.append(idx[:, 0])
+        g1.append(idx[:, 1])
     s1, g1 = np.concatenate(s1), np.concatenate(g1)
     rho1, _, _ = rho(s1, g1)
 
@@ -147,10 +146,18 @@ def train_and_probe(z, ep, prog, seed=0, steps=8000, batch=1024, dev="cpu"):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--reps", nargs="+", required=True,
-                    help="name=path pairs; path is a dir with z.npy OR an annot dir with rl_token.dat")
-    ap.add_argument("--annot", type=pathlib.Path, default=pathlib.Path(".scratch/annot_noprop"),
-                    help="labels source (episode_index, progress)")
+    ap.add_argument(
+        "--reps",
+        nargs="+",
+        required=True,
+        help="name=path pairs; path is a dir with z.npy OR an annot dir with rl_token.dat",
+    )
+    ap.add_argument(
+        "--annot",
+        type=pathlib.Path,
+        default=pathlib.Path(".scratch/annot_noprop"),
+        help="labels source (episode_index, progress)",
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/probe_stitching.json"))
     args = ap.parse_args()
@@ -169,8 +176,7 @@ def main():
             z = np.load(p / "z.npy")
         else:
             m2 = json.loads((p / "meta.json").read_text())
-            z = np.array(np.memmap(p / "rl_token.dat", dtype=np.float32, mode="r",
-                                   shape=(n, m2["token_dim"])))
+            z = np.array(np.memmap(p / "rl_token.dat", dtype=np.float32, mode="r", shape=(n, m2["token_dim"])))
         logger.info(f"probing {name} ({z.shape[1]}d) on {dev}")
         results[name] = train_and_probe(z, ep, prog, seed=args.seed, dev=dev)
         logger.info(f"{name}: {results[name]}")
@@ -179,8 +185,10 @@ def main():
     hdr = f"{'rep':14s} {'rho_within':>10s} {'rho_stitch':>10s} {'ratio':>6s} {'leakage':>8s}"
     print(hdr)
     for name, r in results.items():
-        print(f"{name:14s} {r['rho_tier1_within']:10.3f} {r['rho_tier2_stitch']:10.3f} "
-              f"{r['stitch_ratio']:6.2f} {r['episode_leakage_ratio']:8.2f}")
+        print(
+            f"{name:14s} {r['rho_tier1_within']:10.3f} {r['rho_tier2_stitch']:10.3f} "
+            f"{r['stitch_ratio']:6.2f} {r['episode_leakage_ratio']:8.2f}"
+        )
     print("(bands: rho>=0.7 strong, 0.4 moderate, <0.3 fails; ratio>=0.8 healthy; leakage ~1 good, >>1 bad)")
 
 

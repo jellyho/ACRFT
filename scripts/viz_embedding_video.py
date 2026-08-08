@@ -15,9 +15,9 @@ import json
 import pathlib
 import subprocess
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -48,7 +48,7 @@ def main():
     # rows: background sample + ALL frames of the three hero episodes (pre-success part)
     bg = rng.choice(n, size=args.bg_frames, replace=False)
     hero_rows = {int(e): np.flatnonzero((ep == e) & (prog < 0.999)) for e in heroes}
-    all_rows = np.unique(np.concatenate([bg] + list(hero_rows.values())))
+    all_rows = np.unique(np.concatenate([bg, *list(hero_rows.values())]))
     pos_of = {int(r): i for i, r in enumerate(all_rows)}
 
     from sklearn.manifold import TSNE
@@ -88,9 +88,11 @@ def main():
         for k, e in enumerate(heroes):
             ax = fig.add_subplot(gs[k, 0])
             ax.imshow(img(hero_seq[int(e)][t]))
-            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_xticks([])
+            ax.set_yticks([])
             for sp in ax.spines.values():
-                sp.set_color(EP_COLORS[k]); sp.set_linewidth(2.5)
+                sp.set_color(EP_COLORS[k])
+                sp.set_linewidth(2.5)
             ax.set_ylabel(f"ep{e}", color=EP_COLORS[k], fontsize=10)
         ax = fig.add_subplot(gs[:, 1])
         ax.scatter(xy[:, 0], xy[:, 1], c=prog[all_rows], cmap="viridis", s=3, alpha=0.25, linewidths=0)
@@ -98,25 +100,39 @@ def main():
             seq = hero_seq[int(e)][: t + 1]
             pts = xy[[pos_of[int(r)] for r in seq]]
             ax.plot(pts[:, 0], pts[:, 1], "-", color=EP_COLORS[k], lw=2.0, alpha=0.85)
-            ax.scatter(pts[-1, 0], pts[-1, 1], color=EP_COLORS[k], s=90, zorder=5,
-                       edgecolors="w", linewidths=1.2)
+            ax.scatter(pts[-1, 0], pts[-1, 1], color=EP_COLORS[k], s=90, zorder=5, edgecolors="w", linewidths=1.2)
         ax.set_facecolor("#181c25")
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
         for sp in ax.spines.values():
             sp.set_color("#2a3140")
-        ax.set_title(f"three kitchens, one road  —  task progress {ps[t]:.0%}",
-                     color="w", fontsize=13)
-        fig.savefig(tmp / f"f{t:04d}.png", dpi=100, facecolor="#0f1117",
-                    bbox_inches="tight", pad_inches=0.15)
+        ax.set_title(f"three kitchens, one road  —  task progress {ps[t]:.0%}", color="w", fontsize=13)
+        fig.savefig(tmp / f"f{t:04d}.png", dpi=100, facecolor="#0f1117", bbox_inches="tight", pad_inches=0.15)
         plt.close(fig)
         if t % 20 == 0:
             print(f"frame {t}/{args.steps}", flush=True)
 
-    subprocess.run([
-        "ffmpeg", "-y", "-framerate", str(args.fps), "-i", str(tmp / "f%04d.png"),
-        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-crf", "22", str(args.out),
-    ], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(args.fps),
+            "-i",
+            str(tmp / "f%04d.png"),
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "22",
+            str(args.out),
+        ],
+        check=True,
+        capture_output=True,
+    )
     print(f"wrote {args.out}")
 
 

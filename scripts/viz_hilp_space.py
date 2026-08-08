@@ -14,9 +14,9 @@ import argparse
 import json
 import pathlib
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -49,10 +49,14 @@ def phi_of(run_dir: pathlib.Path, z: np.ndarray):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--reps", nargs="+", default=[
-        "VLA-z=.scratch/annot_noprop",
-        "cheap-z(v7a)=.scratch/cheap_z_v7a",
-    ])
+    ap.add_argument(
+        "--reps",
+        nargs="+",
+        default=[
+            "VLA-z=.scratch/annot_noprop",
+            "cheap-z(v7a)=.scratch/cheap_z_v7a",
+        ],
+    )
     ap.add_argument("--annot", type=pathlib.Path, default=pathlib.Path(".scratch/annot_noprop"))
     ap.add_argument("--episodes", type=int, default=30)
     ap.add_argument("--per-ep", type=int, default=60)
@@ -126,7 +130,8 @@ def main():
         ax.set_title(
             f"distance vs |d(progress)|   rho within {rho_w:.2f} / cross {rho_x:.2f}\n"
             f"episode-offset @dp<0.05: {gap:+.2f}  (0 = episode identity gone)",
-            color="w", fontsize=10,
+            color="w",
+            fontsize=10,
         )
         ax.set_xlabel("|d(progress)|", color="w")
         ax.set_ylabel("d(z_i, z_j)", color="w")

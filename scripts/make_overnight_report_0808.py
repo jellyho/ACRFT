@@ -12,9 +12,9 @@ import pathlib
 import subprocess
 import sys
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -27,8 +27,8 @@ S = ROOT / ".scratch"
 
 
 def mcnemar(a, b):
-    w = sum(1 for x, y in zip(a, b) if x and not y)
-    ll = sum(1 for x, y in zip(a, b) if y and not x)
+    w = sum(1 for x, y in zip(a, b, strict=False) if x and not y)
+    ll = sum(1 for x, y in zip(a, b, strict=False) if y and not x)
     n = w + ll
     p = 1.0 if n == 0 else min(1.0, sum(math.comb(n, k) for k in range(min(w, ll) + 1)) / 2**n * 2)
     return w, ll, p
@@ -36,8 +36,7 @@ def mcnemar(a, b):
 
 def b64(fig):
     buf = io.BytesIO()
-    fig.savefig(buf, format="jpg", dpi=110, bbox_inches="tight", facecolor="white",
-                pil_kwargs={"quality": 82})
+    fig.savefig(buf, format="jpg", dpi=110, bbox_inches="tight", facecolor="white", pil_kwargs={"quality": 82})
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode()
 
@@ -59,11 +58,15 @@ if tau13:
 base = succ["ctl:vla"]
 
 LABELS = {
-    "ctl:prefix": "prefix (action-blind critic)", "ctl:vla": "vla (baseline)",
-    "ctl:bon": "bon (action-blind critic)", "ctl:critic": "critic full-auth (action-blind)",
-    "phi:bon": "bon (phi Cal-QL+swap)", "phi:prefix": "prefix (phi Cal-QL+swap)",
+    "ctl:prefix": "prefix (action-blind critic)",
+    "ctl:vla": "vla (baseline)",
+    "ctl:bon": "bon (action-blind critic)",
+    "ctl:critic": "critic full-auth (action-blind)",
+    "phi:bon": "bon (phi Cal-QL+swap)",
+    "phi:prefix": "prefix (phi Cal-QL+swap)",
     "phi:critic": "critic full-auth (phi Cal-QL+swap)",
-    "mbac:mbacv": "mbacv: sigma commit only (tau 2.0)", "mbac:mbac": "mbac: critic sel + sigma commit",
+    "mbac:mbacv": "mbacv: sigma commit only (tau 2.0)",
+    "mbac:mbac": "mbac: critic sel + sigma commit",
     "mbac:mbacf": "mbacf: sigma-veto BoN + sigma commit",
     "mbac:mbacv_t13": "mbacv: sigma commit only (tau 1.3)",
 }
@@ -78,14 +81,20 @@ for k in arms:
 rows.sort(key=lambda r: r[1])
 fig, ax = plt.subplots(figsize=(9, 0.55 * len(rows) + 1.6))
 for yy, (k, d, p, rate) in enumerate(rows):
-    fam = ("mbac" if k.startswith("mbac") else ("phi" if k.startswith("phi") else "ctl"))
+    fam = "mbac" if k.startswith("mbac") else ("phi" if k.startswith("phi") else "ctl")
     c = {"mbac": rs.PURPLE, "phi": rs.GREEN, "ctl": rs.RED}[fam]
     ax.plot([0, d], [yy, yy], color=c, lw=2, alpha=0.45, zorder=1)
-    ax.scatter([d], [yy], s=95, facecolors=(c if p < 0.05 else "white"), edgecolors=c,
-               linewidths=1.8, zorder=3)
-    ax.annotate(f"{rate:.2f}", (d, yy), textcoords="offset points",
-                xytext=(14 if d >= 0 else -14, 0), ha="left" if d >= 0 else "right",
-                va="center", fontsize=10, color="#444")
+    ax.scatter([d], [yy], s=95, facecolors=(c if p < 0.05 else "white"), edgecolors=c, linewidths=1.8, zorder=3)
+    ax.annotate(
+        f"{rate:.2f}",
+        (d, yy),
+        textcoords="offset points",
+        xytext=(14 if d >= 0 else -14, 0),
+        ha="left" if d >= 0 else "right",
+        va="center",
+        fontsize=10,
+        color="#444",
+    )
 ax.axvline(0, color="black", lw=1.2)
 ax.set_xlim(ax.get_xlim()[0] - 0.045, ax.get_xlim()[1] + 0.045)
 ax.set_yticks(range(len(rows)), [LABELS[r[0]] for r in rows])
@@ -94,38 +103,46 @@ ax.set_title("Paired rollouts")
 FIG1 = b64(fig)
 
 # ---- fig 2: commitment histograms ----
-picks = [("ctl:prefix", ctl["prefix"], rs.RED), ("phi:critic", phi["critic"], rs.GREEN),
-         ("mbac:mbacv", mbc["mbacv"], rs.PURPLE)]
+picks = [
+    ("ctl:prefix", ctl["prefix"], rs.RED),
+    ("phi:critic", phi["critic"], rs.GREEN),
+    ("mbac:mbacv", mbc["mbacv"], rs.PURPLE),
+]
 fig, axes = plt.subplots(1, len(picks), figsize=(11, 3.0), sharey=True)
-for ax, (k, d, c) in zip(axes, picks):
+for ax, (k, d, c) in zip(axes, picks, strict=False):
     ns = np.array([t["n_exec"] for t in d.get("trace", [])])
     if len(ns) == 0:
         continue
     h = np.bincount(ns, minlength=17)[1:]
     ax.bar(range(1, 17), h / h.sum(), color=c, width=0.85)
     ax.set_title(LABELS[k].split(" (")[0].split(":")[0], fontsize=11)
-    ax.text(0.04, 0.92, f"mean {ns.mean():.1f}", transform=ax.transAxes, ha="left",
-            fontsize=9.5, color="#555")
+    ax.text(0.04, 0.92, f"mean {ns.mean():.1f}", transform=ax.transAxes, ha="left", fontsize=9.5, color="#555")
     ax.set_xlabel("committed steps")
 axes[0].set_ylabel("fraction of replans")
 FIG2 = b64(fig)
 
 # ---- fig 3: dynamics R2 / AUSE, phi vs DINO vs phi-h1 ----
 reps = {}
-for name, p in (("DINO v4b space", S / "cheapz_dyn_v1/report.json"),
-                ("phi space (hist 3)", S / "phi_dyn_v1/report.json"),
-                ("phi space (hist 1)", S / "phi_dyn_v1_h1/report.json")):
+for name, p in (
+    ("DINO v4b space", S / "cheapz_dyn_v1/report.json"),
+    ("phi space (hist 3)", S / "phi_dyn_v1/report.json"),
+    ("phi space (hist 1)", S / "phi_dyn_v1_h1/report.json"),
+):
     if p.exists():
         reps[name] = json.loads(p.read_text())
 fig, (a1, a2) = plt.subplots(1, 2, figsize=(9.5, 3.2))
-for (name, r), c in zip(reps.items(), [rs.RED, rs.BLUE, rs.GREEN]):
+for (name, r), c in zip(reps.items(), [rs.RED, rs.BLUE, rs.GREEN], strict=False):
     ks = sorted(int(k) for k in r["per_macro"])
     a1.plot(ks, [r["per_macro"][str(k)]["r2_vs_copyforward"] for k in ks], "-o", color=c, label=name)
     a2.plot(ks, [r["per_macro"][str(k)]["ause"] for k in ks], "-o", color=c, label=name)
-a1.set_xlabel("prediction horizon (steps)"); a1.set_ylabel(r"$R^2$ vs copy-forward")
-a1.set_title("Accuracy"); a1.legend(fontsize=9)
-a2.set_xlabel("prediction horizon (steps)"); a2.set_ylabel("AUSE")
-a2.set_title("Calibration"); a2.legend(fontsize=9)
+a1.set_xlabel("prediction horizon (steps)")
+a1.set_ylabel(r"$R^2$ vs copy-forward")
+a1.set_title("Accuracy")
+a1.legend(fontsize=9)
+a2.set_xlabel("prediction horizon (steps)")
+a2.set_ylabel("AUSE")
+a2.set_title("Calibration")
+a2.legend(fontsize=9)
 FIG3 = b64(fig)
 
 # ---- fig 4: E1 frontier + E2/E3 ----
@@ -134,25 +151,31 @@ fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.5, 3.4))
 fig.subplots_adjust(wspace=0.32)
 e1 = bat["E1"]
 fk = sorted(int(k) for k in e1["fixed_err_at_commit"])
-a1.plot(fk, [e1["fixed_err_at_commit"][str(k)] for k in fk], "-o", color=rs.GRAY,
-        label="fixed k")
+a1.plot(fk, [e1["fixed_err_at_commit"][str(k)] for k in fk], "-o", color=rs.GRAY, label="fixed k")
 qs = [q for q in ("0.3", "0.5", "0.7", "0.9") if f"adaptive_q{q}" in e1]
-a1.plot([e1[f"adaptive_q{q}"]["mean_k_steps"] for q in qs],
-        [e1[f"adaptive_q{q}"]["err_at_commit"] for q in qs], "-o", color=rs.PURPLE,
-        label=r"$\sigma$-adaptive")
-a1.set_xlabel("mean committed steps"); a1.set_ylabel("error at commit end")
-a1.set_title("Commitment frontier", fontsize=12); a1.legend(fontsize=9)
+a1.plot(
+    [e1[f"adaptive_q{q}"]["mean_k_steps"] for q in qs],
+    [e1[f"adaptive_q{q}"]["err_at_commit"] for q in qs],
+    "-o",
+    color=rs.PURPLE,
+    label=r"$\sigma$-adaptive",
+)
+a1.set_xlabel("mean committed steps")
+a1.set_ylabel("error at commit end")
+a1.set_title("Commitment frontier", fontsize=12)
+a1.legend(fontsize=9)
 e3 = bat["E3"]
 ks = sorted(int(k) for k in e3)
-a2.plot(ks, [e3[str(k)]["binding_disagreement"] for k in ks], "-o", color=rs.GREEN,
-        label="disagreement")
-a2.plot(ks, [e3[str(k)]["binding_goal_dist"] for k in ks], "-o", color=rs.RED,
-        label="predicted goal distance")
+a2.plot(ks, [e3[str(k)]["binding_disagreement"] for k in ks], "-o", color=rs.GREEN, label="disagreement")
+a2.plot(ks, [e3[str(k)]["binding_goal_dist"] for k in ks], "-o", color=rs.RED, label="predicted goal distance")
 a2.axhline(0.5, color="gray", ls="--", lw=1)
 a2.text(ks[0], 0.51, "chance", color="gray", fontsize=9)
-a2.set_xlabel("rollout depth (steps)"); a2.set_ylabel("binding accuracy")
-a2.set_title("Binding", fontsize=12); a2.legend(fontsize=9)
+a2.set_xlabel("rollout depth (steps)")
+a2.set_ylabel("binding accuracy")
+a2.set_title("Binding", fontsize=12)
+a2.legend(fontsize=9)
 FIG4 = b64(fig)
+
 
 # ---- numbers for prose ----
 def cell(k):
@@ -161,15 +184,28 @@ def cell(k):
     star = " <b>*</b>" if p < 0.05 else ""
     return f"<td style='text-align:right'>{r:.3f}</td><td style='text-align:right'>+{w}/-{ll}</td><td style='text-align:right'>{p:.3f}{star}</td>"
 
-order = ["ctl:prefix", "phi:bon", "phi:prefix", "mbac:mbacf", "mbac:mbacv", "mbac:mbacv_t13",
-         "mbac:mbac", "ctl:bon", "ctl:critic", "phi:critic"]
-rows_html = "\n".join(
-    f"<tr><td>{LABELS[k]}</td>{cell(k)}</tr>" for k in order if k in succ)
+
+order = [
+    "ctl:prefix",
+    "phi:bon",
+    "phi:prefix",
+    "mbac:mbacf",
+    "mbac:mbacv",
+    "mbac:mbacv_t13",
+    "mbac:mbac",
+    "ctl:bon",
+    "ctl:critic",
+    "phi:critic",
+]
+rows_html = "\n".join(f"<tr><td>{LABELS[k]}</td>{cell(k)}</tr>" for k in order if k in succ)
 E2 = bat["E2"]
 
 REP2_HTML = ""
 if rep2:
-    sv = lambda d, m: [t["success"] for t in d[m]["trials"]]
+
+    def sv(d, m):
+        return [t["success"] for t in d[m]["trials"]]
+
     v2 = sv(rep2, "vla")
     vla60 = base + v2
     pooled = {
@@ -179,13 +215,17 @@ if rep2:
     rows = ""
     for name, arm in pooled.items():
         w, ll, p = mcnemar(arm, vla60)
-        rows += (f"<tr><td>{name}</td><td style='text-align:right'>{sum(arm)}/60 = {sum(arm)/60:.3f}</td>"
-                 f"<td style='text-align:right'>+{w}/-{ll}</td><td style='text-align:right'>{p:.2f}</td></tr>")
+        rows += (
+            f"<tr><td>{name}</td><td style='text-align:right'>{sum(arm)}/60 = {sum(arm)/60:.3f}</td>"
+            f"<td style='text-align:right'>+{w}/-{ll}</td><td style='text-align:right'>{p:.2f}</td></tr>"
+        )
     r2rows = ""
     for m in ("mbacv", "mbacf", "prefix"):
         w, ll, p = mcnemar(sv(rep2, m), v2)
-        r2rows += (f"<tr><td>{m} (tau1.3)</td><td style='text-align:right'>{sum(sv(rep2,m))}/30</td>"
-                   f"<td style='text-align:right'>+{w}/-{ll}</td><td style='text-align:right'>{p:.2f}</td></tr>")
+        r2rows += (
+            f"<tr><td>{m} (tau1.3)</td><td style='text-align:right'>{sum(sv(rep2,m))}/30</td>"
+            f"<td style='text-align:right'>+{w}/-{ll}</td><td style='text-align:right'>{p:.2f}</td></tr>"
+        )
     REP2_HTML = f"""<div class='card'><h3>재현 — 새 장면 30개(seed 30-59)가 밤의 양성 신호를 지웠다</h3>
 <p>모든 유망 arm을 새 장면에서 자체 vla 기준선({sum(v2)}/30 = {sum(v2)/30:.3f})과 함께 다시 돌렸다.
 prefix의 +.10도, mbacv tau1.3의 +.067도 부호가 뒤집혔다:</p>
@@ -200,8 +240,10 @@ prefix의 +.10도, mbacv tau1.3의 +.067도 부호가 뒤집혔다:</p>
 선택이 갈릴 만큼 다르지 않다. 다음 지렛대: 더 약한 체크포인트(후보 다양성↑), 접촉 분기점이 많은 태스크(GarnishPancake),
 그리고 커밋이 배포 선택이 아니라 <b>학습 분포</b>를 바꾸는 AC-RFT 루프.</p></div>"""
 
+
 def _git(*args):
-    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, check=False).stdout.strip()
+
 
 GIT_BRANCH = _git("branch", "--show-current")
 GIT_HASH = _git("rev-parse", "--short", "HEAD")

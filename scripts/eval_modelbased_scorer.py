@@ -71,8 +71,12 @@ def main():
     ap.add_argument("--z-dir", type=pathlib.Path, default=pathlib.Path(".scratch/cheap_z_v4b"))
     ap.add_argument("--annot", type=pathlib.Path, default=pathlib.Path(".scratch/annot_noprop"))
     ap.add_argument("--dyn", type=pathlib.Path, default=pathlib.Path(".scratch/cheapz_dyn_v0"))
-    ap.add_argument("--critic", type=pathlib.Path, default=pathlib.Path(".scratch/critic_cheapz_v4b"),
-                    help="critic dir whose V head scores the predicted futures (must match --z-dir's z!)")
+    ap.add_argument(
+        "--critic",
+        type=pathlib.Path,
+        default=pathlib.Path(".scratch/critic_cheapz_v4b"),
+        help="critic dir whose V head scores the predicted futures (must match --z-dir's z!)",
+    )
     ap.add_argument("--num-states", type=int, default=2048)
     ap.add_argument("--beta", type=float, default=1.0, help="disagreement penalty for the conservative score")
     ap.add_argument("--seed", type=int, default=0)
@@ -93,6 +97,7 @@ def main():
 
     # dynamics ensemble
     import sys
+
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     from train_cheapz_dynamics import Dyn
 
@@ -111,7 +116,7 @@ def main():
     mu, sd = pro.mean(0), pro.std(0)
     pro_n = np.where(sd > 1e-6, (pro - mu) / np.where(sd > 1e-6, sd, 1.0), 0.0).astype(np.float32)
 
-    def V(z_batch, pro_batch):
+    def V(z_batch, pro_batch):  # noqa: N802
         x = torch.cat([z_batch, pro_batch], dim=-1)
         # vtree may nest under a top-level module name
         tree = vtree[next(iter(vtree))] if len(vtree) == 1 else vtree

@@ -448,14 +448,22 @@ def main() -> None:
         "N>10, Cal-QL survives to 50). Calibrated: the push-down is clamped at the frame's "
         "mc_return so it never drives Q below what the data proved achievable (Cal-QL).",
     )
-    ap.add_argument("--cql-swap", action="store_true",
-                    help="add OTHER STATES' demonstrated chunks (batch shuffle) as CQL negatives - "
-                    "trains the state-action BINDING the candidate-only push-down misses (measured: "
-                    "demo-vs-other ranking 0.53 with candidates alone).")
-    ap.add_argument("--cql-candidates", type=int, default=4,
-                    help="candidates per step in the CQL term (cost: extra forward x this).")
-    ap.add_argument("--layernorm-v", action="store_true",
-                    help="LayerNorm inside the V-net hidden layers (RLPD stabilizer).")
+    ap.add_argument(
+        "--cql-swap",
+        action="store_true",
+        help="add OTHER STATES' demonstrated chunks (batch shuffle) as CQL negatives - "
+        "trains the state-action BINDING the candidate-only push-down misses (measured: "
+        "demo-vs-other ranking 0.53 with candidates alone).",
+    )
+    ap.add_argument(
+        "--cql-candidates",
+        type=int,
+        default=4,
+        help="candidates per step in the CQL term (cost: extra forward x this).",
+    )
+    ap.add_argument(
+        "--layernorm-v", action="store_true", help="LayerNorm inside the V-net hidden layers (RLPD stabilizer)."
+    )
     ap.add_argument(
         "--expectile",
         type=float,
@@ -646,7 +654,9 @@ def main() -> None:
     act_scale = jnp.std(data.cand.reshape(-1, data.cand.shape[-1]), axis=0)[None, None, None, None, :]
     # An empty pytree under --objective td: the V network is built only when something reads it, but
     # it still occupies its slot in the carry so both objectives compile to the same scan signature.
-    v_net = _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), use_ln=cfg.layernorm_v) if cfg.objective == "iql" else None
+    v_net = (
+        _critic.ValueNet(hidden_dims=tuple(cfg.hidden_dims), use_ln=cfg.layernorm_v) if cfg.objective == "iql" else None
+    )
     v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
     if v_net is not None:
         logger.info(

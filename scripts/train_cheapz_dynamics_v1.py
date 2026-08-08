@@ -20,7 +20,6 @@ AUSE (sparsification; Spearman deprecated for calibration), OOD swap disagreemen
 import argparse
 import json
 import logging
-import math
 import pathlib
 
 import numpy as np
@@ -31,16 +30,26 @@ logger = logging.getLogger(__name__)
 
 
 class DynV1(nn.Module):
-    def __init__(self, zdim: int, act_seg: int, d: int = 288, depth: int = 4, heads: int = 8,
-                 hist: int = 3, horizon_macro: int = 4, prior_scale: float = 0.0):
+    def __init__(
+        self,
+        zdim: int,
+        act_seg: int,
+        d: int = 288,
+        depth: int = 4,
+        heads: int = 8,
+        hist: int = 3,
+        horizon_macro: int = 4,
+        prior_scale: float = 0.0,
+    ):
         super().__init__()
         self.hist, self.hm, self.zdim = hist, horizon_macro, zdim
         self.z_in = nn.Linear(zdim, d - 32)
         self.a_in = nn.Linear(act_seg, 32)
         L = hist + horizon_macro
         self.pos = nn.Parameter(torch.randn(L, d) * 0.02)
-        layer = nn.TransformerEncoderLayer(d, heads, 4 * d, dropout=0.1, activation="gelu",
-                                           batch_first=True, norm_first=True)
+        layer = nn.TransformerEncoderLayer(
+            d, heads, 4 * d, dropout=0.1, activation="gelu", batch_first=True, norm_first=True
+        )
         self.tf = nn.TransformerEncoder(layer, depth)
         self.mask = torch.triu(torch.full((L, L), float("-inf")), diagonal=1)
         self.head_mu = nn.Linear(d, zdim)
@@ -51,7 +60,7 @@ class DynV1(nn.Module):
         if prior_scale > 0:
             self.prior = nn.Sequential(nn.Linear(d, 256), nn.GELU(), nn.Linear(256, zdim))
             for q in self.prior.parameters():
-                q.requires_grad_(False)
+                q.requires_grad_(False)  # noqa: FBT003
 
     def forward(self, z_hist, a_seq):
         """z_hist [B, hist, zdim] (t-2s, t-s, t); a_seq [B, hm, act_seg] -> mu, lv [B, hm, zdim]."""
@@ -63,7 +72,7 @@ class DynV1(nn.Module):
         a_zero = torch.zeros(B, self.hist, 32, device=a_seq.device, dtype=a_tok.dtype)
         x = torch.cat([torch.cat([z_tok, a_zero], -1), torch.cat([z_pad, a_tok], -1)], dim=1)
         x = x + self.pos[None]
-        h = self.tf(x, mask=self.mask.to(x.device))[:, self.hist:]  # [B, hm, d]
+        h = self.tf(x, mask=self.mask.to(x.device))[:, self.hist :]  # [B, hm, d]
         mu = self.head_mu(h)
         if self.prior_scale > 0:
             mu = mu + self.prior_scale * self.prior(h)
@@ -110,7 +119,8 @@ def main():
     eps_u = np.unique(ep)
     rng.shuffle(eps_u)
     held = set(eps_u[: max(1, int(len(eps_u) * args.heldout_frac))].tolist())
-    ep_start = np.zeros(n, dtype=np.int64); ep_end = np.zeros(n, dtype=np.int64)
+    ep_start = np.zeros(n, dtype=np.int64)
+    ep_end = np.zeros(n, dtype=np.int64)
     for e in eps_u:
         rows = np.flatnonzero(ep == e)
         ep_start[rows], ep_end[rows] = rows.min(), rows.max()
@@ -130,10 +140,13 @@ def main():
         a = ch_t[r].view(len(rows), hm, s * A)
         return z_t[hidx], a, z_t[tidx]
 
-    models = [DynV1(z.shape[1], s * A, hist=hist, horizon_macro=hm,
-                    prior_scale=args.prior_scale).to(dev) for _ in range(args.members)]
-    opt = torch.optim.AdamW([q for m in models for q in m.parameters() if q.requires_grad],
-                            lr=args.lr, weight_decay=0.04)
+    models = [
+        DynV1(z.shape[1], s * A, hist=hist, horizon_macro=hm, prior_scale=args.prior_scale).to(dev)
+        for _ in range(args.members)
+    ]
+    opt = torch.optim.AdamW(
+        [q for m in models for q in m.parameters() if q.requires_grad], lr=args.lr, weight_decay=0.04
+    )
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
 
     for step in range(args.steps):
@@ -153,15 +166,21 @@ def main():
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_([q for m in models for q in m.parameters() if q.requires_grad], 20.0)
-        opt.step(); sched.step()
+        opt.step()
+        sched.step()
         if step % 2000 == 0:
             logger.info(f"step {step}: loss {loss.item() / args.members:.4f}")
 
     args.out.mkdir(parents=True, exist_ok=True)
-    torch.save({"members": [m.state_dict() for m in models],
-                "zmu": zmu, "zsd": zsd,
-                "cfg": {k: getattr(args, k) for k in ("stride", "hist", "members", "prior_scale")}},
-               args.out / "ensemble_v1.pt")
+    torch.save(
+        {
+            "members": [m.state_dict() for m in models],
+            "zmu": zmu,
+            "zsd": zsd,
+            "cfg": {k: getattr(args, k) for k in ("stride", "hist", "members", "prior_scale")},
+        },
+        args.out / "ensemble_v1.pt",
+    )
 
     # ---------------- eval: open-loop curve, AUSE, OOD swap ----------------
     sub = rng.choice(held_rows, size=min(3000, len(held_rows)), replace=False)
@@ -182,11 +201,13 @@ def main():
         for f in fracs:
             k = int(len(err) * (1 - f.item()))
             ause += (err[order_u[-k:]].mean() - err[order_e[-k:]].mean()).abs().item()
-        ause /= (len(fracs) * err.mean().item())
-        r2 = 1.0 - (err ** 2).mean().item() / (base ** 2).mean().item()
+        ause /= len(fracs) * err.mean().item()
+        r2 = 1.0 - (err**2).mean().item() / (base**2).mean().item()
         report["per_macro"][int((j + 1) * s)] = {
-            "err": err.mean().item(), "copyforward": base.mean().item(),
-            "r2_vs_copyforward": r2, "ause": ause,
+            "err": err.mean().item(),
+            "copyforward": base.mean().item(),
+            "r2_vs_copyforward": r2,
+            "ause": ause,
         }
     # OOD: swap chunks between anchors
     perm = torch.from_numpy(rng.permutation(len(sub))).to(dev)

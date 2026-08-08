@@ -31,33 +31,35 @@ PALETTE = [BLUE, ORANGE, GREEN, RED, PURPLE, BROWN]
 
 
 def use():
-    mpl.rcParams.update({
-        "figure.facecolor": "white",
-        "axes.facecolor": "white",
-        "savefig.facecolor": "white",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.edgecolor": "#333333",
-        "axes.labelcolor": "#1c1917",
-        # Titles are labels, not sentences: keep them one or two words; every explanation,
-        # reading instruction, and statistical caveat belongs in the surrounding prose.
-        "axes.titlesize": 12,
-        "axes.labelsize": 11.5,
-        "axes.grid": True,
-        "grid.color": "#dddddd",
-        "grid.linewidth": 0.6,
-        "grid.alpha": 0.6,
-        "xtick.color": "#1c1917",
-        "ytick.color": "#1c1917",
-        "xtick.labelsize": 10.5,
-        "ytick.labelsize": 10.5,
-        # Computer Modern text — the LaTeX look of the reference papers. cmr10 has no unicode
-        # minus, so unicode_minus must be off or negative ticks render as boxes.
-        "font.family": "serif",
-        "font.serif": ["cmr10", "STIXGeneral", "DejaVu Serif"],
-        "mathtext.fontset": "cm",
-        "axes.unicode_minus": False,
-        "legend.frameon": False,
-        "figure.dpi": 110,
-        "axes.prop_cycle": mpl.cycler(color=PALETTE),
-    })
+    mpl.rcParams.update(
+        {
+            "figure.facecolor": "white",
+            "axes.facecolor": "white",
+            "savefig.facecolor": "white",
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.edgecolor": "#333333",
+            "axes.labelcolor": "#1c1917",
+            # Titles are labels, not sentences: keep them one or two words; every explanation,
+            # reading instruction, and statistical caveat belongs in the surrounding prose.
+            "axes.titlesize": 12,
+            "axes.labelsize": 11.5,
+            "axes.grid": True,
+            "grid.color": "#dddddd",
+            "grid.linewidth": 0.6,
+            "grid.alpha": 0.6,
+            "xtick.color": "#1c1917",
+            "ytick.color": "#1c1917",
+            "xtick.labelsize": 10.5,
+            "ytick.labelsize": 10.5,
+            # Computer Modern text — the LaTeX look of the reference papers. cmr10 has no unicode
+            # minus, so unicode_minus must be off or negative ticks render as boxes.
+            "font.family": "serif",
+            "font.serif": ["cmr10", "STIXGeneral", "DejaVu Serif"],
+            "mathtext.fontset": "cm",
+            "axes.unicode_minus": False,
+            "legend.frameon": False,
+            "figure.dpi": 110,
+            "axes.prop_cycle": mpl.cycler(color=PALETTE),
+        }
+    )

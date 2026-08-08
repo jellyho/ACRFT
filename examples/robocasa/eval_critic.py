@@ -202,9 +202,13 @@ class DynCommit:
         self.models = []
         for sd in ck["members"]:
             act_seg = sd["a_in.weight"].shape[1]
-            m = DynV1(zdim, act_seg, hist=self.hist,
-                      horizon_macro=len(ck["members"][0]["pos"]) - self.hist,
-                      prior_scale=cfg["prior_scale"])
+            m = DynV1(
+                zdim,
+                act_seg,
+                hist=self.hist,
+                horizon_macro=len(ck["members"][0]["pos"]) - self.hist,
+                prior_scale=cfg["prior_scale"],
+            )
             m.load_state_dict(sd)
             m.eval()
             self.models.append(m)
@@ -224,17 +228,17 @@ class DynCommit:
         """One-macro-step disagreement per candidate [N]. E3 measured binding PEAKS at one
         macro-step (.837 at k=4), so the veto only needs the first slot - and one batched forward
         over all N candidates costs the same as one chunk."""
-        zn = ((np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd)
+        zn = (np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd
         t = self._t
         N, H, A = cands.shape
         zh = t.from_numpy(np.tile(zn[None, None], (N, self.hist, 1)))
         a = t.from_numpy(np.ascontiguousarray(cands, dtype=np.float32).reshape(N, self.hm, self.stride * A))
         with t.no_grad():
-            mus = t.stack([m(zh, a)[0] for m in self.models])      # [M,N,hm,z]
-        return t.var(mus, dim=0).sum(-1)[:, 0].numpy()             # [N] first-slot sigma
+            mus = t.stack([m(zh, a)[0] for m in self.models])  # [M,N,hm,z]
+        return t.var(mus, dim=0).sum(-1)[:, 0].numpy()  # [N] first-slot sigma
 
     def commit(self, z_phi, chunk, sim_step):
-        zn = ((np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd)
+        zn = (np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd
         self.zbuf.append((sim_step, zn))
         # history slots at t-(hist-1)s .. t: nearest recorded replan-time z per slot (the model was
         # trained on true stride-s history; replans land every 2-16 steps so nearest is close).
@@ -244,12 +248,12 @@ class DynCommit:
             near = min(self.zbuf, key=lambda p: abs(p[0] - want))
             slots.append(near[1])
         t = self._t
-        zh = t.from_numpy(np.stack(slots)[None])                       # [1, hist, z]
+        zh = t.from_numpy(np.stack(slots)[None])  # [1, hist, z]
         H, A = chunk.shape
         a = t.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32).reshape(1, self.hm, self.stride * A))
         with t.no_grad():
-            mus = t.stack([m(zh, a)[0] for m in self.models])          # [M,1,hm,z]
-        sig = t.var(mus, dim=0).sum(-1)[0].numpy()                     # [hm]
+            mus = t.stack([m(zh, a)[0] for m in self.models])  # [M,1,hm,z]
+        sig = t.var(mus, dim=0).sum(-1)[0].numpy()  # [hm]
         base = float(np.median(self.recent)) if self.recent else float(np.median(sig))
         self.recent.extend(sig.tolist())
         over = sig > self.tau_mult * base
@@ -257,8 +261,7 @@ class DynCommit:
         return max(1, k) * self.stride, sig
 
 
-def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None,
-                   dyn=None):
+def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, dyn=None):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
 
@@ -396,15 +399,27 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--checkpoint", required=True, type=pathlib.Path)
     ap.add_argument("--critic", type=pathlib.Path, default=None, help="Trained critic params.msgpack.")
-    ap.add_argument("--phi", type=pathlib.Path, default=None,
-                    help="HILP phi readout (phi.pt): apply phi to the extracted token before the "
-                    "critic, for critics trained on the phi space.")
-    ap.add_argument("--dyn", type=pathlib.Path, default=None,
-                    help="DynV1 ensemble (ensemble_v1.pt) trained on the SAME phi space as --phi; "
-                    "required by the mbac/mbacv modes (sigma-rule commitment).")
-    ap.add_argument("--dyn-tau", type=float, default=2.0,
-                    help="Cut when a macro-step's ensemble disagreement exceeds tau x the running "
-                    "median. Higher = longer commitment.")
+    ap.add_argument(
+        "--phi",
+        type=pathlib.Path,
+        default=None,
+        help="HILP phi readout (phi.pt): apply phi to the extracted token before the "
+        "critic, for critics trained on the phi space.",
+    )
+    ap.add_argument(
+        "--dyn",
+        type=pathlib.Path,
+        default=None,
+        help="DynV1 ensemble (ensemble_v1.pt) trained on the SAME phi space as --phi; "
+        "required by the mbac/mbacv modes (sigma-rule commitment).",
+    )
+    ap.add_argument(
+        "--dyn-tau",
+        type=float,
+        default=2.0,
+        help="Cut when a macro-step's ensemble disagreement exceeds tau x the running "
+        "median. Higher = longer commitment.",
+    )
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
         "--modes",
@@ -483,12 +498,14 @@ def main() -> None:
         import torch as _torch
 
         _sd = _torch.load(args.phi, map_location="cpu")
-        _w0 = _sd["0.weight"].numpy(); _b0 = _sd["0.bias"].numpy()
-        _w2 = _sd["2.weight"].numpy(); _b2 = _sd["2.bias"].numpy()
+        _w0 = _sd["0.weight"].numpy()
+        _b0 = _sd["0.bias"].numpy()
+        _w2 = _sd["2.weight"].numpy()
+        _b2 = _sd["2.bias"].numpy()
 
         def _phi_fn(z, _w0=_w0, _b0=_b0, _w2=_w2, _b2=_b2):
             h = z @ _w0.T + _b0
-            h = 0.5 * h * (1.0 + np.tanh(0.7978845608 * (h + 0.044715 * h ** 3)))  # gelu(tanh approx)
+            h = 0.5 * h * (1.0 + np.tanh(0.7978845608 * (h + 0.044715 * h**3)))  # gelu(tanh approx)
             return (h @ _w2.T + _b2).astype(np.float32)
 
         shared_vla.token_transform = _phi_fn
@@ -497,8 +514,9 @@ def main() -> None:
     dyn_commit = None
     if args.dyn is not None:
         dyn_commit = DynCommit(args.dyn, tau_mult=args.dyn_tau)
-        logger.info(f"dyn commitment active: stride {dyn_commit.stride}, hist {dyn_commit.hist}, "
-                    f"tau x{dyn_commit.tau_mult}")
+        logger.info(
+            f"dyn commitment active: stride {dyn_commit.stride}, hist {dyn_commit.hist}, " f"tau x{dyn_commit.tau_mult}"
+        )
 
     for mode in args.modes:
         policy, H, macro = build_policy(
