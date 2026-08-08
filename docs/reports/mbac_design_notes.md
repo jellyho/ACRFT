@@ -382,3 +382,75 @@ segment was policy-coherent. The dynamics model keeps training on the fresh
 rollouts (its data need not be success-only), so the pessimism boundary expands
 exactly where the robot has actually been - the model-based half converts
 failures into information the critic half can trust.
+
+## Iteration 8b — correction: REAL model-based RL, not critic patching
+
+User pushback, correct: iteration 8 used the model as a target-manufacturing
+gadget for the critic. Original MB-RL uses the model as a WORLD - you roll in
+it, learn in it, plan in it. The real MAC + ACSAC:
+
+### The world model (upgrade phi-dynamics into an MDP model)
+
+phi-dynamics today predicts phi' from (phi, a_chunk) - a transition model only.
+A world model needs reward and termination:
+- reward head r_hat(phi, a, j): per-macro-step progress gain. Trainable NOW -
+  annotation has per-frame progress labels; r = Delta progress (or gamma-return
+  regression). No new data needed.
+- success/termination head from the terminal-success labels.
+- imagination ACTOR pi_hat(a_chunk | phi): the KEY missing piece. The VLA
+  cannot act in imagination (it needs images; imagined states are phi-only).
+  Distill: we hold (phi_t, 16 VLA-sampled chunks) for 280k frames - train a
+  small flow/MLP proposal in phi space to mimic the VLA's chunk distribution.
+  Same scale as the phi readout (minutes to train). This unlocks MULTI-CHUNK
+  imagination: at an imagined phi, propose chunks without the VLA.
+
+### Learning: chunk-level Dyna/MBPO (this is the ACSAC half)
+
+ACSAC = SAC where the action is a chunk. Its replay is exactly what MBPO
+augments:
+- from real annotation states, branch k=2-3 macro-step imagined rollouts:
+  a ~ pi_hat, phi' ~ dynamics, r = r_hat - lambda*sigma  (MOPO penalty on the
+  IMAGINED REWARD - its proper home, not a target patch).
+- depth cap 2-3 macro-steps comes from the measured R2 curve (model beats
+  copy-forward only at 8-16 steps and compounding beyond is unvalidated).
+- train chunk-level Q (and optionally soft-update pi_hat toward high-Q chunks,
+  SAC-style with entropy against the distilled prior) on real + imagined
+  transitions. This is genuine policy improvement beyond the data: the agent
+  tries chunks the demos never executed, in states the demos never reached
+  (imagined branches), and values propagate back through Bellman.
+
+### Acting: receding-horizon planning (TD-MPC at chunk scale)
+
+Deployment is no longer "score one chunk myopically":
+1. VLA proposes N=16 real chunks (as now) - the proposal prior at the REAL state.
+2. For each, imagine D=2-3 chunks ahead: rollout dynamics, propose continuations
+   with pi_hat, score  sum gamma^j (r_hat_j - lambda*sigma_j) + gamma^D Q(phi_D, .).
+3. Execute the first chunk of the best sequence (receding horizon); commit
+   length = where the imagined plan's sigma stays low (adaptive chunking falls
+   out of the plan, again).
+This sees PAST the current chunk - "this chunk looks fine but lands where
+nothing continues well" - the exact blind spot of every myopic mode we ran, and
+a capability no amount of offline Q calibration provides.
+
+### What exists vs what to build
+
+| piece | status |
+|---|---|
+| transition model (phi, 5-ens, calibrated) | DONE (phi_dyn_v1_h1) |
+| reward head | small: progress labels already in annotation |
+| distilled proposal pi_hat(a|phi) | small: (phi, candidates) pairs on disk |
+| chunk-level Q on real+imagined | new training script, existing critic arch |
+| planner (imagination MPC) | numpy/torch loop, cheap next to VLA inference |
+
+### Validation ladder
+
+- W1: reward head quality - r_hat vs true Delta-progress on held-out episodes.
+- W2: pi_hat fidelity - do distilled chunks match VLA candidate distribution
+  (MMD / coverage on held-out states)? If pi_hat is bad, imagination is bad.
+- W3: imagination sanity - imagined 2-3 chunk rollouts from held-out states:
+  does imagined progress track real episode progress? (the MBPO validity check)
+- W4: offline RL gain - chunk-Q trained real+imagined vs real-only (calswap):
+  binding, sensitivity, AND a new probe - value of demo continuation vs value
+  of pi_hat continuation (does imagination discover better-than-demo chunks?).
+- W5: GP protocol rollout (3x50 CI): vla / bon / mpc-D1 (myopic, ablation) /
+  mpc-D3 (plans ahead). The D1-vs-D3 gap isolates the model-based claim.
