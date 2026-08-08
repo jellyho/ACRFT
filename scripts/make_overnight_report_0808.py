@@ -179,11 +179,11 @@ html = f"""<!doctype html><meta charset='utf-8'><title>overnight 2026-08-08 — 
 <h1>하룻밤의 심판 — critic 권한과 model-based adaptive chunking</h1>
 <div class='sub'>2026-08-08 새벽 · PrepareCoffee · 30 paired trials/arm, seed 0 (모든 arm이 같은 장면) · 표는 원시 JSON에서 생성 시점 재계산 (scripts/make_overnight_report_0808.py)</div>
 <style>
-.wa-rpt table{width:100%;table-layout:auto;border-collapse:collapse;overflow-wrap:anywhere;font-size:.92em}
-.wa-rpt td,.wa-rpt th{padding:6px 10px;vertical-align:top}
-.wa-rpt .spec th{width:110px;white-space:nowrap}
-.wa-rpt .num td:nth-child(n+2){text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.wa-rpt img{max-width:100%}
+.wa-rpt table{{width:100%;table-layout:auto;border-collapse:collapse;overflow-wrap:anywhere;font-size:.92em}}
+.wa-rpt td,.wa-rpt th{{padding:6px 10px;vertical-align:top}}
+.wa-rpt .spec th{{width:110px;white-space:nowrap}}
+.wa-rpt .num td:nth-child(n+2){{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}
+.wa-rpt img{{max-width:100%}}
 </style><div class='wa-rpt'>
 
 <div class='card'><h3>TL;DR</h3>
