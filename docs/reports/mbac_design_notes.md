@@ -454,3 +454,40 @@ a capability no amount of offline Q calibration provides.
   of pi_hat continuation (does imagination discover better-than-demo chunks?).
 - W5: GP protocol rollout (3x50 CI): vla / bon / mpc-D1 (myopic, ablation) /
   mpc-D3 (plans ahead). The D1-vs-D3 gap isolates the model-based claim.
+
+## Iteration 8c — one transformer, two readouts: prefix critic == multi-step model
+
+User's observation, and it's the architectural keystone: DynV1's block-causal
+transformer already computes, at action slot j, a representation of "state +
+first j macro-steps of the chunk". That per-prefix representation is the SAME
+object a prefix critic needs and the same object the multi-step model needs:
+
+    slot j -> mu/sigma head : phihat_{t+4j}          (multi-step model, exists)
+    slot j -> Q head        : Q(phi, a_{1:4j})       (prefix critic, one Linear away)
+    slot j -> r head        : rhat_j                  (reward model)
+
+One forward over (phi_t, chunk) yields, for every prefix simultaneously:
+predicted future, model uncertainty, value, reward. Selection (argmax over
+candidates at full horizon), commitment (per-prefix Q vs sigma), and the
+planner's bootstrap all read the same pass - N=16 forwards per replan total.
+
+The deeper win is anti-action-blindness BY CONSTRUCTION: critics went blind
+because nothing in their loss required encoding the action. A Q head sharing a
+backbone with the prediction loss cannot ignore actions - the backbone must
+carry them to predict phihat at all. The dynamics loss becomes the
+representation-level fix for the exact pathology Cal-QL+swap patched at the
+loss level. (This is TD-MPC2's joint model+value philosophy at chunk/prefix
+granularity.)
+
+Design cautions:
+- loss balancing: prediction NLL vs TD on the Q head (start with TD weight
+  small; the backbone is already trained - warm-start from phi_dyn_v1_h1 and
+  attach heads).
+- the Q head trains on real prefixes (executed data) + imagined branches;
+  keep MOPO's lambda*sigma on the imagined ones only.
+- cross-chunk imagination still needs pi_hat (this transformer only sees
+  within-chunk prefixes).
+
+Naming the unified module: PCWM (prefix-critic world model). W-ladder gains a
+step: W0 = attach Q/r heads to the frozen phi_dyn backbone, verify prefix-Q
+matches the standalone critic's diagnostics before any joint training.
