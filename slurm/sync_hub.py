@@ -33,8 +33,8 @@ body{background:#ffffff}
   padding:26px 30px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
 .wbx a{color:#3730a3}
 .wbx h2,.wbx h3{margin:.7em 0 .4em;letter-spacing:-.01em;color:#111;font-family:Georgia,'Times New Roman',serif}
-.wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;background:#fff;color:#1a1a1a;
-  display:block;width:max-content;max-width:100%;overflow-x:auto}
+.wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;background:#fff;color:#1a1a1a}
+.wbx .tblwrap{overflow-x:auto;max-width:100%}.wbx .tblwrap table{margin:10px 2px}
 .wbx td,.wbx th{border:1px solid #e2e2e2;padding:5px 10px;text-align:left;vertical-align:top}
 .wbx th{background:#f3f4f8}.wbx img{max-width:100%;border:1px solid #e2e2e2;border-radius:8px;margin:8px 0;background:#fff}
 .wbx .missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
@@ -102,7 +102,7 @@ def build_thread(merged_reports):
     )
 
 
-def build_mindmap(eid_idx):
+def build_mindmap(eid_idx, summaries=None):
     """인터랙티브 force-directed 관계도 — META의 links에서 자동 생성, 드래그·호버·클릭.
 
     새 포스트가 META에 links만 채우면 노드·간선이 스스로 자란다. 국면(컬럼) 배정은 초기 x 편향과
@@ -116,7 +116,8 @@ def build_mindmap(eid_idx):
     for eid, i in eid_idx.items():
         m = mm.META.get(eid, {})
         nodes.append({"id": eid, "idx": i, "cat": cat.get(eid, len(MM_COLS)),
-                      "what": m.get("what", eid), "date": m.get("date", "")})
+                      "what": m.get("what", eid), "date": m.get("date", ""),
+                      "sum": (summaries or {}).get(eid, "")})
     links, seen = [], set()
     for eid, m in mm.META.items():
         for tgt in m.get("links", []):
@@ -177,7 +178,12 @@ def main():
             return "<span class='xref' style='opacity:.5'"
         return re.sub(r"<span class='xref' data-eid='([^']+)'", sub, body)
 
-    bodies = [activate(b) for _, _, b in ours]
+    def wrap_tables(body):
+        """표는 스크롤 가능한 래퍼 DIV 안에 — table에 display:block을 주면 행이 접혀버린다."""
+        body = re.sub(r"<table(?![^>]*tblwrapped)", "<div class='tblwrap'><table", body)
+        return body.replace("</table>", "</table></div>")
+
+    bodies = [wrap_tables(activate(b)) for _, _, b in ours]
     bodies += [b for _, b in keep]
 
     new_reports = [r for r, _ in merged]
@@ -217,7 +223,7 @@ def main():
             '</div><!--/wb-tabs-->')
     views = ("<!--wb-views-->"
              f'<div id="wb-thread" hidden><div class="wbx">{build_thread([r for r, _ in merged])}</div></div>'
-             f'<div id="wb-map" hidden><div class="wbx">{build_mindmap(eid_idx)}</div></div>'
+             f'<div id="wb-map" hidden><div class="wbx">{build_mindmap(eid_idx, {e: r["summary"] for e, r, _ in ours})}</div></div>'
              "<!--/wb-views-->")
     js = ("""<script id="wb-tabs-js">
 function wbView(v){
@@ -236,7 +242,12 @@ function wbGraphInit(){
   const D=JSON.parse(document.getElementById('wb-graph-data').textContent);
   const Wd=box.clientWidth||1200, H=box.clientHeight||640, NS='http://www.w3.org/2000/svg';
   const svg=document.createElementNS(NS,'svg'); svg.setAttribute('width','100%'); svg.setAttribute('height','100%');
-  box.appendChild(svg);
+  box.style.position='relative'; box.appendChild(svg);
+  const tip=document.createElement('div'); tip.id='wb-tip';
+  tip.style.cssText='position:absolute;display:none;max-width:300px;background:#fff;border:1px solid #cfd4dd;'+
+    'border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.14);padding:10px 13px;font-size:.85em;'+
+    'line-height:1.5;color:#1a1a1a;pointer-events:none;z-index:10';
+  box.appendChild(tip);
   const ncat=D.phases.length;
   const N=D.nodes.map((n,i)=>({...n,
     x:(Wd*0.12)+(n.cat+0.5)*(Wd*0.76)/ncat+40*(Math.random()-0.5),
@@ -255,13 +266,21 @@ function wbGraphInit(){
     const t=document.createElementNS(NS,'text'); t.textContent=n.id;
     t.setAttribute('text-anchor','middle'); t.setAttribute('dy','-1.4em');
     t.setAttribute('font-size','12'); t.setAttribute('font-weight','600'); t.setAttribute('fill','#1a1a1a');
-    const ti=document.createElementNS(NS,'title'); ti.textContent=n.what+' ('+n.date+')';
-    g.appendChild(c); g.appendChild(t); g.appendChild(ti); svg.appendChild(g);
+    g.appendChild(c); g.appendChild(t); svg.appendChild(g);
     g.addEventListener('mouseenter',()=>{
       eEls.forEach((e,i)=>e.setAttribute('opacity',(L[i].a===n||L[i].b===n)?'0.95':'0.08'));
-      nEls.forEach((m,i)=>m.g.setAttribute('opacity',(N[i]===n||(adj[n.id]&&adj[n.id].has(N[i].id)))?'1':'0.25'));});
+      nEls.forEach((m,i)=>m.g.setAttribute('opacity',(N[i]===n||(adj[n.id]&&adj[n.id].has(N[i].id)))?'1':'0.25'));
+      tip.innerHTML='<b>'+n.id+'</b> <span style="color:#5f6b7a">'+n.date+'</span>'+
+        '<div style="margin-top:3px">'+n.what+'</div>'+
+        (n.sum?'<div style="margin-top:5px;color:#5f6b7a">'+n.sum+'</div>':'');
+      tip.style.display='block';});
+    g.addEventListener('mousemove',ev=>{const r=box.getBoundingClientRect();
+      let tx=ev.clientX-r.left+16, ty=ev.clientY-r.top+14;
+      if(tx+310>r.width) tx=ev.clientX-r.left-316; if(ty+140>r.height) ty=ev.clientY-r.top-120;
+      tip.style.left=tx+'px'; tip.style.top=ty+'px';});
     g.addEventListener('mouseleave',()=>{
-      eEls.forEach(e=>e.setAttribute('opacity','.38')); nEls.forEach(m=>m.g.setAttribute('opacity','1'));});
+      eEls.forEach(e=>e.setAttribute('opacity','.38')); nEls.forEach(m=>m.g.setAttribute('opacity','1'));
+      tip.style.display='none';});
     return {g,c,t,n};});
   let drag=null, moved=0, alpha=1;
   nEls.forEach(({g,n})=>{
