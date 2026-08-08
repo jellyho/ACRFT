@@ -117,6 +117,20 @@ def main() -> None:
     ap.add_argument("--stride", type=int, default=1, help="Keep every k-th frame (1 = all frames).")
     ap.add_argument("--discount", type=float, default=0.99, help="Discount for mc_return.")
     ap.add_argument(
+        "--asset-id",
+        default=None,
+        help="Override data.assets.asset_id so norm stats resolve to the dataset actually annotated "
+        "(the scaling-study checkpoints keep per-point stats, e.g. jellyho/yam_lego_taxi_s200; the "
+        "config default would silently load the ORIGINAL dataset's stats).",
+    )
+    ap.add_argument(
+        "--success-from-outcomes",
+        action="store_true",
+        help="Datasets without a per-frame reward column (YAM: success lives in outcomes.jsonl at "
+        "episode level) get a synthesized terminal reward: 1 on the LAST frame of each success "
+        "episode, 0 elsewhere. mc_return/progress then follow the usual terminal-success path.",
+    )
+    ap.add_argument(
         "--no-terminal-success",
         action="store_true",
         help="Keep the raw reward column instead of cutting each episode at its first success. The "
@@ -150,6 +164,14 @@ def main() -> None:
     args = ap.parse_args()
 
     train_config = _config.get_config(args.config)
+    if args.asset_id:
+        train_config = dataclasses.replace(
+            train_config,
+            data=dataclasses.replace(
+                train_config.data, assets=dataclasses.replace(train_config.data.assets, asset_id=args.asset_id)
+            ),
+        )
+        logger.info(f"asset_id override: {args.asset_id}")
     overrides = {}
     if args.objective:
         overrides["rlt_objective"] = args.objective
@@ -203,6 +225,16 @@ def main() -> None:
     logger.info(f"proprio: {args.proprio_key} is {proprio_all.shape[1]}-d")
     if reward_all is None:  # no success column: the sparse reward is all zeros
         reward_all = np.zeros(meta.total_frames, dtype=np.float32)
+    if args.success_from_outcomes:
+        succ = _progress.success_episode_indices(data_config.repo_id)
+        if succ is None:
+            raise ValueError("--success-from-outcomes: no outcomes.jsonl / success source found")
+        lo_all = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
+        hi_all = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
+        reward_all = np.zeros(meta.total_frames, dtype=np.float32)
+        for e in succ:
+            reward_all[hi_all[e] - 1] = 1.0
+        logger.info(f"synthesized terminal reward from outcomes: {len(succ)}/{len(lo_all)} success episodes")
     # NOT lo/hi: those name the frame range this process owns, a few lines up.
     ep_lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
     ep_hi = np.asarray(meta.episodes["dataset_to_index"], dtype=np.int64)
