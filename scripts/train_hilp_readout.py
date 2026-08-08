@@ -70,15 +70,23 @@ for step in range(a.steps):
     fut = np.minimum(s + rng.geometric(1 - a.gamma, B), ep_end[s])
     g = np.where(u < 0.2, nx, np.where(u < 0.7, fut, rng.choice(train_rows, B)))
     si, ni, gi = (torch.from_numpy(x).to(dev) for x in (s, nx, g))
-    v = -torch.norm(phi(z_t[si]) - phi(z_t[gi]), dim=-1)
+
+    # sqrt has a NaN gradient at exactly 0 - duplicate frames (static robot) hit it.
+    # (ported from worker-B's iql-followups fix 85d6a73; their GP-adjacent run died on it)
+    def safe_dist(x, y):
+        return torch.sqrt(((x - y) ** 2).sum(-1) + 1e-8)
+
+    v = -safe_dist(phi(z_t[si]), phi(z_t[gi]))
     with torch.no_grad():
-        vn = -torch.norm(tgt(z_t[ni]) - tgt(z_t[gi]), dim=-1)
+        vn = -safe_dist(tgt(z_t[ni]), tgt(z_t[gi]))
     ng = (si != gi).float()
     td = (-ng) + a.gamma * vn * ng - v
     w = torch.abs(a.tau - (td < 0).float())
     loss = (w * td**2).mean()
     opt.zero_grad(set_to_none=True)
     loss.backward()
+    # distance-parameterised TD can diverge without clipping (worker-B 16e34ff: run -> NaN)
+    torch.nn.utils.clip_grad_norm_(phi.parameters(), 1.0)
     opt.step()
     if step % 5 == 0:
         with torch.no_grad():
