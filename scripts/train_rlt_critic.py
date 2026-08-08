@@ -287,7 +287,7 @@ def main() -> None:
                 run.log(d, step=step)
         if cfg.save_every and step % cfg.save_every == 0 and step < cfg.steps:
             (out_dir / f"params_{step}.msgpack").write_bytes(fser.to_bytes(carry[0]))
-            if cfg.objective == "iql":
+            if cfg.objective == "iql" or getattr(cfg, "aqc_baseline", False):
                 (out_dir / f"vparams_{step}.msgpack").write_bytes(fser.to_bytes(carry[3]))
             tmp = out_dir / "state.msgpack.tmp"
             tmp.write_bytes(fser.to_bytes({"step": step, "carry": list(carry)}))
@@ -296,7 +296,7 @@ def main() -> None:
             logger.info(f"  saved checkpoint params_{step}.msgpack")
 
     (out_dir / "params.msgpack").write_bytes(fser.to_bytes(carry[0]))
-    if cfg.objective == "iql":
+    if cfg.objective == "iql" or getattr(cfg, "aqc_baseline", False):
         (out_dir / "vparams.msgpack").write_bytes(fser.to_bytes(carry[3]))
     state_f.unlink(missing_ok=True)  # finished - a stale resume state would only confuse
     save_config(final=True)

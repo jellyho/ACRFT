@@ -290,6 +290,13 @@ def load_prefix_baselines(params_path):
     vpath = run_dir / pathlib.Path(params_path).name.replace("params", "vparams")
     if not vpath.exists():
         vpath = run_dir / "vparams.msgpack"
+    if not vpath.exists():
+        # td+aqcmax runs before the save fix trained baselines but never wrote them. Deployment
+        # under the shared joint-argmax rule never reads b_h, so a missing file downgrades to None.
+        import logging
+
+        logging.getLogger(__name__).warning(f"aqc_baseline run without vparams at {run_dir}: baselines unavailable")
+        return None
     v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", (512, 512, 512))), out_dim=1 + cfg["num_prefixes"])
     vparams = flax.serialization.msgpack_restore(vpath.read_bytes())
     return lambda obs: v_net.apply(vparams, obs)[..., 1:]
