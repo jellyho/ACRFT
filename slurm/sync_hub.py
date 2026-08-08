@@ -353,6 +353,9 @@ function wbGraphInit(){
         commit_message=f"worker-B: {len(ours)} entries [{mm.GIT_STAMP}]",
         create_pr=True,
     )
+    if res.pr_url is None:
+        print("허브 동기화: 변경 없음 — PR 생략")
+        return
     num = int(res.pr_url.rstrip("/").split("/")[-1])
     api.merge_pull_request(SPACE, num, repo_type="space")
     print(f"허브 동기화: 스레드+마인드맵+우리 {len(ours)} + 기존 {len(keep)} = {len(merged)} 엔트리, PR#{num} 머지")
