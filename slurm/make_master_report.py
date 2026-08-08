@@ -887,6 +887,22 @@ META = {
         why="숫자 판정을 눈으로 검증 — 밴드·V·commit 패널 동행 확인", links=["v11", "v12", "final"]),
 }
 
+def _git_stamp() -> str:
+    """branch@hash(+dirty) at publish time — every posted report carries the code state."""
+    import subprocess
+
+    def g(*args):
+        return subprocess.run(["git", *args], capture_output=True, text=True,
+                              cwd=pathlib.Path(__file__).parent.parent).stdout.strip()
+
+    branch = g("rev-parse", "--abbrev-ref", "HEAD") or "?"
+    sha = g("rev-parse", "--short", "HEAD") or "?"
+    dirty = "+dirty" if g("status", "--porcelain") else ""
+    return f"{branch}@{sha}{dirty}"
+
+
+GIT_STAMP = _git_stamp()
+
 _titles = {e[1]: e[2] for e in ENTRIES}
 
 # 실험별 관련 영상 (Space videos/ 에서 서빙). 항목: (경로, 한 줄 설명)
@@ -942,6 +958,7 @@ def _decorate(eid, body):
             f"<tr><th>{k}</th><td>{m[f]}</td></tr>"
             for k, f in [("누가", "who"), ("언제", "date"), ("어디서", "where"), ("무엇을", "what"), ("어떻게", "how"), ("왜", "why")]
         )
+        + f"<tr><th>코드</th><td><code>{GIT_STAMP}</code> (게시 시점 repo 상태 — branch@hash)</td></tr>"
         + "</table>"
     )
     links = "".join(

@@ -316,7 +316,7 @@ function wbGraphInit(){
     tmp.write_text(out)
     res = api.create_commit(repo_id=SPACE, repo_type="space",
         operations=[CommitOperationAdd(path_in_repo="index.html", path_or_fileobj=str(tmp))],
-        commit_message=f"worker-B: {len(ours)} entries + thread digest + mindmap (5W1H headers, cross-links, real dates)",
+        commit_message=f"worker-B: {len(ours)} entries [{mm.GIT_STAMP}]",
         create_pr=True)
     num = int(res.pr_url.rstrip("/").split("/")[-1])
     api.merge_pull_request(SPACE, num, repo_type="space")
