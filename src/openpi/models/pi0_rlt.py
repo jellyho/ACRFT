@@ -985,8 +985,10 @@ class Pi0RLT(Pi0):
             x_0, _ = jax.lax.while_loop(lambda c: c[1] >= -dt / 2, step, (noise, 1.0))
             return x_0
 
-        # noise_scale > 1 widens the flow init, spreading the candidate set (diversity probe knob).
-        noises = noise_scale * jax.random.normal(rng, (num_samples, b, self.action_horizon, self.action_dim))
+        # noise_scale > 1 widens the flow init, spreading the candidate set (diversity knob).
+        # Scalar = uniform; per-sample array = mixed pool (e.g. safe core at 1.0 + diverse tail).
+        scale = jnp.reshape(jnp.asarray(noise_scale, dtype=jnp.float32), (-1, 1, 1, 1))
+        noises = scale * jax.random.normal(rng, (num_samples, b, self.action_horizon, self.action_dim))
         chunks = jax.vmap(denoise)(noises)  # [n, b, H, D]
         return jnp.transpose(chunks, (1, 0, 2, 3))  # [b, n, H, D]
 

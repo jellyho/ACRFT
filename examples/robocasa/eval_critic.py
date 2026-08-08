@@ -293,6 +293,16 @@ def make_policy_fn(
     return fn
 
 
+def _parse_noise_scales(spec, num_samples):
+    """'1.0x8,1.5x8' -> [1.0]*8+[1.5]*8; must sum to num_samples."""
+    out = []
+    for part in spec.split(","):
+        sc, cnt = part.lower().split("x")
+        out += [float(sc)] * int(cnt)
+    assert len(out) == num_samples, f"noise-scales counts {len(out)} != num_samples {num_samples}"
+    return out
+
+
 def build_policy(
     config_name,
     checkpoint,
@@ -306,6 +316,7 @@ def build_policy(
     softmax_temp=0.0,
     model_overrides=None,
     vla=None,
+    noise_scales=None,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
 
@@ -327,6 +338,7 @@ def build_policy(
         flow_steps=flow_steps,
         seed=seed,
         model_overrides=model_overrides,
+        noise_scale=_parse_noise_scales(noise_scales, num_samples) if noise_scales else 1.0,
     )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
     if mode == "vla":
@@ -399,6 +411,13 @@ def main() -> None:
         "_pardec_noprop checkpoint needs rlt_decoder_mode=parallel and rlt_include_proprio=False.",
     )
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
+    ap.add_argument(
+        "--noise-scales",
+        default=None,
+        help="candidate-pool diversification: 'SCALExCOUNT,...' e.g. '1.0x8,1.5x8'. Sample 0 keeps "
+        "scale of its slot, so keep the first group at 1.0: the vla baseline (candidate 0) stays the "
+        "pure policy sample while the critic selects over the mixed pool.",
+    )
     ap.add_argument(
         "--policy-seed",
         type=int,
@@ -489,6 +508,7 @@ def main() -> None:
             flow_steps=args.num_flow_steps,
             seed=_pseed,
             query_noise=args.query_noise,
+            noise_scales=args.noise_scales,
             model_overrides=_vla_ov,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
