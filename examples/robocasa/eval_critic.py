@@ -182,6 +182,8 @@ def load_token_transform(critic_path):
     tf = meta.get("token_transform")
     if not tf:
         return None
+    if not (annot / tf["file"]).exists() and meta.get("source_annot"):
+        annot = pathlib.Path(meta["source_annot"])  # discount-derived variants carry .dat only
     if tf["kind"] == "pca":
         z = np.load(annot / tf["file"])
         mu, comps = z["mean"], z["components"]
