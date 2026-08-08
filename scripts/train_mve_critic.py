@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--r-steps", type=int, default=30000)
     ap.add_argument("--tau", type=float, default=0.7)
     ap.add_argument("--img-agg", choices=["min", "mean"], default="min")
+    ap.add_argument("--no-reward-head", action="store_true",
+                    help="Candidate targets use gamma^H*V(phihat) only - isolates the reward head's contribution.")
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--heldout-frac", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
@@ -166,6 +168,8 @@ def main():
             vs = torch.stack(vs)                              # [M, b*N]
             v_img = vs.min(0).values if args.img_agg == "min" else vs.mean(0)
             rh = Rh(torch.cat([phi_t[r].repeat_interleave(N, 0), a.reshape(b * N, H * A)], -1)).squeeze(-1)
+            if args.no_reward_head:
+                rh = torch.zeros_like(rh)
             y[r] = (rh.clamp(0.0, 1.0) + (g ** H) * v_img).clamp(0.0, 1.0).view(b, N)
             if i0 % (B * 16) == 0:
                 print(f"[img] {i0}/{len(rows_all)}", flush=True)
