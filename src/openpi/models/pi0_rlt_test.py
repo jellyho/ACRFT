@@ -58,7 +58,7 @@ def test_behsim_prefers_behaviour_over_episode_identity():
     z_random = jax.random.normal(jax.random.key(2), (acts.shape[0], 8))
 
     def kl(z):
-        return float(pi0_rlt.Pi0RLT._behsim_loss(stub, z, acts)[1]["rlt/behsim_kl"])  # noqa: SLF001
+        return float(pi0_rlt.Pi0RLT._behsim_loss(stub, z, acts)[1]["rlt/behsim_kl"])
 
     # A latent that groups by behaviour matches the target distribution exactly.
     assert kl(z_behaviour) == pytest.approx(0.0, abs=1e-3)
@@ -72,7 +72,7 @@ def test_behsim_gradient_is_finite():
     acts, _ = _clustered_actions()
     stub = _behsim_stub()
     z = jax.random.normal(jax.random.key(3), (acts.shape[0], 8))
-    g = jax.grad(lambda zz: jnp.mean(pi0_rlt.Pi0RLT._behsim_loss(stub, zz, acts)[0]))(z)  # noqa: SLF001
+    g = jax.grad(lambda zz: jnp.mean(pi0_rlt.Pi0RLT._behsim_loss(stub, zz, acts)[0]))(z)
     assert jnp.all(jnp.isfinite(g))
     assert float(jnp.linalg.norm(g)) > 0.0
 
@@ -85,9 +85,9 @@ def test_behsim_ignores_padded_action_dims():
     acts, _ = _clustered_actions()
     stub = _behsim_stub()
     z = jax.random.normal(jax.random.key(4), (acts.shape[0], 8))
-    perturbed = acts.at[..., stub._rlt_act_dim :].add(100.0)  # noqa: SLF001
-    base = pi0_rlt.Pi0RLT._behsim_loss(stub, z, acts)[0]  # noqa: SLF001
-    same = pi0_rlt.Pi0RLT._behsim_loss(stub, z, perturbed)[0]  # noqa: SLF001
+    perturbed = acts.at[..., stub._rlt_act_dim :].add(100.0)
+    base = pi0_rlt.Pi0RLT._behsim_loss(stub, z, acts)[0]
+    same = pi0_rlt.Pi0RLT._behsim_loss(stub, z, perturbed)[0]
     assert jnp.allclose(base, same)
 
 
@@ -110,7 +110,7 @@ def test_epadv_gradient_is_reversed():
     z = jax.random.normal(jax.random.key(0), (5, 8))
     ep = jnp.arange(5)
 
-    g_rev = jax.grad(lambda zz: jnp.mean(pi0_rlt.Pi0RLT._epadv_loss(stub, zz, ep)[0]))(z)  # noqa: SLF001
+    g_rev = jax.grad(lambda zz: jnp.mean(pi0_rlt.Pi0RLT._epadv_loss(stub, zz, ep)[0]))(z)
 
     def plain_ce(zz):  # same head, no gradient reversal
         logits = stub.rlt_epadv_out(jax.nn.gelu(stub.rlt_epadv_hidden(zz)))
@@ -152,5 +152,5 @@ def test_objective_accepted(objective):
     ],
 )
 def test_objective_rejected(objective):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="rlt_objective"):
         pi0_rlt.Pi0RLTConfig(pi05=True, rlt_objective=objective)

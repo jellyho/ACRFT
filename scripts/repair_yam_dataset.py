@@ -60,9 +60,7 @@ def episode_end_offsets(scan: dict) -> tuple[dict[tuple[str, int], int], list[di
         for ep, s, e in zip(episodes, start_off, ends, strict=True):
             end_off[(key, ep)] = e
             if s != e:
-                spliced.append(
-                    {"key": key, "file": file_index, "episode": ep, "start_offset": s, "end_offset": e}
-                )
+                spliced.append({"key": key, "file": file_index, "episode": ep, "start_offset": s, "end_offset": e})
     return end_off, spliced
 
 
@@ -131,10 +129,14 @@ def main() -> None:
     for (key, ep), off in sorted(nonzero.items(), key=lambda kv: kv[0][1]):
         print(f"  ep {ep:>3} {key.split('.')[-1]:>12}: shift {off:+d} frames")
 
-    print(f"\nepisodes with a drop *inside* them (residual <=|{max([abs(s['end_offset'] - s['start_offset']) for s in spliced], default=0)}| frame): {len(spliced)}")
+    print(
+        f"\nepisodes with a drop *inside* them (residual <=|{max([abs(s['end_offset'] - s['start_offset']) for s in spliced], default=0)}| frame): {len(spliced)}"
+    )
     for s in spliced:
-        print(f"  ep {s['episode']:>3} {s['key'].split('.')[-1]:>12} file-{s['file']:03d}: "
-              f"offset {s['start_offset']:+d} at start, {s['end_offset']:+d} at end")
+        print(
+            f"  ep {s['episode']:>3} {s['key'].split('.')[-1]:>12} file-{s['file']:03d}: "
+            f"offset {s['start_offset']:+d} at start, {s['end_offset']:+d} at end"
+        )
 
     print("\nepisode metadata:")
     fix_episode_metadata(end_off, dry_run=args.dry_run)

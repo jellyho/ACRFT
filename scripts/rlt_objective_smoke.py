@@ -11,9 +11,9 @@ aux dict. This is a cheap way to catch the two failure modes that only show up a
 Uses gemma_2b_lora so it fits comfortably on one GPU; the objective code paths are identical.
 """
 
+from flax import nnx
 import jax
 import jax.numpy as jnp
-from flax import nnx
 
 from openpi.models import pi0_rlt
 

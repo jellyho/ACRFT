@@ -98,55 +98,46 @@ class Dashboard:
 
     # ---------------------------------------------------------------- panels
     def _candidate_panel(self, info):
+        """The critic's decision surface, drawn as the matrix it actually is.
+
+        One cell per (candidate, prefix length); colour = Q. The joint arg-max picks a single cell,
+        which is outlined. A bar chart of per-candidate maxima hid the prefix axis and made "why not
+        the longest bar" unanswerable in modes that pin the candidate; the grid shows exactly what
+        was scored and exactly what was chosen. Values span a tiny range, so colour is normalised to
+        the frame's own [min, max] and both are printed - the SPREAD number is the honest scale.
+        """
         q = np.asarray(info.q)  # [N, P]
-        best = q.max(axis=1)
-        order = np.argsort(-best)
-        lo, hi = float(best.min()), float(best.max())
+        n, pnum = q.shape
+        lo, hi = float(q.min()), float(q.max())
         spread = hi - lo
         fig = _fig(_W_SIDE, _W_SIDE)
-        ax = fig.add_axes([0.20, 0.16, 0.76, 0.70])
+        ax = fig.add_axes([0.16, 0.15, 0.71, 0.70])
         _style(ax)
-        y = np.arange(len(best))
-        vals = best[order] - lo
-        cols = [_WIN if i == info.best_cand else _OTHER for i in order]
-        ax.barh(y, vals, color=cols, height=0.74, left=0)
-        ax.set_yticks([])
-        ax.invert_yaxis()
-        ax.set_xlim(0, max(spread, 1e-9) * 1.08)
-        ax.set_xlabel(f"value − {lo:.4f}", color=_INK2, fontsize=7.5)
-        # One bar per CANDIDATE (not per prefix): a bar's length is that candidate's best value
-        # across its prefix heads, i.e. exactly the score the joint arg-max ranks it by. The prefix
-        # axis appears only inside the chosen-candidate annotation below.
-        ax.set_title(
-            f"{len(best)} candidates   spread {spread:.4f}",
-            color=_INK,
-            fontsize=8.5,
-            pad=16,
-            loc="left",
+        ax.imshow(q, aspect="auto", cmap="viridis", vmin=lo, vmax=hi if hi > lo else lo + 1e-9, interpolation="nearest")
+        # The chosen cell - the one decision this whole panel exists to explain.
+        from matplotlib.patches import Rectangle
+
+        ax.add_patch(
+            Rectangle((info.best_prefix - 0.5, info.best_cand - 0.5), 1, 1, fill=False, edgecolor=_WIN, lw=2.0)
         )
-        if q.shape[1] > 1:
-            ax.text(
-                0.0,
-                1.015,
-                f"bar = one candidate's best over {q.shape[1]} prefixes",
-                transform=ax.transAxes,
-                ha="left",
-                va="bottom",
-                color=_INK2,
-                fontsize=6.5,
-            )
-        # The winner's rank among the candidates, which is the thing best-of-N is buying.
-        ax.text(
-            0.98,
-            0.02,
-            f"chosen: cand #{info.best_cand}"
-            + (f" @ prefix {info.best_prefix + 1}/{q.shape[1]}" if q.shape[1] > 1 else "  (no prefix head)"),
-            transform=ax.transAxes,
-            ha="right",
-            va="bottom",
-            color=_WIN,
-            fontsize=7.5,
+        if self.mode == "prefix":
+            # Candidate is pinned: only row 0's cells were ever eligible.
+            ax.add_patch(Rectangle((-0.5, -0.5), pnum, 1, fill=False, edgecolor=_INK, lw=1.0, ls=":"))
+        ax.set_xticks(range(pnum))
+        ax.set_xticklabels([str((k + 1) * (self.horizon // pnum)) for k in range(pnum)], fontsize=6)
+        ax.set_yticks([0, n - 1])
+        ax.set_yticklabels(["0", str(n - 1)], fontsize=6)
+        ax.tick_params(colors=_INK2, length=2, width=0.6)
+        ax.set_ylabel("candidate", color=_INK2, fontsize=7, labelpad=1)
+        ax.set_title(f"Q[cand, commit steps]   spread {spread:.4f}", color=_INK, fontsize=7.5, pad=5, loc="left")
+        pick = (
+            f"chosen: cand #{info.best_cand} @ {info.n_exec} steps"
+            if pnum > 1
+            else f"chosen: cand #{info.best_cand} (no prefix head)"
         )
+        if self.mode == "prefix":
+            pick += " — pinned #0"
+        fig.text(0.16, 0.015, pick, ha="left", va="bottom", color=_WIN, fontsize=6.8)
         return _render(fig)
 
     def _trace_panel(self):
