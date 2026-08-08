@@ -697,11 +697,12 @@ entry("08-07", "v14", "v14 — 장면 지름길 제거 데이터 판정", "진�
        ("평가", "시드 4개(5000–5300) × 50장면, 잡내 vla 페어드 — FINAL과 동일 장면"),
        ("판정", "run-level 95% t-CI가 0을 벗어나는가")])}
 <table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_v14_rows}</table>
-<p><b>결과 (iql_v14, n=4 완결).</b> Δ̄=−0.035 CI[−0.083,+0.013] — <b>null</b>. CI가 좁아 "큰 효과가 숨어있다"고 볼 여지도 작다.
+<p><b>결과.</b> iql_v14(n=4): Δ̄=−0.035 CI[−0.083,+0.013] — <b>null</b>, CI가 좁아 "큰 효과가 숨어있다"고 볼 여지도 작다.
+td_max_v14(n=4): Δ̄=−0.110 CI[−0.378,+0.158] — null이나 시드 3/4가 음수로 TD의 음(−) 경향 유지.
 <b>해석:</b> 장면 정체성 지름길 제거는 held-out 프로브가 보인 보수 편향(낯선 성공 저평가)의 원인 후보였지만,
 그것만으로는 성공률이 움직이지 않는다. v12의 결론(밴드는 열리나 전환 실패)이 지름길 없는 데이터에서도 유지 —
 즉 병목은 데이터의 암기 가능성이 아니라 <b>후보 간 참 가치 격차 자체가 작은 것</b>(on-policy Q^π의 구조적 한계)일 가능성이 커졌다.
-td_max_v14·calql_v14는 학습 중.</p>
+calql_v14는 학습 중(74k).</p>
 """)
 entry("08-07", "calql", "CalQL(CO-RFT) — 후보축 학습 신호의 성공률 판정", "진행 중", f"""
 {spec([("동기", "지금까지의 모든 방법은 후보 축을 학습에서 쓰지 않았다(실행 행동만 회귀). CalQL의 CQL 항은 16후보를 데모 대비 밀어내리는 최초의 학습-시간 후보축 신호"),
@@ -709,10 +710,11 @@ entry("08-07", "calql", "CalQL(CO-RFT) — 후보축 학습 신호의 성공률 
        ("평가", "demo-only(noprop)는 시드 8개로 확장(5000–5700), mixed는 학습 중"),
        ("판정", "run-level 95% t-CI")])}
 <table class='num'><tr><th>arm</th><th>n런</th><th>Δ̄</th><th>95% CI</th><th>판정</th></tr>{_cq_rows}</table>
-<p><b>잠정 (calql_noprop, n=4).</b> Δ̄=−0.035 CI[−0.265,+0.195] — null이지만 시드별 Δ가 +0.10/−0.16/+0.08/−0.16으로
-<b>쌍봉</b>: 런 간 분산이 다른 어떤 팔보다 크다. 후보축 신호가 실제로 배포 선택을 바꾸고 있다는 정황(변동 자체가 개입의 증거)이나,
-방향이 시드에 따라 갈린다. 시드 4개를 추가해 n=8로 분산 구조를 확정한다. calql_mixed(현재 56k/100k)가 진짜 시험대 —
-실패 데이터 위에서 CQL 항이 작동해야 CO-RFT의 전제가 성립한다.</p>
+<p><b>결과 (완결).</b> calql_noprop(n=8): Δ̄=−0.018 CI[−0.103,+0.068] — null (초기 n=4의 쌍봉 ±0.1 분산은 시드가
+쌓이며 씻김). <b>calql_mixed(n=4): Δ̄=+0.015 CI[−0.069,+0.099], McNemar +37/−34 p=0.813 — null.</b>
+주목할 점 하나: 전 mixed 팔 중 유일하게 점추정이 양수이고 시드 3/4이 양수 — 학습-시간 후보축 신호(CQL 항)가
+방향은 옳게 미는 정황이나 크기가 잡음 이하다. conservatism 프레임으로 읽으면: 후보가 전부 in-support인 우리
+배포에서는 억압할 OOD가 등장하지 않아 다이얼이 공회전한다 — 'conservatism 스펙트럼' 리포트 참조.</p>
 """)
 
 # ============================================== 08-08 논문 리뷰
@@ -761,6 +763,35 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 <tr><td>이산 선택 → 연속 조향</td><td>Q-VGM: 재순위는 후보를 다듬지 못함</td><td><b>∂Q/∂a velocity correction 실험 설계</b> (기존 CalQL critic 재사용)</td></tr>
 <tr><td>가치의 용처는 학습-시간</td><td>Robo-ValueRL: BoN 없이 품질 조건화+잔차 어댑터로 +26~34%</td><td>히스토리 조건 critic·실패 페널티 타깃 도입, 어댑터 경로는 사용자 결정</td></tr>
 <tr><td>가치 신호 자체는 존재</td><td>프로빙 R²=0.55, 우리 held-out rise-collapse</td><td>critic 학습은 성공 — 병목은 배포 방식이라는 확신 강화</td></tr></table>
+""")
+
+# ============================================== 08-08 conservatism 종합 프레임
+entry("08-07", "conservatism", "Conservatism 스펙트럼 — 전체 null의 통일 해석과 다음 수", "살아있음", """
+<p><b>주장.</b> 지금까지의 모든 판정(FINAL 14팔·v14·calql·randh·워커A 밤샘)은 "보수성 다이얼 위의 어디에 서
+있었는가"로 한 번에 설명된다. 그리고 위험은 축이 두 개라서, 한 축의 완벽한 안전이 다른 축을 지켜주지 않는다.</p>
+<h3>보수성이 사는 곳 — 방법별 위치</h3>
+<table class='num'><tr><th>방법</th><th>보수성의 형태</th><th>위치</th><th>우리 판정</th></tr>
+<tr><td>BoN/재순위</td><td>선택형 — π_β 샘플 중 argmax, KL≤log N (N=16이면 2.8nat)</td><td>극안전단</td><td>null (안전한 무익)</td></tr>
+<tr><td>IQL</td><td>질의 회피형 — OOD 행동을 아예 평가하지 않음</td><td>안전단</td><td>null</td></tr>
+<tr><td>CQL/CalQL</td><td>가치 억압형 — OOD를 명시적으로 누름 (CalQL은 mc 하한 보정)</td><td>중간</td><td>null — 억압할 OOD가 배포 경로에 없음</td></tr>
+<tr><td>FQL/velocity steering</td><td>정책 근접형 — BC/flow 앵커가 곧 보수성, 가치 페널티 불필요</td><td>중간 (실행가능)</td><td>미실험 — Q-VGM 리뷰 참조</td></tr>
+<tr><td>제약 없는 actor-critic</td><td>없음</td><td>위험단</td><td>워커A full-authority 파국(.300, p=.004)이 근방 증거</td></tr></table>
+<h3>핵심 역설 — BoN은 완벽한 BC 정규화인데도 위험하다</h3>
+<p>위험의 축이 두 개이기 때문이다. <b>축1 분포 이탈(OOD)</b>: BC 계열이 막는 것 — BoN은 이 축에서 완벽하다(전 후보가
+in-support). <b>축2 추정 오차의 착취(optimizer's curse)</b>: argmax는 N개의 잡음 낀 추정 중 가장 과대추정된 것을
+체계적으로 고른다 — in-support여도 발생하며, support 제약은 무력하다. max-of-N ≈ N/(N+1) 분위수이므로 τ=0.9
+critic이 보증하는 것은 N≈10까지: <b>N을 키울수록 보정 안 된 꼬리를 수확한다.</b></p>
+<h3>축2에 대한 처방 (우리 스택 실행 순)</h3>
+<table class='num'><tr><th>처방</th><th>원리</th><th>상태</th></tr>
+<tr><td><b>LCB 선택</b> argmax(Q̄−k·σ)</td><td>불확실성 비례 비관 — 과대추정 후보를 깎고 고름 (K=2 min은 조악한 버전; K↑)</td><td>워커A σ-veto .767이 독립 증거 — 설계 후보</td></tr>
+<tr><td><b>τ↔N 정합</b></td><td>선택 분위수(1−1/N)를 학습 분위수로 — 꼬리를 critic이 보증</td><td>N·τ는 짝 노브 — 다양화와 세트</td></tr>
+<tr><td><b>랭킹 손실 critic</b></td><td>절대값 대신 같은 상태 후보쌍의 순서를 학습 — curse가 착취하는 절대 스케일 오차와
+familiarity bias(실행 행동만 회귀)를 통째로 소거</td><td><b>v16 후보 1순위</b></td></tr>
+<tr><td>soft 선택</td><td>softmax(Q/T) 샘플링 — "가장 시끄러운 추정치"를 항상 잡는 성질 완화</td><td>softcand 모드 기구현</td></tr></table>
+<h3>SNR 조건 — 어떤 선택 규칙도 못 피하는 것</h3>
+<p>BoN 기대 이득 ≈ (참 가치 스프레드 상위꼬리) − (오차 상위꼬리). 참 스프레드가 0에 가까우면(우리 측정: demo 밴드
+0.002–0.023, rand≈vla) 이득의 원천 자체가 없다. <b>따라서 정답은 한 쌍: 신호를 키우는 후보 다양화(canddiv 프로브)
++ 오차를 억누르는 위 장치들.</b> 다양화 없는 보수성 = 안전한 무익(지금), 보수성 없는 다양화 = curse 증폭.</p>
 """)
 
 # ============================================== 08-08 교차 워커 배움
@@ -888,6 +919,9 @@ META = {
     "xworker-0808": dict(date="2026-08-08", who="워커B(리뷰) ← 워커A 리포트 7건", where="공유 허브",
         what="교차 워커 배움 — 상호 재현·McNemar 도입·표현/데이터 공격로 비교", how="워커A 전 리포트 정독 후 즉시 반영",
         why="워커끼리 서로 배우라는 지시 — 독립 스택의 결론 상호 검증", links=["final", "kper", "papers-value-steering"]),
+    "conservatism": dict(date="2026-08-08", who="워커B(종합)", where="전 판정 결과 재해석",
+        what="보수성 2축 프레임 — 전 null의 통일 해석과 축2(추정 오차) 처방", how="방법별 다이얼 위치 분류 + SNR 조건",
+        why="BoN이 완벽한 BC 정규화인데도 위험한 역설의 해소 — 다음 수(다양화+LCB+랭킹)의 논리적 근거", links=["final", "calql", "v14", "wcurse", "papers-value-steering", "xworker-0808"]),
     "morning-0808": dict(date="2026-08-08", who="워커B(Claude)", where="클러스터 전체 + HF Space",
         what="밤샘(08-07 밤~08-08 아침) 작업 종합", how="각 리포트의 완결 결과를 표로 집약",
         why="아침에 전체 상황을 한 번에 파악할 수 있도록", links=["td-segv", "final", "kper", "v12"]),
