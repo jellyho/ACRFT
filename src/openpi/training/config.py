@@ -1377,7 +1377,7 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
 _CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
 
 
-def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
+def _yam_rlt_config(delta_mode: str = "joint", horizon: int = 30) -> TrainConfig:
     """Pi0RLT on the YAM bimanual dataset (real teleop data).
 
     Defaults chosen for this setting: the parallel decoder and no-proprio token (the best RLT variant
@@ -1391,14 +1391,18 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
     The RLT bottleneck is judged by its reconstruction loss and the BC loss alone.
     """
     tag = "" if delta_mode == "joint" else f"_{delta_mode}"
+    # A non-default horizon gets its own config name, which also keys its own norm stats and
+    # checkpoint dir: relative-joint deltas widen with lookahead, so a 60-frame chunk must not
+    # normalise with (or resume from) the 30-frame statistics.
+    hsuf = "" if horizon == 30 else f"_h{horizon}"
     return TrainConfig(
-        name=f"pi05_yam_lego_taxi{tag}_rlt",
+        name=f"pi05_yam_lego_taxi{tag}_rlt{hsuf}",
         model=pi0_rlt.Pi0RLTConfig(
             pi05=True,
             # 30 frames at YAM's 30 fps is exactly a one-second window. The 16 this started with was
             # carried over from the RoboCasa configs and covers only 0.53 s - short for a bimanual
             # chunk, and it is also the window the RLT bottleneck has to summarise into one token.
-            action_horizon=30,
+            action_horizon=horizon,
             discrete_state_input=False,
             rlt_backbone_gradient=False,
             rlt_decoder_mode="parallel",  # pardec: best on RoboCasa, un-bypassable bottleneck
@@ -1429,6 +1433,7 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
 
 
 _CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none"))
+_CONFIGS.append(_yam_rlt_config("joint", horizon=60))  # 2-second chunk ablation
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
