@@ -110,6 +110,53 @@ class Policy(BasePolicy):
         return self._metadata
 
 
+class MultiSamplePolicy(BasePolicy):
+    """Draw several action chunks for one observation, when the client asks for them.
+
+    The policy is a distribution, not a single answer: flow matching maps different noise to
+    different chunks. Drawing a handful and showing them together is the only cheap way to see
+    whether it is confident (a tight bundle) or torn between options (a wide spray) -- a scalar
+    loss averages exactly that away.
+
+    Opt-in per request, via a ``num_samples`` key on the observation, because N samples costs N
+    forward passes. A rollout has no reason to pay that, so a client that never sends the key
+    gets today's behaviour and today's latency, byte for byte.
+
+    ``actions`` stays the single chunk to execute and keeps its shape. The extra draws ride
+    along under ``action_samples`` as [N, horizon, dim], with the executed chunk as row 0 --
+    reshaping ``actions`` to [N, ...] instead would break every client that reads the chunk
+    length off the response, ActionChunkBroker included.
+    """
+
+    def __init__(self, policy: BasePolicy, *, action_horizon: int, action_dim: int, seed: int = 0):
+        self._policy = policy
+        self._action_horizon = int(action_horizon)
+        self._action_dim = int(action_dim)
+        self._rng = np.random.default_rng(seed)
+
+    @override
+    def infer(self, obs: dict) -> dict:  # type: ignore[misc]
+        # Pop before anything else touches it: the input transforms are built from the model's
+        # own input spec and reject keys they do not know.
+        obs = dict(obs)
+        num_samples = int(obs.pop("num_samples", 0) or 0)
+
+        result = self._policy.infer(obs)
+        if num_samples <= 1:
+            return result
+
+        samples = [np.asarray(result["actions"])]
+        for _ in range(num_samples - 1):
+            noise = self._rng.standard_normal((self._action_horizon, self._action_dim)).astype(np.float32)
+            samples.append(np.asarray(self._policy.infer(obs, noise=noise)["actions"]))
+        result["action_samples"] = np.stack(samples)
+        return result
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._policy.metadata
+
+
 class PolicyRecorder(_base_policy.BasePolicy):
     """Records the policy's behavior to disk."""
 

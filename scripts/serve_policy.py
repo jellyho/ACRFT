@@ -129,11 +129,25 @@ def spec_metadata(train_config: _config.TrainConfig) -> dict:
     size on the way out — 14 for YAM. Publishing 32 would describe something no client ever
     receives, which is worse than publishing nothing.
     """
-    return {"action_horizon": int(train_config.model.action_horizon)}
+    return {
+        "action_horizon": int(train_config.model.action_horizon),
+        # Tells a client it may ask for several chunks per observation (see MultiSamplePolicy).
+        # Without it a viewer has to try and interpret the absence of `action_samples` in the
+        # reply, which is indistinguishable from a server that simply ignored the request.
+        "supports_multi_sample": True,
+    }
 
 
 def main(args: Args) -> None:
     policy, train_config = create_policy(args)
+    # Wrapped unconditionally: it is inert unless a request carries `num_samples`, so a plain
+    # rollout pays nothing, and there is no server-side mode to remember to turn on before
+    # looking at the action distribution.
+    policy = _policy.MultiSamplePolicy(
+        policy,
+        action_horizon=int(train_config.model.action_horizon),
+        action_dim=int(train_config.model.action_dim),
+    )
     # Config-derived spec first, so an explicit policy_metadata entry can still override it.
     policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}
     logging.info("Serving %s: %s", train_config.name, policy_metadata)
