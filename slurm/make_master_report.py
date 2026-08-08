@@ -692,9 +692,27 @@ entry("08-07", "calql", "CalQL(CO-RFT) — 후보축 학습 신호의 성공률 
 """)
 
 # ============================================== 08-08 논문 리뷰
-entry("08-07", "papers-value-steering", "논문 리뷰 — 가치 기반 VLA 조향 3편 (\"robo-value-RL\" 탐색 결과)", "완결", """
-<p class='sub'>요청받은 "robo-value-RL" 제목의 논문은 arXiv·웹 검색에서 확인되지 않았다. 같은 주제(동결 VLA를 가치함수로
-조향)의 최근접 논문 3편을 리뷰한다 — 셋 다 우리 FINAL null 판정의 해석에 직접 걸린다.</p>
+entry("08-07", "papers-value-steering", "논문 리뷰 — Robo-ValueRL + 가치 기반 VLA 조향 3편", "완결", """
+<h3>⓪ Robo-ValueRL (gewu-lab, arXiv:2607.09866) — 요청 논문</h3>
+<p><b>구도.</b> 오프라인→온라인 로봇 RL에서 가치함수를 "데이터 활용 인터페이스"로 쓴다. 3단: ① 히스토리 조건부
+가치 추정, ② 품질 조건부 정책 사전학습, ③ 온라인 잔차(residual) 적응. 결과: chip insertion BC 대비 +26%,
+block disassembly +34%, 온라인 3회 반복으로 46%→86%.</p>
+<p><b>우리 스택과의 평행선 (수렴 진화 수준).</b> 가치 헤드가 <b>동결 VLM 백본 위 경량 Transformer + HL-Gauss
+분포 헤드(K=256 bins)</b> — 우리 ARQ critic(동결 π0.5 토큰 + HL-Gauss 51–201 atoms)과 같은 설계 계열.
+타깃도 정규화 진행도 + <b>실패 궤적 페널티</b> — 우리 mc_floor·실패 데이터 혼합과 같은 문제 의식.</p>
+<p><b>결정적 차이 — 가치를 어디에 쓰는가.</b> 이들은 <b>BoN 재순위를 아예 하지 않는다.</b> 가치는
+(a) 학습-시간 신호: ΔV를 3단계 품질 라벨(Low/Med/High)로 이산화해 <b>"Quality: High" 텍스트 프롬프트로 VLA에
+주입</b>(품질 조건부 사전학습), (b) 온라인 롤아웃을 고품질 세그먼트로 필터링해 <b>동결 베이스 + 경량 잔차 어댑터</b>만
+학습. 즉 우리 FINAL이 도달한 결론("테스트타임 이산 선택은 이 세팅에서 못 이긴다")을 이들은 설계로 우회했다.</p>
+<p><b>우리가 가져올 것 세 가지.</b> ① <b>히스토리 조건화</b>: 5프레임 히스토리(SigLIP+Perceiver 압축)가 가치
+신뢰도와 성공률 모두 최고(30프레임보다 나음) — 우리 critic은 단일 프레임이라 가림·반복 동작에서 모호하고,
+held-out 보수 편향의 원인 후보. 토큰에 5프레임 히스토리를 붙이는 critic 변형은 저비용 실험. ② <b>실패 페널티
+타깃</b>: v13 보상 성형 아이디어와 동일 계열 — 문헌 근거 확보. ③ <b>잔차 어댑터 경로</b>: 베이스 동결을 유지한 채
+critic-필터링 데이터로 작은 어댑터만 학습 — "critic이 VLA를 이긴다"를 선택이 아니라 학습된 델타로 달성하는
+경로다. 단, 어댑터는 critic 외 추가 학습 파라미터이므로 <b>"이득의 100% 가치-기반 선택 귀속" 원칙과의 관계는
+사용자 결정 필요</b>.</p>
+<hr>
+<p class='sub'>이하는 같은 주제(동결 VLA 가치 조향)의 인접 3편 — FINAL null 판정의 해석에 직접 걸린다.</p>
 <h3>① V-GPS — Steering Your Generalists (arXiv:2410.13816)</h3>
 <p>우리와 같은 구도(동결 정책 + 오프라인 가치함수 + 테스트타임 재순위)의 원조. Cal-QL로 가치함수를 학습하고
 정책에서 <b>K=50 후보</b>를 뽑아 재순위. OpenVLA·Octo 등 5개 정책 × 12과제에서 일관된 개선을 보고.
@@ -717,6 +735,7 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 <table class='num'><tr><th>교훈</th><th>근거</th><th>우리 액션</th></tr>
 <tr><td>BoN은 후보 스프레드가 전제</td><td>V-GPS K=50·차선 베이스에서만 이득, 우리 null</td><td>후보 다양화 프로브(21번, 실행중) + N 증대 검토</td></tr>
 <tr><td>이산 선택 → 연속 조향</td><td>Q-VGM: 재순위는 후보를 다듬지 못함</td><td><b>∂Q/∂a velocity correction 실험 설계</b> (기존 CalQL critic 재사용)</td></tr>
+<tr><td>가치의 용처는 학습-시간</td><td>Robo-ValueRL: BoN 없이 품질 조건화+잔차 어댑터로 +26~34%</td><td>히스토리 조건 critic·실패 페널티 타깃 도입, 어댑터 경로는 사용자 결정</td></tr>
 <tr><td>가치 신호 자체는 존재</td><td>프로빙 R²=0.55, 우리 held-out rise-collapse</td><td>critic 학습은 성공 — 병목은 배포 방식이라는 확신 강화</td></tr></table>
 """)
 
@@ -817,7 +836,7 @@ META = {
         what="최초의 학습-시간 후보축 신호(CQL 항)의 성공률 판정", how="demo-only 8시드 + mixed(학습중) 페어드 평가",
         why="모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지", links=["v12", "final", "wcurse"]),
     "papers-value-steering": dict(date="2026-08-08", who="워커B(리뷰)", where="arXiv",
-        what="가치 기반 VLA 조향 논문 3편 리뷰 (V-GPS·Q-VGM·frozen-VLA 프로빙)", how="원문 정독 후 FINAL 결론과 대조",
+        what="Robo-ValueRL(arXiv:2607.09866) 정독 + 인접 3편(V-GPS·Q-VGM·프로빙) 리뷰", how="원문 정독 후 FINAL 결론·우리 스택과 대조",
         why="'robo-value-RL' 탐색 요청 — FINAL null의 해석과 다음 수(그래디언트 조향)의 문헌 근거", links=["final", "calql", "wcurse"]),
     "morning-0808": dict(date="2026-08-08", who="워커B(Claude)", where="클러스터 전체 + HF Space",
         what="밤샘(08-07 밤~08-08 아침) 작업 종합", how="각 리포트의 완결 결과를 표로 집약",
