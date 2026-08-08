@@ -301,3 +301,84 @@ THIS checkpoint is small by construction. Where it should matter instead:
 mid-chunk failures), (b) tasks with contact-rich junctures (GarnishPancake),
 (c) the AC-RFT loop where commitment shapes the TRAINING distribution, not
 just deployment selection.
+
+## Iteration 8 — MAC x ACSAC: model-based action-chunking RL, unified design
+
+Prompt: can Q-chunking-style chunk-level RL (ACSAC: the chunk is ONE macro-action,
+SAC/RLPD-style TD over the chunk MDP) be combined with our model-based stack?
+Answer: yes, and the combination is more principled than either half alone. The
+dynamics model is exactly the missing piece that makes chunk-level offline RL
+work, and chunk-level RL is exactly the frame that makes our model useful
+without falling into the model-value trap.
+
+### The unifying object: Q(phi, a_chunk, k)
+
+Extend the macro-action to include the COMMITMENT: a macro-action is (chunk
+a_{1:16}, commit length k in {4,8,12,16}). One critic learns
+
+    Q(phi_t, a, k)  <-  r_{t:t+k} + gamma^k * V(phi_{t+k})     (real data, executed k)
+    Q(phi_t, a, k)  <-  gamma^k * [ V(phihat_k(phi_t, a)) - lambda * sum_j sigma_j(phi_t, a) ]
+                                                                (model-backed, ANY a, ANY k)
+
+The second line is the synthesis. Offline demo data only contains the demo's
+action at the demo's pace - that is WHY critics go action-blind (no
+counterfactuals) and why commitment had to be hand-tuned (no variable-k data).
+The phi-dynamics fills both gaps at once: its 4 macro-slots produce phihat at
+every k for every stored candidate (the 16 candidates per frame we already
+annotate), so the critic sees counterfactual (a, k) pairs with model-backed
+targets instead of CQL's uniform push-down.
+
+### Why the measured failure modes are answered, not ignored
+
+- Model-value inversion (E2: ranking by d(phihat, goal) = .371, WORSE than
+  chance): the trap was a raw distance heuristic on the model's output. Here
+  the model output is fed to the LEARNED V (Cal-QL-calibrated), and the
+  lambda*sigma penalty subtracts exactly where phihat is untrustworthy - and E2
+  measured sigma to be 1.6x larger on wrong-action rollouts. The penalty is
+  large precisely where the inversion lives. (MOPO's pessimism, at chunk level.)
+- sigma-rule tau tuning (iteration 5-7: tau 2.0 inert, tau 1.3 nulled): the
+  hand rule dissolves. Commitment becomes argmax_k Q(phi, a, k), where longer k
+  accumulates more sigma penalty AND more gamma discount - "commit while the
+  model agrees" now falls out of the Bellman objective with lambda the single
+  pessimism knob, learned against real returns instead of hand-set.
+- Full-authority collapse (.300, p=.004): authority here is bounded by
+  construction - the argmax runs over 16 candidates x 4 commit lengths, but
+  every option's value carries its own model-risk discount; the exploitable
+  tail (options the data never continued) is exactly the high-sigma tail.
+- Q-chunking's own result (unbiased n-step backups, better exploration) is
+  preserved: line 1 IS Q-chunking's backup; we only add line 2.
+
+### ACSAC correspondence
+
+| ACSAC piece | here |
+|---|---|
+| actor (chunk proposal) | frozen VLA flow (N=16 samples) - no actor training |
+| chunk-level Q | Q(phi, a, k) above |
+| SAC entropy/exploration | candidate diversity of the flow + (online) softmax over Q |
+| replay | annotation frames + model-backed (a, k) branches (macro-Dyna) |
+| pessimism (RLPD/Cal-QL) | Cal-QL floor on real data + lambda*sigma on model branches |
+
+### Offline validation ladder (all runnable on existing artifacts)
+
+- M1 model-backed counterfactual targets vs CQL-swap: retrain the phi critic
+  replacing --cql-swap with target line 2 on the stored 16 candidates
+  (k=4 only). Gate: binding >= .95 AND action-sensitivity >= .3 without any
+  CQL term. If it passes, pessimism-by-model replaces pessimism-by-copy.
+- M2 variable-k head: extend the critic to Q(phi, a, k) with the model filling
+  the k-grid. Diagnostics: does argmax_k reproduce a sane commit distribution
+  (compare to ctl-prefix's bimodal, which correlated with the only positive
+  arm)? Does the implied commit anti-correlate with sigma-spikes?
+- M3 GP protocol rollout (3 seed sets x 50, CI): arms = vla / bon(calswap) /
+  mac-k (Q-learned commitment) / mac-full (selection + commitment from Q).
+  MAC beats the sigma-rule iff the learned lambda/gamma trade-off finds the
+  cut points the hand rule missed.
+
+### Where RFT enters (the AC-RFT endgame)
+
+Online, the same Q(phi, a, k) is the natural advantage estimator for chunk-level
+RFT: A(s, a, k) = Q - V weights the VLA's flow-matching update per CHUNK (Q-VGM
+style, never PPO through the flow), and k* labels how much of each rollout
+segment was policy-coherent. The dynamics model keeps training on the fresh
+rollouts (its data need not be success-only), so the pessimism boundary expands
+exactly where the robot has actually been - the model-based half converts
+failures into information the critic half can trust.
