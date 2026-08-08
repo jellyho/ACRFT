@@ -178,6 +178,13 @@ html = f"""<!doctype html><meta charset='utf-8'><title>overnight 2026-08-08 — 
 <style>{css}</style>
 <h1>하룻밤의 심판 — critic 권한과 model-based adaptive chunking</h1>
 <div class='sub'>2026-08-08 새벽 · PrepareCoffee · 30 paired trials/arm, seed 0 (모든 arm이 같은 장면) · 표는 원시 JSON에서 생성 시점 재계산 (scripts/make_overnight_report_0808.py)</div>
+<style>
+.wa-rpt table{width:100%;table-layout:auto;border-collapse:collapse;overflow-wrap:anywhere;font-size:.92em}
+.wa-rpt td,.wa-rpt th{padding:6px 10px;vertical-align:top}
+.wa-rpt .spec th{width:110px;white-space:nowrap}
+.wa-rpt .num td:nth-child(n+2){text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.wa-rpt img{max-width:100%}
+</style><div class='wa-rpt'>
 
 <div class='card'><h3>TL;DR</h3>
 <p>오프라인에서 전 조건을 통과한 Cal-QL+swap critic(φ-공간, binding .996, action-sensitivity .524)을 시뮬레이터에 세웠다.
@@ -235,6 +242,7 @@ hist=1 배포판이 hist=3와 동급이라 롤아웃 통합도 깨끗하다.</p>
 <li>AC-RFT 통합: MB-AC 커밋 하에서 수집한 롤아웃으로 RFT — 데이터 분포 자체가 adaptive-chunked</li>
 </ul></div>
 
+</div>
 <div class='sub'>원시 데이터: .scratch/rollout_{{control,rltphi,mbac}}.json · mbac_offline_phi.json · phi_dyn_v1{{,_h1}}/report.json · 설계 노트: docs/reports/mbac_design_notes.md · {GIT_STAMP}</div>
 """
 out = ROOT / "docs/reports/2026-08-08_overnight-authority-mbac.html"
