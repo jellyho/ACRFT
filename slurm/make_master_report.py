@@ -621,6 +621,24 @@ for a, m in FINAL_ARMS:
         _abs_rows += f"<tr><td>{a}</td><td>{S}/{N} ({S / N:.3f})</td><td>{V}/{N} ({V / N:.3f})</td></tr>"
     else:
         _abs_rows += f"<tr><td>{a}</td><td colspan=2 class='pending'>평가 대기 (학습 재가동 — td-segv 리포트 참조)</td></tr>"
+_mc_rows = ""
+from math import comb as _comb
+for a, m in FINAL_ARMS:
+    b = c = n = 0
+    for f in sorted(glob.glob(str(C / f"critic_runs/final/{a}/rollout/f_s*.json"))):
+        j = json.loads(pathlib.Path(f).read_text())
+        if m in j and "vla" in j:
+            for tc, tv in zip(j[m]["trials"], j["vla"]["trials"]):
+                n += 1
+                b += int(tc["success"] and not tv["success"])
+                c += int(tv["success"] and not tc["success"])
+    if n == 0:
+        continue
+    mtot = b + c
+    pv = min(1.0, sum(_comb(mtot, k) for k in range(0, min(b, c) + 1)) * 2 / 2**mtot) if mtot else 1.0
+    mark = "<b class='bad'>유의한 해악</b>" if (pv < 0.05 and c > b) else ("<b class='good'>유의한 이득</b>" if (pv < 0.05 and b > c) else "무차이")
+    _mc_rows += f"<tr><td>{a}</td><td>+{b}</td><td>−{c}</td><td>{n}</td><td>{pv:.3f}</td><td>{mark}</td></tr>"
+
 entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "완결", f"""
 {spec([("공통", "γ0.995 · 100k · b256 · seed0 · mc_floor · z-score · 타깃τ0.005 · IQL τ0.9 · 배포=공통 joint argmax"),
        ("요인", "A 방법×부트스트랩(max/softmax/aqcmax) · B atoms(51/101/201) · C 타깃넷(EMA/online) · D 데이터(mixed/demo)"),
@@ -632,11 +650,17 @@ entry("08-07", "final", "FINAL 캠페인 — 전 요인 사전등록 스윕", "�
 <h3>절대 성공률</h3>
 <table class='num'><tr><th>arm</th><th>arm 성공</th><th>잡내 vla 성공</th></tr>{_abs_rows if _abs_rows else "<tr><td colspan=3>평가 도착 대기</td></tr>"}</table>
 <h3>최종 판정 (2026-08-08, 14/14팔 완결)</h3>
-<p><b>어떤 요인 조합도 VLA를 이기지 못했다. 14팔 전부 null</b> — 95% t-CI(n=4)가 모두 0을 포함하고,
+<p><b>어떤 요인 조합도 VLA를 이기지 못했다.</b> run-level 95% t-CI(n=4)로는 14팔 전부 null이고,
 점추정 Δ̄는 −0.190 ~ +0.040 사이(14팔 평균 −0.051). 방법(TD/IQL/QC), 부트스트랩 연산자(max/softmax/aqcmax),
 atoms(51/101/201), 타깃넷(EMA/online), 데이터(demo/mixed) 어느 축도 판정을 바꾸지 못했다.
 같은 레시피·같은 장면·잡내 페어드라는 통제 하에서의 결론이므로, "튜닝이 부족했다"보다는
 <b>이 스택의 구조적 한계</b>로 읽는 것이 타당하다.</p>
+<h3>트라이얼 페어드 McNemar (워커A 관례 도입 — 같은 장면 200쌍, +: critic만 성공 / −: vla만 성공)</h3>
+<table class='num'><tr><th>arm</th><th>+</th><th>−</th><th>n쌍</th><th>p</th><th>판정</th></tr>{_mc_rows}</table>
+<p><b>검정력을 올리자 드러난 것.</b> run-level CI(n=4, 보수적)로는 안 보이던 신호가 트라이얼 페어드에서 확정된다:
+<b>td_max_demo(+21/−59, p&lt;0.001)·td_aqcmax(+28/−53, p=0.007)·td_max_online(+30/−51, p=0.026)은 유의한 해악.</b>
+즉 "TD 계열은 demo-only·aqcmax 부트스트랩·타깃넷 제거에서 능동적으로 해롭고", 나머지는 무차이, <b>유의한 이득은 0팔</b>.
+워커A의 독립 스택(HILP φ + Cal-QL+swap, McNemar) 판정과 서로 재현 관계다 — full-authority 해악(p=.004), BoN 무익.</p>
 <p><b>구조적 이유 — 왜 아무것도 안 바뀌는가.</b> ① rand(16후보 중 무작위)는 VLA와 구조적으로 동일 분포이고
 실측도 무차이(n=71, Δ̄=−0.020 CI[−0.054,+0.015]); randh(길이 무작위)도 null(n=4). ② 모든 critic의 argmax도 null —
 max가 mean을 못 이긴다는 것은 <b>같은 상태에서 뽑힌 16후보의 참 가치 스프레드가 선택 이득을 만들기에 너무 작다</b>는 뜻
@@ -739,6 +763,29 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 <tr><td>가치 신호 자체는 존재</td><td>프로빙 R²=0.55, 우리 held-out rise-collapse</td><td>critic 학습은 성공 — 병목은 배포 방식이라는 확신 강화</td></tr></table>
 """)
 
+# ============================================== 08-08 교차 워커 배움
+entry("08-07", "xworker-0808", "교차 워커 리뷰 — 워커A에게서 배운 것 (08-08)", "완결", """
+<p class='sub'>같은 허브의 워커A 리포트 7건을 정독하고, 방법·결과·운영 관행에서 배울 것을 우리 스택에 반영한 기록.</p>
+<h3>① 서로 재현: BoN은 두 스택 모두에서 무익</h3>
+<p>워커A는 전혀 다른 표현(HILP φ 128d, TD readout)·다른 critic(Cal-QL+swap negatives, 오프라인 action-sensitivity
+0→0.524 통과)으로 밤샘 롤아웃 판정을 했다: <b>BoN 무익(.700 동률), full-authority critic은 파국(.300, McNemar p=.004)</b>,
+σ-veto BoN .767(비유의). 우리 FINAL(14팔 null, TD 3팔 유의 해악)과 <b>독립 스택 상호 재현</b> — "action-sensitive critic을
+만들어도 BoN으로는 못 이긴다"가 두 워커 공통 결론이 됐다. 그들의 논지(critic에게는 커밋 길이·거부권 같은
+좁고 검증가능한 권한이 맞다)는 우리 다음 수(다양화·그래디언트 조향)와 상보적이다.</p>
+<h3>② 도입한 것: 트라이얼 페어드 McNemar</h3>
+<p>워커A의 판정 표준을 FINAL 탭에 즉시 도입했다(200쌍/팔). 결과: run-level CI로 안 보이던
+TD 3팔의 유의한 해악이 확정됐다 — FINAL 탭 참조. 앞으로 모든 페어드 판정에 두 통계를 병기한다.</p>
+<h3>③ 표현 병리의 다른 공격로</h3>
+<p>워커A: VLA 토큰의 episode-정체성 병리(kNN purity .42, 학습할수록 악화)를 <b>표현 쪽에서</b> 공격 —
+DINOv2+15분 헤드(cheap-z, purity .154)와 episode 적대자, TD readout φ(stitch .78). 우리는 같은 병리를
+<b>데이터 쪽에서</b> 공격했다(K-per-scene, 혼합결과 주방 45%). 두 접근은 독립이라 결합 가능: φ/cheap-z 위에
+우리 FINAL 레시피를 얹는 실험이 유효한 다음 후보다. 또 dynamics 앙상블 disagreement가 "성공 데모만으로도
+action을 구분하는 유일한 오프라인 신호"라는 측정은 우리 후보 다양화 프로브와 직접 비교 대상.</p>
+<h3>④ 운영 관행</h3>
+<p>좀비 잡(squeue R인데 실제 사망)의 로그 mtime 감시 — 우리도 행 걸린 평가 2건을 겪었으므로 감시 루틴에 채택.
+체크포인트 자동 아카이브(HF 업로드 검증 후 로컬 삭제)도 디스크 사고 예방책으로 참고.</p>
+""")
+
 # ============================================== 08-08 아침 종합
 entry("08-07", "morning-0808", "밤샘 종합 보고 (08-08 아침) — 무엇이 풀렸고 무엇이 남았나", "살아있음", """
 <p><b>한 줄 요약.</b> 닷새를 막던 TD+mixed 학습 불능이 근본 원인(int32 초과 후보 버퍼) 수준에서 해결되어 FINAL 스윕
@@ -838,6 +885,9 @@ META = {
     "papers-value-steering": dict(date="2026-08-08", who="워커B(리뷰)", where="arXiv",
         what="Robo-ValueRL(arXiv:2607.09866) 정독 + 인접 3편(V-GPS·Q-VGM·프로빙) 리뷰", how="원문 정독 후 FINAL 결론·우리 스택과 대조",
         why="'robo-value-RL' 탐색 요청 — FINAL null의 해석과 다음 수(그래디언트 조향)의 문헌 근거", links=["final", "calql", "wcurse"]),
+    "xworker-0808": dict(date="2026-08-08", who="워커B(리뷰) ← 워커A 리포트 7건", where="공유 허브",
+        what="교차 워커 배움 — 상호 재현·McNemar 도입·표현/데이터 공격로 비교", how="워커A 전 리포트 정독 후 즉시 반영",
+        why="워커끼리 서로 배우라는 지시 — 독립 스택의 결론 상호 검증", links=["final", "kper", "papers-value-steering"]),
     "morning-0808": dict(date="2026-08-08", who="워커B(Claude)", where="클러스터 전체 + HF Space",
         what="밤샘(08-07 밤~08-08 아침) 작업 종합", how="각 리포트의 완결 결과를 표로 집약",
         why="아침에 전체 상황을 한 번에 파악할 수 있도록", links=["td-segv", "final", "kper", "v12"]),
