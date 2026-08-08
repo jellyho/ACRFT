@@ -94,7 +94,8 @@ def main():
     rng = jax.random.key(cfg.seed)
     params = net.init(rng, tok_d[:1])
     tgt = params
-    tx = optax.adam(cfg.lr)
+    # distance-parameterised TD can diverge without clipping (phi_mixed run 1: loss->nan)
+    tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(cfg.lr))
     opt = tx.init(params)
 
     def loss_fn(p, tgt_p, s_idx, g_idx, key):
