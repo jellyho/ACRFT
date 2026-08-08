@@ -271,3 +271,33 @@ the right experiment: they test whether BOUNDED authority - commitment-only
 (mbacv), sigma-vetoed selection (mbacf), or both (mbac) - is where the gain
 lives. If mbacv > vla while phi-critic collapsed, the lesson generalizes:
 give learned components narrow, verifiable authority.
+
+## Iteration 7 (10:40) — replication: the positives were seed noise
+
+rep2 (fresh scenes, seed 30-59, its own vla baseline 19/30 = .633):
+mbacv tau1.3 .567, mbacf tau1.3 .500, prefix .500 — every overnight positive
+reversed sign on new scenes. Pooled at 60 config-matched paired trials:
+
+| arm | pooled | vs vla .667 | p |
+|---|---|---|---|
+| prefix | .650 (39/60) | +10/-11 | 1.00 |
+| mbacv tau1.3 | .667 (40/60) | +8/-8 | 1.00 |
+
+Exactly even. The honest ledger of the whole night, at adequate power:
+- ONE robust effect: full-authority critic HARMS (-.40, p=.004). Negative.
+- Everything else — prefix's +.10, mbacv tau1.3's +.067 — is within-seed noise
+  exactly as worker-B's 16-seed CI runs foretold. 30-trial arms have ±.1 noise;
+  never celebrate a +.1 again without a replication.
+- Adaptive commitment is at least SAFE (no arm harmed), which the full-authority
+  mode is not. Bounded authority buys robustness, not (yet) success rate.
+
+Why no gain? The sim rollouts run at ~replan-every-16-steps against a policy
+whose failure modes (wrong grasp choice, missed button) are decided WITHIN a
+chunk, not between chunks; cutting a chunk early cannot fix a chunk that was
+never going to work, and N=16 candidates from the same flow are too correlated
+for selection to matter. The leverage adaptive chunking has on THIS task at
+THIS checkpoint is small by construction. Where it should matter instead:
+(a) weaker/earlier checkpoints (more divergent candidates, more recoverable
+mid-chunk failures), (b) tasks with contact-rich junctures (GarnishPancake),
+(c) the AC-RFT loop where commitment shapes the TRAINING distribution, not
+just deployment selection.
