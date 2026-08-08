@@ -169,6 +169,37 @@ def proprio_stats(critic_path):
     return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
 
 
+def load_token_transform(critic_path):
+    """The embedding map a ladder critic was trained on (annot meta token_transform), or None.
+
+    Live rollout tokens must pass through the SAME map (PCA / HILP phi) the training annot did.
+    """
+    import json as _json
+
+    cfg = _json.loads((pathlib.Path(critic_path).parent / "config.json").read_text())
+    annot = pathlib.Path(cfg["data"])
+    meta = _json.loads((annot / "meta.json").read_text())
+    tf = meta.get("token_transform")
+    if not tf:
+        return None
+    if tf["kind"] == "pca":
+        z = np.load(annot / tf["file"])
+        mu, comps = z["mean"], z["components"]
+        return lambda x: (np.asarray(x, np.float32) - mu) @ comps.T
+    if tf["kind"] == "phi":
+        import sys as _sys
+
+        _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+        import flax.serialization as _fser
+        from train_hilp_readout import Phi as _Phi
+
+        params = _fser.msgpack_restore((annot / tf["file"]).read_bytes())
+        net = _Phi(dim=tf["dim"])
+        fn = jax.jit(lambda x: net.apply(params, x))
+        return lambda x: np.asarray(fn(jnp.asarray(x, jnp.float32)))
+    raise ValueError(f"unknown token_transform kind {tf['kind']}")
+
+
 def make_policy_fn(
     vla,
     score,
@@ -184,6 +215,7 @@ def make_policy_fn(
     gamma=0.99,
     history=0,
     history_stride=8,
+    token_tf=None,
 ):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
@@ -201,6 +233,8 @@ def make_policy_fn(
     def fn(element):
         z, cand = vla.token_and_candidates(element)
         z_raw = np.asarray(z, np.float32)[0]  # [2048] pre-proprio token, for the history buffer
+        if token_tf is not None:
+            z = token_tf(z)  # ladder critics see the SAME embedding the annot was transformed with
         if mode == "vla":
             return cand[0], vla.H, None
         if mode == "randh":
@@ -383,6 +417,7 @@ def build_policy(
             gamma=_ccfg.get("discount", 0.99),
             history=_ccfg.get("history", 0) or 0,
             history_stride=_ccfg.get("history_stride", 8) or 8,
+            token_tf=load_token_transform(critic_path),
             **kw,
         ),
         vla.H,
