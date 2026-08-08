@@ -18,16 +18,16 @@ Conventions beyond rcParams:
 
 import matplotlib as mpl
 
-# seaborn "deep"-adjacent muted palette, in the order worker-B uses them:
-# red for the incumbent/failing family, green for IQL, blue for high-gamma, purple for dueling.
-RED = "#c44e52"
-GREEN = "#2e8b6d"
-BLUE = "#4c72b0"
-PURPLE = "#8172b3"
-ORANGE = "#dd8452"
+# seaborn "deep" — the palette Seohong Park's papers (HILP/METRA/OGBench) draw from.
+BLUE = "#4C72B0"
+ORANGE = "#DD8452"
+GREEN = "#55A868"
+RED = "#C44E52"
+PURPLE = "#8172B3"
+BROWN = "#937860"
 GRAY = "#555555"
 LIGHTGRAY = "#aaaaaa"
-PALETTE = [RED, GREEN, BLUE, PURPLE, ORANGE, GRAY]
+PALETTE = [BLUE, ORANGE, GREEN, RED, PURPLE, BROWN]
 
 
 def use():
@@ -39,18 +39,24 @@ def use():
         "axes.spines.right": False,
         "axes.edgecolor": "#333333",
         "axes.labelcolor": "#1c1917",
-        "axes.titlesize": 13,
-        "axes.labelsize": 12,
+        # Titles are labels, not sentences: keep them one or two words; every explanation,
+        # reading instruction, and statistical caveat belongs in the surrounding prose.
+        "axes.titlesize": 12,
+        "axes.labelsize": 11.5,
         "axes.grid": True,
         "grid.color": "#dddddd",
         "grid.linewidth": 0.6,
         "grid.alpha": 0.6,
         "xtick.color": "#1c1917",
         "ytick.color": "#1c1917",
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
-        "font.family": "sans-serif",
-        "font.sans-serif": ["DejaVu Sans", "Arial"],
+        "xtick.labelsize": 10.5,
+        "ytick.labelsize": 10.5,
+        # Computer Modern text — the LaTeX look of the reference papers. cmr10 has no unicode
+        # minus, so unicode_minus must be off or negative ticks render as boxes.
+        "font.family": "serif",
+        "font.serif": ["cmr10", "STIXGeneral", "DejaVu Serif"],
+        "mathtext.fontset": "cm",
+        "axes.unicode_minus": False,
         "legend.frameon": False,
         "figure.dpi": 110,
         "axes.prop_cycle": mpl.cycler(color=PALETTE),

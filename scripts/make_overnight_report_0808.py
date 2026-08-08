@@ -86,8 +86,8 @@ for yy, (k, d, p, rate) in enumerate(rows):
 ax.axvline(0, color="black", lw=1.2)
 ax.set_xlim(ax.get_xlim()[0] - 0.045, ax.get_xlim()[1] + 0.045)
 ax.set_yticks(range(len(rows)), [LABELS[r[0]] for r in rows])
-ax.set_xlabel("success-rate difference vs vla  (30 paired trials; filled dot = McNemar p < 0.05)")
-ax.set_title("One significant result, and it is the sharpest critic given the most authority")
+ax.set_xlabel(r"$\Delta$ success rate vs vla")
+ax.set_title("Paired rollouts")
 FIG1 = b64(fig)
 
 # ---- fig 2: commitment histograms ----
@@ -100,11 +100,11 @@ for ax, (k, d, c) in zip(axes, picks):
         continue
     h = np.bincount(ns, minlength=17)[1:]
     ax.bar(range(1, 17), h / h.sum(), color=c, width=0.85)
-    ax.set_title(f"{LABELS[k]}\nmean {ns.mean():.1f} steps", fontsize=10.5)
-    ax.set_xlabel("committed steps per replan")
+    ax.set_title(LABELS[k].split(" (")[0].split(":")[0], fontsize=11)
+    ax.text(0.04, 0.92, f"mean {ns.mean():.1f}", transform=ax.transAxes, ha="left",
+            fontsize=9.5, color="#555")
+    ax.set_xlabel("committed steps")
 axes[0].set_ylabel("fraction of replans")
-fig.suptitle("Who commits how far: bimodal (helpful), thrashing (collapsed), inert (tau too lax)",
-             y=1.06, fontsize=12)
 FIG2 = b64(fig)
 
 # ---- fig 3: dynamics R2 / AUSE, phi vs DINO vs phi-h1 ----
@@ -118,12 +118,11 @@ fig, (a1, a2) = plt.subplots(1, 2, figsize=(9.5, 3.2))
 for (name, r), c in zip(reps.items(), [rs.RED, rs.BLUE, rs.GREEN]):
     ks = sorted(int(k) for k in r["per_macro"])
     a1.plot(ks, [r["per_macro"][str(k)]["r2_vs_copyforward"] for k in ks], "-o", color=c, label=name)
-    a2.plot(ks, [r["per_macro"][str(k)]["ause"] for k in ks], "-o", color=c,
-            label=f'{name} (swap {r["ood_swap_ratio"]:.2f})')
-a1.set_xlabel("prediction horizon (control steps)"); a1.set_ylabel("R2 vs copy-forward")
-a1.set_title("phi space is easier to predict"); a1.legend(fontsize=9)
-a2.set_xlabel("prediction horizon (control steps)"); a2.set_ylabel("AUSE (lower = better calibrated)")
-a2.set_title("and better calibrated (legend: OOD action-swap ratio)"); a2.legend(fontsize=9)
+    a2.plot(ks, [r["per_macro"][str(k)]["ause"] for k in ks], "-o", color=c, label=name)
+a1.set_xlabel("prediction horizon (steps)"); a1.set_ylabel(r"$R^2$ vs copy-forward")
+a1.set_title("Accuracy"); a1.legend(fontsize=9)
+a2.set_xlabel("prediction horizon (steps)"); a2.set_ylabel("AUSE")
+a2.set_title("Calibration"); a2.legend(fontsize=9)
 FIG3 = b64(fig)
 
 # ---- fig 4: E1 frontier + E2/E3 ----
@@ -137,19 +136,19 @@ a1.plot(fk, [e1["fixed_err_at_commit"][str(k)] for k in fk], "-o", color=rs.GRAY
 qs = [q for q in ("0.3", "0.5", "0.7", "0.9") if f"adaptive_q{q}" in e1]
 a1.plot([e1[f"adaptive_q{q}"]["mean_k_steps"] for q in qs],
         [e1[f"adaptive_q{q}"]["err_at_commit"] for q in qs], "-o", color=rs.PURPLE,
-        label="sigma-adaptive (tau sweep)")
-a1.set_xlabel("mean committed steps"); a1.set_ylabel("prediction error at commit end")
-a1.set_title("Adaptive cutting vs the fixed-k frontier", fontsize=11); a1.legend(fontsize=9)
+        label=r"$\sigma$-adaptive")
+a1.set_xlabel("mean committed steps"); a1.set_ylabel("error at commit end")
+a1.set_title("Commitment frontier", fontsize=12); a1.legend(fontsize=9)
 e3 = bat["E3"]
 ks = sorted(int(k) for k in e3)
 a2.plot(ks, [e3[str(k)]["binding_disagreement"] for k in ks], "-o", color=rs.GREEN,
-        label="by ensemble disagreement")
+        label="disagreement")
 a2.plot(ks, [e3[str(k)]["binding_goal_dist"] for k in ks], "-o", color=rs.RED,
-        label="by predicted goal distance")
+        label="predicted goal distance")
 a2.axhline(0.5, color="gray", ls="--", lw=1)
 a2.text(ks[0], 0.51, "chance", color="gray", fontsize=9)
-a2.set_xlabel("rollout depth (control steps)"); a2.set_ylabel("binding accuracy (demo vs other-state chunk)")
-a2.set_title("Disagreement binds; model-value inverts", fontsize=11); a2.legend(fontsize=9)
+a2.set_xlabel("rollout depth (steps)"); a2.set_ylabel("binding accuracy")
+a2.set_title("Binding", fontsize=12); a2.legend(fontsize=9)
 FIG4 = b64(fig)
 
 # ---- numbers for prose ----
@@ -188,7 +187,7 @@ html = f"""<!doctype html><meta charset='utf-8'><title>overnight 2026-08-08 — 
 </table></div>
 
 <div class='card'><h3>질문 1 — 오프라인 합격이 롤아웃 이득으로 이어지는가</h3>
-<p>아니오. 권한이 넓을수록 해가 커진다.</p>
+<p>아니오. 권한이 넓을수록 해가 커진다. 그림은 각 arm의 성공률에서 vla 기준선(.700)을 뺀 값이다 — arm당 30 paired trials(모든 arm이 같은 30개 장면), 채워진 점만 McNemar p&lt;0.05로 유의하고 빈 점은 우연과 구분되지 않는다. 색은 critic 계열(빨강 action-blind / 초록 φ Cal-QL+swap / 보라 model-based).</p>
 <img src='data:image/jpeg;base64,{FIG1}'>
 <table class='num'><tr><th>arm</th><th>success</th><th>paired +/-</th><th>McNemar p</th></tr>
 {rows_html}</table>
@@ -200,14 +199,14 @@ Q의 꼬리 노이즈를 자신 있게 착취하고, 커밋 분포는 59%가 2�
 
 <div class='card'><h3>질문 2 — 커밋(how far)은 누가 정해야 하는가</h3>
 <img src='data:image/jpeg;base64,{FIG2}'>
-<p>야간 최고 성적(.800)을 낸 대조군 prefix 모드의 커밋 분포는 이봉형이다: 대부분 길게(14–16) 가되
+<p>세 분포는 replan당 실행한 스텝 수다(최대 16). 야간 최고 성적(.800)을 낸 대조군 prefix 모드의 커밋 분포는 이봉형이다: 대부분 길게(14–16) 가되
 30%는 2스텝에서 끊는다 — 소박한 수단으로나마 이미 적응적 커밋을 하고 있었다.
 붕괴한 전권 critic은 같은 축을 스래싱으로 사용했고, σ-rule(tau 2.0)은 88% 풀커밋으로 사실상 개입하지 않았다
 (E1 배터리가 예측한 그대로 — tau가 너무 관대). tau 1.3 스윕이 후속으로 돌고 있다.</p></div>
 
 <div class='card'><h3>질문 3 — dynamics는 어느 공간에서, 무엇에 쓸 것인가</h3>
 <img src='data:image/jpeg;base64,{FIG3}'>
-<p>같은 아키텍처·같은 스텝으로 φ-공간이 DINO-공간을 전 구간에서 이긴다(R² .659 vs .519 @16, OOD swap 1.41–1.54 vs 1.09).
+<p>왼쪽은 copy-forward 대비 R²(높을수록 정확), 오른쪽은 AUSE(낮을수록 자기 오류를 잘 순위매기는, 즉 잘 캘리브레이션된 불확실성). 같은 아키텍처·같은 스텝으로 φ-공간이 DINO-공간을 전 구간에서 이긴다(R² .659 vs .519 @16, OOD swap 1.41–1.54 vs 1.09).
 TD readout이 외형 잡음을 미리 버려줬기 때문에, 남은 기하가 정확히 행동이 움직이는 것이기 때문이다.
 hist=1 배포판이 hist=3와 동급이라 롤아웃 통합도 깨끗하다.</p>
 <img src='data:image/jpeg;base64,{FIG4}'>
