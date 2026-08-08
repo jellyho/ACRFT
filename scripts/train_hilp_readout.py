@@ -102,9 +102,14 @@ def main():
         s, s2, g = tok_d[s_idx], tok_d[jnp.minimum(s_idx + 1, ends_d[s_idx])], tok_d[g_idx]
         at_goal = (s_idx == g_idx) | (s_idx == ends_d[s_idx])
         ps, pg = net.apply(p, s), net.apply(jax.lax.stop_gradient(tgt_p), g)
-        v = -jnp.linalg.norm(ps - pg, axis=-1)
+
+        def safe_dist(a, b):
+            # sqrt has a NaN gradient at exactly 0 - duplicate frames (static robot) hit it.
+            return jnp.sqrt(jnp.sum(jnp.square(a - b), axis=-1) + 1e-8)
+
+        v = -safe_dist(ps, pg)
         ps2 = net.apply(jax.lax.stop_gradient(tgt_p), s2)
-        v_next = -jnp.linalg.norm(ps2 - pg, axis=-1)
+        v_next = -safe_dist(ps2, pg)
         y = jnp.where(at_goal, 0.0, -1.0 + cfg.discount * v_next)
         u = jax.lax.stop_gradient(y) - v
         w = jnp.abs(cfg.expectile - (u < 0).astype(jnp.float32))
