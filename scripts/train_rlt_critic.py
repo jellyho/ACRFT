@@ -138,6 +138,14 @@ def parse_args():
     arch.add_argument("--head-dim", type=int, default=48)
     arch.add_argument("--mlp-dim", type=int, default=1024)
     arch.add_argument("--hidden-dims", type=int, nargs="+", default=[512, 512, 512], help="qc MLP / iql V widths")
+    arch.add_argument(
+        "--history",
+        type=int,
+        default=0,
+        help="arq: K past rl_tokens as extra observation positions (short-history conditioning; "
+        "single frames are ambiguous under occlusion/repeated motion - Robo-ValueRL ablation)",
+    )
+    arch.add_argument("--history-stride", type=int, default=8, help="env steps between history frames")
 
     wb = ap.add_argument_group("wandb")
     wb.add_argument("--wandb-project", default=None)
@@ -172,6 +180,7 @@ def main() -> None:
             "num_layers": cfg.num_layers,
             "num_heads": cfg.num_heads,
             "head_dim": cfg.head_dim,
+            "history": cfg.history,
             "mlp_dim": cfg.mlp_dim,
         }
         if cfg.kind == "arq"
@@ -210,7 +219,8 @@ def main() -> None:
         )
 
     rng = jax.random.key(cfg.seed)
-    params = net.init(rng, data.token[:1], data.chunk[:1])
+    _obs0 = data.obs_at(jnp.arange(1), history=cfg.history, history_stride=cfg.history_stride)
+    params = net.init(rng, _obs0, data.chunk[:1])
     logger.info(f"{cfg.kind.upper()} critic: {sum(x.size for x in jax.tree.leaves(params)) / 1e6:.2f}M params")
 
     num_prefixes = 1 if cfg.kind == "qc" else data.chunk.shape[1] // cfg.macro_group_size
@@ -223,7 +233,7 @@ def main() -> None:
         if (cfg.objective == "iql" or cfg.boot_op == "aqcmax")
         else None
     )
-    v_params = v_net.init(jax.random.fold_in(rng, 1), data.token[:1]) if v_net is not None else {}
+    v_params = v_net.init(jax.random.fold_in(rng, 1), _obs0) if v_net is not None else {}
     step_fn, tx, tx_v = _training.make_update(data, cfg, net, hl, support, v_net=v_net)
     carry = (params, params, tx.init(params), v_params, tx_v.init(v_params))
     diag = _training.make_diag(data, cfg, net, hl)

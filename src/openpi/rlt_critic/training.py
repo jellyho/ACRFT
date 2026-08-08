@@ -11,6 +11,10 @@ from openpi.rlt_critic.data import Data
 def make_update(data: Data, cfg, net, hl, support, v_net=None):
     """One jitted critic update, written to be scanned. Returns (step, tx, tx_v)."""
     T = data.token.shape[0]
+    _hk, _hs = getattr(cfg, "history", 0), getattr(cfg, "history_stride", 8)
+
+    def _obs(d, i):
+        return d.obs_at(i, history=_hk, history_stride=_hs)
     H = data.horizon
     prefixes = jnp.arange(cfg.macro_group_size, H + 1, cfg.macro_group_size) if cfg.kind == "arq" else jnp.array([H])
     step_discount = cfg.discount ** jnp.arange(H, dtype=jnp.float32)  # gamma^i, i < H
@@ -36,12 +40,12 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         valid = (data.alive[idx][:, None] > 0) & (ended | (landing < T))
 
         if cfg.objective == "iql":
-            v_out = v_net.apply(v_params, data.token[next_idx])
+            v_out = v_net.apply(v_params, _obs(data, next_idx))
             v_next = clamp(v_out[..., 0] if getattr(cfg, "aqc_baseline", False) else v_out)  # [B, P]
         else:
             # TD/CalQL: V(s') from the stored candidates via the chosen bootstrap OPERATOR.
             q = net.apply(
-                tgt_params, jnp.repeat(data.token[next_idx][:, :, None], data.num_samples, 2), data.cand_at(next_idx)
+                tgt_params, jnp.repeat(_obs(data, next_idx)[:, :, None], data.num_samples, 2), data.cand_at(next_idx)
             )
             q = hl.from_logits(q) if cfg.num_atoms > 1 else q  # [K, B, P, N(, P')]
             q = jnp.min(q, axis=0)
@@ -55,7 +59,7 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             elif op == "aqcmax":
                 # AQC-style max: subtract each prefix head's own baseline b_h before the arg-max, so
                 # no head wins on its systematic bias; add the winner's baseline back to stay a value.
-                b = v_net.apply(v_params, data.token[next_idx])[..., 1:]  # [B, P, P']
+                b = v_net.apply(v_params, _obs(data, next_idx))[..., 1:]  # [B, P, P']
                 qp = q if q.ndim == 4 else q[..., None]  # [B, P, N, P']
                 adv = qp - b[:, :, None, :]
                 a_flat = adv.reshape(*landing.shape, -1)
@@ -82,14 +86,14 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         w = valid.astype(jnp.float32)[None]  # [1, B, P]
         n_valid = jnp.maximum(jnp.sum(valid), 1.0)
 
-        pred = net.apply(params, data.token[idx], data.chunk[idx])  # [K, B(, P)(, atoms)]
+        pred = net.apply(params, _obs(data, idx), data.chunk[idx])  # [K, B(, P)(, atoms)]
         if cfg.kind == "qc":
             pred = pred[:, :, None] if cfg.num_atoms == 1 else pred[:, :, None, :]
         if cfg.dueling:
             # Q = V + (A - mean_h A): the zero-mean advantage pins the (V+c, A-c) gauge, so the
             # target's absolute level has exactly one place to live (V). Scalar ARQ only.
             pred = pred - jnp.mean(pred, axis=-1, keepdims=True)
-            v_out = v_net.apply(v_params, data.token[idx])
+            v_out = v_net.apply(v_params, _obs(data, idx))
             pred = pred + (v_out[..., 0] if getattr(cfg, "aqc_baseline", False) else v_out)[None, :, None]
 
         if cfg.num_atoms > 1:
@@ -105,10 +109,10 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         if cfg.objective != "iql" and getattr(cfg, "aqc_baseline", False) and v_net is not None:
             # TD + aqcmax bootstrap: train the per-prefix baselines here too (same expectile recipe
             # as the IQL/AQC path) - the bootstrap operator above reads heads 1..P.
-            q_demo_t = net.apply(jax.lax.stop_gradient(tgt_params), data.token[idx], data.chunk[idx])
+            q_demo_t = net.apply(jax.lax.stop_gradient(tgt_params), _obs(data, idx), data.chunk[idx])
             q_demo_t = hl.from_logits(q_demo_t) if cfg.num_atoms > 1 else q_demo_t
             q_demo_t = jnp.min(q_demo_t, axis=0)
-            b_all = v_net.apply(v_params, data.token[idx])[..., 1:]
+            b_all = v_net.apply(v_params, _obs(data, idx))[..., 1:]
             u_b = jax.lax.stop_gradient(q_demo_t) - b_all
             w_b = jnp.abs(cfg.baseline_expectile - (u_b < 0).astype(jnp.float32))
             b_loss = jnp.sum(w_b * jnp.square(u_b) * valid) / n_valid
@@ -119,7 +123,7 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
             # DOWN relative to the demonstrated chunk, per prefix. This is the training-time
             # candidate-axis signal every inference-time trick failed to fake - logsumexp gives
             # every candidate a gradient proportional to how loudly it currently outbids the demo.
-            zc = jnp.repeat(data.token[idx][:, None], data.num_samples, axis=1)
+            zc = jnp.repeat(_obs(data, idx)[:, None], data.num_samples, axis=1)
             q_c = net.apply(params, zc, data.cand_at(idx))
             q_c = hl.from_logits(q_c) if cfg.num_atoms > 1 else q_c  # [K, B, N, P]
             q_d = hl.from_logits(pred) if cfg.num_atoms > 1 else pred  # [K, B, P] (pred computed above)
@@ -130,11 +134,11 @@ def make_update(data: Data, cfg, net, hl, support, v_net=None):
         if cfg.objective == "iql":
             # Expectile regression: V chases an upper quantile of Q(z, a_demo) - the stand-in for
             # max_a Q that never proposes an action and never takes an arg-max.
-            q_demo = net.apply(jax.lax.stop_gradient(tgt_params), data.token[idx], data.chunk[idx])
+            q_demo = net.apply(jax.lax.stop_gradient(tgt_params), _obs(data, idx), data.chunk[idx])
             q_demo = hl.from_logits(q_demo) if cfg.num_atoms > 1 else q_demo
             q_demo = jnp.min(q_demo, axis=0)  # ensemble min, as deployment reads it
             q_demo = q_demo[:, None] if cfg.kind == "qc" else q_demo  # [B, P]
-            v_all = v_net.apply(v_params, data.token[idx])
+            v_all = v_net.apply(v_params, _obs(data, idx))
             v = (v_all[..., 0] if getattr(cfg, "aqc_baseline", False) else v_all)[:, None]
             if cfg.dueling:
                 q_demo = q_demo - jnp.mean(q_demo, axis=-1, keepdims=True) + jax.lax.stop_gradient(v)
@@ -198,10 +202,14 @@ def make_diag(data, cfg, net, hl):
     n_diag = min(2048, data.token.shape[0])
     n_diag -= n_diag % 256  # fixed slice shape -> single compilation
     diag_idx = jnp.asarray(np.sort(rng.choice(data.token.shape[0], size=max(n_diag, 256), replace=False)))
+    _hk, _hs = getattr(cfg, "history", 0), getattr(cfg, "history_stride", 8)
+
+    def _obs(d, i):
+        return d.obs_at(i, history=_hk, history_stride=_hs)
 
     @jax.jit
     def diag_slice(p, idx):
-        z = data.token[idx]
+        z = _obs(data, idx)
         qa = net.apply(p, jnp.repeat(z[:, None], data.num_samples, axis=1), data.cand_at(idx))
         qa = hl.from_logits(qa) if cfg.num_atoms > 1 else qa
         qa = jnp.min(qa, axis=0)  # ensemble -> [S, N(, P)]

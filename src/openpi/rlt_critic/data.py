@@ -28,6 +28,7 @@ class Data:
     done: jax.Array  # [T]          1 at the terminal frame
     done_cum: jax.Array  # [T]      running terminal count, for "any terminal inside [t, t+h-1]?"
     alive: jax.Array  # [T]         frame is at or before its episode's terminal
+    ep_start: jax.Array  # [T]      first frame index of this frame's episode (history clamp)
     horizon: int
     action_dim: int
     num_samples: int
@@ -40,8 +41,23 @@ class Data:
         """cand[idx] -> [*idx.shape, N, H, A], gathering each sub-int32 part separately."""
         return jnp.concatenate([p[idx] for p in self.cand_parts], axis=idx.ndim)
 
+    def obs_at(self, idx: jax.Array, *, history: int = 0, history_stride: int = 8, token_dim: int = 2048) -> jax.Array:
+        """Observation for frame idx: [hist_K..hist_1, token+proprio] -> [*idx.shape, K*token_dim + D].
 
-_DATA_ARRAYS = ("token", "chunk", "cand_parts", "reward", "episode", "mc_return", "done", "done_cum", "alive")
+        History frames look back ``history_stride`` env steps apart, clamped at the episode start
+        (Robo-ValueRL-style short history: single-frame values are ambiguous under occlusion and
+        repeated motions — a press-approach and a post-failure retreat can share the frame).
+        """
+        if history <= 0:
+            return self.token[idx]
+        hists = []
+        for k in range(history, 0, -1):
+            back = jnp.clip(idx - k * history_stride, self.ep_start[idx], None)
+            hists.append(self.token[back][..., :token_dim])
+        return jnp.concatenate([*hists, self.token[idx]], axis=-1)
+
+
+_DATA_ARRAYS = ("token", "chunk", "cand_parts", "reward", "episode", "mc_return", "done", "done_cum", "alive", "ep_start")
 _DATA_STATS = ("action_mean", "action_std", "proprio_mean", "proprio_std")
 
 
@@ -81,10 +97,17 @@ def _terminals(done, episode):
         fired = w[done[w] > 0]
         if len(fired):
             alive[fired[0] + 1 :][: w[-1] - fired[0]] = 0.0  # frames after the terminal: not decisions
+    ep = np.asarray(episode)
+    start = np.zeros(len(ep), np.int32)
+    starts = np.flatnonzero(np.concatenate([[True], ep[1:] != ep[:-1]]))
+    for i, s0 in enumerate(starts):
+        e0 = starts[i + 1] if i + 1 < len(starts) else len(ep)
+        start[s0:e0] = s0
     return {
         "done": jnp.asarray(done.astype(np.int32)),
         "done_cum": jnp.asarray(np.cumsum(done, dtype=np.int32)),
         "alive": jnp.asarray(alive),
+        "ep_start": jnp.asarray(start),
     }
 
 

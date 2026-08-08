@@ -167,7 +167,8 @@ def proprio_stats(critic_path):
 
 
 def make_policy_fn(
-    vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, vfn=None, bfn=None, gamma=0.99
+    vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, vfn=None, bfn=None,
+    gamma=0.99, history=0, history_stride=8
 ):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
@@ -180,9 +181,11 @@ def make_policy_fn(
                     near-tie is not always resolved toward the noisiest estimate. 0 = hard arg-max.
     """
     rng = np.random.default_rng(seed)
+    hist_state = {"t": 0, "buf": []}  # (env_step, raw 2048d token) at each replan of THIS episode
 
     def fn(element):
         z, cand = vla.token_and_candidates(element)
+        z_raw = np.asarray(z, np.float32)[0]  # [2048] pre-proprio token, for the history buffer
         if mode == "vla":
             return cand[0], vla.H, None
         if mode == "randh":
@@ -207,6 +210,22 @@ def make_policy_fn(
             p = np.asarray(element["observation/state"], np.float32) - mu
             p = np.where(sd > 1e-6, p / np.where(sd > 1e-6, sd, 1.0), 0.0)
             z = np.concatenate([np.asarray(z, np.float32), p[None, :]], axis=-1)
+        if history > 0:
+            # Mirror training's obs_at: K slots at t-k*stride, clamped to episode start (here: the
+            # oldest buffered token). Buffer holds tokens from past replans of this episode.
+            t_now = hist_state["t"]
+            hist_state["buf"].append((t_now, z_raw))
+            slots = []
+            for k in range(history, 0, -1):
+                want = t_now - k * history_stride
+                best = hist_state["buf"][0][1]
+                for ts, tok in hist_state["buf"]:
+                    if ts <= want:
+                        best = tok
+                    else:
+                        break
+                slots.append(best)
+            z = np.concatenate([np.concatenate(slots)[None, :], np.asarray(z, np.float32)], axis=-1)
         scored = cand
         if query_noise > 0:
             # Temporally coherent offset+drift per candidate, scaled by the chunk's own spread, so the
@@ -261,9 +280,15 @@ def make_policy_fn(
         else:
             i, pp = np.unravel_index(choice, q.shape)
         n_exec = int((pp + 1) * macro)
+        hist_state["t"] += n_exec
         v = float(np.asarray(vfn(jnp.asarray(z))).reshape(-1)[0]) if vfn is not None else None
         return cand[i], n_exec, Replan(q, cand, int(i), int(pp), n_exec, float(q[i, pp]), v)
 
+    def _reset():
+        hist_state["t"] = 0
+        hist_state["buf"].clear()
+
+    fn.reset = _reset
     return fn
 
 
@@ -329,6 +354,8 @@ def build_policy(
             vfn=vfn,
             bfn=bfn,
             gamma=_ccfg.get("discount", 0.99),
+            history=_ccfg.get("history", 0) or 0,
+            history_stride=_ccfg.get("history_stride", 8) or 8,
             **kw,
         ),
         vla.H,

@@ -154,6 +154,8 @@ def run_trials(
             # evaluation that fresh seeds cannot give.
             env.set_ep_meta(ep_metas[trial % len(ep_metas)])
         obs = env.reset()
+        if hasattr(policy_fn, "reset"):
+            policy_fn.reset()  # clear per-episode state (e.g. the critic's history token buffer)
         prompt = env.get_ep_meta().get("lang", task)
         success, step = False, 0
         stage_at: dict = {}

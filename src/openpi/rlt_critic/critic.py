@@ -98,6 +98,12 @@ class ARQCritic(nn.Module):
     def n_embd(self) -> int:
         return self.num_heads * self.head_dim
 
+    # >0 = the LEADING history*history_token_dim entries of obs are K past rl_tokens (oldest first),
+    # each becoming its own observation position (short-history conditioning: single frames are
+    # ambiguous under occlusion and repeated motions - Robo-ValueRL ablation, 5 frames > none > 30).
+    history: int = 0
+    history_token_dim: int = 2048
+
     @property
     def macro_h(self) -> int:
         return self.horizon // self.macro_group_size
@@ -107,6 +113,14 @@ class ARQCritic(nn.Module):
         d, mh = self.n_embd, self.macro_h
         a = actions.reshape(*actions.shape[:-2], mh, self.macro_group_size * self.action_dim)
 
+        hist_tok = None
+        if self.history:
+            hd = self.history * self.history_token_dim
+            hist, obs = obs[..., :hd], obs[..., hd:]
+            hist = hist.reshape(*hist.shape[:-1], self.history, self.history_token_dim)
+            # ONE shared projection for every history slot; order is carried by the pos embedding.
+            hist_tok = nn.Dense(d, name="hist_proj")(nn.LayerNorm()(hist))  # [..., K, d]
+
         if self.proprio_dim:
             z, pro = obs[..., : -self.proprio_dim], obs[..., -self.proprio_dim :]
             lead = jnp.concatenate(
@@ -115,6 +129,8 @@ class ARQCritic(nn.Module):
             )  # [..., 2, d]
         else:
             lead = nn.Dense(d)(nn.LayerNorm()(obs))[..., None, :]  # [..., 1, d]
+        if hist_tok is not None:
+            lead = jnp.concatenate([hist_tok, lead], axis=-2)
         nl = lead.shape[-2]
         act_tok = nn.Dense(d)(a)  # [..., mh, d]
         x = jnp.concatenate([lead, act_tok], axis=-2)  # [..., nl+mh, d]
@@ -326,6 +342,8 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
             "num_heads": cfg.get("num_heads", 8),
             "head_dim": cfg.get("head_dim", 48),
             "mlp_dim": cfg.get("mlp_dim", 1024),
+            "history": cfg.get("history", 0),
+            "history_token_dim": cfg.get("history_token_dim", 2048),
         }
         if cfg.get("kind", "arq") == "arq"
         else {"hidden_dims": tuple(cfg.get("hidden_dims", [512, 512, 512]))}
