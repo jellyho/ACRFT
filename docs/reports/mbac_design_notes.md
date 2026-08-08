@@ -491,3 +491,64 @@ Design cautions:
 Naming the unified module: PCWM (prefix-critic world model). W-ladder gains a
 step: W0 = attach Q/r heads to the frozen phi_dyn backbone, verify prefix-Q
 matches the standalone critic's diagnostics before any joint training.
+
+## Iteration 9 — MAC, actually read (arXiv 2512.08108, Park·Park·Lee·Levine)
+
+Read the full paper. What MAC actually is, and where iterations 8/8b were wrong:
+
+**MAC's recipe** (n=10 chunk, H=10 chunks, ALL tasks same hypers):
+1. Action-chunk dynamics p(s_{t+n}|s_t, a_{t:t+n-1}) - DETERMINISTIC MLP, MSE, raw
+   state. One call per chunk => n-fold fewer autoregressive calls; their Fig 2:
+   1-step model error DIVERGES over 100 steps, chunk-25 stays flat.
+2. Action-chunk reward model (discounted n-step sum).
+3. Flow-matching BC chunk policy + ONE-STEP distilled policy (for cheap sampling
+   inside imagination).
+4. Policy = REJECTION SAMPLING: argmax over N=32 BC samples by Q. No actor
+   optimization. And crucially - NO uncertainty penalty anywhere: "we query the
+   model only with in-distribution action-chunk samples, which obviates the need
+   for an additional uncertainty penalization mechanism."
+5. Value = ON-POLICY model-based value expansion: imaginary rollouts of H chunks
+   (nH=100 steps) from dataset states, actions by the rejection policy in
+   imagination; V learns nH-step targets (Eq 10, random start k); Q distills
+   V for the sampler (Eq 11). Fresh rollouts every epoch.
+Results: crushes MBRL baselines on long-horizon (cube-octuple 30 vs 0, puzzle-4x5
+99 vs ~0); flow rejection sampling is load-bearing (Gaussian actor: 0).
+
+**Corrections to my design:**
+- DROP the lambda*sigma penalty as the central mechanism (8/8b's core). MAC's
+  answer to model exploitation is staying in-distribution BY SAMPLING FROM THE
+  BC FLOW - never optimizing against the model. Our E2 finding actually
+  corroborates their choice: sigma spikes 1.6x exactly on out-of-distribution
+  chunks, i.e., in-distribution sampling avoids the region where penalties
+  would be needed. (Keep the ensemble for diagnostics, not for pessimism.)
+- The piece our stack is MISSING is their #5: every critic we trained (TD, IQL,
+  Cal-QL+swap) learns from dataset transitions only - short in-sample backups,
+  bias accumulating over the horizon (our own gamma-saturation measurement).
+  MAC replaces that with nH-step on-policy targets through imagination. THAT is
+  the import, not another pessimism term.
+- Deployment selection stays argmax-over-flow-samples (= our bon mode,
+  literally their Eq 4). The A/B becomes beautifully clean: same bon rule,
+  Q trained MAC-style (imagination, on-policy) vs Cal-QL+swap (in-sample).
+
+**Correspondence table (our env):**
+| MAC piece | ours |
+|---|---|
+| flow BC chunk policy pi_theta | the VLA itself (flow, N samples) - already exists |
+| one-step distilled pi_omega | distill phi-conditioned one-step head from stored (phi, 16 candidates) - the piece to build (VLA can't act in imagination: needs images, imagination lives in phi) |
+| chunk dynamics p_psi | phi_dyn_v1_h1 (ours: latent phi, ensemble/NLL; theirs: raw, deterministic - try deterministic phi variant, MAC says it suffices) |
+| reward model r_psi | progress-delta head on annotation labels (to build, small) |
+| V via value expansion | to build: imagined H-chunk rollouts from annotation states, nH-step targets |
+| Q for rejection sampling | to build: Eq-11 distillation of V |
+| n, H | n=16 (our chunk), H=4-6 => 64-96 imagined steps (task ~500) |
+
+**Open questions honestly carried from the paper:**
+- MAC ran on 100M-transition low-dim OGBench states; we have 280k frames of
+  512-d phi. Imagination quality rests on phi_dyn's R2 .66@16 - decent but far
+  from OGBench MLP fidelity. W3 (imagined-vs-real progress tracking) becomes
+  the gating check before trusting value expansion.
+- Their BC flow is trained on the SAME dataset as the model; our pi_omega
+  distills the VLA's samples, which are already policy-like. Distribution match
+  between pi_omega and the VLA at deployment is what makes the learned Q
+  transfer - measure with W2 (MMD/coverage).
+- prefix-critic transformer (8c) remains compatible: it can BE p_psi and Q's
+  backbone jointly; MAC just tells us what training signal to feed the Q head.
