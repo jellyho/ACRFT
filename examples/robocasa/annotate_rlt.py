@@ -69,7 +69,10 @@ def _build_action_decoder(train_config: _config.TrainConfig, checkpoint_dir: pat
         *data_config.data_transforms.outputs,
     ]
 
-    state_dim = train_config.model.action_dim  # states are padded to the model action dim
+    # The dummy state must match the norm stats' state dimensionality. RoboCasa pads states to the
+    # model action dim so the two coincide there, but YAM's 42-d state exceeds the 32-d action dim
+    # and Unnormalize broadcasts against the stats vector directly.
+    state_dim = len(norm_stats["state"].mean) if "state" in norm_stats else train_config.model.action_dim
 
     def decode(actions: np.ndarray) -> np.ndarray:
         # `Unnormalize` is strict about the keys in the norm stats, so `state` has to be present even
