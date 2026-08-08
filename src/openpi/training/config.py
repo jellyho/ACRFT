@@ -20,6 +20,7 @@ import openpi.models.pi0_rlt as pi0_rlt
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
+import openpi.policies.gr1_policy as gr1_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.robocasa_policy as robocasa_policy
 import openpi.policies.yam_policy as yam_policy
@@ -434,6 +435,52 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             # RoboCasa's action column is named "action" (singular), unlike the default "actions".
+            action_sequence_keys=("action",),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotGR1DataConfig(DataConfigFactory):
+    """GR1 tabletop Teleop-Sim (LeRobot layout): one ego_view camera, 44-d state/action.
+
+    Point HF_LEROBOT_HOME at the downloaded LeRobot root (e.g. /scratch/.../gr1_data/LeRobot) and
+    use the dataset dir name as repo_id (e.g. "gr1_unified.PnPCanToDrawerClose").
+    """
+
+    include_progress: bool = False
+    reward_key: str = "next.reward"
+    include_episode_index: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        structure = {
+            "observation/image": "observation.images.ego_view",
+            "observation/state": "observation.state",
+            "actions": "action",
+            "prompt": "prompt",
+        }
+        if self.include_episode_index:
+            structure["episode_index"] = "episode_index"
+        repack_inputs = []
+        if self.include_progress:
+            structure["progress"] = "progress"
+            repack_inputs.append(
+                _progress.AddProgress(_progress.compute_progress_labels(self.repo_id, reward_key=self.reward_key))
+            )
+        repack_inputs.append(_transforms.RepackTransform(structure))
+        repack_transform = _transforms.Group(inputs=repack_inputs)
+
+        data_transforms = _transforms.Group(
+            inputs=[gr1_policy.GR1Inputs(model_type=model_config.model_type)],
+            outputs=[gr1_policy.GR1Outputs()],
+        )
+        model_transforms = ModelTransformFactory()(model_config)
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            # GR1's action column is also named "action" (singular).
             action_sequence_keys=("action",),
         )
 
