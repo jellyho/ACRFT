@@ -951,8 +951,10 @@ entry(
 'object'로 기록 → float32 교정, ⑤ frame_index 컬럼 부재 → AddProgress에 전역 index 폴백 구현(커밋),
 ⑥ torchcodec이 노드의 FFmpeg 공유 라이브러리 부재로 실패 → pyav 백엔드 env 배선(LEROBOT_VIDEO_BACKEND, 커밋).</p>
 <p><b>하네스 완성(17:00):</b> 서버(serve_bon_policy.py — eval_critic 재사용, 표준 infer 계약) + 클라이언트
-(rollout_client.py — .venv-gr1, 페어드 시드) 양단 커밋. 5태스크 전부 v3 변환 완료. 파일럿은 PRO6000 큐 대기가
-길어져 A6000 batch16 폴백 병행(먼저 진입하는 쪽 채택 — 파일럿 목적은 체크포인트 확보이므로 batch 차이는 기록만).</p>
+(rollout_client.py — .venv-gr1, 페어드 시드) 양단 커밋. 5태스크 전부 v3 변환 완료. 파일럿 자원 사고 2건 추가: ⑦ base 체크포인트의 action 프로젝션이 (32,·)로 존재해 shape 충돌 → 로더에
+불일치-드롭+fresh 유지 구현(커밋), ⑧ A6000 48GB는 batch16도 OOM(기각), ⑨ PRO6000 96GB도 batch32 OOM →
+batch16 채택. <b>학습 진입 성공(21:15, node57 PRO6000): 1.7s/it, 30k ETA ~13.7시간(08-10 오전 완주 예상).</b>
+9건의 사고 전부 원인-수정 짝으로 기록 — 이식 완료.</p>
 <p><b>다음 순서:</b> 파일럿 완주 → 정책 서버 + .venv-gr1 클라이언트로 headroom·rand-vs-vla 스프레드 측정 →
 유효 시 주석·critic·페어드. PR#4는 branch protection으로 사용자 머지 대기.</p>
 """,
@@ -2060,9 +2062,11 @@ generator (real numeric stats from parquet; neutral image placeholder, unused by
 recorded as 'object' → float32, ⑤ no frame_index column → AddProgress fallback from the global index (committed),
 ⑥ torchcodec fails without FFmpeg shared libs on the nodes → pyav backend env passthrough (committed).</p>
 <p><b>Harness complete (17:00):</b> server (serve_bon_policy.py, standard infer contract over eval_critic) +
-client (rollout_client.py, .venv-gr1, paired seeds) both committed; all 5 tasks converted to v3. Pilot queued on
-PRO6000 with an A6000 batch-16 fallback racing it (first to start wins; the pilot's purpose is a capable
-checkpoint, so the batch difference is recorded, not controlled).</p>
+client (rollout_client.py, .venv-gr1, paired seeds) both committed; all 5 tasks converted to v3. Two more compute incidents: ⑦ the base checkpoint carries (32,·) action projections — shape clash → loader now
+drops mismatched entries and keeps fresh params (committed), ⑧ A6000 48GB OOMs even at batch 16 (rejected),
+⑨ PRO6000 96GB OOMs at batch 32 → batch 16 adopted. <b>Training entered (21:15, node57 PRO6000): 1.7 s/it,
+~13.7 h to 30k (done by mid-morning 08-10).</b> All nine incidents recorded as cause-fix pairs — the port is
+complete.</p>
 <p><b>Next:</b> pilot completion → policy server + .venv-gr1 client to measure headroom and the rand-vs-vla
 spread → if valid, annotate/critic/paired verdicts. PR#4 awaits the user's merge (branch protection).</p>
 """,
