@@ -66,6 +66,7 @@ def main():
     ap.add_argument("--host", default="localhost")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--out", type=pathlib.Path, required=True)
+    ap.add_argument("--video-dir", type=pathlib.Path, default=None, help="save per-trial ego_view mp4s here")
     args = ap.parse_args()
 
     import gymnasium as gym
@@ -79,6 +80,13 @@ def main():
     for trial in range(args.num_trials):
         obs, _ = env.reset(seed=args.seed + trial)
         success, step = False, 0
+        writer = None
+        if args.video_dir is not None:
+            import cv2
+
+            args.video_dir.mkdir(parents=True, exist_ok=True)
+            vpath = args.video_dir / f"{args.task}_seed{args.seed + trial}.mp4"
+            writer = cv2.VideoWriter(str(vpath), cv2.VideoWriter_fourcc(*"mp4v"), 20, (256, 256))
         while step < args.max_steps and not success:
             element = {
                 "observation/image": np.asarray(obs["video.ego_view_pad_res256_freq20"]),  # [256,256,3] uint8
@@ -89,11 +97,16 @@ def main():
             for action in chunk:
                 obs, reward, term, trunc, info = env.step(split_action(action))
                 success = success or bool(reward > 0) or bool(info.get("success", False))
+                if writer is not None:
+                    frame = np.asarray(obs["video.ego_view_pad_res256_freq20"])
+                    writer.write(frame[:, :, ::-1])  # RGB → BGR
                 step += 1
                 if success or step >= args.max_steps or term or trunc:
                     break
             if term or trunc:
                 break
+        if writer is not None:
+            writer.release()
         trials.append({"trial": trial, "success": bool(success), "steps": step})
         print(f"trial {trial + 1}/{args.num_trials}: {'SUCCESS' if success else 'failure'} in {step}", flush=True)
 
