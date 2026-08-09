@@ -948,7 +948,11 @@ entry(
 4태스크 변환의 체크리스트):</b> ① LeRobot v2.0 포맷(BackwardCompatibilityError) → v2.1 태그+공식 변환기,
 ② 변환기 --root는 부모 디렉토리 시맨틱, ③ episodes_stats.jsonl은 변환기가 생성이 아니라 로드 — 자작 생성기
 (수치는 parquet 실계산, 이미지는 중립 placeholder — openpi는 이미지 스탯 미사용), ④ state/action dtype이
-'object'로 기록 → float32 교정, ⑤ frame_index 컬럼 부재 → AddProgress에 전역 index 폴백 구현(커밋).</p>
+'object'로 기록 → float32 교정, ⑤ frame_index 컬럼 부재 → AddProgress에 전역 index 폴백 구현(커밋),
+⑥ torchcodec이 노드의 FFmpeg 공유 라이브러리 부재로 실패 → pyav 백엔드 env 배선(LEROBOT_VIDEO_BACKEND, 커밋).</p>
+<p><b>하네스 완성(17:00):</b> 서버(serve_bon_policy.py — eval_critic 재사용, 표준 infer 계약) + 클라이언트
+(rollout_client.py — .venv-gr1, 페어드 시드) 양단 커밋. 5태스크 전부 v3 변환 완료. 파일럿은 PRO6000 큐 대기가
+길어져 A6000 batch16 폴백 병행(먼저 진입하는 쪽 채택 — 파일럿 목적은 체크포인트 확보이므로 batch 차이는 기록만).</p>
 <p><b>다음 순서:</b> 파일럿 완주 → 정책 서버 + .venv-gr1 클라이언트로 headroom·rand-vs-vla 스프레드 측정 →
 유효 시 주석·critic·페어드. PR#4는 branch protection으로 사용자 머지 대기.</p>
 """,
@@ -2038,7 +2042,12 @@ converted v2.0→v3.0 → norm stats <b>passed (15:00)</b> → pilot finetune au
 (the checklist for the other 4 tasks):</b> ① LeRobot v2.0 format → v2.1 tag + official converter,
 ② the converter's --root means the PARENT directory, ③ episodes_stats.jsonl is loaded, not generated — wrote a
 generator (real numeric stats from parquet; neutral image placeholder, unused by openpi), ④ state/action dtype
-recorded as 'object' → float32, ⑤ no frame_index column → AddProgress fallback from the global index (committed).</p>
+recorded as 'object' → float32, ⑤ no frame_index column → AddProgress fallback from the global index (committed),
+⑥ torchcodec fails without FFmpeg shared libs on the nodes → pyav backend env passthrough (committed).</p>
+<p><b>Harness complete (17:00):</b> server (serve_bon_policy.py, standard infer contract over eval_critic) +
+client (rollout_client.py, .venv-gr1, paired seeds) both committed; all 5 tasks converted to v3. Pilot queued on
+PRO6000 with an A6000 batch-16 fallback racing it (first to start wins; the pilot's purpose is a capable
+checkpoint, so the batch difference is recorded, not controlled).</p>
 <p><b>Next:</b> pilot completion → policy server + .venv-gr1 client to measure headroom and the rand-vs-vla
 spread → if valid, annotate/critic/paired verdicts. PR#4 awaits the user's merge (branch protection).</p>
 """,
