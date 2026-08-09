@@ -52,6 +52,10 @@ class ProgressLabels:
     onsets: np.ndarray  # [num_episodes] int32, first frame where the reward fires
     delta_max: float  # only used by mode="global": dataset-wide time-to-success horizon
     mode: str = "per_episode"  # "per_episode": frame/onset in [0,1]; "global": 1 - delta/delta_max
+    # Global dataset index of each episode's first frame. Lets AddProgress recover a per-episode
+    # frame_index from the global "index" column on datasets that carry no frame_index (e.g. GR1
+    # Teleop-Sim). None on caches written before this field existed.
+    starts: np.ndarray | None = None
 
     def progress(self, episode_index, frame_index) -> np.ndarray:
         onset = self.onsets[np.asarray(episode_index, dtype=np.int64)]
@@ -167,8 +171,10 @@ def compute_progress_labels(
     cache = root / "meta" / "openpi_progress_onsets.npz"
     if use_cache and cache.exists():
         with np.load(cache) as d:
-            if len(d["onsets"]) == meta.total_episodes:
-                return ProgressLabels(onsets=d["onsets"], delta_max=float(d["delta_max"]), mode=mode)
+            if len(d["onsets"]) == meta.total_episodes and "starts" in d:
+                return ProgressLabels(
+                    onsets=d["onsets"], delta_max=float(d["delta_max"]), mode=mode, starts=d["starts"]
+                )
 
     reward = read_reward_column(root, meta.total_frames, reward_key)
     lo = np.asarray(meta.episodes["dataset_from_index"], dtype=np.int64)
@@ -199,11 +205,11 @@ def compute_progress_labels(
     if use_cache:
         try:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            np.savez(cache, onsets=onsets, delta_max=delta_max)
+            np.savez(cache, onsets=onsets, delta_max=delta_max, starts=lo)
         except OSError as e:  # a read-only dataset dir is fine, we just recompute next time
             logger.warning(f"Could not cache progress labels to {cache}: {e}")
 
-    return ProgressLabels(onsets=onsets, delta_max=delta_max, mode=mode)
+    return ProgressLabels(onsets=onsets, delta_max=delta_max, mode=mode, starts=lo)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -218,9 +224,18 @@ class AddProgress(_transforms.DataTransformFn):
     labels: ProgressLabels
 
     def __call__(self, data: dict) -> dict:
-        if "episode_index" not in data or "frame_index" not in data:
+        if "episode_index" not in data:
+            return data
+        if "frame_index" in data:
+            frame = data["frame_index"]
+        elif "index" in data and self.labels.starts is not None:
+            # Datasets without a frame_index column (e.g. GR1 Teleop-Sim): recover it from the
+            # global index and the episode's first-frame offset.
+            ep = np.asarray(data["episode_index"], dtype=np.int64)
+            frame = np.asarray(data["index"], dtype=np.int64) - self.labels.starts[ep]
+        else:
             return data
         return {
             **data,
-            "progress": self.labels.progress(data["episode_index"], data["frame_index"]),
+            "progress": self.labels.progress(data["episode_index"], frame),
         }
