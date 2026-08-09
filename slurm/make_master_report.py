@@ -977,8 +977,13 @@ tasks 테이블 그대로 <b>"PnPCanToDrawerClose"</b>(자연어 지시문 아�
 <tr><td>⑬</td><td>서버 기동됐는데 readiness 타임아웃</td><td>print 마커가 stdout 버퍼에 갇힘</td><td>python -u + websockets 로그 라인을 마커로</td></tr>
 <tr><td>⑭</td><td>클라이언트 keepalive 1011 사망</td><td>첫 추론의 JIT 컴파일(수 분)이 ws 이벤트 루프를 독점 → ping 응답 불가</td><td>서버 기동 전 웜업 추론(커밋)</td></tr></table>
 <p>부수 확인: 3090 풀에서 cuInit CUDA_ERROR_UNKNOWN 불량 노드 2대 조우(1대는 bad_nodes.txt 기존 등재 —
-참조 누락 반성, 제외 목록 상시 적용으로 전환), 3090 24GB에서 상수 할당 OOM은 과거 FINAL 평가와 같은
-MEM_FRACTION 0.92로 상향해 재시도 중.</p>
+참조 누락 반성, 제외 목록 상시 적용으로 전환). 3090 24GB는 이 서빙 구성(π0.5 + 16후보 flow)에 구조적으로
+빠듯함이 확인됐다: MEM_FRACTION 0.80→0.92에서 OOM 지점이 2.4GB→267MB 상수로 이동(거의 맞지만 부족) →
+<b>A6000 48GB로 전환 + PREALLOCATE=false</b>.</p>
+<p><b>✅ E2E 스모크 통과 (05:45, node25 A6000).</b> 서버 웜업(JIT) → 클라이언트 2트라이얼 완주(각 720스텝,
+페어드 시드 5000/5001) → JSON 기록까지 전 루프 검증. 두 트라이얼 모두 실패는 10k(1/3 학습) 중간 체크포인트로선
+예상 범위 — 성공률 판정은 30k phase-1에서. phase-1 템플릿은 A6000·24h·시드 분할(25×2잡/팔, 팔 간 동일 시드
+페어링 유지)로 확정.</p>
 <p><b>다음 순서:</b> E2E 스모크 통과 확인 → 30k 완주 시 phase-1 평가(선작성 완료:
 mode=vla 헤드룸 50트라이얼 + mode=rand 스프레드, 페어드 시드 5000+i) → 유효 시 주석·critic·페어드.
 PR#4는 branch protection으로 사용자 머지 대기.</p>
@@ -2138,8 +2143,14 @@ eval template:</p>
 <tr><td>⑬</td><td>server up yet readiness timeout</td><td>the print marker was stuck in the stdout buffer</td><td>python -u + use the websockets log line as the marker</td></tr>
 <tr><td>⑭</td><td>client dies with keepalive 1011</td><td>first-request JIT compilation (minutes) monopolizes the ws event loop → pings unanswered</td><td>warm-up inference before serving (committed)</td></tr></table>
 <p>Side findings: two 3090-pool nodes with cuInit CUDA_ERROR_UNKNOWN (one was already in bad_nodes.txt — a
-missed lookup, now applied as a standing exclude list); the 2.4GB-constant OOM on a 24GB 3090 is being retried
-with MEM_FRACTION 0.92, the same setting the FINAL-campaign evals used.</p>
+missed lookup, now applied as a standing exclude list). The 24GB 3090 proved structurally tight for this serving
+config (π0.5 + 16-candidate flow): raising MEM_FRACTION 0.80→0.92 moved the OOM from a 2.4GB to a 267MB
+constant (nearly fits, but not quite) → <b>switched to A6000 48GB + PREALLOCATE=false</b>.</p>
+<p><b>✅ E2E smoke passed (05:45, node25 A6000).</b> Server warm-up (JIT) → client completing 2 full trials
+(720 steps each, paired seeds 5000/5001) → JSON written: the entire loop is verified. Both trials failing is
+expected for the 10k (one-third-trained) intermediate checkpoint — the success-rate verdict belongs to the 30k
+phase-1. The phase-1 template is finalized: A6000, 24h, seed-split (2 jobs × 25 trials per arm, identical seed
+pairing across arms).</p>
 <p><b>Next:</b> confirm the E2E smoke passes → at 30k, phase-1 eval (pre-written:
 mode=vla headroom 50 trials + mode=rand spread, paired seeds 5000+i) → if valid, annotate/critic/paired verdicts.
 PR#4 awaits the user's merge (branch protection).</p>
