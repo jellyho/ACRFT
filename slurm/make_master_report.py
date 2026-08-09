@@ -1646,6 +1646,323 @@ ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES
 
 # ================================================================== English versions (KO/EN toggle)
 en(
+    "flow",
+    "Timeline · Takeaways",
+    """
+<p>The project's arc as takeaway cards: pipeline built (annotation → critic → paired rollouts) → early TD deficits
+→ terminal-handling bug found via single-trajectory overfit → data ladders and full-data gates → the demo-only
+verdict (v11: TD definitively harmful −0.167; IQL/QC/AQC null, 16 seeds) → mixed data opens the candidate band
+10–30x but success rates do not move (v12) → the FINAL 14-arm preregistered sweep (all null) → segfault
+root-caused to an INT32 overflow → K-per-scene data kills the scene-identity shortcut → conservatism synthesis →
+model-based route closed offline → GR1 port. Current position: every offline route on PrepareCoffee is closed;
+the next arena is GR1 (two decisions pending).</p>
+""",
+)
+
+en(
+    "genesis",
+    "The first TD critic generations and the first deficit",
+    """
+<p><b>What/why.</b> First test of value-based candidate selection on frozen RLT embeddings: TD-bootstrap critics
+(v1–v5) deployed Best-of-16. <b>Result: consistent deficits vs the VLA</b>, opening the diagnostic program:
+targets, values, or selection rule?</p>
+""",
+)
+
+en(
+    "vbias",
+    "Distance-structure bias of TD targets (the b(d) probe)",
+    """
+<p><b>What.</b> TD-critic error regressed against distance-to-goal d shows a systematic bias b(d) growing with
+distance — long-horizon states are misvalued in a structured way; an early candidate explanation for the
+genesis deficits.</p>
+""",
+)
+
+en(
+    "families",
+    "Rollout totals across method families (the TD→IQL pivot)",
+    """
+<p><b>What.</b> Paired rollout totals for TD/QC/IQL/AQC on identical scenes. TD kept losing; IQL variants were
+least harmful — the documented basis for pivoting to IQL.</p>
+""",
+)
+
+en(
+    "wcurse",
+    "Anatomy of the winner's curse — variance decomposition, two argmaxes",
+    """
+<p><b>What.</b> Candidate-Q error decomposes into a state-axis part (shared by all candidates, ~88% on the
+prefix axis) and a candidate-axis part (what selection uses). Within-row comparisons are paired-safe;
+cross-candidate argmax harvests noise. Later the backbone of the conservatism synthesis.</p>
+""",
+)
+
+en(
+    "duel",
+    "Two dueling-gauge failures and the zero-mean fix",
+    """
+<p><b>What.</b> Q=V+A failed twice because (V+c, A−c) is a gauge freedom. Fix: zero-mean advantage per state,
+pinning the absolute level to V (scalar ARQ only).</p>
+""",
+)
+
+en(
+    "singlefit",
+    "Single-trajectory fit — validating terminal handling",
+    """
+<p><b>What.</b> Overfitting one trajectory exposed the missing terminal reward in the bootstrap
+(--terminal-uses-mc): corr(Q, mc) −0.75 → +0.983, Q at goal 0.00 → 0.84 within 6k steps. One flag was the
+entire failure.</p>
+""",
+)
+
+en(
+    "ladders",
+    "Data ladders (1→64 episodes) × objective × γ",
+    """
+<p><b>What.</b> Fit metrics across the grid: data requirements per objective and the value-scale effect of γ.
+Basis for the γ=0.995 default and the recipes used from v11 onward.</p>
+""",
+)
+
+en(
+    "fullfit",
+    "Full-data critic inspection",
+    """
+<p><b>What.</b> The pre-rollout quality gate: fit metrics and trajectory visualisations a critic must pass
+before evaluation GPU is spent.</p>
+""",
+)
+
+en(
+    "highpower",
+    "High-power rollout verdicts (softcand / e70 replication / softmax)",
+    """
+<p><b>What.</b> Seeds and trials raised until CIs could detect ~0.05 effects: softcand, e70 replication and
+smooth-max — all null. Early apparent gains did not survive statistical power.</p>
+""",
+)
+
+en(
+    "randh",
+    "The coin-flip experiment — measuring active harm",
+    """
+<p><b>What.</b> rand (uniform over the 16 candidates — structurally the VLA's own distribution; n=71,
+Δ̄ −0.020 CI[−0.054,+0.015]) and randh (random commit length too) as honest nulls. A critic below rand shows
+active harm — TD did. rand≈vla later anchored the SNR argument.</p>
+""",
+)
+
+en(
+    "aqc",
+    "AQC implementation and the demo-only verdict",
+    """
+<p><b>What.</b> AQC-style deployment: per-prefix baselines b_h + epsilon'd z-score across commit lengths;
+cured the h-collapse (61% h=2 → mean h≈11). Demo-only verdict, 16 seeds: null (0.000).</p>
+""",
+)
+
+en(
+    "autopsy",
+    "Failure autopsy — programmatic stage predicates",
+    """
+<p><b>What.</b> Env-predicate stages (grasped/placed/machine_on) logged every step — no eyeball classification.
+Failures ~2/3 endgame; grasp ~0%; TD's signature is placed-no-press dithering; the button press is nearly
+invisible in a single frame (a structural ambiguity later cited by the history experiments).</p>
+""",
+)
+
+en(
+    "pools",
+    "Scene-pool effects — fixing the evaluation methodology",
+    """
+<p><b>What.</b> The same checkpoint swings ±0.1 across scene pools; only within-pool, in-job-paired comparisons
+are valid. Retired several earlier cross-pool claims; the protocol used everywhere since.</p>
+""",
+)
+
+en(
+    "failpipe",
+    "Failure-data pipeline + in-distribution scene replay",
+    """
+<p><b>What.</b> dump-traj → annotate_rollouts → memmap: failure rollouts became training data (v12 mixed);
+stored ep_meta replays exact scenes for in-distribution evaluation.</p>
+""",
+)
+
+en(
+    "v11",
+    "v11 fair comparison — 16-seed CIs, complete",
+    f"""
+<p><b>What.</b> The demo-only preregistered verdict: 4 methods × 16 seeds × 50 scenes, method-only-diff
+checkpoints, in-job pairing.</p>
+{img(P / "16_run_level.png", "v11 forest")}
+<p><b>TD: definitively harmful</b> (Δ̄=−0.167 CI[−0.214,−0.119], 16/16 negative); QC −0.038, IQL +0.004,
+AQC 0.000 — null. On demo-only data no method helps and TD actively hurts; the remaining lever is data.</p>
+""",
+)
+
+en(
+    "v12",
+    "v12 mixed data — band opening vs the success-rate judge",
+    """
+<p><b>What.</b> Failure rollouts added to training. The mechanism moved: candidate band opened 10–30x
+(0.065–0.107 vs 0.002–0.023). Success did not: iql Δ̄=−0.017 CI[−0.068,+0.035], aqc −0.019 (n=16) — null.
+Held-out probe (seed 9100): genuine rise-then-collapse V on unseen failures, plus a conservative bias on unseen
+successes — later targeted by K-per-scene data.</p>
+""",
+)
+
+en(
+    "final",
+    "FINAL campaign — the preregistered all-factor sweep",
+    f"""
+<p><b>What.</b> 14 arms (method × bootstrap-op × atoms × target-net × data), one fixed recipe, 4 seeds × 50
+scenes per arm, identical scenes across arms; verdict = run-level 95% t-CI + trial-paired McNemar.</p>
+{img(P / "20_final_forest.png", "FINAL forest")}
+<p><b>Verdict (14/14): no factor combination beats the VLA.</b> Point estimates −0.190…+0.040 (mean −0.051),
+all CIs cover zero; McNemar sharpens three TD arms into significant harm (td_max_demo p&lt;0.001, td_aqcmax
+p=0.007, td_max_online p=0.026); zero significant wins. Structural reading: rand≈vla by construction, all
+critic argmaxes ≈ vla, candidate-axis variance ≪ state-axis. Side finding: mixed data softens TD's demo-only
+harm (−0.167 → −0.050).</p>
+""",
+)
+
+en(
+    "td-segv",
+    "Root-causing the silent TD+mixed deaths — an XLA compile segfault",
+    """
+<p><b>What.</b> TD/QC/CalQL × mixed died after model init with no traceback. Hypothesis ladder: RAM (rejected),
+bad nodes (rejected: IQL trains there), faulthandler → SIGSEGV inside XLA backend_compile, cache (rejected),
+autotune/parallel/batch (rejected), fMHA/Triton flags (rejected). <b>Root cause: the candidate buffer is
+2.48e9 elements &gt; INT32_MAX</b>; XLA gather codegen segfaults on sm_86/Blackwell, surviving only on sm_89.
+Fix: sub-int32 buffer split (cand_at) — which exposed the dataset being baked into the program as constants
+(17GB duplicated on device); fixed by passing Data as a traced pytree argument. Numerics unchanged;
+field-confirmed by the first-ever TD+mixed steps on the A6000 fleet.</p>
+""",
+)
+
+en(
+    "kper",
+    "K-per-scene collection — removing the scene-identity shortcut",
+    """
+<p><b>What.</b> One rollout per kitchen lets a critic regress outcomes off scene identity. Fix: --policy-seed
+decouples sampling from the scene; 150 kitchens × 3 policy seeds = 450 rollouts (VLA success 0.676).
+<b>45% of kitchens have mixed outcomes</b> — identity cannot predict outcome there. Ledger: 11/15 first-round
+jobs died on bad nodes; dump filenames collided across policy seeds; re-collected into per-job directories.</p>
+""",
+)
+
+en(
+    "video-gallery",
+    "HUD rollout video gallery",
+    """
+<p><b>What.</b> Representative rollouts with the critic HUD (grey band = 16-candidate Q spread q01–q99,
+blue = executed chunk's Q, red = V(z)); served from the Space, full archive in the acrft-rollout-videos dataset.</p>
+""",
+)
+
+en(
+    "papers-value-steering",
+    "Paper review — Robo-ValueRL and value-guided VLA steering",
+    """
+<p><b>Robo-ValueRL (2607.09866).</b> Same value-head family as ours (frozen VLM + light transformer + HL-Gauss),
+but <b>no Best-of-N anywhere</b>: value is a training-time interface — ΔV → quality labels as text prompts
+(+26/+34% over BC) and value-filtered online data training a residual adapter on a frozen base (46%→86%).
+History: 5 frames beat none and 30 (single frames ambiguous under occlusion/repetition; 28/46/30%).
+Adoptables: short history (tested: null here), failure-penalty targets, the adapter route (needs a user call on
+the attribution rule). <b>V-GPS</b>: K=50 Cal-QL reranking — gains where the base is suboptimal vs its data.
+<b>Q-VGM</b>: critic gradients steer flow denoising; "discrete reranking cannot refine candidates".
+<b>Frozen-VLA probing</b>: value decodes linearly from frozen features (R²=.55); gains only with headroom.</p>
+""",
+)
+
+en(
+    "xworker-0808",
+    "Cross-worker review — learning from worker A",
+    """
+<p><b>What.</b> Adopted from worker A: the trial-paired McNemar test (immediately revealed significant TD harm
+in three FINAL arms); mutual replication (their independent φ + Cal-QL stack: BoN tie .700, full authority
+.300 p=.004); their representation-side attack on episode identity vs our data-side one (complementary);
+ops practices (zombie-job mtime detection, checkpoint archiving). The loop is now bidirectional — their MVE
+critic cites both workers' significant negatives as design constraints.</p>
+""",
+)
+
+en(
+    "conservatism",
+    "The conservatism spectrum — one frame for every null",
+    f"""
+<p><b>Claim.</b> Every verdict fits one question: where does a method sit on the conservatism dial, and which of
+the <b>two risk axes</b> does it guard? Axis 1 — distribution shift (OOD): BC-style constraints handle it;
+BoN is perfect here (all candidates in-support). Axis 2 — <b>estimation-error exploitation (optimizer's
+curse)</b>: argmax picks the most overestimated of N noisy scores, in-support or not; support constraints are
+powerless. max-of-N queries the N/(N+1) quantile, so a τ=0.9 critic certifies only up to N≈10.</p>
+<p><b>Positions:</b> BoN = selection-type safety (KL ≤ log N; the safe-and-useless extreme where we sat);
+IQL = query avoidance; CQL/CalQL = value suppression (idle: no OOD reaches our deployment);
+FQL/velocity-steering = policy proximity; unconstrained actor-critic = the dangerous end (worker A's .300,
+p=.004).</p>
+<p><b>SNR condition.</b> BoN gain ≈ c_N · σ_signal · ρ, c_N≈√(2 ln N): the true candidate spread is the sole
+source of gain. Measured: demo-only band 0.002–0.023 (at the HL-Gauss bin width), rand≈vla → gain ≈ 0 for any
+selector. Diversification opens the spread (×6.8 at noise 1.5, ×25 at 2.0, critic band following):</p>
+{img(P / "21_cand_diversity.png", "diversity sweep")}
+<p>v17 (diversified, no error-conservatism) went negative as predicted; v17b (σ-veto on ensemble disagreement)
+flipped positive at n=8 (+0.052, p=0.076) then <b>washed out at n=16 (+0.019, p=0.383) — the trick family is
+closed</b>, reaffirming the n≥8 rule. History conditioning: null for iql and td. Principled prescriptions
+(LCB/veto, τ↔N matching, ranking losses) remain contingent on a task where σ_signal exists at all.</p>
+""",
+)
+
+en(
+    "v14",
+    "v14 — the shortcut-free data verdict",
+    """
+<p><b>What.</b> Retraining on demos + K-per-scene rollouts (605,684 frames; shortcut removed). iql_v14
+−0.035 CI[−0.083,+0.013] (tight null); td_max_v14 −0.110 (null, negative-leaning); calql_v14 −0.140,
+McNemar p=0.001 — significant harm (CQL over-suppression on failure-heavy data is the working hypothesis).
+Removing the memorization shortcut alone does not convert band opening into success.</p>
+""",
+)
+
+en(
+    "calql",
+    "CalQL (CO-RFT) — the first training-time candidate-axis signal",
+    """
+<p><b>What.</b> TD + mc-floor + a CQL term pushing the 16 candidates down vs the demo chunk. calql_noprop
+(n=8): −0.018 CI[−0.103,+0.068] (early bimodality washed out). calql_mixed (n=4): +0.015, McNemar p=0.813 —
+the only positive-pointing mixed arm, still null; on v14 data it flipped to significant harm. With every
+deployed candidate in-support, the suppression dial spins idle.</p>
+""",
+)
+
+en(
+    "phi-ladder",
+    "The embedding ladder — dimension or geometry? (HILP φ replication)",
+    """
+<p><b>What.</b> Worker A's TD-only readout collapses episode identity; two user questions shaped the controls:
+PCA-128 (dimension) and decoder/probes (information loss). Battery: episode-probe accuracy .99 raw / .92 PCA /
+<b>.756 φ</b> with progress R² preserved — geometry, not dimension (our φ still weaker than worker A's).
+Incidents: NaN divergence from the ‖·‖ gradient at 0 (duplicate static frames; ε-safe distance fix);
+completion markers must be &amp;&amp;-gated. Information loss, programmatically: per-dim proprio R²
+raw .760 → PCA .653 → φ .546 (φ+proprio .617) — φ discards short-range action-relevant information, the
+mechanistic explanation for its BoN failure. Critic ladder at n=8: φ-128 −0.010 null; the n=4 monotone
+signal was noise. Closed.</p>
+""",
+)
+
+en(
+    "morning-0808",
+    "Morning synthesis (08-08)",
+    """
+<p><b>What.</b> Overnight: TD+mixed silent deaths root-caused and fixed (INT32 buffer + constants duplication);
+qc(mixed) first through the post-fix pipeline (null); td_max_demo −0.190; K-per-scene complete (45% mixed
+kitchens); v14 merged (605k frames); raw-JSON audit passed; reporting system rebuilt (5W1H, cross-links,
+thread, mindmap, white theme, paper-style figures).</p>
+""",
+)
+
+en(
     "morning-0809",
     "Morning synthesis (08-09) — the night of convergence",
     """
