@@ -943,9 +943,14 @@ entry(
 <table class='num'><tr><th>옵션</th><th>내용</th><th>비고</th></tr>
 <tr><td>A. node200 (B200, 다른 머신)</td><td>기존 VLA 미세조정이 돌던 인프라(train_rlt.slurm, /data5) — 가장 빠름</td><td>워커A 머신 자원 — 승인 필요, torch/B200 이슈 이력 참고</td></tr>
 <tr><td>B. 이 클러스터 PRO6000/A6000</td><td>3B 미세조정을 bf16 + batch 축소로 — PRO6000(96GB)이면 무난, A6000(48GB)은 빠듯</td><td>큐 경쟁, 검증 안 된 경로</td></tr></table>
-<p><b>순서:</b> 자원 결정 → config 구현·norm stats → 1태스크(PnPCanToDrawerClose) 파일럿 미세조정 →
-주석 → FINAL 레시피 critic → 페어드 평가. 파일럿에서 베이스 성공률(=headroom)과 rand-vs-vla 갭(=후보 스프레드)을
-먼저 재서, 이 무대가 정말 질문에 유효한지부터 확인한다 — PrepareCoffee의 교훈.</p>
+<p><b>발차 (08-09 ㄱㄱㄱ, 자원 B: PRO6000).</b> config 등록(pi05_gr1_rlt: action_dim 48, 파일럿 30k) →
+데이터 v2.0→v3.0 변환 → norm stats <b>통과(15:00)</b> → 파일럿 미세조정 자동 개시. <b>이식 사고록(5건 — 나머지
+4태스크 변환의 체크리스트):</b> ① LeRobot v2.0 포맷(BackwardCompatibilityError) → v2.1 태그+공식 변환기,
+② 변환기 --root는 부모 디렉토리 시맨틱, ③ episodes_stats.jsonl은 변환기가 생성이 아니라 로드 — 자작 생성기
+(수치는 parquet 실계산, 이미지는 중립 placeholder — openpi는 이미지 스탯 미사용), ④ state/action dtype이
+'object'로 기록 → float32 교정, ⑤ frame_index 컬럼 부재 → AddProgress에 전역 index 폴백 구현(커밋).</p>
+<p><b>다음 순서:</b> 파일럿 완주 → 정책 서버 + .venv-gr1 클라이언트로 headroom·rand-vs-vla 스프레드 측정 →
+유효 시 주석·critic·페어드. PR#4는 branch protection으로 사용자 머지 대기.</p>
 """,
 )
 
@@ -2028,11 +2033,14 @@ action choice separates outcomes, and base success rates with headroom.</p>
 <tr><td>Eval harness</td><td>Decided: policy-server split (main venv serves VLA+critic via the standard infer
 protocol — BoN lives in a server-side Policy adapter, commit length expressed by truncating the returned chunk;
 .venv-gr1 runs the env client). No protocol extension needed.</td></tr></table>
-<p><b>Order (preregistered):</b> compute decision → finetune pilot (PnPCanToDrawerClose) → measure base
-success (headroom) and rand-vs-vla gap (candidate spread) FIRST — the PrepareCoffee lesson — then annotate,
-train the FINAL-recipe critic, and run paired verdicts.</p>
-<p><b>Pending user decision:</b> compute A (node200/B200, other machine, fastest) vs B (this cluster's
-PRO6000 96GB, queue-contended).</p>
+<p><b>Launched (08-09, compute B: PRO6000).</b> Config registered (action_dim 48, 30k pilot) → dataset
+converted v2.0→v3.0 → norm stats <b>passed (15:00)</b> → pilot finetune auto-started. <b>Port incident ledger
+(the checklist for the other 4 tasks):</b> ① LeRobot v2.0 format → v2.1 tag + official converter,
+② the converter's --root means the PARENT directory, ③ episodes_stats.jsonl is loaded, not generated — wrote a
+generator (real numeric stats from parquet; neutral image placeholder, unused by openpi), ④ state/action dtype
+recorded as 'object' → float32, ⑤ no frame_index column → AddProgress fallback from the global index (committed).</p>
+<p><b>Next:</b> pilot completion → policy server + .venv-gr1 client to measure headroom and the rand-vs-vla
+spread → if valid, annotate/critic/paired verdicts. PR#4 awaits the user's merge (branch protection).</p>
 """,
 )
 
