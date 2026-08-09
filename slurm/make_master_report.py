@@ -968,7 +968,18 @@ tasks 테이블 그대로 <b>"PnPCanToDrawerClose"</b>(자연어 지시문 아�
 중반에 죽을 운명이었다. 저장 전 안전 창에서 체크포인트 디렉토리를 /scratch(12T 여유)로 심링크 스왑해 무중단
 우회 — 10k 저장 성공 여부는 워처가 감시하고, 저장되는 즉시 그 중간 체크포인트로 서버+클라이언트 E2E 스모크를
 돌려 30k 완주 전에 평가 루프 전체를 검증한다.</p>
-<p><b>다음 순서:</b> 10k 중간 체크포인트로 E2E 하네스 스모크 → 30k 완주 시 phase-1 평가(선작성 완료:
+<h3>E2E 하네스 부팅 사다리 (08-10 새벽, 10k 중간 체크포인트)</h3>
+<p>10k 저장은 /scratch 심링크를 통해 성공(사고 ⑩ 우회 검증). 이어 서버+클라이언트 전 루프 스모크를 부팅하며
+사고 4건을 사다리식으로 규명·수정했다 — 전부 phase-1 본 평가 템플릿에 선반영:</p>
+<table class='num'><tr><th>#</th><th>증상</th><th>원인</th><th>수정</th></tr>
+<tr><td>⑪</td><td>서버 즉사: HF 404 (RepositoryNotFoundError)</td><td>잡에 HF_LEROBOT_HOME 부재 → norm stats 로딩이 로컬 데이터셋 대신 HF 원격 조회</td><td>학습 잡과 동일 env 2종 주입</td></tr>
+<tr><td>⑫</td><td>_METADATA not found (…/params/params)</td><td>--checkpoint는 step 디렉토리를 받는데 /params까지 붙여 이중 경로</td><td>step 디렉토리로 통일</td></tr>
+<tr><td>⑬</td><td>서버 기동됐는데 readiness 타임아웃</td><td>print 마커가 stdout 버퍼에 갇힘</td><td>python -u + websockets 로그 라인을 마커로</td></tr>
+<tr><td>⑭</td><td>클라이언트 keepalive 1011 사망</td><td>첫 추론의 JIT 컴파일(수 분)이 ws 이벤트 루프를 독점 → ping 응답 불가</td><td>서버 기동 전 웜업 추론(커밋)</td></tr></table>
+<p>부수 확인: 3090 풀에서 cuInit CUDA_ERROR_UNKNOWN 불량 노드 2대 조우(1대는 bad_nodes.txt 기존 등재 —
+참조 누락 반성, 제외 목록 상시 적용으로 전환), 3090 24GB에서 상수 할당 OOM은 과거 FINAL 평가와 같은
+MEM_FRACTION 0.92로 상향해 재시도 중.</p>
+<p><b>다음 순서:</b> E2E 스모크 통과 확인 → 30k 완주 시 phase-1 평가(선작성 완료:
 mode=vla 헤드룸 50트라이얼 + mode=rand 스프레드, 페어드 시드 5000+i) → 유효 시 주석·critic·페어드.
 PR#4는 branch protection으로 사용자 머지 대기.</p>
 """,
@@ -2117,7 +2128,19 @@ installed into .venv-gr1.</p>
 directory was symlink-swapped to /scratch (12T free) with no interruption — a watcher confirms the 10k save, and
 the moment it lands we run a server+client end-to-end smoke on that intermediate checkpoint, validating the whole
 evaluation loop before 30k completes.</p>
-<p><b>Next:</b> E2E harness smoke on the 10k intermediate checkpoint → at 30k, phase-1 eval (pre-written:
+<h3>E2E harness boot ladder (early 08-10, on the 10k intermediate checkpoint)</h3>
+<p>The 10k save landed safely through the /scratch symlink (incident ⑩'s bypass verified). Booting the full
+server+client loop then surfaced four incidents, resolved ladder-style — all fixes pre-applied to the phase-1
+eval template:</p>
+<table class='num'><tr><th>#</th><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+<tr><td>⑪</td><td>Server dies instantly: HF 404 (RepositoryNotFoundError)</td><td>job lacked HF_LEROBOT_HOME → norm-stats loading queried the HF remote instead of the local dataset</td><td>inject the same two env vars as the training job</td></tr>
+<tr><td>⑫</td><td>_METADATA not found (…/params/params)</td><td>--checkpoint takes the step directory but we appended /params, doubling the path</td><td>standardize on the step directory</td></tr>
+<tr><td>⑬</td><td>server up yet readiness timeout</td><td>the print marker was stuck in the stdout buffer</td><td>python -u + use the websockets log line as the marker</td></tr>
+<tr><td>⑭</td><td>client dies with keepalive 1011</td><td>first-request JIT compilation (minutes) monopolizes the ws event loop → pings unanswered</td><td>warm-up inference before serving (committed)</td></tr></table>
+<p>Side findings: two 3090-pool nodes with cuInit CUDA_ERROR_UNKNOWN (one was already in bad_nodes.txt — a
+missed lookup, now applied as a standing exclude list); the 2.4GB-constant OOM on a 24GB 3090 is being retried
+with MEM_FRACTION 0.92, the same setting the FINAL-campaign evals used.</p>
+<p><b>Next:</b> confirm the E2E smoke passes → at 30k, phase-1 eval (pre-written:
 mode=vla headroom 50 trials + mode=rand spread, paired seeds 5000+i) → if valid, annotate/critic/paired verdicts.
 PR#4 awaits the user's merge (branch protection).</p>
 """,
