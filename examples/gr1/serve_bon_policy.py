@@ -66,10 +66,22 @@ def main():
         flow_steps=args.flow_steps,
         seed=args.seed,
     )
-    server = websocket_policy_server.WebsocketPolicyServer(
-        policy=BoNServePolicy(policy_fn), host="0.0.0.0", port=args.port
-    )
-    print(f"serving {args.mode} policy on :{args.port}")
+    policy = BoNServePolicy(policy_fn)
+
+    # Warm up: the first infer triggers minutes of JIT compilation, which would starve the websocket
+    # event loop past the keepalive ping timeout (the client's connection dies with 1011). Compile
+    # before serving so live requests stay near real-time.
+    warmup = {
+        "observation/image": np.zeros((256, 256, 3), np.uint8),
+        "observation/state": np.zeros(44, np.float32),
+        "prompt": "PnPCanToDrawerClose",
+    }
+    print("warming up (jit compile)...", flush=True)
+    policy.infer(warmup)
+    policy.reset()
+
+    server = websocket_policy_server.WebsocketPolicyServer(policy=policy, host="0.0.0.0", port=args.port)
+    print(f"serving {args.mode} policy on :{args.port}", flush=True)
     server.serve_forever()
 
 
