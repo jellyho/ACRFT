@@ -196,6 +196,8 @@ def create_torch_dataset(
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
         tolerance_s=_float32_safe_tolerance(dataset_meta.fps, _max_video_timestamp(dataset_meta)),
+        # torchcodec needs FFmpeg SHARED libs, absent on this cluster's nodes; pyav ships its own.
+        video_backend=os.environ.get("LEROBOT_VIDEO_BACKEND"),
     )
     if skip_videos:
         dataset._query_videos = _StubVideoQuery()
