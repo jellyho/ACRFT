@@ -984,8 +984,19 @@ tasks 테이블 그대로 <b>"PnPCanToDrawerClose"</b>(자연어 지시문 아�
 페어드 시드 5000/5001) → JSON 기록까지 전 루프 검증. 두 트라이얼 모두 실패는 10k(1/3 학습) 중간 체크포인트로선
 예상 범위 — 성공률 판정은 30k phase-1에서. phase-1 템플릿은 A6000·24h·시드 분할(25×2잡/팔, 팔 간 동일 시드
 페어링 유지)로 확정.</p>
-<p><b>다음 순서:</b> E2E 스모크 통과 확인 → 30k 완주 시 phase-1 평가(선작성 완료:
-mode=vla 헤드룸 50트라이얼 + mode=rand 스프레드, 페어드 시드 5000+i) → 유효 시 주석·critic·페어드.
+<h3>20k 진단 평가 — 0/25와 판별 체계 (08-10 오전)</h3>
+<p>30k를 기다리는 동안 20k 중간 체크포인트로 vla 25트라이얼 진단을 돌렸다(학습 곡선 + 성공 감지 배선 검증 목적).
+그 과정에서 사고 2건 추가: <b>⑮</b> phase-1 스크립트 재작성 때 <code>unset LD_LIBRARY_PATH</code> 누락 →
+miniconda libcrypto 오염으로 서버 즉사. <b>⑯</b>(교훈적) readiness 마커 "serving"이 서버 <i>트레이스백</i>의
+"openpi.<b>serving</b>" 문자열에 오탐 매치 → SERVER_UP 오판, 클라이언트 1시간 헛대기. 성공 마커는 실패 출력과
+절대 겹치지 않는 문자열이어야 한다(<code>policy on :</code>으로 교체).</p>
+<p><b>결과: 0/25, 전 트라이얼 720스텝 최대치.</b> 해석 두 갈래 — (a) 20k 학습 부족, (b) 하네스 행동 실행 의미론
+불일치. 조사: env 컨트롤러는 <code>control_delta=False</code>(절대 관절각), action_space 선언은 명목 [-1,1]인데
+데모 액션 실측 범위는 ±3.0 rad — 데모가 같은 env에서 수집됐으므로 raw 라디안 통과가 정상일 공산이 크나 확정 필요.
+판별 잡 2종 제출: <b>개루프 프로브</b>(데모 프레임 24개 → 예측 chunk vs 데모 액션 MSE, hold-still 기준선 대조 —
+서빙 스택 건전성 확정) + <b>2트라이얼 비디오</b>(클라이언트에 --video-dir 추가·커밋, 실패 양상 기록용).
+phase-1 제출은 프로브 판독 후 — 하네스 결함 상태로 4잡×25트라이얼을 태우지 않는다.</p>
+<p><b>다음 순서:</b> 개루프 프로브 판독 → (건전 시) 30k phase-1 4잡 제출 → 유효 시 주석·critic·페어드.
 PR#4는 branch protection으로 사용자 머지 대기.</p>
 """,
 )
@@ -2151,9 +2162,24 @@ constant (nearly fits, but not quite) → <b>switched to A6000 48GB + PREALLOCAT
 expected for the 10k (one-third-trained) intermediate checkpoint — the success-rate verdict belongs to the 30k
 phase-1. The phase-1 template is finalized: A6000, 24h, seed-split (2 jobs × 25 trials per arm, identical seed
 pairing across arms).</p>
-<p><b>Next:</b> confirm the E2E smoke passes → at 30k, phase-1 eval (pre-written:
-mode=vla headroom 50 trials + mode=rand spread, paired seeds 5000+i) → if valid, annotate/critic/paired verdicts.
-PR#4 awaits the user's merge (branch protection).</p>
+<h3>20k diagnostic — 0/25 and the discrimination plan (08-10 morning)</h3>
+<p>While waiting for 30k we ran a 25-trial vla diagnostic on the 20k intermediate checkpoint (learning-curve
+point + success-plumbing verification). Two more incidents en route: <b>⑮</b> the phase-1 script rewrite dropped
+<code>unset LD_LIBRARY_PATH</code> → miniconda libcrypto pollution killed the server instantly. <b>⑯</b>
+(instructive) the readiness marker "serving" false-matched the string "openpi.<b>serving</b>" inside the server's
+<i>traceback</i> → SERVER_UP misjudged, client waited an hour on nothing. Success markers must never overlap
+failure output (replaced with <code>policy on :</code>).</p>
+<p><b>Result: 0/25, every trial hitting the 720-step cap.</b> Two readings — (a) 20k is undertrained,
+(b) an action-execution semantics mismatch in the harness. Investigation: the env controller runs
+<code>control_delta=False</code> (absolute joint angles) and the declared action_space is a nominal [-1,1],
+yet measured demo actions span ±3.0 rad — since demos were collected in this very env, raw radians passing
+through is the likely truth, but it needs confirmation. Two discriminator jobs submitted: an <b>open-loop
+probe</b> (24 demo frames → predicted chunk vs demo-action MSE against a hold-still baseline — settles serving
+-stack health) and a <b>2-trial video job</b> (--video-dir added to the client, committed — failure morphology
+for the record). Phase-1 stays queued until the probe reads out — we don't burn 4 jobs × 25 trials on a
+possibly-broken harness.</p>
+<p><b>Next:</b> read the open-loop probe → (if healthy) submit the four 30k phase-1 jobs → if valid,
+annotate/critic/paired verdicts. PR#4 awaits the user's merge (branch protection).</p>
 """,
 )
 
