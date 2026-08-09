@@ -1126,6 +1126,14 @@ p=0.165 — null이며 음의 경향.</b> 스프레드를 5.8× 열어줘도(can
 n=8의 +0.052/p=0.076은 φ의 n=4 신호와 같은 소멸 패턴(시드 ≥0이 9/16 = 동전). 다양화·veto 계열은 여기서 종결 —
 "트릭을 덧대지 말고 본질로"라는 방향 전환(model-based 리포트 참조)이 데이터로도 정당화됐다.
 n≤8의 유망 신호는 판정으로 취급하지 않는다는 규칙을 재확인.</p>
+<h3>v20 — N=4 소표본 BoN (ACSAC 소견 검증, 사용자 질문)</h3>
+<p><b>배경.</b> ACSAC은 n=4가 최적이라 보고했고, 우리 프레임에서도 근거가 있다: max-of-4는 ~80분위 질의라
+τ=0.9 critic의 보증 범위(N≤10) <b>안</b>이고(N=16은 밖), curse 계수 c₄≈1.0으로 c₁₆≈2.35의 절반 이하.
+확인 결과 우리는 전 실험 N=16 고정 — 처음 검증한다. 단일변수: FINAL iql critic 그대로, N만 16→4, 4시드 페어드.</p>
+<p><b>판정: Δ̄=−0.015 CI[−0.090,+0.060], McNemar +30/−33 p=0.801 — null.</b> N=16(−0.065)보다 점추정은 덜
+나쁘지만(curse 감소 방향과 부호 일치) 이득은 없다. <b>해석: 이 과제의 병목은 τ↔N 부정합이 아니라 σ_signal 부재</b> —
+스프레드가 없으면 어떤 N도 0을 곱한다. ACSAC의 n=4 최적은 참 스프레드가 존재하는 과제의 이야기이며,
+GR1 파일럿의 초기 측정에 N∈{4,8,16} 스윕을 포함해 그 조건에서 재검한다.</p>
 <h3>SNR 조건 — 어떤 선택 규칙도 못 피하는 것</h3>
 <p>BoN 기대 이득 ≈ (참 가치 스프레드 상위꼬리) − (오차 상위꼬리). 참 스프레드가 0에 가까우면(우리 측정: demo 밴드
 0.002–0.023, rand≈vla) 이득의 원천 자체가 없다. <b>따라서 정답은 한 쌍: 신호를 키우는 후보 다양화(canddiv 프로브)
@@ -1912,6 +1920,13 @@ powerless. max-of-N queries the N/(N+1) quantile, so a τ=0.9 critic certifies o
 IQL = query avoidance; CQL/CalQL = value suppression (idle: no OOD reaches our deployment);
 FQL/velocity-steering = policy proximity; unconstrained actor-critic = the dangerous end (worker A's .300,
 p=.004).</p>
+<p><b>v20 — small-N BoN (N=4; ACSAC check, user question).</b> ACSAC reports n=4 as optimal, and our frame
+agrees on the mechanism: max-of-4 queries the ~80th percentile — INSIDE a τ=0.9 critic's certified range
+(N≤10), unlike N=16 — with less than half the curse coefficient. We had never tested it (all runs N=16).
+Single variable: same FINAL iql critic, N 16→4, 4 paired seeds. <b>Verdict: mean −0.015, CI [−0.090,+0.060],
+McNemar +30/−33 p=0.801 — null.</b> Less negative than N=16 (−0.065), sign-consistent with reduced curse, but
+no gain: the binding constraint here is the absence of σ_signal, not τ↔N mismatch. The GR1 pilot will include
+an N∈{{4,8,16}} sweep where real spread may exist.</p>
 <p><b>SNR condition.</b> BoN gain ≈ c_N · σ_signal · ρ, c_N≈√(2 ln N): the true candidate spread is the sole
 source of gain. Measured: demo-only band 0.002–0.023 (at the HL-Gauss bin width), rand≈vla → gain ≈ 0 for any
 selector. Diversification opens the spread (×6.8 at noise 1.5, ×25 at 2.0, critic band following):</p>
