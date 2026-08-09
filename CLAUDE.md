@@ -23,6 +23,8 @@
 - **pre-commit 필수**: 훅이 `.git/hooks/pre-commit`에 설치되어 있다(ruff --fix / ruff-format /
   uv-lock). 커밋이 훅에서 실패하면 고치고 다시 커밋 — `--no-verify` 우회 금지. 훅 파이썬이
   miniconda 3.12를 잡으면 깨지므로 `uvx --python 3.11 pre-commit`으로 재설치한다.
+- **이중 언어 필수**: 모든 엔트리는 `en(eid, title, body)`로 영어판을 함께 작성한다 —
+  허브의 KO/EN 토글이 이를 렌더링한다. 수치 표·figure는 공유, 산문은 완역.
 - **git 스탬프 필수**: 모든 게시는 branch@hash(+dirty)를 포함한다 — 5W1H 헤더의 '코드' 행에
   자동 삽입되고(`GIT_STAMP`), 허브 커밋 메시지에도 붙는다. 게시 전 커밋을 먼저 하는 습관을 권장
   (dirty 스탬프는 재현 불가능한 게시라는 뜻이다).
