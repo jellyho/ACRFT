@@ -84,6 +84,13 @@ def ci_row(name, ds):
 
 
 ENTRIES = []  # (date, eid, title, status, body)
+EN_BODIES = {}  # eid -> English body (KO/EN toggle on the hub; translated progressively)
+EN_TITLES = {}  # eid -> English title
+
+
+def en(eid, title, body):
+    EN_TITLES[eid] = title
+    EN_BODIES[eid] = body
 
 
 def entry(date, eid, title, status, body):
@@ -1636,6 +1643,81 @@ def _decorate(eid, body):
 
 
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
+
+# ================================================================== English versions (KO/EN toggle)
+en(
+    "morning-0809",
+    "Morning synthesis (08-09) — the night of convergence",
+    """
+<p><b>One line.</b> Every branch that was open overnight closed honestly — the trick family (v17b),
+embeddings (phi, phi+proprio), history conditioning, and the offline model-based composition. Two days of
+experiments converge on a single structural fact: <b>on this task, with this task-finetuned VLA, there is no
+value difference among candidates for selection to harvest.</b> The essential next move is the GR1 transfer;
+two user decisions are pending.</p>
+<table class='num'><tr><th>Experiment</th><th>Verdict</th><th>Numbers</th></tr>
+<tr><td>v17b diversified + sigma-veto (n=16)</td><td>null — trick family closed</td><td>mean +0.019, CI [−0.021,+0.059], McNemar +136/−121 p=0.383</td></tr>
+<tr><td>phi-128 embedding ladder (n=8)</td><td>null — the n=4 signal was noise</td><td>mean −0.010</td></tr>
+<tr><td>History critic (iql, td)</td><td>both null — axis closed</td><td>−0.025 / +0.020</td></tr>
+<tr><td>Model-based composition gate (4 coords)</td><td>rejected offline, zero rollouts spent</td><td>demo winrate .479–.487 (0.5 = blind)</td></tr>
+<tr><td>phi+proprio (user question)</td><td>better proprio retention (R² .546→.617) but gate equally closed</td><td>winrate .485</td></tr></table>
+<p><b>Why this is progress.</b> Eight independent negative routes point to the same structural fact, each closed
+with preregistered criteria and paired statistics, mutually replicated with worker A's independent stack.
+The map of "what does not work" is complete, and it dictates the design of the next stage (GR1 pilot:
+measure headroom and candidate spread first).</p>
+<p><b>Pending decisions:</b> (1) GR1 training compute — A: node200/B200 (fast, needs approval) vs
+B: this cluster's PRO6000 (96GB); (2) merging PR#4 (110+ commits) into master.</p>
+""",
+)
+
+en(
+    "model-based",
+    "Back to essentials with model-based — Q(z,a) = γ^h · V(f(z,a))",
+    """
+<p><b>Direction (user directive, 08-09).</b> Instead of stacking tricks, one simple construction that attacks
+the measured root cause (the candidate axis receives no training signal): <b>Q(z,a) = γ^h · V(f(z,a))</b>,
+where f is a latent dynamics model trained by plain supervision on (z, chunk, z′) pairs already present in the
+annotation, and V is the existing IQL value network. Deployment = argmax of V(landing) over the standard 16
+candidates. No CQL, no veto, no noise pools.</p>
+<h3>Gate 1 — does the token pair carry action information?</h3>
+<table class='num'><tr><th>Coordinates</th><th>identity</th><th>no-action</th><th>action-cond.</th><th>action info</th></tr>
+<tr><td>raw 2048</td><td>0.197</td><td>0.128</td><td>0.125</td><td>+2.6% — faint</td></tr>
+<tr><td>PCA-128</td><td>1.225</td><td>0.649</td><td>0.607</td><td>+6.5%</td></tr>
+<tr><td>phi-128</td><td>1.082</td><td>0.579</td><td>0.537</td><td>+7.3%</td></tr></table>
+<p>Action information lives in compressed coordinates (~3x the relative share), but even +7.3% is an existence
+proof, not a dominant signal.</p>
+<h3>Gate 2 — does the composed Q rank candidates? (verdict: no)</h3>
+<p>On 2,000 held-out frames, compute y = V(f(z,a)) for the executed demo chunk and the 16 stored candidates.
+demo_winrate (0.5 = action-blind): raw .479 / PCA .481 / phi .487 / phi+proprio .485.
+<b>In-distribution control (user question): coin-flip even on the training frames themselves</b>
+(.482–.489, bands narrower still) — a fundamental failure, not a generalization gap. The bottleneck is the
+size of the supervision f gets for its action dependence, not memorization; more data would not fix it.</p>
+<p><b>Two-day convergence.</b> Selection tricks, embeddings, history, CalQL and model-based composition all
+independently confirm the same structural fact. The essential response is to change the stage: GR1 tabletop,
+where action selection genuinely separates outcomes — that is finding a valid arena for the question, not a trick.</p>
+""",
+)
+
+en(
+    "gr1-port",
+    "GR1 tabletop port plan — moving to an arena where the question is valid",
+    """
+<p><b>Why GR1.</b> All routes converged on "nothing to harvest on PrepareCoffee with a task-finetuned VLA".
+GR1 tabletop (the AQC paper's setting) offers fixed tabletop scenes, bimanual precision manipulation where
+action choice separates outcomes, and base success rates with headroom.</p>
+<table class='num'><tr><th>Item</th><th>Status</th></tr>
+<tr><td>Simulator (robosuite-gr1 + tabletop fork)</td><td>smoke passed 08-07 (.venv-gr1)</td></tr>
+<tr><td>Data (Teleop-Sim, 5 tasks)</td><td>12G verified — 1,000 episodes/task, LeRobot, ego_view 256², state/action 44d</td></tr>
+<tr><td>Data pipeline code</td><td>gr1_policy + LeRobotGR1DataConfig implemented and committed; TrainConfig draft ready</td></tr>
+<tr><td>Eval harness</td><td>Decided: policy-server split (main venv serves VLA+critic via the standard infer
+protocol — BoN lives in a server-side Policy adapter, commit length expressed by truncating the returned chunk;
+.venv-gr1 runs the env client). No protocol extension needed.</td></tr></table>
+<p><b>Order (preregistered):</b> compute decision → finetune pilot (PnPCanToDrawerClose) → measure base
+success (headroom) and rand-vs-vla gap (candidate spread) FIRST — the PrepareCoffee lesson — then annotate,
+train the FINAL-recipe critic, and run paired verdicts.</p>
+<p><b>Pending user decision:</b> compute A (node200/B200, other machine, fastest) vs B (this cluster's
+PRO6000 96GB, queue-contended).</p>
+""",
+)
 
 # ------------------------------------------------------------------ assemble
 dates = list(dict.fromkeys(d for d, *_ in ENTRIES))

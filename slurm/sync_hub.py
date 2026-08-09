@@ -68,6 +68,8 @@ body{background:#ffffff}
   padding:9px 18px;font-size:.95em;cursor:pointer}
 .wb-tab.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
 #wb-thread .wbx,#wb-map .wbx{margin-top:4px}
+body:not([data-wblang=en]) .wbx-en{display:none}
+body[data-wblang=en] .wbx-ko{display:none}
 </style>"""
 
 # 마인드맵 컬럼(연구 국면) 배치와 컬럼 색 (seaborn deep — 논문 팔레트)
@@ -175,6 +177,14 @@ def main():
     ours = []
     for date, eid, title, status, body in mm.ENTRIES:
         iso = mm.META.get(eid, {}).get("date") or DATE_MAP.get(date, "2026-08-08")
+        en_body = mm.EN_BODIES.get(eid)
+        if en_body:
+            dual = f'<div class="wbx wbx-ko">{body}</div><div class="wbx wbx-en">{en_body}</div>'
+        else:
+            dual = (
+                f'<div class="wbx wbx-ko">{body}</div>'
+                f'<div class="wbx wbx-en"><p class="sub">English version pending — Korean original below.</p>{body}</div>'
+            )
         ours.append(
             (
                 eid,
@@ -185,7 +195,7 @@ def main():
                     "tags": [MARK, "RoboCasa"],
                     "status": "living" if status != "완결" else "finding",
                 },
-                f'<div class="wbx">{body}</div>',
+                dual,
             )
         )
     ours.sort(key=lambda x: x[1]["date"], reverse=True)
@@ -249,6 +259,7 @@ def main():
         '<button class="wb-tab on" data-v="list" onclick="wbView(\'list\')">📋 리포트 목록</button>'
         '<button class="wb-tab" data-v="thread" onclick="wbView(\'thread\')">🧵 데일리 스레드</button>'
         '<button class="wb-tab" data-v="map" onclick="wbView(\'map\')">🗺️ 관계도</button>'
+        '<button id="wb-lang" class="wb-tab" style="margin-left:auto" onclick="wbLang()">EN</button>'
         "</div><!--/wb-tabs-->"
     )
     views = (
@@ -258,6 +269,13 @@ def main():
         "<!--/wb-views-->"
     )
     js = """<script id="wb-tabs-js">
+function wbLang(){
+  const b=document.body, to=(b.dataset.wblang==='en')?'ko':'en';
+  b.dataset.wblang=to; localStorage.setItem('wblang',to);
+  document.getElementById('wb-lang').textContent=(to==='en')?'한국어':'EN';
+}
+(function(){const s=localStorage.getItem('wblang'); if(s==='en'){document.body.dataset.wblang='en';
+  addEventListener('DOMContentLoaded',()=>{const e=document.getElementById('wb-lang'); if(e) e.textContent='한국어';});}})();
 function wbView(v){
   document.querySelectorAll('.wb-tab').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
   const listy=['list','count','chips'];
