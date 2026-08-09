@@ -1076,6 +1076,34 @@ _CONFIGS = [
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
     ),
+    # GR1 tabletop (Teleop-Sim) RLT finetune - the pilot for the GR1 port (see slurm/gr1_config_draft.py).
+    # Data: HF_LEROBOT_HOME must point at the downloaded LeRobot root; repo_id is the dataset dir name.
+    TrainConfig(
+        name="pi05_gr1_rlt",
+        model=pi0_rlt.Pi0RLTConfig(
+            pi05=True,
+            action_horizon=16,
+            action_dim=48,  # GR1 action is 44-d; pad to 48 (pi05_base was 32 - projections re-init fresh)
+            discrete_state_input=False,
+            rlt_backbone_gradient=False,
+        ),
+        data=LeRobotGR1DataConfig(
+            repo_id="gr1_unified.PnPCanToDrawerClose",
+            include_progress=True,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=30_000,  # pilot: enough for the headroom/spread measurement
+        save_interval=10_000,
+        action_dist_interval=0,
+        rlt_monitor_interval=1_000,
+    ),
     #
     # Fine-tuning Aloha configs.
     #
