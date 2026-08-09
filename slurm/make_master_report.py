@@ -924,7 +924,11 @@ entry(
 <table class='num'><tr><th>변경</th><th>내용</th><th>난이도</th></tr>
 <tr><td>action_dim 44</td><td>π0.5 기본 action_dim=32 &lt; GR1 44 → in/out 프로젝션 재초기화 필요(KeepMissing 로더가 처리, 새 프로젝션은 BC 미세조정으로 학습)</td><td>중</td></tr>
 <tr><td>데이터 config</td><td>단일 ego_view 카메라(RoboCasa는 3캠) 매핑 + state 44d repack + norm stats 재계산</td><td>중</td></tr>
-<tr><td>RLT 파이프라인</td><td>주석·critic·평가는 과제 무관 설계라 그대로 — env id만 gr1_unified/*로</td><td>하</td></tr></table>
+<tr><td>RLT 파이프라인</td><td>주석·critic은 과제 무관 — 그대로</td><td>하</td></tr>
+<tr><td><b>평가 하네스 (10:10 조사 갱신)</b></td><td>메인 venv(mujoco 3.3.1)에서 fork env는 버전 assert 3종 완화 후에도
+<b>렌더러 API 비호환</b>(MjRenderContextOffscreen, 3.2.6 전용)으로 불가. 물리 스택 추가 패치는 하지 않는다(원칙).
+<b>확정 아키텍처: 정책 서버 분리</b> — 메인 venv에서 openpi serve_policy(VLA+critic+후보 API), .venv-gr1에서 롤아웃
+클라이언트(env)가 websocket으로 질의. openpi에 서버가 이미 있어 후보/critic 엔드포인트 추가만 필요</td><td>중</td></tr></table>
 <h3>학습 자원 — 사용자 결정 필요</h3>
 <table class='num'><tr><th>옵션</th><th>내용</th><th>비고</th></tr>
 <tr><td>A. node200 (B200, 다른 머신)</td><td>기존 VLA 미세조정이 돌던 인프라(train_rlt.slurm, /data5) — 가장 빠름</td><td>워커A 머신 자원 — 승인 필요, torch/B200 이슈 이력 참고</td></tr>
