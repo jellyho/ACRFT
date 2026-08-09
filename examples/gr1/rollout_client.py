@@ -22,11 +22,44 @@ import numpy as np
 sys.path.insert(0, "third_party/robocasa-gr1-tabletop-tasks")
 sys.path.insert(0, "third_party/robosuite-gr1")
 
+# 44-d GR00T layout (meta/modality.json). The ArmsAndWaist robot exposes neither legs nor neck;
+# those channels are exactly 0 throughout the demos, so we zero-fill state and drop them from actions.
+STATE_SLICES = [
+    ("state.left_arm", 0, 7),
+    ("state.left_hand", 7, 13),
+    (None, 13, 19),  # left_leg
+    (None, 19, 22),  # neck
+    ("state.right_arm", 22, 29),
+    ("state.right_hand", 29, 35),
+    (None, 35, 41),  # right_leg
+    ("state.waist", 41, 44),
+]
+ACTION_SLICES = {
+    "action.left_arm": (0, 7),
+    "action.left_hand": (7, 13),
+    "action.right_arm": (22, 29),
+    "action.right_hand": (29, 35),
+    "action.waist": (41, 44),
+}
+
+
+def pack_state(obs: dict) -> np.ndarray:
+    state = np.zeros(44, np.float32)
+    for key, a, b in STATE_SLICES:
+        if key is not None:
+            state[a:b] = np.asarray(obs[key], np.float32).reshape(-1)
+    return state
+
+
+def split_action(flat: np.ndarray) -> dict:
+    return {k: np.asarray(flat[a:b], np.float32) for k, (a, b) in ACTION_SLICES.items()}
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="PnPCanToDrawerClose")
     ap.add_argument("--robot", default="GR1ArmsAndWaistFourierHands")
+    ap.add_argument("--prompt", default="PnPCanToDrawerClose", help="must match the training task string")
     ap.add_argument("--num-trials", type=int, default=50)
     ap.add_argument("--seed", type=int, default=5000)
     ap.add_argument("--max-steps", type=int, default=720)
@@ -48,17 +81,13 @@ def main():
         success, step = False, 0
         while step < args.max_steps and not success:
             element = {
-                "observation/image": np.asarray(obs["video.ego_view_pad_res256_freq20"])[-1],
-                "observation/state": np.asarray(obs["state"], np.float32)
-                if "state" in obs
-                else np.concatenate(
-                    [np.asarray(v, np.float32).reshape(-1) for k, v in sorted(obs.items()) if k.startswith("state.")]
-                ),
-                "prompt": getattr(env.unwrapped, "language_instruction", args.task),
+                "observation/image": np.asarray(obs["video.ego_view_pad_res256_freq20"]),  # [256,256,3] uint8
+                "observation/state": pack_state(obs),
+                "prompt": args.prompt,
             }
             chunk = np.asarray(policy.infer(element)["actions"])  # [n_exec, 44]
             for action in chunk:
-                obs, reward, term, trunc, info = env.step(action)
+                obs, reward, term, trunc, info = env.step(split_action(action))
                 success = success or bool(reward > 0) or bool(info.get("success", False))
                 step += 1
                 if success or step >= args.max_steps or term or trunc:
