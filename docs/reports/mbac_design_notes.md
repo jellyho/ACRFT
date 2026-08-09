@@ -601,3 +601,54 @@ Clean A/B against calswap: same selection rule, different Q.
 
 Cost: one small head + one precompute pass + a target-swap in
 train_rlt_critic. Everything else exists.
+
+## Iteration 11 — the exclusion chain is complete; AC-RFT pilot proposal
+
+Two days, two workers, and every offline route to candidate discrimination is
+now closed with measurements:
+
+| route | verdict | evidence |
+|---|---|---|
+| representation (rlt5 / mae0.5 / PCA / phi / phipro) | not the bottleneck | PC-mae0.5 calswap sens .427 (token exonerated); ladder nulls |
+| objective (plain IQL / CalQL / +swap / dueling / TD) | fixes binding, not resolution | swap binding .94-.999 everywhere; GP sens .0002 |
+| candidate diversity | diversity != value spread | GP most diverse (.110) yet sens 0; canddiv v17 null |
+| model composition (V(f(z,a)), MVE 4 variants) | structurally blind + inverted | wB .48; MVE sens .005 across ALL knobs, demo-vs-cand .17 |
+| mixed-outcome data | perfects V, not Q | YAM V .966 / sens 0 (episode-level labels) |
+
+What every route lacks is the same thing: **same-state counterfactuals** —
+trajectories where the state is (near-)identical and the executed chunk
+differs, with different outcomes. Offline teleop cannot contain these. Rollouts
+under our own sampling DO: every replan draws N=16 chunks, executes one, and
+the sim tells us how the episode ends.
+
+### AC-RFT pilot (proposal for user review — design-before-implement)
+
+**Phase 0 — counterfactual harvesting (1 GPU-day, no method risk):**
+Roll the GP 90k VLA (best ckpt, .560) on the 150 pre-registered scenes +
+150 fresh scenes, vanilla vla mode, but LOG the full Replan record (all 16
+candidates, chosen index, token) at every replan — the existing eval_critic
+trace machinery already carries this. ~300 episodes x ~40 replans = 12k
+decision points with executed-vs-rejected chunks and episode outcomes.
+- Immediate measurement: at states visited TWICE across episodes (phi-kNN
+  match), do different executed chunks correlate with different outcomes?
+  This is the FIRST direct measurement of whether same-state counterfactuals
+  even exist at this policy's noise level — the quantity every offline route
+  was missing. If they don't exist, no critic can ever help this policy and
+  the honest conclusion is "the policy's own spread is the ceiling".
+
+**Phase 1 — critic on on-policy data (2 GPU-days):**
+Train the established calswap critic on the harvested rollouts (successes AND
+failures, chunk-level credit from episode outcome + gamma^dt). Gates: the same
+five diagnostics, but now sensitivity has a real chance - failures give
+within-task contrast at the CHUNK level, not episode level.
+
+**Phase 2 — advantage-weighted RFT (the payoff, 3-4 GPU-days):**
+Fine-tune the VLA's flow with per-chunk advantage weights
+    w = exp(beta * (Q(z, a_exec) - V(z)))            [AWR on flow matching]
+computed by the phase-1 critic on the harvested data - never a policy
+gradient through the flow, just reweighted regression (Q-VGM style). Judge on
+the pre-registered 3x50 protocol vs the 90k baseline (.560 +- .035): +0.05
+pooled would clear the noise floor we measured.
+
+Compute honesty: phases are sequential gates - phase 0's measurement can kill
+the program cheaply before phases 1-2 spend anything.
