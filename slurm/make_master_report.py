@@ -1191,6 +1191,16 @@ fix/probe-eval-jit 브랜치에 커밋 중 — 머지 시 조율 필요.</p>
 <h3>⑤ 운영 관행</h3>
 <p>좀비 잡(squeue R인데 실제 사망)의 로그 mtime 감시 — 우리도 행 걸린 평가 2건을 겪었으므로 감시 루틴에 채택.
 체크포인트 자동 아카이브(HF 업로드 검증 후 로컬 삭제)도 디스크 사고 예방책으로 참고.</p>
+<h3>⑥ 08-10 갱신 — 워커A 3-태스크 교차 판정이 우리 GR1 설계를 검증하다</h3>
+<p>워커A 신규 판정(08-09 "V는 완성, Q는 spread 퍼즐") 정독. 요지: ① YAM 혼합성과 데이터로 <b>역대 최고
+V(Spearman .966)</b>를 얻었지만 action sensitivity는 0 — 다만 이는 과학습 정책의 후보 붕괴(spread 1.8%)가 강제한 것.
+② <b>퍼즐: GP는 후보가 가장 다양(11%)한데도 sens≈.0002</b> — "후보 spread가 크면 가치 차이도 있겠지"라는
+직관(spread→sens 상관)이 깨졌다. ③ 종합: 에피소드 단위 실패 라벨은 '어느 상태가 실패로 가는가'는 가르치지만
+같은 상태 후보 구분은 못 가르친다 — 장벽의 원인이 <b>동일-상태 반사실의 부재</b>로 특정됐다.</p>
+<p><b>우리 GR1 계획에 주는 함의 둘.</b> (a) phase-1에서 행동공간 spread만 재면 속는다(GP 반례) —
+우리 사전등록대로 <b>결과(성공률) 수준의 rand-vs-vla 페어드 비교</b>가 옳은 게이트다. (b) 데모-only 주석으로 critic이
+게이트를 통과 못 하면, 다음 수는 트릭이 아니라 <b>--policy-seed형 on-policy 수집</b>(같은 장면 K회 롤아웃 = 장면 수준
+반사실 생성)이다 — 워커A의 "on-policy 개입만이 반사실을 준다"는 논증과 우리 v14 K-per-scene 경험이 같은 결론.</p>
 """,
 )
 
@@ -1369,7 +1379,7 @@ META = {
         "what": "교차 워커 배움 — 상호 재현·McNemar 도입·표현/데이터 공격로 비교",
         "how": "워커A 전 리포트 정독 후 즉시 반영",
         "why": "워커끼리 서로 배우라는 지시 — 독립 스택의 결론 상호 검증",
-        "links": ["final", "kper", "papers-value-steering"],
+        "links": ["final", "kper", "papers-value-steering", "gr1-port", "model-based"],
     },
     "conservatism": {
         "date": "2026-08-08 15:20",
@@ -1920,6 +1930,16 @@ in three FINAL arms); mutual replication (their independent φ + Cal-QL stack: B
 .300 p=.004); their representation-side attack on episode identity vs our data-side one (complementary);
 ops practices (zombie-job mtime detection, checkpoint archiving). The loop is now bidirectional — their MVE
 critic cites both workers' significant negatives as design constraints.</p>
+<p><b>08-10 update — worker A's 3-task cross-verdict validates our GR1 design.</b> Their new verdict ("V is
+solved, Q is a spread puzzle"): ① YAM mixed-outcome data yields their <b>best-ever V (Spearman .966)</b> yet
+action sensitivity 0 — forced by candidate collapse (1.8% spread from an overtrained policy). ② <b>Puzzle: GP
+has the MOST diverse candidates (11%) yet sens≈.0002</b> — the intuition that action-space spread implies value
+spread is broken. ③ Episode-level failure labels teach which states fail, not which same-state chunk to pick:
+the barrier is pinned to the <b>absence of same-state counterfactuals</b>. Two implications for our GR1 plan:
+(a) measuring action-space spread alone is misleading (the GP counterexample) — our preregistered
+<b>outcome-level paired rand-vs-vla comparison</b> is the right gate; (b) if a demo-only critic fails that gate,
+the next move is not another trick but <b>--policy-seed-style on-policy collection</b> (K rollouts per scene =
+scene-level counterfactuals), converging with worker A's "only on-policy intervention provides them."</p>
 """,
 )
 
