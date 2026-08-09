@@ -955,8 +955,22 @@ entry(
 불일치-드롭+fresh 유지 구현(커밋), ⑧ A6000 48GB는 batch16도 OOM(기각), ⑨ PRO6000 96GB도 batch32 OOM →
 batch16 채택. <b>학습 진입 성공(21:15, node57 PRO6000): 1.7s/it, 30k ETA ~13.7시간(08-10 오전 완주 예상).</b>
 9건의 사고 전부 원인-수정 짝으로 기록 — 이식 완료.</p>
-<p><b>다음 순서:</b> 파일럿 완주 → 정책 서버 + .venv-gr1 클라이언트로 headroom·rand-vs-vla 스프레드 측정 →
-유효 시 주석·critic·페어드. PR#4는 branch protection으로 사용자 머지 대기.</p>
+<p><b>하네스 계약 확정 (08-09 밤, GPU 노드 스모크 2건).</b> 로그인 노드는 GPU가 없어 EGL 오프스크린 렌더가
+불가하므로 스모크를 3090 노드 슬럼 잡으로 돌렸다. 확정된 계약: ① obs 이미지 키
+<code>video.ego_view_pad_res256_freq20</code>(256²×3 uint8), ② env action은 flat 벡터가 아니라
+<b>부위별 Dict</b>(left/right arm 7 + left/right hand 6 + waist 3 = 29ch) — 데이터셋 44d 레이아웃
+(modality.json: arm7·hand6·<i>leg6</i>·<i>neck3</i>·arm7·hand6·<i>leg6</i>·waist3)에서 legs·neck은 데모 전 구간
+정확히 0(stats 확인)이라 state는 zero-fill 44d 조립, action은 flat 44 → 5-슬라이스 Dict 분해, ③ 학습 프롬프트는
+tasks 테이블 그대로 <b>"PnPCanToDrawerClose"</b>(자연어 지시문 아님 — 평가도 동일 문자열 사용), ④ 성공 판정은
+<code>info["success"]</code>(프로그램적). rollout_client에 반영·커밋, openpi-client는 .venv-gr1에 설치 완료.</p>
+<p><b>사고 ⑩ — 선제 차단 (23:35).</b> 파일럿 체크포인트 목적지가 기본값 <code>/home</code>(200G 중 잔여 1.4G,
+100% 풀)이었고 save_interval=10k라 첫 저장(step 10k, ~01:58)에 ~30GB 쓰기 → ENOSPC로 13.7시간 학습이
+중반에 죽을 운명이었다. 저장 전 안전 창에서 체크포인트 디렉토리를 /scratch(12T 여유)로 심링크 스왑해 무중단
+우회 — 10k 저장 성공 여부는 워처가 감시하고, 저장되는 즉시 그 중간 체크포인트로 서버+클라이언트 E2E 스모크를
+돌려 30k 완주 전에 평가 루프 전체를 검증한다.</p>
+<p><b>다음 순서:</b> 10k 중간 체크포인트로 E2E 하네스 스모크 → 30k 완주 시 phase-1 평가(선작성 완료:
+mode=vla 헤드룸 50트라이얼 + mode=rand 스프레드, 페어드 시드 5000+i) → 유효 시 주석·critic·페어드.
+PR#4는 branch protection으로 사용자 머지 대기.</p>
 """,
 )
 
@@ -2067,8 +2081,25 @@ drops mismatched entries and keeps fresh params (committed), ⑧ A6000 48GB OOMs
 ⑨ PRO6000 96GB OOMs at batch 32 → batch 16 adopted. <b>Training entered (21:15, node57 PRO6000): 1.7 s/it,
 ~13.7 h to 30k (done by mid-morning 08-10).</b> All nine incidents recorded as cause-fix pairs — the port is
 complete.</p>
-<p><b>Next:</b> pilot completion → policy server + .venv-gr1 client to measure headroom and the rand-vs-vla
-spread → if valid, annotate/critic/paired verdicts. PR#4 awaits the user's merge (branch protection).</p>
+<p><b>Harness contract pinned down (night of 08-09, two GPU-node smokes).</b> The login node has no GPU so EGL
+offscreen rendering fails there; the smokes ran as Slurm jobs on 3090 nodes. Confirmed contract: ① obs image key
+<code>video.ego_view_pad_res256_freq20</code> (256²×3 uint8); ② the env action is not a flat vector but a
+<b>per-part Dict</b> (left/right arm 7 + left/right hand 6 + waist 3 = 29ch) — in the dataset's 44-d layout
+(modality.json: arm7·hand6·<i>leg6</i>·<i>neck3</i>·arm7·hand6·<i>leg6</i>·waist3) the legs and neck channels are
+exactly 0 throughout the demos (verified from stats), so state is assembled as zero-filled 44-d and the flat 44-d
+action is split into the 5 Dict slices; ③ the training prompt is the literal task string
+<b>"PnPCanToDrawerClose"</b> (not the natural-language instruction — eval uses the identical string); ④ success is
+read programmatically from <code>info["success"]</code>. rollout_client updated and committed; openpi-client
+installed into .venv-gr1.</p>
+<p><b>Incident ⑩ — pre-empted (23:35).</b> The pilot's checkpoint destination defaulted to <code>/home</code>
+(1.4G free of 200G, 100% full) with save_interval=10k, so the first save (step 10k, ~01:58) would have written
+~30GB and killed the 13.7-hour run mid-flight with ENOSPC. Inside the safe window before any save, the checkpoint
+directory was symlink-swapped to /scratch (12T free) with no interruption — a watcher confirms the 10k save, and
+the moment it lands we run a server+client end-to-end smoke on that intermediate checkpoint, validating the whole
+evaluation loop before 30k completes.</p>
+<p><b>Next:</b> E2E harness smoke on the 10k intermediate checkpoint → at 30k, phase-1 eval (pre-written:
+mode=vla headroom 50 trials + mode=rand spread, paired seeds 5000+i) → if valid, annotate/critic/paired verdicts.
+PR#4 awaits the user's merge (branch protection).</p>
 """,
 )
 
