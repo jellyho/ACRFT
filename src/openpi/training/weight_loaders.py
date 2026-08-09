@@ -105,10 +105,14 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
 
-    # First, take all weights that are a subset of the reference weights.
+    # First, take all weights that are a subset of the reference weights. A checkpoint entry whose
+    # SHAPE disagrees with the reference is dropped (kept fresh) - e.g. action_in/out projections
+    # when action_dim changes (GR1 44d vs pi05_base 32d); loading it would fail the shape check.
     result = {}
     for k, v in flat_loaded.items():
         if k in flat_ref:
+            if hasattr(flat_ref[k], "shape") and tuple(v.shape) != tuple(flat_ref[k].shape):
+                continue
             result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
 
     flat_loaded.clear()
@@ -118,5 +122,16 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     for k in {k for k in flat_ref if pattern.fullmatch(k)}:
         if k not in result:
             result[k] = flat_ref[k]
+
+    # Finally, any reference key still absent (checkpoint lacked it, or it was shape-dropped above)
+    # keeps its fresh initialization - without this the returned tree would be missing leaves.
+    leftover = [k for k in flat_ref if k not in result]
+    for k in leftover:
+        result[k] = flat_ref[k]
+    if leftover:
+        logger.info(
+            f"weight loader: {len(leftover)} params kept fresh (absent or shape-mismatched): "
+            f"{sorted(leftover)[:6]}{' ...' if len(leftover) > 6 else ''}"
+        )
 
     return flax.traverse_util.unflatten_dict(result, sep="/")
