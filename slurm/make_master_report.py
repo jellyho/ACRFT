@@ -927,8 +927,11 @@ entry(
 <tr><td>RLT 파이프라인</td><td>주석·critic은 과제 무관 — 그대로</td><td>하</td></tr>
 <tr><td><b>평가 하네스 (10:10 조사 갱신)</b></td><td>메인 venv(mujoco 3.3.1)에서 fork env는 버전 assert 3종 완화 후에도
 <b>렌더러 API 비호환</b>(MjRenderContextOffscreen, 3.2.6 전용)으로 불가. 물리 스택 추가 패치는 하지 않는다(원칙).
-<b>확정 아키텍처: 정책 서버 분리</b> — 메인 venv에서 openpi serve_policy(VLA+critic+후보 API), .venv-gr1에서 롤아웃
-클라이언트(env)가 websocket으로 질의. openpi에 서버가 이미 있어 후보/critic 엔드포인트 추가만 필요</td><td>중</td></tr></table>
+<b>확정 아키텍처: 정책 서버 분리</b> — 메인 venv에서 openpi serve_policy(VLA+critic), .venv-gr1에서 롤아웃
+클라이언트(env)가 websocket 질의. <b>설계 확정(11:40): 프로토콜 확장 불필요</b> — 표준 infer(obs)→actions 인터페이스를
+그대로 쓰고, ① BoN 로직(후보 16→critic→argmax)은 서버측 Policy 어댑터(BoNServePolicy) 내부에, ② 커밋 길이는
+반환 chunk를 n_exec 길이로 잘라 보내는 것으로 표현(클라이언트는 받은 만큼 실행하는 표준 루프), ③ vla 기준선 =
+같은 서버의 mode=vla. 클라이언트는 rollout.py의 시드·페어링·stage 로깅 프로토콜을 이식</td><td>중</td></tr></table>
 <h3>학습 자원 — 사용자 결정 필요</h3>
 <table class='num'><tr><th>옵션</th><th>내용</th><th>비고</th></tr>
 <tr><td>A. node200 (B200, 다른 머신)</td><td>기존 VLA 미세조정이 돌던 인프라(train_rlt.slurm, /data5) — 가장 빠름</td><td>워커A 머신 자원 — 승인 필요, torch/B200 이슈 이력 참고</td></tr>
