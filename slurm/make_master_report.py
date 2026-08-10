@@ -877,6 +877,21 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 <tr><td>이산 선택 → 연속 조향</td><td>Q-VGM: 재순위는 후보를 다듬지 못함</td><td><b>∂Q/∂a velocity correction 실험 설계</b> (기존 CalQL critic 재사용)</td></tr>
 <tr><td>가치의 용처는 학습-시간</td><td>Robo-ValueRL: BoN 없이 품질 조건화+잔차 어댑터로 +26~34%</td><td>히스토리 조건 critic·실패 페널티 타깃 도입, 어댑터 경로는 사용자 결정</td></tr>
 <tr><td>가치 신호 자체는 존재</td><td>프로빙 R²=0.55, 우리 held-out rise-collapse</td><td>critic 학습은 성공 — 병목은 배포 방식이라는 확신 강화</td></tr></table>
+<h3>➃ TD-JEPA (FAIR, arXiv:2510.00739) — 사용자 요청 리뷰 (08-10)</h3>
+<p><b>무엇.</b> 상태 인코더 φ + <b>정책조건 행동조건 예측기</b> T(φ(s),a,z) + 정책 π_z를 <b>단일 TD 목적식</b>으로
+동시 학습하는 zero-shot RL: T(φ(s),a,z) ≈ φ(s′)+γT(φ(s′),a′,z), a′~π_z. 예측기가 φ의
+<b>successor feature</b>(미래 상태 방문의 할인합 요약)를 잠재공간에서 직접 근사하므로, 사후에 어떤 보상이 와도
+Q(s,a)=⟨T,w_r⟩로 조립 가능. 상태/태스크 인코더 분리(비대칭 이중 예측기)+직교 정규화로 collapse 방지.
+ExoRL·OGBench 65태스크, 특히 픽셀에서 강함.</p>
+<p><b>HILP와의 차이.</b> HILP는 도달가능성 <i>거리</i>만 남기는 상태 임베딩(행동 정보 없음 — 그래서 우리는 f(z,a)를
+따로 지도학습으로 붙였고, 그 합성게이트가 action-blind로 판정났다). TD-JEPA는 행동조건 장기예측이 목적식에
+내장 — 우리 3단 구성(HILP φ + 지도 f + IQL V)을 원리적으로 <b>하나의 TD 손실로 대체</b>한다.</p>
+<p><b>우리 판정과의 교차 — 솔직한 평가.</b> 두 워커가 수렴한 벽("demo-only엔 동일-상태 반사실이 없다")은
+TD-JEPA도 공짜로 못 넘는다: 단일 텔레옵 데모에선 z(정책) 공간이 1개로 붕괴한다. 그러나 z-조건 구조는
+"같은 상태, 다른 정책 → 다른 미래"라는 반사실을 <b>정책축에서 제조</b>하는 장치이고, 우리가 phase-2에 계획한
+on-policy K-per-scene 수집(vla/rand/noise-scale 변형)이 정확히 그 정책 패밀리를 공급한다.
+<b>액션:</b> GR1 phase-1 게이트 통과 + on-policy 수집 시점에 phase-2 critic을 TD-JEPA(z=정책변형,
+데이터=demos+rollouts)로 사전등록 (Task#8).</p>
 """,
 )
 
@@ -1961,6 +1976,21 @@ Adoptables: short history (tested: null here), failure-penalty targets, the adap
 the attribution rule). <b>V-GPS</b>: K=50 Cal-QL reranking — gains where the base is suboptimal vs its data.
 <b>Q-VGM</b>: critic gradients steer flow denoising; "discrete reranking cannot refine candidates".
 <b>Frozen-VLA probing</b>: value decodes linearly from frozen features (R²=.55); gains only with headroom.</p>
+<p><b>TD-JEPA (FAIR, 2510.00739) — user-requested review (08-10).</b> Learns a state encoder φ, a
+<b>policy- and action-conditioned predictor</b> T(φ(s),a,z), and latent policies π_z under a <b>single TD
+objective</b>: T(φ(s),a,z) ≈ φ(s′)+γT(φ(s′),a′,z), a′~π_z — the predictor directly approximates φ's
+<b>successor features</b> in latent space, so any later reward assembles into Q(s,a)=⟨T,w_r⟩ zero-shot.
+Separate state/task encoders (asymmetric dual predictors) + orthonormality regularization prevent collapse;
+strong on ExoRL/OGBench, especially from pixels. <b>vs HILP:</b> HILP keeps only reachability <i>distance</i>
+(no action information — which is why we bolted a supervised f(z,a) on top, and that composition gated out
+action-blind). TD-JEPA bakes action-conditioned long-horizon prediction into the objective — it would replace
+our three-piece stack (HILP φ + supervised f + IQL V) with <b>one TD loss</b>. <b>Honest crossing with our
+verdicts:</b> the wall both workers converged on (demo-only data has no same-state counterfactuals) is not
+crossed for free — on a single teleop behavior mode the z-space collapses to one policy. But z-conditioning is
+precisely a machine for manufacturing "same state, different policy → different future" counterfactuals along
+the policy axis, and our planned phase-2 on-policy K-per-scene collection (vla/rand/noise-scale variants)
+supplies exactly that policy family. <b>Action:</b> once GR1 phase-1 gates pass and on-policy collection
+exists, preregister the phase-2 critic as TD-JEPA (z = policy variant, data = demos+rollouts) — Task#8.</p>
 """,
 )
 
