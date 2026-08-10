@@ -977,6 +977,20 @@ TD 손실로 해낸다. <b>ARQ transformer는 아키텍처 그대로, 출력 헤
 더 나은 수도관"이지 보장이 아니다. 다만 우리가 잰 +7.3%가 정확히 압축 좌표의 예측 신호였으므로, 그 신호를
 정면으로 먹는 목적식이라는 점에서 시도 가치가 가장 높은 단일 변경이다. (Task#8, GR1 phase-1 게이트 통과 시
 A단계 사전등록.)</p>
+<h3>⑧ Actor-critic으로도 가능한가 (08-10 사용자 질문)</h3>
+<p><b>가능하고, 프레임에 내장돼 있다</b> — TD-JEPA 원본부터 잠재 정책을 Q에 대한 DPG로 학습하는
+actor-critic이다. 우리 버전에서 Q=⟨F(s,chunk),w⟩는 chunk에 미분 가능하고, 그 그래디언트의 해석이 깨끗하다:
+∂Q/∂chunk = wᵀ·∂F/∂chunk = <b>"chunk를 어느 방향으로 틀면 예측 착지 임베딩이 φ-공간의 가치 상승 방향으로
+움직이는가"</b>. BoN(16개 중 고르기)의 다음 단계인 연속 다듬기다.</p>
+<table class='num'><tr><th>형태 (약→강)</th><th>무엇</th><th>학습</th><th>위험</th></tr>
+<tr><td>∂Q/∂a flow 조향</td><td>VLA flow 디노이징에 velocity correction 주입</td><td>불필요(테스트타임)</td><td>낮음 — 스텝 크기로 통제, critic 생기면 공짜 팔</td></tr>
+<tr><td>AWR 잔차 어댑터</td><td>exp(A/β) 가중 BC로 소형 어댑터 학습 (A=Q−V)</td><td>가벼움</td><td>낮음 — 가중치가 데이터 chunk에만 붙어 in-support 보장 (Robo-ValueRL 어댑터 계열)</td></tr>
+<tr><td>DPG 잔차 액터</td><td>δ(φ(s),chunk)를 ∂Q/∂a로 직접 상승</td><td>있음</td><td><b>높음</b> — 아래</td></tr></table>
+<p><b>단, 우리 conservatism 2축 진단이 정확히 여기서 돌아온다.</b> critic-argmax(TD 3팔)조차 추정 오차를
+골라 밟아 유의한 해악을 냈다(McNemar p&lt;0.01). ∂Q/∂a 상승은 과대평가 방향으로 <b>연속적으로 파고들어</b>
+축2(winner's curse)를 이산 선택보다 세게 착취한다 — TD-JEPA 벤치에서 되는 이유는 탐사 데이터로 Q가 넓게
+교정돼 있기 때문이고, demo-only에선 몇 스텝만 밀어도 OOD다. <b>개입 강도 사다리: BoN 게이트(신호 확인) →
+flow 조향·AWR 어댑터(BC-앵커 내장) → DPG 액터는 on-policy 수집으로 Q가 자기 분포에서 교정된 후(C단계 이후)에만.</b></p>
 """,
 )
 
@@ -2181,6 +2195,22 @@ the output head changes</b> (HL-Gauss can stay as an auxiliary head).</p>
 pipe for a weak signal, not a guarantee. But the +7.3% we measured lives exactly in compressed-coordinate
 prediction, and this objective consumes that signal head-on: the highest-value single change available.
 (Task#8; stage A preregistered once the GR1 phase-1 gates pass.)</p>
+<h3>⑧ Does it work as an actor-critic too? (user question, 08-10)</h3>
+<p><b>Yes — natively.</b> The original TD-JEPA already trains its latent policies by DPG against Q. In our
+version Q=⟨F(s,chunk),w⟩ is differentiable in the chunk, with a clean interpretation:
+∂Q/∂chunk = wᵀ·∂F/∂chunk = <b>"the direction that moves the predicted landing embedding up the value
+gradient in φ-space"</b> — continuous refinement, the step beyond BoN's discrete pick-of-16.</p>
+<table class='num'><tr><th>Form (weak→strong)</th><th>What</th><th>Training</th><th>Risk</th></tr>
+<tr><td>∂Q/∂a flow steering</td><td>velocity correction injected into the VLA's flow denoising</td><td>none (test-time)</td><td>low — step-size-controlled; a free arm once the critic exists</td></tr>
+<tr><td>AWR residual adapter</td><td>small adapter trained by exp(A/β)-weighted BC (A=Q−V)</td><td>light</td><td>low — weights attach only to data chunks, in-support by construction (Robo-ValueRL family)</td></tr>
+<tr><td>DPG residual actor</td><td>ascend δ(φ(s),chunk) directly along ∂Q/∂a</td><td>yes</td><td><b>high</b> — below</td></tr></table>
+<p><b>But our two-axis conservatism diagnosis returns exactly here.</b> Even critic-argmax (the TD arms)
+significantly harmed by stepping on estimation errors (McNemar p&lt;0.01). Gradient ascent on ∂Q/∂a digs into
+overestimated directions <b>continuously</b>, exploiting axis 2 (winner's curse) harder than any discrete
+pick. It works in TD-JEPA's benchmarks because exploratory data calibrates Q broadly; on demo-only data a few
+steps already leave support. <b>Intervention ladder: BoN gate (signal first) → flow steering and AWR adapter
+(BC anchors built in) → DPG actor only after on-policy collection calibrates Q on its own distribution
+(post stage C).</b></p>
 """,
 )
 
