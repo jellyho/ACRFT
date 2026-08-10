@@ -1465,6 +1465,17 @@ raw 토큰 주입, 출력 오차 45%)로 <b>φ-소비 롤아웃 팔 전체 무�
 쓰는 kNN 판정: φ 이웃 act-cos .661 vs stage-only .334(paired +.327), raw 대비 +.026 유의. "φ가 잇는 것은
 phase가 아니라 블럭-팔 상대 배치 같은 관계 기하"라는 발견 — 남은 병목을 "그 다리를 건너는 action-조건
 backup"으로 특정한 점이 우리 TD-SF-ARQ의 벡터 SF 타깃 논리와 정확히 맞물린다.</p>
+<h3>⑧ 08-11 갱신 — 워커A YAM 실기 스케일링이 우리 GR1에 주는 경고</h3>
+<p>워커A r51(YAM π0.5, 체크포인트 50k–200k×10트라이얼): <b>완주 0/50, 그리고 결정적 교차</b> — 200k는
+milestone ≥1을 10/10 통과하지만 ≥3은 0/10, 즉 <b>과학습이 쉬운 구간만 확실히 하고 어려운 구간은 전멸</b>시킨다.
+오프라인에서 잰 200k 후보 스프레드 붕괴(.018)와 정합 — 정책이 사실상 결정론이 되어 후보축이 죽는다. H60(히스토리
+60) 변형은 open-loop 교정 상실로 손해(우리 adaptive chunking 동기와 같은 관찰).</p>
+<p><b>우리 GR1 이식에 즉시 반영:</b> ① pilot-2가 30k에서 완주 0일 때 "학습 부족"으로만 읽지 말 것 — 워커A는
+<b>더 오래 학습한 200k가 어려운 구간에서 오히려 나빠졌다</b>. 우리 phase-1은 헤드룸을 <b>milestone별로</b> 봐야
+하며(전 구간 0/50이어도 milestone별 통과율 곡선이 정보), 후보 스프레드가 아직 살아있는 <b>덜 학습된 체크포인트
+(예: 20k)</b>가 critic 실험엔 오히려 나을 수 있다. ② 이는 우리 σ_signal 프레임의 실기 재확인이다: 과학습→스프레드
+붕괴→선택 신호 소멸. <b>critic 실험용 기준 체크포인트는 스프레드가 살아있는 지점으로 프로그램적 선택</b>(후보
+16개 std를 체크포인트별로 재어 최대 지점)하도록 phase-1 절차에 추가한다.</p>
 
 """,
 )
@@ -2437,6 +2448,17 @@ resolving "passes offline, zero in rollouts"), YAM's 0.0000 was a gate defect. N
 verdict:</b> φ's bridging axis is relational geometry, not stage (act-cos .661 vs stage-only .334); the
 remaining bottleneck named as "the action-conditioned backup that crosses that bridge" — exactly the axis our
 vector-SF target feeds.</p>
+<p><b>08-11 update — worker A's YAM real-robot scaling warns our GR1.</b> r51 (YAM π0.5, checkpoints
+50k–200k ×10 trials): <b>0/50 completions and a decisive crossing</b> — 200k passes milestone ≥1 at 10/10 but
+≥3 at 0/10; overtraining sharpens the easy segment and wipes out the hard one, matching the offline 200k
+candidate-spread collapse (.018) — the policy goes near-deterministic and the candidate axis dies. The H60
+(history-60) variant loses via lost open-loop correction (same observation motivating our adaptive chunking).
+<b>Immediate GR1 implications:</b> ① a 0/N at 30k is not only "undertrained" — worker A's longer-trained 200k
+got worse on hard milestones; our phase-1 must read headroom <b>per milestone</b> (a per-milestone pass-rate
+curve is informative even at 0/50 overall), and a <b>less-trained checkpoint (e.g. 20k)</b> with live candidate
+spread may be better for critic experiments. ② This is a real-robot re-confirmation of our σ_signal frame:
+overtraining → spread collapse → selection signal vanishes. We add to phase-1: <b>programmatically pick the
+critic checkpoint at the spread-maximizing point</b> (measure 16-candidate std per checkpoint).
 
 """,
 )
