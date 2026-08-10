@@ -877,21 +877,39 @@ matched-pair 순서 정확도 94.2% vs 셔플 50.1%). 단, 행동 개선은 <b>h
 <tr><td>이산 선택 → 연속 조향</td><td>Q-VGM: 재순위는 후보를 다듬지 못함</td><td><b>∂Q/∂a velocity correction 실험 설계</b> (기존 CalQL critic 재사용)</td></tr>
 <tr><td>가치의 용처는 학습-시간</td><td>Robo-ValueRL: BoN 없이 품질 조건화+잔차 어댑터로 +26~34%</td><td>히스토리 조건 critic·실패 페널티 타깃 도입, 어댑터 경로는 사용자 결정</td></tr>
 <tr><td>가치 신호 자체는 존재</td><td>프로빙 R²=0.55, 우리 held-out rise-collapse</td><td>critic 학습은 성공 — 병목은 배포 방식이라는 확신 강화</td></tr></table>
-<h3>➃ TD-JEPA (FAIR, arXiv:2510.00739) — 사용자 요청 리뷰 (08-10)</h3>
-<p><b>무엇.</b> 상태 인코더 φ + <b>정책조건 행동조건 예측기</b> T(φ(s),a,z) + 정책 π_z를 <b>단일 TD 목적식</b>으로
-동시 학습하는 zero-shot RL: T(φ(s),a,z) ≈ φ(s′)+γT(φ(s′),a′,z), a′~π_z. 예측기가 φ의
-<b>successor feature</b>(미래 상태 방문의 할인합 요약)를 잠재공간에서 직접 근사하므로, 사후에 어떤 보상이 와도
-Q(s,a)=⟨T,w_r⟩로 조립 가능. 상태/태스크 인코더 분리(비대칭 이중 예측기)+직교 정규화로 collapse 방지.
-ExoRL·OGBench 65태스크, 특히 픽셀에서 강함.</p>
-<p><b>HILP와의 차이.</b> HILP는 도달가능성 <i>거리</i>만 남기는 상태 임베딩(행동 정보 없음 — 그래서 우리는 f(z,a)를
-따로 지도학습으로 붙였고, 그 합성게이트가 action-blind로 판정났다). TD-JEPA는 행동조건 장기예측이 목적식에
-내장 — 우리 3단 구성(HILP φ + 지도 f + IQL V)을 원리적으로 <b>하나의 TD 손실로 대체</b>한다.</p>
-<p><b>우리 판정과의 교차 — 솔직한 평가.</b> 두 워커가 수렴한 벽("demo-only엔 동일-상태 반사실이 없다")은
-TD-JEPA도 공짜로 못 넘는다: 단일 텔레옵 데모에선 z(정책) 공간이 1개로 붕괴한다. 그러나 z-조건 구조는
-"같은 상태, 다른 정책 → 다른 미래"라는 반사실을 <b>정책축에서 제조</b>하는 장치이고, 우리가 phase-2에 계획한
-on-policy K-per-scene 수집(vla/rand/noise-scale 변형)이 정확히 그 정책 패밀리를 공급한다.
-<b>액션:</b> GR1 phase-1 게이트 통과 + on-policy 수집 시점에 phase-2 critic을 TD-JEPA(z=정책변형,
-데이터=demos+rollouts)로 사전등록 (Task#8).</p>
+""",
+)
+
+# ============================================== 08-10 TD-JEPA 리뷰
+entry(
+    "08-10",
+    "papers-tdjepa",
+    "논문 리뷰 — TD-JEPA, HILP의 상위호환인가",
+    "완결",
+    """
+<p class='sub'>사용자 요청 리뷰: "HILP 말고 TD-JEPA 같은 건 어때?" (arXiv:2510.00739, FAIR·Meta, 2025-10)</p>
+<h3>무엇을 배우는가</h3>
+<p>상태 인코더 φ + <b>정책조건·행동조건 예측기</b> T(φ(s),a,z) + 잠재 정책 π_z를 <b>단일 TD 목적식</b>으로
+동시 학습하는 zero-shot RL:</p>
+<p style='text-align:center'><b>T(φ(s), a, z) ≈ φ(s′) + γ·T(φ(s′), a′, z)</b>, a′~π_z(s′)</p>
+<p>예측기가 φ의 <b>successor feature</b>(그 정책으로 미래에 방문할 상태들의 할인합 요약)를 잠재공간에서 직접
+근사한다. Q(s,a)=⟨SF, w_r⟩ 분해 덕에, 사후에 어떤 보상이 주어져도 재학습 없이 Q를 조립할 수 있다(zero-shot).
+상태/태스크 인코더 분리(비대칭 이중 예측기) + 직교 정규화로 collapse를 막는다.
+ExoRL·OGBench 65태스크, 특히 픽셀 입력에서 SOTA급.</p>
+<h3>HILP와의 차이 — 우리가 겪은 한계와 1:1 대응</h3>
+<table class='num'><tr><th></th><th>HILP (우리 사용)</th><th>TD-JEPA</th></tr>
+<tr><td>배우는 것</td><td>도달가능성 <i>거리</i> 임베딩 (상태만)</td><td>임베딩 + 행동조건 장기예측 + 정책</td></tr>
+<tr><td>행동 정보</td><td>없음 → f(z,a)를 따로 지도학습으로 부착</td><td>T(φ(s),<b>a</b>,z)에 내장, TD로 장기 전파</td></tr>
+<tr><td>우리 실측 약점</td><td>"거리만 남고 디테일 소실"(디코더 확인), 합성게이트 action-blind(.487)</td><td>SF 근사가 가치 추정용 정보 보존을 목적식으로 강제</td></tr>
+<tr><td>구성</td><td>3단 합성: HILP φ + 지도 f + IQL V</td><td><b>단일 TD 손실</b> — 접합부 오차 소멸</td></tr></table>
+<h3>우리 판정과의 교차 — 솔직한 평가</h3>
+<p>두 워커가 수렴한 벽("demo-only 데이터엔 동일-상태 반사실이 없다")은 TD-JEPA도 공짜로 못 넘는다:
+단일 텔레옵 데모에선 z(정책) 공간이 사실상 1개로 붕괴해 정책조건부의 이점이 죽는다. 그러나 z-조건 구조는
+"같은 상태, 다른 정책 → 다른 미래"라는 반사실을 <b>정책축에서 제조하는 장치</b>이고, 우리가 phase-2에 계획한
+on-policy K-per-scene 수집(vla/rand/noise-scale 변형)이 정확히 그 정책 패밀리를 공급한다.</p>
+<p><b>액션 (Task#8):</b> GR1 phase-1 게이트(헤드룸·rand-vs-vla) 통과 + on-policy 수집이 생기는 시점에,
+phase-2 critic을 TD-JEPA(z=정책변형, 데이터=demos+rollouts)로 <b>사전등록</b>한다. "간단한 방식 하나" 원칙과도
+정합 — 컴포넌트를 늘리는 게 아니라 셋을 하나로 줄이는 방향이다.</p>
 """,
 )
 
@@ -1420,6 +1438,15 @@ META = {
         "how": "demo-only 8시드 + mixed(학습중) 페어드 평가",
         "why": "모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지",
         "links": ["v12", "final", "wcurse"],
+    },
+    "papers-tdjepa": {
+        "date": "2026-08-10 18:10",
+        "who": "워커B(리뷰)",
+        "where": "arXiv",
+        "what": "TD-JEPA(arXiv:2510.00739) 정독 — HILP 대비, phase-2 critic 후보 판단",
+        "how": "원문 정독 후 우리 판정(합성게이트 null·반사실 부재)과 대조",
+        "why": "사용자 질문 'HILP 말고 TD-JEPA는 어때?' — 표현 학습의 다음 수 선택",
+        "links": ["phi-ladder", "model-based", "xworker-0808", "gr1-port", "papers-value-steering"],
     },
     "papers-value-steering": {
         "date": "2026-08-08 13:30",
@@ -1976,21 +2003,38 @@ Adoptables: short history (tested: null here), failure-penalty targets, the adap
 the attribution rule). <b>V-GPS</b>: K=50 Cal-QL reranking — gains where the base is suboptimal vs its data.
 <b>Q-VGM</b>: critic gradients steer flow denoising; "discrete reranking cannot refine candidates".
 <b>Frozen-VLA probing</b>: value decodes linearly from frozen features (R²=.55); gains only with headroom.</p>
-<p><b>TD-JEPA (FAIR, 2510.00739) — user-requested review (08-10).</b> Learns a state encoder φ, a
-<b>policy- and action-conditioned predictor</b> T(φ(s),a,z), and latent policies π_z under a <b>single TD
-objective</b>: T(φ(s),a,z) ≈ φ(s′)+γT(φ(s′),a′,z), a′~π_z — the predictor directly approximates φ's
-<b>successor features</b> in latent space, so any later reward assembles into Q(s,a)=⟨T,w_r⟩ zero-shot.
-Separate state/task encoders (asymmetric dual predictors) + orthonormality regularization prevent collapse;
-strong on ExoRL/OGBench, especially from pixels. <b>vs HILP:</b> HILP keeps only reachability <i>distance</i>
-(no action information — which is why we bolted a supervised f(z,a) on top, and that composition gated out
-action-blind). TD-JEPA bakes action-conditioned long-horizon prediction into the objective — it would replace
-our three-piece stack (HILP φ + supervised f + IQL V) with <b>one TD loss</b>. <b>Honest crossing with our
-verdicts:</b> the wall both workers converged on (demo-only data has no same-state counterfactuals) is not
-crossed for free — on a single teleop behavior mode the z-space collapses to one policy. But z-conditioning is
+""",
+)
+
+en(
+    "papers-tdjepa",
+    "Paper review — TD-JEPA, a strict upgrade over HILP?",
+    """
+<p class='sub'>User-requested review: "what about TD-JEPA instead of HILP?" (arXiv:2510.00739, FAIR/Meta, Oct 2025)</p>
+<h3>What it learns</h3>
+<p>A state encoder φ, a <b>policy- and action-conditioned predictor</b> T(φ(s),a,z), and latent policies π_z,
+all under a <b>single TD objective</b>:</p>
+<p style='text-align:center'><b>T(φ(s), a, z) ≈ φ(s′) + γ·T(φ(s′), a′, z)</b>, a′~π_z(s′)</p>
+<p>The predictor directly approximates φ's <b>successor features</b> (the discounted summary of states the
+policy will visit) in latent space. Via Q(s,a)=⟨SF, w_r⟩, any reward given later assembles into a Q-function
+with no retraining (zero-shot). Separate state/task encoders (asymmetric dual predictors) plus orthonormality
+regularization prevent collapse. State-of-the-art-level results on 65 ExoRL/OGBench tasks, especially from
+pixels.</p>
+<h3>vs HILP — mapping 1:1 onto the limits we measured</h3>
+<table class='num'><tr><th></th><th>HILP (what we used)</th><th>TD-JEPA</th></tr>
+<tr><td>Learns</td><td>reachability-<i>distance</i> embedding (states only)</td><td>embedding + action-conditioned long-horizon prediction + policies</td></tr>
+<tr><td>Action info</td><td>none → we bolted a supervised f(z,a) on top</td><td>built into T(φ(s),<b>a</b>,z), propagated long-horizon by TD</td></tr>
+<tr><td>Our measured weakness</td><td>"only distance survives" (decoder check); composition gate action-blind (.487)</td><td>SF approximation forces value-relevant information retention by objective</td></tr>
+<tr><td>Structure</td><td>three-piece: HILP φ + supervised f + IQL V</td><td><b>one TD loss</b> — the seam errors disappear</td></tr></table>
+<h3>Honest crossing with our verdicts</h3>
+<p>The wall both workers converged on (demo-only data carries no same-state counterfactuals) is not crossed
+for free: on a single teleop behavior mode the z (policy) space collapses to one policy. But z-conditioning is
 precisely a machine for manufacturing "same state, different policy → different future" counterfactuals along
-the policy axis, and our planned phase-2 on-policy K-per-scene collection (vla/rand/noise-scale variants)
-supplies exactly that policy family. <b>Action:</b> once GR1 phase-1 gates pass and on-policy collection
-exists, preregister the phase-2 critic as TD-JEPA (z = policy variant, data = demos+rollouts) — Task#8.</p>
+the policy axis — and our planned phase-2 on-policy K-per-scene collection (vla/rand/noise-scale variants)
+supplies exactly that policy family.</p>
+<p><b>Action (Task#8):</b> once the GR1 phase-1 gates (headroom, rand-vs-vla) pass and on-policy collection
+exists, preregister the phase-2 critic as TD-JEPA (z = policy variant, data = demos+rollouts). This also fits
+the "one simple method" principle — it does not add components, it collapses three into one.</p>
 """,
 )
 
