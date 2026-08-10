@@ -955,7 +955,27 @@ z 공간이 사실상 1개 정책으로 붕괴한다(논문의 학습 데이터�
 이 프레임은 우리 문제(후보 chunk의 가치 비교)에 정확히 맞물린다: 후보 chunk를 "그 chunk를 실행하는
 단기 정책"으로 보고 T(φ(s), chunk, z)의 착지 SF로 가치를 매기는 것이 우리 model-based 시도
 Q=γ^h·V(f(z,a))의 원리적 완성형이다.</p>
-<h3>⑦ 설계 확정 (08-10 저녁, 사용자 논의) — TD-SF-ARQ: 단일태스크 증류</h3>
+<p><b>→ 설계 제안은 독립 리포트로 분리:</b> <span class='xref' data-eid='tdsf-arq'>TD-SF-ARQ 설계</span> — 단일태스크 증류(⑦)와 actor-critic 확장 사다리(⑧)를 그쪽에서 완결적으로 다룬다.</p>
+""",
+)
+
+# ============================================== 08-10 TD-SF-ARQ 설계
+entry(
+    "08-10",
+    "tdsf-arq",
+    "TD-SF-ARQ 설계 — 벡터 SF 타깃의 단일태스크 critic (사전등록)",
+    "살아있음",
+    """
+<p class='sub'>설계 제안 (사전등록 문서). 배경: <span class='xref' data-eid='papers-tdjepa'>TD-JEPA 리뷰</span>에서
+사용자 질문 두 개("z가 local하게만 의미 있는 단일 태스크에서 JEPA 이점을 살릴 수 있나", "actor-critic도 되나")로
+발전한 우리 자체 방법 제안. 아래는 그 완결 정리다.</p>
+<h3>동기 — 우리 진단의 요약</h3>
+<p>이틀간의 판정으로 확정된 사실: ① 후보 chunk 간 가치 차이는 demo-only 데이터에서 극도로 희미하다
+(σ_signal≈0, 압축 좌표에서만 행동 정보 +7.3%). ② 그 희미한 신호마저 스칼라 TD로는 전이당 1차원의
+그래디언트만 받아 굶주린다. ③ 3단 합성(HILP φ + 지도 f + IQL V)은 접합부마다 오차가 쌓여 action-blind로
+판정났다. 처방은 "행동조건 예측을 목적식에 내장한 단일 손실" — TD-JEPA의 핵심 구조다. 단, 우리는
+behavior foundation model이 아니라 단일 태스크 critic이 목표이므로 그 프레임을 증류해야 한다.</p>
+<h3>설계 — 무엇을 버리고 무엇을 살리나</h3>
 <p><b>사용자 논점.</b> 우리는 behavior foundation model이 목표가 아니다 — 태스크 하나, z는 local하게만
 의미 있는 데이터셋. 그래도 JEPA류 표현의 이점을 살리면서 우리 adaptive transformer critic을 유지하려면?</p>
 <p><b>답: 버릴 것과 살릴 것을 나눈다.</b> 태스크 인코더 ψ·전역 z·제로샷 추론(ω_r 회귀)·잠재 정책 학습은
@@ -977,7 +997,7 @@ TD 손실로 해낸다. <b>ARQ transformer는 아키텍처 그대로, 출력 헤
 더 나은 수도관"이지 보장이 아니다. 다만 우리가 잰 +7.3%가 정확히 압축 좌표의 예측 신호였으므로, 그 신호를
 정면으로 먹는 목적식이라는 점에서 시도 가치가 가장 높은 단일 변경이다. (Task#8, GR1 phase-1 게이트 통과 시
 A단계 사전등록.)</p>
-<h3>⑧ Actor-critic으로도 가능한가 (08-10 사용자 질문)</h3>
+<h3>Actor-critic 확장 — 개입 강도 사다리</h3>
 <p><b>가능하고, 프레임에 내장돼 있다</b> — TD-JEPA 원본부터 잠재 정책을 Q에 대한 DPG로 학습하는
 actor-critic이다. 우리 버전에서 Q=⟨F(s,chunk),w⟩는 chunk에 미분 가능하고, 그 그래디언트의 해석이 깨끗하다:
 ∂Q/∂chunk = wᵀ·∂F/∂chunk = <b>"chunk를 어느 방향으로 틀면 예측 착지 임베딩이 φ-공간의 가치 상승 방향으로
@@ -991,8 +1011,14 @@ actor-critic이다. 우리 버전에서 Q=⟨F(s,chunk),w⟩는 chunk에 미분 
 축2(winner's curse)를 이산 선택보다 세게 착취한다 — TD-JEPA 벤치에서 되는 이유는 탐사 데이터로 Q가 넓게
 교정돼 있기 때문이고, demo-only에선 몇 스텝만 밀어도 OOD다. <b>개입 강도 사다리: BoN 게이트(신호 확인) →
 flow 조향·AWR 어댑터(BC-앵커 내장) → DPG 액터는 on-policy 수집으로 Q가 자기 분포에서 교정된 후(C단계 이후)에만.</b></p>
+<h3>사전등록 — A단계 판정 기준</h3>
+<p>GR1 phase-1 게이트(헤드룸·rand-vs-vla) 통과 시 A단계를 다음 기준으로 사전등록한다:
+동일 주석 데이터에서 IQL critic과 TD-SF-ARQ를 나란히 학습, 오프라인 게이트(held-out demo_winrate·band)에서
+① demo_winrate가 0.5에서 유의하게 벗어나고 ② IQL 대비 개선이 확인될 때만 롤아웃 팔로 승격.
+둘 다 아니면 null로 기록하고 C단계(on-policy) 전제 조건으로 이동 — 트릭 추가 없음.</p>
 """,
 )
+
 
 # ============================================== 08-09 아침 종합
 entry(
@@ -1530,6 +1556,15 @@ META = {
         "how": "demo-only 8시드 + mixed(학습중) 페어드 평가",
         "why": "모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지",
         "links": ["v12", "final", "wcurse"],
+    },
+    "tdsf-arq": {
+        "date": "2026-08-10 21:20",
+        "who": "워커B(설계) + 사용자(논점 두 개)",
+        "where": "설계 문서 (구현 전)",
+        "what": "TD-JEPA 증류: ARQ critic 출력을 벡터 SF로 교체하는 단일 TD 손실 + A/B/C 사다리 + actor-critic 확장",
+        "how": "TD-JEPA 리뷰 → 사용자 질문 2건 → 우리 진단(+7.3% 압축좌표·스칼라 TD 굶주림)과 결합",
+        "why": "phase-2 critic의 사전등록 — 접합부 없는 행동조건 목적식으로 희미한 신호를 최대 추출",
+        "links": ["papers-tdjepa", "model-based", "phi-ladder", "gr1-port", "conservatism", "final"],
     },
     "papers-tdjepa": {
         "date": "2026-08-10 18:10",
@@ -2168,7 +2203,26 @@ axis — and our planned phase-2 on-policy K-per-scene collection (vla/rand/nois
 <b>real policy family</b>. Once z genuinely varies in the data, the frame locks onto our actual problem
 (valuing candidate chunks): treat each candidate chunk as a short-horizon policy and score it by the landing
 SF of T(φ(s), chunk, z) — the principled completion of our model-based attempt Q=γ^h·V(f(z,a)).</p>
-<h3>⑦ Design settled (evening 08-10, user discussion) — TD-SF-ARQ: the single-task distillation</h3>
+<p><b>→ The design proposal now lives in its own report:</b> <span class='xref' data-eid='tdsf-arq'>TD-SF-ARQ design</span> — the single-task distillation (⑦) and the actor-critic ladder (⑧) are treated there in full.</p>
+""",
+)
+
+en(
+    "tdsf-arq",
+    "TD-SF-ARQ design — a single-task critic with vector SF targets (preregistration)",
+    """
+<p class='sub'>Design proposal (preregistration document). Grew out of two user questions on the
+<span class='xref' data-eid='papers-tdjepa'>TD-JEPA review</span> ("can we keep the JEPA benefit in a
+single-task dataset where z is only locally meaningful?", "does it work as an actor-critic?").
+This is the complete write-up.</p>
+<h3>Motivation — our diagnosis in brief</h3>
+<p>Two days of verdicts established: ① value differences between candidate chunks are extremely faint in
+demo-only data (σ_signal≈0; action information only +7.3%, and only in compressed coordinates); ② even that
+faint signal starves under scalar TD — one gradient dimension per transition; ③ the three-piece composition
+(HILP φ + supervised f + IQL V) accumulated seam errors and gated out action-blind. The prescription is a
+single loss with action-conditioned prediction built in — TD-JEPA's core structure. But we want a single-task
+critic, not a behavior foundation model, so the frame must be distilled.</p>
+<h3>The design — what to drop, what to keep</h3>
 <p><b>The user's point.</b> We are not building a behavior foundation model — one task, a dataset where z is
 only locally meaningful. How do we keep the JEPA-style representation benefit while preserving our adaptive
 transformer critic?</p>
@@ -2195,7 +2249,7 @@ the output head changes</b> (HL-Gauss can stay as an auxiliary head).</p>
 pipe for a weak signal, not a guarantee. But the +7.3% we measured lives exactly in compressed-coordinate
 prediction, and this objective consumes that signal head-on: the highest-value single change available.
 (Task#8; stage A preregistered once the GR1 phase-1 gates pass.)</p>
-<h3>⑧ Does it work as an actor-critic too? (user question, 08-10)</h3>
+<h3>Actor-critic extension — the intervention-strength ladder</h3>
 <p><b>Yes — natively.</b> The original TD-JEPA already trains its latent policies by DPG against Q. In our
 version Q=⟨F(s,chunk),w⟩ is differentiable in the chunk, with a clean interpretation:
 ∂Q/∂chunk = wᵀ·∂F/∂chunk = <b>"the direction that moves the predicted landing embedding up the value
@@ -2211,8 +2265,14 @@ pick. It works in TD-JEPA's benchmarks because exploratory data calibrates Q bro
 steps already leave support. <b>Intervention ladder: BoN gate (signal first) → flow steering and AWR adapter
 (BC anchors built in) → DPG actor only after on-policy collection calibrates Q on its own distribution
 (post stage C).</b></p>
+<h3>Preregistration — stage-A verdict criteria</h3>
+<p>Once the GR1 phase-1 gates (headroom, rand-vs-vla) pass, stage A is preregistered as: train the IQL critic
+and TD-SF-ARQ side by side on identical annotations; promote to a rollout arm only if the offline gate
+(held-out demo_winrate, band) shows ① demo_winrate significantly off 0.5 and ② improvement over IQL.
+Otherwise record null and move to the stage-C (on-policy) precondition — no tricks added.</p>
 """,
 )
+
 
 en(
     "xworker-0808",
