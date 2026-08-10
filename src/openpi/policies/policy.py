@@ -240,6 +240,7 @@ class CriticSelectPolicy(BasePolicy):
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         obs = dict(obs)
         selected = bool(obs.pop("critic_select", False))
+        want_hud = bool(obs.pop("critic_hud", False))
         num_samples = int(obs.pop("num_samples", 0) or self._default_samples)
         if not selected:
             return self._pol.infer(obs, noise=noise)
@@ -267,12 +268,20 @@ class CriticSelectPolicy(BasePolicy):
         q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
         q_full = q[:, -1]
         best = int(np.argmax(q_full))
-        return {
+        out = {
             "actions": decoded[best],
             "action_samples": decoded,
             "critic_scores": q_full,
             "critic_choice": best,
         }
+        # The full [N, P] grid plus the candidate chunks and the choice are everything a HUD needs
+        # to reconstruct this replan (examples/robocasa/hud.py draws exactly these). They ride along
+        # only when the client sets ``critic_hud`` so a plain critic_select response stays small.
+        if want_hud:
+            out["critic_grid"] = q  # Q at every (candidate, commit-length) — [N, P]
+            out["critic_best_prefix"] = int(q.shape[1] - 1)  # BoN commits the full chunk
+            out["critic_macro"] = int(self._macro)  # env steps per prefix column
+        return out
 
     @property
     def metadata(self) -> dict[str, Any]:
