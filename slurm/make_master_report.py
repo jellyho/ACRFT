@@ -1135,15 +1135,26 @@ PCA-128 통제군 추가, "도달성 거리만 남기면 디테일이 사라지�
 훨씬 깊게 지우며(.756) progress를 보존(.747): 효과는 차원이 아니라 TD 기하다. ② 단 워커A 보고치(ep .28,
 stitch .78)에는 못 미치고 Kendall τ는 raw보다 낮다 — 재현 레시피의 차이가 있고, 원본 체크포인트 교차검증(경로 A)이
 필요하다. ③ proprio 유무는 무차이. <h3>디코더 프로브 — φ가 무엇을 버렸나 (사용자 질문의 답)</h3>
-<p>φ→이미지 디코더(kroll 6만 프레임, 20k스텝)와 raw 디코더를 같은 조건에서 학습해 held-out 재구성을 비교
-(<a href="videos/decoder/22_decoder_phi128_recon.png" target="_blank">φ 패널</a> ·
-<a href="videos/decoder/22_decoder_raw_recon.png" target="_blank">raw 패널</a> ·
-<a href="videos/decoder/22_decoder_phi128_walk.mp4" target="_blank">φ 임베딩 워크</a> ·
-<a href="videos/decoder/22_decoder_phi128_ride.mp4" target="_blank">교차-에피소드 ride</a>).
-<b>판정(프로그램적):</b> proprio 차원별 선형 프로브 R² 평균이 <b>raw .760 → PCA-128 .653 → φ-128 .546</b> —
+<p>임베딩이 이미지의 어떤 정보를 보존/폐기하는지 보려고, 임베딩→이미지 <b>디코더</b>를 학습해 held-out
+프레임을 재구성시켰다(kroll 6만 프레임, 20k스텝; φ-128용과 raw-2048용을 같은 조건으로 두 벌).
+산출물 4종은 각각 다음을 보여준다:</p>
+<table class='num'><tr><th>산출물</th><th>무엇을 보는가</th><th>읽는 법</th></tr>
+<tr><td>φ 재구성 패널 (아래 왼쪽)</td><td>held-out 원본(위 행) vs φ-128에서 재구성(아래 행)</td><td>φ에 남은 정보만 복원됨 — 주방 배치·로봇 팔 위치는 남고, 그리퍼 각도·물체 디테일이 뭉개지면 그 정보가 φ에서 사라졌다는 뜻</td></tr>
+<tr><td>raw 재구성 패널 (아래 오른쪽)</td><td>같은 프레임을 raw 2048 토큰에서 재구성</td><td>φ 패널과의 차이가 곧 "φ가 버린 것" — raw 쪽이 그리퍼·물체를 더 보존</td></tr>
+<tr><td><a href="videos/decoder/22_decoder_phi128_walk.mp4" target="_blank">φ 임베딩 워크(영상)</a></td><td>φ 공간의 두 실제 프레임 임베딩 사이를 선형 보간하며 각 점을 디코딩</td><td>중간 프레임들이 그럴듯한 "장면 변화"로 이어지면 φ 공간이 매끄럽게 의미를 인코딩한다는 것. 뚝뚝 끊기면 임베딩 공간에 구멍이 있다는 것</td></tr>
+<tr><td><a href="videos/decoder/22_decoder_phi128_ride.mp4" target="_blank">교차-에피소드 ride(영상)</a></td><td>다른 에피소드의 궤적을 따라 φ를 뽑아 순서대로 디코딩</td><td>학습에 안 쓴 에피소드에서도 진행 상황이 복원되면 φ가 에피소드 정체성이 아니라 "과제 진행"을 일반화해 인코딩한다는 증거</td></tr></table>
+<p style='display:flex;gap:8px;flex-wrap:wrap'>
+<img src="videos/decoder/22_decoder_phi128_recon.png" alt="φ-128 재구성 패널" style='max-width:49%'>
+<img src="videos/decoder/22_decoder_raw_recon.png" alt="raw 2048 재구성 패널" style='max-width:49%'></p>
+<p><b>판정(프로그램적):</b> proprio 차원별 선형 프로브 R² 평균이 <b>raw .760 → PCA-128 .653 → φ-128 .546</b> —
 φ는 로봇 자체 상태(관절·그리퍼) 정보를 raw 대비 28% 상대 손실한다. 즉 φ가 버린 것은 <b>단거리 행동-관련 정보</b>이며,
 "거리만 남기면 디테일이 사라지는 것 아닌가"라는 우려의 정량 확인이자 φ-critic이 BoN을 못 여는 이유의 기전적 설명이다.
 (재구성 패널·워크 영상은 정성 참고 자료로만 첨부 — 육안 인상은 판정 근거로 쓰지 않는다.)</p>
+<p class='sub'><b>화질에 대한 주의(08-10 사용자 피드백 반영):</b> 위 패널이 전반적으로 흐릿한 것은 임베딩 탓만이
+아니라 <b>L2 회귀 디코더의 구조적 한계</b>다 — 픽셀 MSE를 최소화하는 예측은 "가능한 이미지들의 평균"이라 항상
+뭉개진다. 임베딩이 실제로 보존한 정보의 상한을 보려면 조건부 생성모델이 맞는 도구다.
+→ <b>후속: φ-조건부 diffusion 디코더</b>(같은 데이터·같은 조건, φ-128 vs raw-2048 조건 비교)를 학습해
+패널·워크 영상을 재생성한다. 판정은 여전히 프로그램적(DINOv2 특징 유사도·proprio 프로브 R²)으로 한다 (Task#9).</p>
 ④ <b>critic 사다리 확정(n=8):</b> RLT2048 −0.065 / PCA-128 −0.040 / <b>φ-128 −0.010 CI[−0.078,+0.058],
 McN +62/−66 p=0.791 — null 확정.</b> n=4의 +0.035와 단조 배열은 새 4시드(−0.02/−0.10/+0.02/−0.12)에서 소멸 —
 v11 AQC 전례("n=4 신호를 믿지 말 것")의 재연이며, 그 규칙이 옳았음의 재확인. φ 결합팔(v19: φ×다양화×veto)도
@@ -2125,6 +2136,20 @@ completion markers must be &amp;&amp;-gated. Information loss, programmatically:
 raw .760 → PCA .653 → φ .546 (φ+proprio .617) — φ discards short-range action-relevant information, the
 mechanistic explanation for its BoN failure. Critic ladder at n=8: φ-128 −0.010 null; the n=4 monotone
 signal was noise. Closed.</p>
+<h3>Decoder artifacts — what each one shows</h3>
+<table class='num'><tr><th>Artifact</th><th>What it is</th><th>How to read it</th></tr>
+<tr><td>φ reconstruction panel (below left)</td><td>held-out originals (top row) vs reconstructions from φ-128 (bottom row)</td><td>only information retained in φ can be reconstructed — kitchen layout and arm pose survive, blurred gripper/objects mean that information is gone from φ</td></tr>
+<tr><td>raw reconstruction panel (below right)</td><td>the same frames reconstructed from the raw 2048-d token</td><td>the difference vs the φ panel IS what φ discarded</td></tr>
+<tr><td><a href="videos/decoder/22_decoder_phi128_walk.mp4" target="_blank">φ embedding walk (video)</a></td><td>linear interpolation between two real frame embeddings, each point decoded</td><td>smooth plausible scene morphing = the φ space encodes meaning continuously; jumps = holes in the space</td></tr>
+<tr><td><a href="videos/decoder/22_decoder_phi128_ride.mp4" target="_blank">cross-episode ride (video)</a></td><td>φ extracted along an unseen episode's trajectory, decoded in order</td><td>if task progress is recovered on unseen episodes, φ generalizes progress rather than memorizing episode identity</td></tr></table>
+<p style='display:flex;gap:8px;flex-wrap:wrap'>
+<img src="videos/decoder/22_decoder_phi128_recon.png" alt="phi-128 reconstruction panel" style='max-width:49%'>
+<img src="videos/decoder/22_decoder_raw_recon.png" alt="raw-2048 reconstruction panel" style='max-width:49%'></p>
+<p class='sub'><b>On image quality (08-10 user feedback):</b> the blur is not only the embedding's fault — an
+L2 regression decoder structurally predicts the mean of all compatible images. To see the true upper bound of
+what the embedding retains, a conditional generative model is the right tool. → <b>Follow-up: a φ-conditioned
+diffusion decoder</b> (same data and protocol, φ-128 vs raw-2048 conditioning) will regenerate the panels and
+walk videos; verdicts stay programmatic (DINOv2 feature similarity, proprio probe R²) — Task#9.</p>
 """,
 )
 
