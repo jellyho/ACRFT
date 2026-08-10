@@ -932,9 +932,12 @@ Lazaric·Tirinzoni, FAIR·Meta, 2025-10-02)</p>
 <p><b>주목할 정직 포인트:</b> proprio manipulation(cube 계열)에서는 HILP가 크게 이기는 도메인이 있다 —
 "TD-JEPA가 HILP의 전면 상위호환"은 과장이고, 정확히는 <b>"픽셀 입력 + 넓은 커버리지에서 상위호환,
 proprio manipulation에선 도메인 의존"</b>이다. 우리 GR1은 ego 픽셀 중심이라 유리한 쪽이긴 하다.
-ablation 요지: ① 예측 타깃을 one-step·정책무관으로 바꾸면 성능 급락 — <b>multi-step·정책조건이 핵심</b>
+ablation 요지(§5.2, 두 축): ① <b>몇 스텝을 내다보나</b> — one-step(BYOL*)→multi-step(BYOL-γ*)에서 DMC픽셀
+513.8→582.4, ② <b>누구의 미래를 예측하나</b> — behavior policy→정책조건부(TD-JEPA)에서 582.4→628.8.
+"급락"이 아니라 <b>평균적 이득의 누적</b>이며, 원문은 expert-like 데이터에선 behavior 근사도 효과적일 수
+있다고 단서를 단다(우리 GR1 데모가 그 경우다)
 ② 공유 인코더(φ=ψ)보다 분리가 낫다 ③ 사전학습된 φ를 <b>동결한 채로도</b> TD3 미세조정이 from-scratch보다
-훨씬 빠르다(fast adaptation) — 표현이 실제 정보를 담고 있다는 방증.</p>
+훨씬 빠르다(fast adaptation) — 표현이 실제 정보를 담고 있다는 방증.</p><blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"While BYOL* and BYOL-γ* approximate one-step and multi-step transitions of the <i>behavioral policy</i>, respectively, TD-JEPA models multi-step transitions of the <i>zero-shot policies</i>. While approximating the behavioral dynamics can be effective for expert-like data (i.e., in OGBench), we observe a general pattern suggesting that directly modeling policy-conditional successor measures is <b>on average beneficial</b>." (§5.2)</blockquote>
 
 <h3>⑤ HILP와의 구조 비교 — 우리가 겪은 한계와 1:1 대응</h3>
 <table class='num'><tr><th></th><th>HILP (우리 사용)</th><th>TD-JEPA</th></tr>
@@ -986,8 +989,11 @@ successor feature로 바꾸고 TD 타깃도 벡터로 주는 것</b>:</p>
 <p><b>왜 이것이 우리 진단의 처방인가.</b> 측정으로 확정된 병목은 "행동 정보는 존재하나 희미하다"(압축 좌표
 +7.3%)였다. 스칼라 TD는 그 희미한 행동 의존 경로에 <b>전이당 1차원</b>의 그래디언트만 흘린다 — 약한 신호가
 굶주리는 구조(GR1 그리퍼 정규화 사고의 학습신호 버전). 벡터 SF 타깃은 <b>전이당 128차원의 밀집 감독</b>을
-행동 조건 경로에 직접 붓는다 — TD-JEPA ablation에서 one-step·정책무관 타깃으로 바꾸면 무너지는 이유가
-바로 이 축이다. 또한 model-based 시도 Q=γ^h·V(f(z,a))가 하려던 "착지점의 가치"를 f·V 접합부 없이 단일
+행동 조건 경로에 직접 붓는다. TD-JEPA의 §5.2 ablation이 같은 방향을 가리킨다: one-step·behavior-policy
+타깃(BYOL*)에서 정책조건 multi-step(TD-JEPA)으로 갈수록 DMC픽셀 513.8→582.4→628.8 — "directly modeling
+policy-conditional successor measures is on average beneficial"(원문). 급락이 아니라 누적적 이득이고,
+expert-like 데이터에선 격차가 줄 수 있다는 단서도 원문에 있다 — 그래서 우리도 이 설계를 보장이 아닌
+가설로 사전등록한다. 또한 model-based 시도 Q=γ^h·V(f(z,a))가 하려던 "착지점의 가치"를 f·V 접합부 없이 단일
 TD 손실로 해낸다. <b>ARQ transformer는 아키텍처 그대로, 출력 헤드만 교체</b>(HL-Gauss는 보조 헤드로 유지 가능).</p>
 <table class='num'><tr><th>단계</th><th>내용</th><th>통제</th></tr>
 <tr><td>A</td><td>φ = <b>고정</b> PCA-128, ARQ 출력만 F로 교체, chunk-단위 TD + w 회귀</td><td>collapse 원천 차단, 변인 하나. 판정 = 오프라인 게이트(demo_winrate·band) vs IQL critic 나란히</td></tr>
@@ -2179,8 +2185,11 @@ theory is directional and experiments decide.</p>
 <p><b>Honest note:</b> on proprioceptive manipulation (the cube family) HILP still wins big in places — "a
 strict upgrade over HILP" is an overstatement; the accurate claim is <b>"an upgrade from pixels with broad
 coverage; domain-dependent on proprio manipulation."</b> Our GR1 setting is ego-pixel-centric, the favorable
-side. Ablations: ① switching the prediction target to one-step/policy-agnostic collapses performance —
-<b>multi-step, policy-conditioned prediction is the load-bearing part</b>; ② separate encoders beat a shared
+side. Ablations: ① the prediction-target ablation (§5.2) moves along two axes — horizon (one-step BYOL* → multi-step
+BYOL-γ*: DMC-pixels 513.8→582.4) and whose future (behavior policy → policy-conditional TD-JEPA:
+582.4→628.8) — a <b>cumulative average benefit, not a collapse</b>, with the caveat that behavior-dynamics
+approximation can suffice on expert-like data (our GR1 demos are that case): <i>"directly modeling
+policy-conditional successor measures is on average beneficial"</i>; ② separate encoders beat a shared
 one; ③ a <b>frozen</b> pretrained φ still enables much faster TD3 finetuning than from-scratch — evidence the
 representation retains real information.</p>
 
@@ -2237,8 +2246,11 @@ labels on φ)</p>
 exists but is faint" (+7.3% in compressed coordinates). Scalar TD feeds that faint action-conditioned pathway
 <b>one gradient dimension per transition</b> — a starvation structure (the learning-signal version of the GR1
 gripper-normalization incident). A vector SF target pours <b>128 dimensions of dense supervision per
-transition</b> straight into the action-conditioned path — precisely the axis whose removal collapses TD-JEPA
-in its ablations. It also achieves what our model-based attempt Q=γ^h·V(f(z,a)) was after ("value of the
+transition</b> straight into the action-conditioned path. TD-JEPA's §5.2 ablation points the same way — one-step
+behavior-policy targets → policy-conditional multi-step gives DMC-pixels 513.8→582.4→628.8, "directly
+modeling policy-conditional successor measures is on average beneficial" (verbatim) — a cumulative gain,
+not a collapse, and the paper cautions the gap can shrink on expert-like data; which is why we preregister
+this design as a hypothesis, not a guarantee. It also achieves what our model-based attempt Q=γ^h·V(f(z,a)) was after ("value of the
 landing point") in a single TD loss with no f/V seams. <b>The ARQ transformer keeps its architecture; only
 the output head changes</b> (HL-Gauss can stay as an auxiliary head).</p>
 <table class='num'><tr><th>Stage</th><th>What</th><th>Control</th></tr>
