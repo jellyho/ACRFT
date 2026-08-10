@@ -996,8 +996,24 @@ miniconda libcrypto 오염으로 서버 즉사. <b>⑯</b>(교훈적) readiness 
 판별 잡 2종 제출: <b>개루프 프로브</b>(데모 프레임 24개 → 예측 chunk vs 데모 액션 MSE, hold-still 기준선 대조 —
 서빙 스택 건전성 확정) + <b>2트라이얼 비디오</b>(클라이언트에 --video-dir 추가·커밋, 실패 양상 기록용).
 phase-1 제출은 프로브 판독 후 — 하네스 결함 상태로 4잡×25트라이얼을 태우지 않는다.</p>
-<p><b>다음 순서:</b> 개루프 프로브 판독 → (건전 시) 30k phase-1 4잡 제출 → 유효 시 주석·critic·페어드.
-PR#4는 branch protection으로 사용자 머지 대기.</p>
+<h3>근본 원인 규명 — 그리퍼 차원의 quantile 붕괴 (08-10 오후, 판별 사다리 완결)</h3>
+<p>30k 완주 후에도 phase-1을 보류하고 판별을 끝까지 밀었다. 사다리: ① 개루프 프로브 — 데모 프레임에서
+예측 MSE 1.82 > hold-still 0.88, 예측 절대최대 10.8(데모 ±3.0) → 어딘가 결함. ② 로더 프로브(학습 파이프라인
+그대로) — 정규화 공간 MSE 1.5 vs zero-기준선 65,315로 "완벽해 보임". ③ 그러나 이 대비는 착시:
+기준선 65,315는 <b>정규화가 ±1198로 폭발한 준상수 차원들</b>이 지배하는 수치였고, 그 쉬운 차원을 제외한
+실 관절 차원의 오차는 개루프와 같은 수준. ④ A/B 프로브(같은 element에서 서빙 후보 경로 vs 직접
+sample_actions) — 두 경로 일치(MSE 1.3–2.0), 즉 서빙 무죄·<b>모델 자체가 유효 차원을 못 배움</b>.</p>
+<p><b>범인: 양손 마지막 관절(그리퍼 개폐, flat-44 dim 12/34).</b> 데모의 >99% 프레임에서 3.0에 파킹 →
+q01=q99=2.9994(스팬 0)인데 실제 grasp 때 0↔3을 오간다. quantile 정규화 y=2(x−q01)/(스팬+1e-6)−1이
+grasp 순간을 <b>수백만 배로 폭발</b>시켜 flow 손실을 지배 — 과제에서 가장 결정적인 차원(잡기)이 가장
+병리적이었고, 정책은 손 개폐를 전혀 못 배웠다. 0/25가 완전히 설명된다.</p>
+<p><b>수리·재발차단:</b> <code>slurm/repair_gr1_norm_stats.py</code>(커밋) — 스팬&lt;0.1인 차원의 q01/q99를
+데이터셋 실측 min/max로 확장(그리퍼 0..3, waist-yaw ±0.1; 상수 0인 legs/neck은 무해하므로 불변).
+부수: GR1Outputs가 2D를 가정해 3D 후보 배열에서 truncate가 무연산이 되는 버그도 수정(커밋).
+<b>pilot-2 재학습 발차</b>(gigabyte_pro6000, 수리된 stats, 이번엔 체크포인트를 /scratch로 직접 지정 —
+사고 ⑩ 재발 원천 차단). 다른 4개 태스크 데이터셋도 같은 수리를 적용할 것.</p>
+<p><b>다음 순서:</b> pilot-2 학습(~14h) → 20k 중간 진단(개루프 MSE + 25트라이얼) → 30k phase-1 4잡
+(vla/rand × 시드분할) → 유효 시 주석·critic·페어드. PR#4는 사용자 머지 대기.</p>
 """,
 )
 
@@ -2178,8 +2194,28 @@ probe</b> (24 demo frames → predicted chunk vs demo-action MSE against a hold-
 -stack health) and a <b>2-trial video job</b> (--video-dir added to the client, committed — failure morphology
 for the record). Phase-1 stays queued until the probe reads out — we don't burn 4 jobs × 25 trials on a
 possibly-broken harness.</p>
-<p><b>Next:</b> read the open-loop probe → (if healthy) submit the four 30k phase-1 jobs → if valid,
-annotate/critic/paired verdicts. PR#4 awaits the user's merge (branch protection).</p>
+<h3>Root cause found — gripper-dim quantile collapse (08-10 afternoon, discrimination ladder complete)</h3>
+<p>Even after the 30k finish we held phase-1 and pushed the discrimination to the end. The ladder:
+① open-loop probe — on demo frames, prediction MSE 1.82 &gt; hold-still 0.88, predicted |max| 10.8 vs demo
+±3.0 → something broken. ② loader probe (the training pipeline itself) — normalized-space MSE 1.5 vs a
+zero-baseline of 65,315, which "looked perfect". ③ But that contrast was an illusion: the 65,315 baseline is
+dominated by <b>near-constant dims whose normalization explodes to ±1198</b>; excluding those easy dims, the
+real-joint error matches the open-loop number. ④ A/B probe (serving candidate path vs direct sample_actions
+on the same element) — the two agree (MSE 1.3–2.0): serving is innocent, <b>the model itself never learned
+the meaningful dims</b>.</p>
+<p><b>The culprit: the hands' last joints (gripper open/close, flat-44 dims 12/34).</b> Parked at 3.0 in
+&gt;99% of demo frames → q01=q99=2.9994 (zero span), yet the joint swings 0↔3 during a grasp. Quantile
+normalization y=2(x−q01)/(span+1e-6)−1 blows the grasp moments up <b>by a factor of millions</b>, dominating
+the flow loss — the most task-critical dimension (grasping) was the most pathological one, and the policy
+never learned to close its hands. 0/25 fully explained.</p>
+<p><b>Repair &amp; prevention:</b> <code>slurm/repair_gr1_norm_stats.py</code> (committed) — dims with span
+&lt; 0.1 get q01/q99 widened to the dataset's true min/max (grippers 0..3, waist-yaw ±0.1; the constant-zero
+legs/neck are harmless and untouched). Also fixed: GR1Outputs assumed 2D so its truncate was a no-op on 3D
+candidate arrays (committed). <b>pilot-2 retrain launched</b> (gigabyte_pro6000, repaired stats, checkpoints
+pointed straight at /scratch this time — incident ⑩ prevented at the source). The same repair will be applied
+to the other four task datasets.</p>
+<p><b>Next:</b> pilot-2 training (~14h) → 20k mid-flight diagnostic (open-loop MSE + 25 trials) → 30k phase-1
+(vla/rand × seed split) → if valid, annotate/critic/paired verdicts. PR#4 awaits the user's merge.</p>
 """,
 )
 
