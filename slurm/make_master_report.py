@@ -1087,8 +1087,11 @@ entry(
     "08-11",
     "horizon-probe",
     "설계 — 커버리지가 범인인가: OGBench에서 역방향 ablation (반사실 다이얼)",
-    "살아있음",
+    "보류",
     """
+<p class='missing'><b>보류 (08-11, 사용자 판단):</b> OGBench 재확인은 "커버리지가 OGBench 장점"이라는
+결론이 이미 우리 2축 프레임으로 설명되므로 새로 얻을 게 적다 — 실험은 접고, 결론(커버리지=인과 변인,
+처방=on-policy 커버리지 제조)만 로드맵에 반영한다. 본류는 GR1 phase-1 + phase-2 on-policy.</p>
 <p class='sub'>사용자 제안(08-11) + 결정적 사실 확정: "TD-BoN(우리 초기 버전)은 OGBench에서 굉장히 잘 된다."
 그리고 OGBench의 장점은 <b>diverse/play 데이터의 반사실 풍부함(커버리지)</b>이다. 이 엔트리는 그 관찰을
 <b>범인 특정 실험</b>으로 구체화한다.</p>
@@ -2493,6 +2496,10 @@ en(
     "horizon-probe",
     "Design — is coverage the culprit? A reverse ablation on OGBench (the counterfactual dial)",
     """
+<p class='missing'><b>Shelved (08-11, user call):</b> re-confirming on OGBench adds little — "coverage is
+OGBench's advantage" is already explained by our two-axis frame. We drop the experiment and keep only its
+conclusion (coverage = causal variable; prescription = manufacture coverage on-policy) in the roadmap. The
+main line is GR1 phase-1 + phase-2 on-policy.</p>
 <p class='sub'>User proposal (08-11) + a decisive fact: "TD-BoN (our original version) works really well on
 OGBench." And OGBench's advantage is the <b>counterfactual richness of its diverse/play data (coverage)</b>.
 This entry turns that into a culprit-isolation experiment.</p>
