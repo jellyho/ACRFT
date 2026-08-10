@@ -1,10 +1,10 @@
-"""YAM pi05 real-robot milestone figure: stacked funnel towers + mean-progress line.
+"""YAM pi05 real-robot milestone figure: equal-interval milestone grid + mean-progress line.
 
-Left: one stacked bar per run. Segments stack from the bottom, milestone 1 (lightest) up
-to milestone 4 (darkest); each segment's height = fraction of trials that stopped at exactly
-that milestone, so the total tower height = P(reach >=1) and the top edge of each segment
-sits at the cumulative P(>=m). Single blue hue, light->dark. Right: mean progress (0-4) with
-SEM across checkpoints, the H60 variant as an open diamond. Regenerates from
+Left: each milestone occupies an EQUAL vertical row (milestone 1 at the bottom -> 4 at top),
+so runs are compared on identical footing. Within each row, a fixed-length light track marks
+the 100% reference and a filled bar of length = P(reach >=m) shows the rate, in a single blue
+hue that darkens with milestone (gradient). Numbers give the exact rate. Right: mean progress
+(0-4) with SEM across checkpoints, H60 as an open diamond. Regenerates from
 docs/reports/yam_pi05_progress_2026-08-10.json.
 """
 
@@ -15,7 +15,6 @@ import sys
 import numpy as np
 
 sys.path.insert(0, "scripts")
-from matplotlib.patches import Patch
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import report_style
@@ -29,71 +28,70 @@ LABEL = {
     "rel_s200_100k": "100k",
     "rel_s200_150k": "150k",
     "rel_s200_200k": "200k",
-    "rel_s200_100k_h60": "100k\nH60",
+    "rel_s200_100k_h60": "100k H60",
 }
-XPOS = {"rel_s200_50k": 0, "rel_s200_100k": 1, "rel_s200_150k": 2, "rel_s200_200k": 3, "rel_s200_100k_h60": 4.4}
 base = np.array([76, 114, 176]) / 255  # seaborn deep blue
 
 
 def shade(mi):  # milestone index 0..3: light -> full hue
-    return tuple(1 - (1 - base) * (0.30 + 0.70 * mi / 3))
+    return tuple(1 - (1 - base) * (0.32 + 0.68 * mi / 3))
 
 
-fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(9.4, 3.6), gridspec_kw={"width_ratios": [1.35, 1]})
+fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(9.6, 3.7), gridspec_kw={"width_ratios": [1.5, 1]})
 
-# --- left: stacked funnel towers ---
-W = 0.62
-for run in ORDER:
+# --- left: equal-interval milestone grid ---
+n_runs = len(ORDER)
+row_h = 0.66  # bar thickness within each unit-height milestone row
+col_w = 1.0
+track_w = 0.86  # full-rate reference length within a column
+for ci, run in enumerate(ORDER):
     p = d["runs"][run]["prog"]
     n = len(p)
-    ge = [sum(x >= m for x in p) / n for m in (1, 2, 3, 4)]  # P(>=m)
-    bands = [ge[0] - ge[1], ge[1] - ge[2], ge[2] - ge[3], ge[3]]  # exactly-at-m, bottom->top
-    x = XPOS[run]
-    bottom = 0.0
-    for mi, h in enumerate(bands):
-        if h > 0:
-            ax_l.bar(x, h, width=W, bottom=bottom, color=shade(mi), zorder=2)
-        # label cumulative P(>=m+1) at the TOP edge of this segment, if that milestone was reached
-        top = bottom + h
-        if ge[mi] > 0 and h >= 0.06:
-            ax_l.text(
-                x,
-                top - h / 2,
-                f"{ge[mi]:.1f}",
-                ha="center",
-                va="center",
-                fontsize=8.5,
-                zorder=5,
-                path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
+    ge = [sum(x >= m for x in p) / n for m in (1, 2, 3, 4)]
+    x0 = ci * col_w
+    for mi in range(4):
+        y = mi + 0.5
+        ax_l.add_patch(
+            plt.Rectangle(
+                (x0 - track_w / 2, y - row_h / 2),
+                track_w,
+                row_h,
+                facecolor="#f0f0f0",
+                edgecolor="#e2e2e2",
+                lw=0.5,
+                zorder=1,
             )
-        bottom = top
-    # annotate the highest milestone reached, at the tower top
-    hi = max((m for m in range(4) if ge[m] > 0), default=-1)
-    if hi >= 0 and bands[hi] < 0.06:
+        )
+        w = ge[mi] * track_w
+        if w > 0:
+            ax_l.add_patch(
+                plt.Rectangle(
+                    (x0 - track_w / 2, y - row_h / 2), w, row_h, facecolor=shade(mi), edgecolor="none", zorder=2
+                )
+            )
+        inside = ge[mi] >= 0.34
+        tx = x0 - track_w / 2 + (w - 0.08 if inside else w + 0.06)
         ax_l.text(
-            x,
-            ge[0] + 0.02,
-            f"{ge[hi]:.1f}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-            color="#333333",
-            zorder=5,
-            path_effects=[pe.withStroke(linewidth=2, foreground="white")],
+            tx,
+            y,
+            f"{ge[mi]:.1f}",
+            ha="right" if inside else "left",
+            va="center",
+            fontsize=8.5,
+            color="white" if inside else "#333333",
+            zorder=3,
+            path_effects=None if inside else [pe.withStroke(linewidth=1.8, foreground="white")],
         )
 
-ax_l.set_xticks([XPOS[r] for r in ORDER], [LABEL[r] for r in ORDER])
-ax_l.axvline(3.75, color="#dddddd", lw=0.8, ls=":")
-ax_l.set_ylim(0, 1.06)
-ax_l.set_ylabel("fraction of trials")
-ax_l.set_title("Milestone funnel")
-ax_l.legend(
-    handles=[Patch(color=shade(mi), label=f"milestone {mi + 1}") for mi in range(4)],
-    fontsize=8,
-    loc="upper right",
-    title="stops at",
-    title_fontsize=8,
-)
+ax_l.axvline(3.5, color="#cccccc", lw=0.8, ls=":")
+ax_l.set_xlim(-0.6, n_runs - 0.4)
+ax_l.set_ylim(0, 4)
+ax_l.set_xticks(range(n_runs), [LABEL[r] for r in ORDER], fontsize=9)
+ax_l.set_yticks([mi + 0.5 for mi in range(4)], [f"milestone {mi + 1}" for mi in range(4)])
+ax_l.set_title("Milestone attainment (equal rows)")
+for s in ("top", "right", "left", "bottom"):
+    ax_l.spines[s].set_visible(False)
+ax_l.tick_params(length=0)
 
 # --- right: mean progress line ---
 main = {d["runs"][r]["ckpt"]: d["runs"][r]["prog"] for r in ORDER if d["runs"][r]["h"] == 16}
@@ -120,7 +118,7 @@ ax_r.set_xticks(xs)
 ax_r.set_ylim(0, 4)
 ax_r.axhline(4, ls=":", color="#bbb", lw=1)
 ax_r.set_title("Mean progress")
-ax_r.legend(fontsize=8.5, loc="upper right")
+ax_r.legend(fontsize=8.5, loc="lower left")
 
 fig.tight_layout()
 out = pathlib.Path(".scratch/fig_yam_pi05_funnel.jpg")
