@@ -55,6 +55,7 @@ if a.use_proprio:
     prop_stats = (_pm, _ps)
     print(f"proprio appended: input dim {z.shape[1]}")
 z = (z - z.mean(0)) / (z.std(0) + 1e-6)
+D = z.shape[1]  # meta["dim"] is stale once proprio is appended
 ep = np.load(a.cache / "episode_index.npy")
 z_t = torch.from_numpy(z).to(dev)
 
