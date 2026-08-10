@@ -1,5 +1,10 @@
 # ACRFT 실험 보고 · 게시 방법론
 
+> **전 워커 공통 규칙의 단일 원천은 Space 리포의 `RULES.md`다**
+> (https://huggingface.co/spaces/jellyho/acrft-reports/blob/main/RULES.md).
+> 이 파일(CLAUDE.md)은 그 요약 + 이 리포 특화 절차이며, 충돌 시 RULES.md가 우선한다.
+> RULES.md 개정 시 날짜·워커명을 남긴다.
+
 이 저장소의 실험 보고는 **HF Space 허브(`jellyho/acrft-reports`, private)** 로 게시된다.
 링크는 반드시 `https://huggingface.co/spaces/jellyho/acrft-reports` 를 쓴다
 (`*.hf.space` 직링크는 private이라 익명 401).
