@@ -652,3 +652,18 @@ pooled would clear the noise floor we measured.
 
 Compute honesty: phases are sequential gates - phase 0's measurement can kill
 the program cheaply before phases 1-2 spend anything.
+
+## Iteration 12 — pilot updated to the settled TD-SF-ARQ design (user + worker-B, 08-10)
+
+Phase 1 critic options revised: (a) control = plain IQL (progress-anchored, the
+YAM-V-proven regressor), (b) treatment = TD-SF-ARQ stage-A: ARQ head outputs a
+VECTOR successor feature F(s, chunk) with vector TD targets
+F ≈ phibar(s') + gamma*Fbar(s', chunk'), score Q = <F, w> with w a closed-form
+ridge regression of progress/success on phi. Rationale (worker-B's framing,
+consistent with our coordinate gate +7.3%): the faint action-dependent path
+starves under scalar TD's 1-D gradient; a 128-D vector target feeds it densely,
+and it subsumes our composed Q = gamma^h V(f(z,a)) without the f/V seam.
+Honest expectation stands: the same-state-counterfactual wall is untouched in
+stage A - Phase 0's harvest is what changes the data, for BOTH workers' stage C.
+Cross-replication: same offline gates (time-resolution corrected), IQL side by
+side, two independent stacks.
