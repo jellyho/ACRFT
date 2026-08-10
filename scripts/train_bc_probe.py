@@ -35,6 +35,11 @@ def main():
         "dimension-matched control for low-dim embeddings (is 128d enough, or did the "
         "objective discard information?). The projection is saved and replayed at rollout.",
     )
+    ap.add_argument(
+        "--use-proprio",
+        action="store_true",
+        help="Concatenate z-scored proprio (stats from annot meta) to the embedding before the MLP.",
+    )
     ap.add_argument("--steps", type=int, default=60000)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--hidden", type=int, default=1024)
@@ -54,6 +59,13 @@ def main():
     else:
         z = np.array(np.memmap(args.annot / "rl_token.dat", dtype=np.float32, mode="r", shape=(n, meta["token_dim"])))
         src = "rl_token"
+    if args.use_proprio:
+        pm = np.asarray(meta["proprio_mean"], np.float32)
+        psd = np.asarray(meta["proprio_std"], np.float32)
+        prop = np.array(np.memmap(args.annot / "proprio.dat", dtype=np.float32, mode="r", shape=(n, len(pm))))
+        prop = np.where(psd > 1e-6, (prop - pm) / np.where(psd > 1e-6, psd, 1.0), 0.0).astype(np.float32)
+        z = np.concatenate([z, prop], axis=1)
+        src += "+proprio"
     zmu, zsd = z.mean(0), z.std(0) + 1e-6
     z = (z - zmu) / zsd
     proj = None
@@ -121,6 +133,7 @@ def main():
                 "H": H,
                 "A": A,
                 "z_src": src,
+                "use_proprio": args.use_proprio,
                 "annot": str(args.annot),
             },
         },
