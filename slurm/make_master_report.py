@@ -731,7 +731,7 @@ atoms(51/101/201), 타깃넷(EMA/online), 데이터(demo/mixed) 어느 축도 �
 <p><b>검정력을 올리자 드러난 것.</b> run-level CI(n=4, 보수적)로는 안 보이던 신호가 트라이얼 페어드에서 확정된다:
 <b>td_max_demo(+21/−59, p&lt;0.001)·td_aqcmax(+28/−53, p=0.007)·td_max_online(+30/−51, p=0.026)은 유의한 해악.</b>
 즉 "TD 계열은 demo-only·aqcmax 부트스트랩·타깃넷 제거에서 능동적으로 해롭고", 나머지는 무차이, <b>유의한 이득은 0팔</b>.
-워커A의 독립 스택(HILP φ + Cal-QL+swap, McNemar) 판정과 서로 재현 관계다 — full-authority 해악(p=.004), BoN 무익.</p>
+워커A의 독립 스택(HILP φ + Cal-QL+swap, McNemar) 판정과 서로 재현 관계다 — full-authority 해악(p=.004)<i>(주의 08-10: 워커A 정정 — φ rollout 정규화 버그로 이 수치 무효, 동일 시드 재실행 중)</i>, BoN 무익.</p>
 <p><b>구조적 이유 — 왜 아무것도 안 바뀌는가.</b> ① rand(16후보 중 무작위)는 VLA와 구조적으로 동일 분포이고
 실측도 무차이(n=71, Δ̄=−0.020 CI[−0.054,+0.015]); randh(길이 무작위)도 null(n=4). ② 모든 critic의 argmax도 null —
 max가 mean을 못 이긴다는 것은 <b>같은 상태에서 뽑힌 16후보의 참 가치 스프레드가 선택 이득을 만들기에 너무 작다</b>는 뜻
@@ -1020,7 +1020,9 @@ flow 조향·AWR 어댑터(BC-앵커 내장) → DPG 액터는 on-policy 수집�
 <h3>사전등록 — A단계 판정 기준</h3>
 <p>GR1 phase-1 게이트(헤드룸·rand-vs-vla) 통과 시 A단계를 다음 기준으로 사전등록한다:
 동일 주석 데이터에서 IQL critic과 TD-SF-ARQ를 나란히 학습, 오프라인 게이트(held-out demo_winrate·band)에서
-① demo_winrate가 0.5에서 유의하게 벗어나고 ② IQL 대비 개선이 확인될 때만 롤아웃 팔로 승격.
+① demo_winrate가 0.5에서 유의하게 벗어나고 ② IQL 대비 개선이 확인되며 ③ <b>시간해상도가 γ-천장
+(ΔQ≈V·|lnγ|·Δt, 워커A 08-10 보정)의 30% 이상</b>일 때만 롤아웃 팔로 승격 — 천장 초과 sensitivity는
+인공 마진으로 간주해 기각한다.
 둘 다 아니면 null로 기록하고 C단계(on-policy) 전제 조건으로 이동 — 트릭 추가 없음.</p>
 """,
 )
@@ -1045,7 +1047,7 @@ entry(
 <tr><td>φ+proprio (사용자 질문)</td><td>proprio 보존↑(R² .546→.617)이나 게이트 동일 기각</td><td>winrate .485</td></tr></table>
 <h3>이틀의 수렴 — 왜 이것이 성과인가</h3>
 <p>부정 결과 여덟 갈래가 서로 독립인 방법으로 같은 구조적 사실을 가리켰고(선택·임베딩·히스토리·학습신호·모델 합성),
-각 갈래는 사전등록 기준과 페어드 통계로 닫혔다. 워커A의 독립 스택 판정(전권 파국 p=.004, BoN 동률)과도 상호 재현.
+각 갈래는 사전등록 기준과 페어드 통계로 닫혔다. 워커A의 독립 스택 판정(전권 파국 p=.004<i>(주의 08-10: 워커A 정정 — φ rollout 정규화 버그로 이 수치 무효, 동일 시드 재실행 중)</i>, BoN 동률)과도 상호 재현.
 "무엇이 안 되는가"의 지도가 완성됐고, 그 지도가 다음 무대(GR1)의 실험 설계 — 파일럿에서 headroom과 스프레드부터
 측정 — 를 결정한다.</p>
 <h3>사용자 결정 대기</h3>
@@ -1291,7 +1293,7 @@ entry(
 <tr><td>IQL</td><td>질의 회피형 — OOD 행동을 아예 평가하지 않음</td><td>안전단</td><td>null</td></tr>
 <tr><td>CQL/CalQL</td><td>가치 억압형 — OOD를 명시적으로 누름 (CalQL은 mc 하한 보정)</td><td>중간</td><td>null — 억압할 OOD가 배포 경로에 없음</td></tr>
 <tr><td>FQL/velocity steering</td><td>정책 근접형 — BC/flow 앵커가 곧 보수성, 가치 페널티 불필요</td><td>중간 (실행가능)</td><td>미실험 — Q-VGM 리뷰 참조</td></tr>
-<tr><td>제약 없는 actor-critic</td><td>없음</td><td>위험단</td><td>워커A full-authority 파국(.300, p=.004)이 근방 증거</td></tr></table>
+<tr><td>제약 없는 actor-critic</td><td>없음</td><td>위험단</td><td>워커A full-authority 파국(.300, p=.004)<i>(주의 08-10: 워커A 정정 — φ rollout 정규화 버그로 이 수치 무효, 동일 시드 재실행 중)</i>이 근방 증거</td></tr></table>
 <h3>핵심 역설 — BoN은 완벽한 BC 정규화인데도 위험하다</h3>
 <p>위험의 축이 두 개이기 때문이다. <b>축1 분포 이탈(OOD)</b>: BC 계열이 막는 것 — BoN은 이 축에서 완벽하다(전 후보가
 in-support). <b>축2 추정 오차의 착취(optimizer's curse)</b>: argmax는 N개의 잡음 낀 추정 중 가장 과대추정된 것을
@@ -1367,7 +1369,7 @@ entry(
 <p class='sub'>같은 허브의 워커A 리포트 7건을 정독하고, 방법·결과·운영 관행에서 배울 것을 우리 스택에 반영한 기록.</p>
 <h3>① 서로 재현: BoN은 두 스택 모두에서 무익</h3>
 <p>워커A는 전혀 다른 표현(HILP φ 128d, TD readout)·다른 critic(Cal-QL+swap negatives, 오프라인 action-sensitivity
-0→0.524 통과)으로 밤샘 롤아웃 판정을 했다: <b>BoN 무익(.700 동률), full-authority critic은 파국(.300, McNemar p=.004)</b>,
+0→0.524 통과)으로 밤샘 롤아웃 판정을 했다: <b>BoN 무익(.700 동률), full-authority critic은 파국(.300, McNemar p=.004)</b><i>(주의 08-10: 워커A 정정 — φ rollout 정규화 버그로 이 수치 무효, 동일 시드 재실행 중)</i>,
 σ-veto BoN .767(비유의). 우리 FINAL(14팔 null, TD 3팔 유의 해악)과 <b>독립 스택 상호 재현</b> — "action-sensitive critic을
 만들어도 BoN으로는 못 이긴다"가 두 워커 공통 결론이 됐다. 그들의 논지(critic에게는 커밋 길이·거부권 같은
 좁고 검증가능한 권한이 맞다)는 우리 다음 수(다양화·그래디언트 조향)와 상보적이다.</p>
@@ -1383,7 +1385,7 @@ action을 구분하는 유일한 오프라인 신호"라는 측정은 우리 후
 <h3>④ 08-09 심야 갱신 — 루프가 양방향이 됐다</h3>
 <p>워커A 신규 5건(08-08 야간) 정독: ① 밤샘 판정을 <b>set B(새 장면 30개, 자체 vla 기준선) 재현</b>까지 얹어 확정 —
 우리도 v17b 확정 시 재현 세트를 붙이는 게 맞다. ② 신규 <b>MVE critic</b>은 명시적으로 "두 워커의 유의한 부정 결과
-둘(전권 파국 p=.004 · 우리 calql_v14 과잉억압 p=.001)을 동시에 회피"하도록 설계 — 비관은 in-sample V+min 앙상블에만,
+둘(전권 파국 p=.004<i>(주의 08-10: 워커A 정정 — φ rollout 정규화 버그로 이 수치 무효, 동일 시드 재실행 중)</i> · 우리 calql_v14 과잉억압 p=.001)을 동시에 회피"하도록 설계 — 비관은 in-sample V+min 앙상블에만,
 OOD 질의는 구조적으로 0(MAC 계보). 우리 주석의 프레임당 16후보를 'frozen policy 아카이브'로 재사용한다.
 <b>서로의 리포트가 서로의 실험 설계에 인용되는 루프가 성립.</b> ③ 그들의 σ-veto는 dynamics-불일치 기반(러닝 미디언×τ),
 우리 v17b는 Q-앙상블-불일치 기반 — v17b 확정 시 veto 신호원 비교가 자연스러운 공동 후속. ④ 운영 메모: 워커A는
@@ -1401,6 +1403,21 @@ V(Spearman .966)</b>를 얻었지만 action sensitivity는 0 — 다만 이는 �
 우리 사전등록대로 <b>결과(성공률) 수준의 rand-vs-vla 페어드 비교</b>가 옳은 게이트다. (b) 데모-only 주석으로 critic이
 게이트를 통과 못 하면, 다음 수는 트릭이 아니라 <b>--policy-seed형 on-policy 수집</b>(같은 장면 K회 롤아웃 = 장면 수준
 반사실 생성)이다 — 워커A의 "on-policy 개입만이 반사실을 준다"는 논증과 우리 v14 K-per-scene 경험이 같은 결론.</p>
+<h3>⑦ 08-10 오후 갱신 — 정정 문화·γ-천장·관계 기하</h3>
+<p><b>(a) 정정 공지 — 우리 인용도 즉시 주석.</b> 워커A가 φ rollout 정규화 버그(표준화 토큰으로 학습된 phi.pt에
+raw 토큰 주입, 출력 오차 45%)로 <b>φ-소비 롤아웃 팔 전체 무효</b>를 공지 — 우리가 여러 엔트리에서 인용한
+"전권 파국 .300, p=.004"가 포함된다. 본 허브의 인용 지점 전부에 주의 문구를 달았다(오프라인 결과·대조군은
+유효, 동일 시드 재실행 중). 부정 결과의 자기 정정을 즉시 공지하는 관행 자체가 이 허브의 자산이다.</p>
+<p><b>(b) sensitivity의 γ-천장 보정 — 우리 게이트에 직접 반영.</b> 참 가치차의 상한은 ΔQ≈V·|lnγ|·Δt인데
+기존 sensitivity는 이를 무시했다: calswap의 .29–.52는 천장 초과 = CQL 인공 마진("오프라인 통과, 롤아웃 0"
+미스터리 해소), YAM의 0.0000은 γ 때문에 완벽 critic도 .0001인 게이트 결함. <b>새 게이트: 시간해상도 ≥ 천장의
+30%.</b> → 우리 TD-SF-ARQ A단계 사전등록 기준에 이 천장 보정을 채택한다(demo_winrate·band에 γ-천장 대비
+정규화 병기).</p>
+<p><b>(c) 교차-궤적 이웃 판정 — φ의 bridging 축은 관계 기하.</b> expert action chunk를 관계 상태의 증인으로
+쓰는 kNN 판정: φ 이웃 act-cos .661 vs stage-only .334(paired +.327), raw 대비 +.026 유의. "φ가 잇는 것은
+phase가 아니라 블럭-팔 상대 배치 같은 관계 기하"라는 발견 — 남은 병목을 "그 다리를 건너는 action-조건
+backup"으로 특정한 점이 우리 TD-SF-ARQ의 벡터 SF 타깃 논리와 정확히 맞물린다.</p>
+
 """,
 )
 
@@ -2280,7 +2297,9 @@ steps already leave support. <b>Intervention ladder: BoN gate (signal first) →
 <h3>Preregistration — stage-A verdict criteria</h3>
 <p>Once the GR1 phase-1 gates (headroom, rand-vs-vla) pass, stage A is preregistered as: train the IQL critic
 and TD-SF-ARQ side by side on identical annotations; promote to a rollout arm only if the offline gate
-(held-out demo_winrate, band) shows ① demo_winrate significantly off 0.5 and ② improvement over IQL.
+(held-out demo_winrate, band) shows ① demo_winrate significantly off 0.5, ② improvement over IQL, and
+③ <b>temporal resolution ≥ 30% of the γ-ceiling</b> (ΔQ≈V·|lnγ|·Δt, worker A's 08-10 correction) —
+sensitivity above the ceiling is treated as an artificial margin and rejected.
 Otherwise record null and move to the stage-C (on-policy) precondition — no tricks added.</p>
 """,
 )
@@ -2292,7 +2311,7 @@ en(
     """
 <p><b>What.</b> Adopted from worker A: the trial-paired McNemar test (immediately revealed significant TD harm
 in three FINAL arms); mutual replication (their independent φ + Cal-QL stack: BoN tie .700, full authority
-.300 p=.004); their representation-side attack on episode identity vs our data-side one (complementary);
+.300 p=.004 <i>(caveat 08-10: worker A retraction — a φ rollout normalization bug voids this number; rerunning on identical seeds)</i>); their representation-side attack on episode identity vs our data-side one (complementary);
 ops practices (zombie-job mtime detection, checkpoint archiving). The loop is now bidirectional — their MVE
 critic cites both workers' significant negatives as design constraints.</p>
 <p><b>08-10 update — worker A's 3-task cross-verdict validates our GR1 design.</b> Their new verdict ("V is
@@ -2305,6 +2324,17 @@ the barrier is pinned to the <b>absence of same-state counterfactuals</b>. Two i
 <b>outcome-level paired rand-vs-vla comparison</b> is the right gate; (b) if a demo-only critic fails that gate,
 the next move is not another trick but <b>--policy-seed-style on-policy collection</b> (K rollouts per scene =
 scene-level counterfactuals), converging with worker A's "only on-policy intervention provides them."</p>
+<p><b>08-10 afternoon update.</b> (a) <b>Retraction handled:</b> worker A voided all φ-consuming
+rollout arms (raw tokens fed to a phi trained on standardized ones; 45% output error) — including the
+".300, p=.004 full-authority catastrophe" we cite; every citation on this hub now carries a caveat (offline
+results and controls stand; identical-seed reruns underway). (b) <b>γ-ceiling sensitivity correction
+adopted:</b> the true value-difference ceiling is ΔQ≈V·|lnγ|·Δt; calswap's .29–.52 exceeded it (CQL artifact,
+resolving "passes offline, zero in rollouts"), YAM's 0.0000 was a gate defect. New gate: temporal resolution
+≥ 30% of ceiling — adopted into our TD-SF-ARQ stage-A preregistration. (c) <b>Cross-trajectory neighbor
+verdict:</b> φ's bridging axis is relational geometry, not stage (act-cos .661 vs stage-only .334); the
+remaining bottleneck named as "the action-conditioned backup that crosses that bridge" — exactly the axis our
+vector-SF target feeds.</p>
+
 """,
 )
 
@@ -2320,7 +2350,7 @@ powerless. max-of-N queries the N/(N+1) quantile, so a τ=0.9 critic certifies o
 <p><b>Positions:</b> BoN = selection-type safety (KL ≤ log N; the safe-and-useless extreme where we sat);
 IQL = query avoidance; CQL/CalQL = value suppression (idle: no OOD reaches our deployment);
 FQL/velocity-steering = policy proximity; unconstrained actor-critic = the dangerous end (worker A's .300,
-p=.004).</p>
+p=.004 <i>(caveat 08-10: worker A retraction — a φ rollout normalization bug voids this number; rerunning on identical seeds)</i>).</p>
 <p><b>v20 — small-N BoN (N=4; ACSAC check, user question).</b> ACSAC reports n=4 as optimal, and our frame
 agrees on the mechanism: max-of-4 queries the ~80th percentile — INSIDE a τ=0.9 critic's certified range
 (N≤10), unlike N=16 — with less than half the curse coefficient. We had never tested it (all runs N=16).
