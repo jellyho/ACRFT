@@ -40,7 +40,11 @@ body{background:#ffffff}
 .wbx a{color:#3730a3}
 .wbx h2,.wbx h3{margin:.7em 0 .4em;letter-spacing:-.01em;color:#111;font-family:Georgia,'Times New Roman',serif}
 .wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;background:#fff;color:#1a1a1a}
-.wbx .tblwrap{overflow-x:auto;max-width:100%}.wbx .tblwrap table{margin:10px 2px}
+/* 호스트 페이지가 .num을 26px 원형 배지(inline-flex)로 정의 — 우리 <table class='num'>이 그 규칙에
+   잡히면 표 전체가 26×26 상자로 붕괴해 산문과 겹친다. 표 display를 강제 복원한다. */
+.wbx table.num,.wbx table.spec{display:table !important;width:auto !important;height:auto !important;
+  border-radius:0 !important;flex:none !important}
+.wbx .tblwrap{overflow-x:auto !important;max-width:100%}.wbx .tblwrap table{margin:10px 2px}
 .wbx td,.wbx th{border:1px solid #e2e2e2;padding:5px 10px;text-align:left;vertical-align:top}
 .wbx th{background:#f3f4f8}.wbx img{max-width:100%;border:1px solid #e2e2e2;border-radius:8px;margin:8px 0;background:#fff}
 .wbx .missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
