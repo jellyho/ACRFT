@@ -63,4 +63,4 @@ class GR1Outputs(transforms.DataTransformFn):
     action_dim: int = 44
 
     def __call__(self, data: dict) -> dict:
-        return {"actions": np.asarray(data["actions"][:, : self.action_dim])}
+        return {"actions": np.asarray(data["actions"][..., : self.action_dim])}
