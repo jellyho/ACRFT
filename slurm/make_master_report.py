@@ -1082,38 +1082,39 @@ TRA-비관 분석은 대조학습 계열 제외의 근거.</p>
 """,
 )
 
-# ============================================== 08-11 horizon 프로브 환경 설계
+# ============================================== 08-11 커버리지 역방향 ablation 설계
 entry(
     "08-11",
     "horizon-probe",
-    "설계 — horizon이 가치를 가르는 진단 환경 (임베딩 가설의 결정적 시험대)",
+    "설계 — 커버리지가 범인인가: OGBench에서 역방향 ablation (반사실 다이얼)",
     "살아있음",
     """
-<p class='sub'>사용자 제안(08-11): "horizon이 차이를 보일 만한 태스크를 가져오거나, 인공 환경을 만들어보자."
-이 엔트리는 그 제안을 <b>사전등록된 진단 실험</b>으로 구체화한다.</p>
-<h3>왜 이게 정확한 다음 수인가</h3>
-<p>지금까지 모든 null(FINAL 14팔·φ 사다리·BoN 90쌍·워커A 독립 스택)은 한 문장으로 수렴한다:
-<b>후보축에 학습 신호가 없다(σ_signal≈0)</b>. 그런데 이 진단에는 치명적 확증편향 위험이 있다 — 우리가 쓴
-과제(PrepareCoffee·YAM)가 <b>애초에 단기 반응형이라</b> 후보 chunk의 장기 가치차가 원래 작았을 수 있다.
-그러면 "임베딩이 문제냐 신호가 문제냐"를 영원히 못 가른다. <b>해결: 정답이 알려진, horizon이 가치를 지배하도록
-설계된 환경에서 우리 파이프라인 전체를 돌려본다.</b> 신호가 실재하도록 만들어 놓은 곳에서도 우리 critic이
-그것을 못 잡으면 → 임베딩/목적식 결함(고칠 수 있음). 잡으면 → 우리 방법은 옳고 실패는 데이터 탓
-(→ on-policy 수집). 어느 쪽이든 2년치 모호성을 한 번에 가른다.</p>
-<h3>후보 환경 — 둘 다 프로그램적 정답 보유</h3>
-<table class='num'><tr><th>옵션</th><th>무엇</th><th>왜 horizon이 가치를 가르나</th><th>비용</th></tr>
-<tr><td>A. OGBench stitch (기성)</td><td>antmaze/humanoidmaze/scene stitch 데이터셋 — BYOL-γ·TD-JEPA가 쓴 바로 그 벤치</td><td>4칸 이내 조각으로 학습, 더 긴 경로로 평가 → 조합 일반화가 성공률을 <b>정의</b>한다. 갈림길에서 후보 방향 선택이 결과를 가름</td><td>낮음 — 데이터·환경 공개, φ/critic 코드 대부분 재사용</td></tr>
-<tr><td>B. 인공 gridworld/키-문 (자작)</td><td>같은 상태에서 두 갈래: 하나는 즉시 보상 0·장기 성공, 하나는 즉시 진전·장기 막힘. horizon H를 다이얼로</td><td>ΔQ가 H에 정확히 비례하도록 설계 — γ-천장(워커A 보정) 대비 sensitivity를 H로 스캔 가능. 완전 관측·완전 정답</td><td>중 — 환경 자작이나 완전 통제(교란 0)</td></tr></table>
-<h3>사전등록 — 무엇을 보면 무엇을 결론하나</h3>
-<p>동일 파이프라인(어노테이션 → φ/raw 임베딩 → critic → 오프라인 게이트 + 롤아웃)을 이식하고, <b>horizon을
-스윕</b>한다. 판정:</p>
+<p class='sub'>사용자 제안(08-11) + 결정적 사실 확정: "TD-BoN(우리 초기 버전)은 OGBench에서 굉장히 잘 된다."
+그리고 OGBench의 장점은 <b>diverse/play 데이터의 반사실 풍부함(커버리지)</b>이다. 이 엔트리는 그 관찰을
+<b>범인 특정 실험</b>으로 구체화한다.</p>
+<h3>재구성 — 진단이 뒤집혔다</h3>
+<p>TD-BoN이 OGBench에서 잘 된다는 사실은 "우리 파이프라인이 신호가 있을 때 잡는가?"에 <b>이미 답</b>한다: 잡는다.
+따라서 PrepareCoffee·YAM의 null은 <b>임베딩/critic 결함이 아니라 그 데이터에 신호(반사실)가 없어서</b>다 — 우리
+2축 결론(축2 = 같은-상태 반사실 부재)을 반대편에서 확증하며 <b>우리 방법을 면죄</b>한다. 그러므로 질문이 바뀐다:</p>
+<p style='text-align:center'><b>OGBench엔 있고 VLA-manipulation엔 없는, TD-BoN을 죽이는 그 속성 하나는?</b></p>
+<p>사용자 확정: <b>커버리지(반사실 밀도)</b>가 1순위 용의자이자 OGBench의 핵심 장점. "임베딩이 흩어져서"가 아니라
+"같은 상태를 다른 행동으로 지나간 데이터가 없어서" 후보를 못 가른다는 가설.</p>
+<h3>결정적 실험 — 같은 환경에서 커버리지만 다이얼 (한 변인)</h3>
+<p>새 환경을 만들 필요가 없다. <b>OGBench 그 자체에서 커버리지만 얇게 만든다</b>: env·horizon·관측·알고리즘 전부
+고정, 데이터의 <b>반사실 밀도</b>만 낮춘다(같은 상태를 지나는 서로 다른 궤적/행동 수를 프로그램적으로 감축 →
+demo-only 레짐으로 수렴). 반사실 밀도는 측정 가능 — 상태 빈당 데이터에 등장한 서로 다른 next-action 수.</p>
 <table class='num'><tr><th>관측</th><th>결론</th></tr>
-<tr><td>H↑에 따라 demo_winrate가 0.5→1로, BoN이 vla 대비 상승</td><td>우리 파이프라인은 <b>신호가 있을 때 잡는다</b> — 기존 null은 과제의 σ_signal 부재 탓. 임베딩 무죄</td></tr>
-<tr><td>H↑에도 게이트 평평(0.5)</td><td>임베딩/critic <b>목적식 결함</b> — 신호가 있어도 못 잡음. TD-SF-ARQ 벡터 SF가 이걸 고치는지 같은 환경에서 직접 비교</td></tr>
-<tr><td>raw는 되는데 φ만 안 됨</td><td>φ가 horizon 관련 정보를 버림(디코더 프로브 .546과 정합) — 표현 선택 문제로 특정</td></tr></table>
-<p><b>순서:</b> GR1 phase-1과 병행 가능(다른 자원). 먼저 <b>옵션 A(OGBench stitch)</b>로 착수 — 기성 데이터·환경이라
-가장 빠르고, TD-JEPA/BYOL-γ가 이미 이 벤치에서 성공했으므로 "신호가 실재한다"가 문헌으로 보장된다. 우리 IQL
-critic + φ를 그 위에 얹어 <b>같은 벤치에서 우리 스택이 BoN 이득을 내는지</b>가 첫 결정적 관측. 실패 시 옵션 B로
-교란을 0으로 줄여 재확인. (Task#10)</p>
+<tr><td>커버리지↓에 따라 TD-BoN sensitivity·성공이 <b>단조 붕괴</b>, demo-only 레짐에서 우리 VLA null 재현</td><td><b>커버리지가 인과 변인으로 확정</b> — 2년치 null의 뿌리를 같은 환경에서 통제 증명. 처방은 명확: VLA엔 반사실을 <b>만들어야</b> 한다(on-policy)</td></tr>
+<tr><td>커버리지를 얇게 해도 TD-BoN 유지</td><td>커버리지는 범인이 아님 → horizon·관측차원 등 2순위 용의자로 다이얼 이동</td></tr>
+<tr><td>같은 커버리지에서 raw는 되고 φ만 붕괴</td><td>표현이 부차 변인 — φ가 버린 정보가 이 레짐에서 결정적(디코더 프로브 .546과 대조)</td></tr></table>
+<h3>전략적 따름정리 — 이게 맞으면 우리 로드맵이 확정된다</h3>
+<p>커버리지가 인과 변인으로 확정되면: ① <b>오프라인 전용 임베딩 라인(φ, TD-SF-ARQ A·B단계)은 천장이 있다</b> —
+반사실이 없는 데이터에선 목적식을 아무리 바꿔도 상한이 낮다. ② 진짜 레버는 <b>커버리지 제조 = on-policy
+K-per-scene 수집</b>(vla/rand/noise 변형으로 같은 장면을 다르게 지나가기) — GR1 phase-2 C단계로 이미 계획됨.
+OGBench는 그것의 존재 증명이다: "반사실을 주면 TD-BoN이 된다". TD-SF-ARQ는 그 반사실을 <b>최대 효율로 흡수</b>하는
+목적식(전이당 128차원 SF 감독)이라는 위치로 정리된다.</p>
+<p><b>순서:</b> GR1 phase-1과 병렬(다른 자원). 우리 초기 TD-BoN 코드 + OGBench 로더 재사용이라 착수 빠름.
+반사실-밀도 다이얼 3~4점 스윕이 첫 산출. (Task#10)</p>
 """,
 )
 
@@ -1358,8 +1359,20 @@ stitch .78)에는 못 미치고 Kendall τ는 raw보다 낮다 — 재현 레시
 <p class='sub'><b>화질에 대한 주의(08-10 사용자 피드백 반영):</b> 위 패널이 전반적으로 흐릿한 것은 임베딩 탓만이
 아니라 <b>L2 회귀 디코더의 구조적 한계</b>다 — 픽셀 MSE를 최소화하는 예측은 "가능한 이미지들의 평균"이라 항상
 뭉개진다. 임베딩이 실제로 보존한 정보의 상한을 보려면 조건부 생성모델이 맞는 도구다.
-→ <b>후속: φ-조건부 diffusion 디코더</b>(같은 데이터·같은 조건, φ-128 vs raw-2048 조건 비교)를 학습해
-패널·워크 영상을 재생성한다. 판정은 여전히 프로그램적(DINOv2 특징 유사도·proprio 프로브 R²)으로 한다 (Task#9).</p>
+→ <b>후속(완료): φ-조건부 diffusion 디코더</b>(같은 kroll 데이터·같은 프로토콜, φ-128 vs raw-2048 조건,
+조건부 DDPM 30k). L2의 평균-예측 한계를 제거해 임베딩이 보존한 정보의 상한을 본다.</p>
+<h3>diffusion 디코더 판정 (08-11, 프로그램적)</h3>
+<p>held-out 128프레임에서 best-of-4 샘플의 픽셀 MSE(낮을수록 조건 임베딩에 정보가 더 남아있음):</p>
+<table class='num'><tr><th>조건 임베딩</th><th>best-of-4 MSE ↓</th><th>해석</th></tr>
+<tr><td>raw 2048</td><td><b>0.0193</b></td><td>기준 — 원 토큰이 픽셀을 가장 잘 복원</td></tr>
+<tr><td>φ-128</td><td>0.0602</td><td>raw의 <b>3.1배</b> — φ 조건만으로는 같은 프레임을 훨씬 못 만든다</td></tr></table>
+<p><b>판정:</b> 생성모델(평균-예측 편향 제거)로 봐도 φ는 raw 대비 재구성 정보가 크게 부족하다 —
+L2 proprio 프로브(R² raw .760→φ .546)와 <b>독립 지표에서 같은 방향</b>. 즉 앞선 "φ가 단거리 정보를 버린다"는
+결론이 디코더 종류(회귀 vs 생성)에 무관하게 성립. 패널·워크 영상은
+<a href="videos/decoder/23_diff_raw_recon.png" target="_blank">raw 패널</a> ·
+<a href="videos/decoder/23_diff_phi128_recon.png" target="_blank">φ 패널</a> ·
+<a href="videos/decoder/23_diff_raw_walk.mp4" target="_blank">raw 워크</a> ·
+<a href="videos/decoder/23_diff_phi128_walk.mp4" target="_blank">φ 워크</a> (정성 참고 — 판정은 위 MSE로). (Task#9 완료)</p>
 ④ <b>critic 사다리 확정(n=8):</b> RLT2048 −0.065 / PCA-128 −0.040 / <b>φ-128 −0.010 CI[−0.078,+0.058],
 McN +62/−66 p=0.791 — null 확정.</b> n=4의 +0.035와 단조 배열은 새 4시드(−0.02/−0.10/+0.02/−0.12)에서 소멸 —
 v11 AQC 전례("n=4 신호를 믿지 말 것")의 재연이며, 그 규칙이 옳았음의 재확인. φ 결합팔(v19: φ×다양화×veto)도
@@ -1690,12 +1703,12 @@ META = {
     },
     "horizon-probe": {
         "date": "2026-08-11 03:30",
-        "who": "워커B(설계) + 사용자(제안)",
+        "who": "워커B(설계) + 사용자(제안·확정)",
         "where": "설계 문서 (구현 전)",
-        "what": "horizon이 가치를 지배하는 진단 환경 — 임베딩 결함 vs 신호 부재를 가르는 사전등록 시험",
-        "how": "OGBench stitch(기성) 우선, 인공 gridworld(자작) 백업 — 동일 파이프라인 이식+horizon 스윕",
-        "why": "모든 null이 '과제가 애초에 단기'라는 확증편향일 위험 — 신호가 실재하는 곳에서 우리 방법 검증",
-        "links": ["conservatism", "phi-ladder", "tdsf-arq", "papers-byolg", "papers-tdjepa", "final"],
+        "what": "커버리지 역방향 ablation — OGBench에서 반사실 밀도만 다이얼해 TD-BoN 붕괴점 특정",
+        "how": "TD-BoN이 OGBench서 성공 = 존재증명. 같은 env 반사실 밀도만 감축 → demo-only 레짐 재현 여부",
+        "why": "커버리지(반사실)가 OGBench 장점이자 VLA null의 인과 변인 후보 — 한 변인 통제로 확정",
+        "links": ["conservatism", "phi-ladder", "tdsf-arq", "papers-byolg", "papers-tdjepa", "gr1-port", "final"],
     },
     "papers-byolg": {
         "date": "2026-08-11 02:40",
@@ -2478,34 +2491,38 @@ contrastive variants.</p>
 
 en(
     "horizon-probe",
-    "Design — a horizon-decisive diagnostic environment (the crucial test of the embedding hypothesis)",
+    "Design — is coverage the culprit? A reverse ablation on OGBench (the counterfactual dial)",
     """
-<p class='sub'>User proposal (08-11): "bring a task where horizon makes a difference, or build an artificial
-environment." This entry turns that into a pre-registered diagnostic.</p>
-<h3>Why this is exactly the right next move</h3>
-<p>Every null so far (FINAL 14 arms, the φ ladder, 90-pair BoN, worker A's independent stack) converges on one
-sentence: <b>there is no learning signal on the candidate axis (σ_signal≈0)</b>. But that diagnosis carries a
-fatal confound risk — the tasks we used (PrepareCoffee, YAM) may be <b>short-horizon reactive to begin with</b>,
-so candidate chunks never had much long-term value spread. Then "is it the embedding or the signal?" can never
-be separated. <b>Fix: run the whole pipeline in an environment with known ground truth, designed so horizon
-dominates value.</b> If our critic fails to capture signal we deliberately built in → embedding/objective
-defect (fixable). If it captures it → our method is right and the failure was the data (→ on-policy). Either
-way, two years of ambiguity resolved at once.</p>
-<h3>Candidate environments — both with programmatic ground truth</h3>
-<table class='num'><tr><th>Option</th><th>What</th><th>Why horizon decides value</th><th>Cost</th></tr>
-<tr><td>A. OGBench stitch (off-the-shelf)</td><td>antmaze/humanoidmaze/scene stitch datasets — the exact bench BYOL-γ and TD-JEPA used</td><td>train on ≤4-cell pieces, evaluate on longer paths → combinatorial generalization <b>defines</b> success; the choice of candidate direction at a junction decides the outcome</td><td>low — public data/env, most φ/critic code reusable</td></tr>
-<tr><td>B. Artificial gridworld / key-door (custom)</td><td>same state, two branches: one 0 immediate reward but long-term success, one immediate progress but long-term dead end; horizon H on a dial</td><td>design ΔQ exactly proportional to H — scan sensitivity against the γ-ceiling (worker A's correction) by H; fully observed, exact ground truth</td><td>medium — custom env but full control (zero confounds)</td></tr></table>
-<h3>Pre-registration — what we conclude from what we see</h3>
-<p>Port the identical pipeline (annotation → φ/raw embedding → critic → offline gate + rollout) and <b>sweep
-horizon</b>. Verdicts:</p>
+<p class='sub'>User proposal (08-11) + a decisive fact: "TD-BoN (our original version) works really well on
+OGBench." And OGBench's advantage is the <b>counterfactual richness of its diverse/play data (coverage)</b>.
+This entry turns that into a culprit-isolation experiment.</p>
+<h3>Reframe — the diagnosis flipped</h3>
+<p>That TD-BoN works on OGBench <b>already answers</b> "does our pipeline capture signal when present?" — yes.
+So the PrepareCoffee/YAM nulls are <b>not an embedding/critic defect but the absence of signal (counterfactuals)
+in that data</b> — confirming our two-axis conclusion (axis 2 = absent same-state counterfactuals) from the
+opposite side, and <b>exonerating our method</b>. So the question changes:</p>
+<p style='text-align:center'><b>What single property, present in OGBench and absent in VLA manipulation, kills TD-BoN?</b></p>
+<p>User-confirmed: <b>coverage (counterfactual density)</b> is the prime suspect and OGBench's core advantage.
+The hypothesis is not "the embedding scatters" but "there is no data of the same state traversed by different
+actions," so candidates cannot be told apart.</p>
+<h3>Decisive experiment — dial only coverage in the same environment (one variable)</h3>
+<p>No new environment needed. <b>Thin coverage within OGBench itself</b>: hold env, horizon, observation and
+algorithm fixed, and reduce only the <b>counterfactual density</b> of the data (programmatically cut the number
+of distinct trajectories/actions passing through the same state → converge to a demo-only regime). Counterfactual
+density is measurable — the number of distinct next-actions per state present in the data.</p>
 <table class='num'><tr><th>Observation</th><th>Conclusion</th></tr>
-<tr><td>as H↑, demo_winrate goes 0.5→1 and BoN rises over vla</td><td>our pipeline <b>captures signal when present</b> — prior nulls were the tasks' absent σ_signal. Embedding exonerated</td></tr>
-<tr><td>gate stays flat (0.5) even as H↑</td><td>embedding/critic <b>objective defect</b> — signal present but not captured. Test directly whether TD-SF-ARQ's vector SF fixes it in the same env</td></tr>
-<tr><td>raw works but φ does not</td><td>φ discarded horizon-relevant information (consistent with decoder probe .546) — pinned as a representation-choice problem</td></tr></table>
-<p><b>Order:</b> can run in parallel with GR1 phase-1 (different resources). Start with <b>Option A (OGBench
-stitch)</b> — off-the-shelf, fastest, and since TD-JEPA/BYOL-γ already succeed on it, "the signal is real" is
-literature-guaranteed. Putting our IQL critic + φ on top, whether <b>our stack yields a BoN gain on the same
-bench</b> is the first decisive observation. On failure, fall to Option B to drive confounds to zero. (Task#10)</p>
+<tr><td>as coverage↓, TD-BoN sensitivity/success <b>monotonically collapses</b>, reproducing our VLA null in the demo-only regime</td><td><b>coverage confirmed as the causal variable</b> — the root of two years of nulls, proven under control in the same env. Prescription is clear: for VLA, counterfactuals must be <b>manufactured</b> (on-policy)</td></tr>
+<tr><td>TD-BoN survives even at thin coverage</td><td>coverage is not the culprit → move the dial to second-tier suspects (horizon, observation dimensionality)</td></tr>
+<tr><td>at equal coverage, raw works but φ collapses</td><td>representation is a secondary variable — the information φ discards is decisive in this regime (contrast decoder probe .546)</td></tr></table>
+<h3>Strategic corollary — if this holds, our roadmap is settled</h3>
+<p>If coverage is confirmed causal: ① the <b>offline-only embedding line (φ, TD-SF-ARQ stages A/B) has a
+ceiling</b> — with no counterfactuals in the data, no objective change lifts it far. ② The real lever is
+<b>manufacturing coverage = on-policy K-per-scene collection</b> (traverse the same scene differently via
+vla/rand/noise variants) — already planned as GR1 phase-2 stage C. OGBench is the existence proof: "give it
+counterfactuals and TD-BoN works." TD-SF-ARQ then sits as the objective that <b>absorbs those counterfactuals
+most efficiently</b> (128-dim SF supervision per transition).</p>
+<p><b>Order:</b> parallel with GR1 phase-1 (different resources). Fast to start — our original TD-BoN code +
+the OGBench loader. First output: a 3–4-point counterfactual-density sweep. (Task#10)</p>
 """,
 )
 
@@ -2630,9 +2647,22 @@ signal was noise. Closed.</p>
 <img src="videos/decoder/22_decoder_raw_recon.png" alt="raw-2048 reconstruction panel" style='max-width:49%'></p>
 <p class='sub'><b>On image quality (08-10 user feedback):</b> the blur is not only the embedding's fault — an
 L2 regression decoder structurally predicts the mean of all compatible images. To see the true upper bound of
-what the embedding retains, a conditional generative model is the right tool. → <b>Follow-up: a φ-conditioned
-diffusion decoder</b> (same data and protocol, φ-128 vs raw-2048 conditioning) will regenerate the panels and
-walk videos; verdicts stay programmatic (DINOv2 feature similarity, proprio probe R²) — Task#9.</p>
+what the embedding retains, a conditional generative model is the right tool. → <b>Follow-up (done): a
+φ-conditioned diffusion decoder</b> (same kroll data and protocol, φ-128 vs raw-2048 conditioning, conditional
+DDPM 30k).</p>
+<h3>Diffusion decoder verdict (08-11, programmatic)</h3>
+<p>Best-of-4 pixel MSE over 128 held-out frames (lower = more information retained in the conditioning embedding):</p>
+<table class='num'><tr><th>Conditioning</th><th>best-of-4 MSE ↓</th><th>Reading</th></tr>
+<tr><td>raw 2048</td><td><b>0.0193</b></td><td>baseline — the raw token reconstructs pixels best</td></tr>
+<tr><td>φ-128</td><td>0.0602</td><td><b>3.1× worse</b> than raw — φ-conditioning alone makes far worse frames</td></tr></table>
+<p><b>Verdict:</b> even with a generative model (mean-prediction bias removed) φ retains substantially less
+reconstruction information than raw — the <b>same direction on an independent metric</b> as the L2 proprio
+probe (R² raw .760 → φ .546). So "φ discards short-range information" holds regardless of decoder type
+(regression vs generative). Panels/walks:
+<a href="videos/decoder/23_diff_raw_recon.png" target="_blank">raw panel</a> ·
+<a href="videos/decoder/23_diff_phi128_recon.png" target="_blank">φ panel</a> ·
+<a href="videos/decoder/23_diff_raw_walk.mp4" target="_blank">raw walk</a> ·
+<a href="videos/decoder/23_diff_phi128_walk.mp4" target="_blank">φ walk</a> (qualitative; verdict is the MSE). (Task#9 done)</p>
 """,
 )
 
