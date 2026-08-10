@@ -261,7 +261,9 @@ class DynCommit:
         return max(1, k) * self.stride, sig
 
 
-def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, dyn=None):
+def make_policy_fn(
+    vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None, dyn=None, probe=None
+):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
 
@@ -279,6 +281,8 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
         z_phi = np.asarray(z, np.float32)  # pre-proprio: the dyn ensemble lives in phi space
         if mode == "vla":
             return cand[0], vla.H, None
+        if mode == "probe":
+            return probe(z_phi), vla.H, None
         if mode == "mbacv":
             # commitment-only ablation: the VLA's own first sample, cut by the sigma rule. Isolates
             # the adaptive-commitment axis from selection entirely.
@@ -362,6 +366,7 @@ def build_policy(
     model_overrides=None,
     vla=None,
     dyn=None,
+    probe=None,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
 
@@ -385,8 +390,8 @@ def build_policy(
         model_overrides=model_overrides,
     )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
-    if mode in ("vla", "mbacv"):
-        return make_policy_fn(vla, None, None, mode=mode, dyn=dyn, **kw), vla.H, None
+    if mode in ("vla", "mbacv", "probe"):
+        return make_policy_fn(vla, None, None, mode=mode, dyn=dyn, probe=probe, **kw), vla.H, None
     score, _, macro = _critic.load_trained(critic_path, action_dim=vla.raw_dim, horizon=vla.H)
     pro = proprio_stats(critic_path)
     if pro is not None:
@@ -429,7 +434,7 @@ def main() -> None:
         "--modes",
         nargs="+",
         default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "vla", "mbac", "mbacv", "mbacf"],
+        choices=["critic", "bon", "prefix", "rand", "vla", "mbac", "mbacv", "mbacf", "probe"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
@@ -474,6 +479,8 @@ def main() -> None:
 
     if args.critic is None and any(m in args.modes for m in ("critic", "bon", "prefix", "rand", "mbac", "mbacf")):
         ap.error("--critic is required for critic/bon/prefix/rand/mbac modes")
+    if args.probe is None and "probe" in args.modes:
+        ap.error("--probe is required for the probe mode")
     if args.dyn is None and any(m in args.modes for m in ("mbac", "mbacv", "mbacf")):
         ap.error("--dyn is required for the mbac/mbacv modes")
 
@@ -515,11 +522,30 @@ def main() -> None:
         shared_vla.token_transform = _phi_fn
         logger.info(f"phi adapter active: token {_w0.shape[1]} -> {_w2.shape[0]}")
 
+    probe_fn = None
+    if args.probe is not None:
+        import torch as _torch
+
+        _pk = _torch.load(args.probe, map_location="cpu", weights_only=False)
+        _pw = [(_pk["net"][f"{i}.weight"].numpy(), _pk["net"][f"{i}.bias"].numpy()) for i in (0, 2, 4, 6)]
+        _pmu, _psd = _pk["zmu"], _pk["zsd"]
+        _pH, _pA = _pk["cfg"]["H"], _pk["cfg"]["A"]
+
+        def probe_fn(z, _w=_pw, _mu=_pmu, _sd=_psd, _hh=_pH, _aa=_pA):
+            x = (np.asarray(z, np.float32).reshape(-1) - _mu) / _sd
+            for i, (w, b) in enumerate(_w):
+                x = x @ w.T + b
+                if i < len(_w) - 1:
+                    x = 0.5 * x * (1.0 + np.tanh(0.7978845608 * (x + 0.044715 * x**3)))
+            return x.reshape(_hh, _aa).astype(np.float32)
+
+        logger.info(f"probe policy active: {_pk['cfg']['z_src']} ({_pk['cfg']['in_dim']}d) -> chunk")
+
     dyn_commit = None
     if args.dyn is not None:
         dyn_commit = DynCommit(args.dyn, tau_mult=args.dyn_tau)
         logger.info(
-            f"dyn commitment active: stride {dyn_commit.stride}, hist {dyn_commit.hist}, " f"tau x{dyn_commit.tau_mult}"
+            f"dyn commitment active: stride {dyn_commit.stride}, hist {dyn_commit.hist}, tau x{dyn_commit.tau_mult}"
         )
 
     for mode in args.modes:
@@ -536,6 +562,7 @@ def main() -> None:
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
             dyn=dyn_commit,
+            probe=probe_fn,
         )
         trace, frames, box = [], [], {"trial": 0, "proj": None}
         record = args.video_dir is not None
