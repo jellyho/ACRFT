@@ -1,4 +1,11 @@
-"""Build the project's master experiment report — every experiment, grouped by DATE, then by
+"""Build the project's master experiment repo
+<p><b>⑨ BoN pre-registration closed (worker A r53, 08-10 23:00) — test-time BoN confirmed futile.</b> The
+seed-0 positive signal (.800 vs .700) held over from last cycle was <b>noise</b>: seeds 30 and 60 tied exactly,
+pooled bon .711 vs vla .678 (+11/−8, McNemar <b>p=0.65</b>) — below the pre-registered p&lt;.05, null. With the
+full-authority catastrophe (.133), <b>"full authority harms, selection-only is futile" is the ceiling of a
+demo-only critic</b> — meeting our FINAL 14-arm null again from an independent stack. Test-time selection (BoN)
+is closed across two stacks and three datasets; the remaining doors are training-time intervention (the
+vector-SF critic) and on-policy counterfactuals.</p>rt — every experiment, grouped by DATE, then by
 experiment name within the date. Two-tier navigation: pick a day, pick the experiment.
 
 Output:
@@ -1075,6 +1082,41 @@ TRA-비관 분석은 대조학습 계열 제외의 근거.</p>
 """,
 )
 
+# ============================================== 08-11 horizon 프로브 환경 설계
+entry(
+    "08-11",
+    "horizon-probe",
+    "설계 — horizon이 가치를 가르는 진단 환경 (임베딩 가설의 결정적 시험대)",
+    "살아있음",
+    """
+<p class='sub'>사용자 제안(08-11): "horizon이 차이를 보일 만한 태스크를 가져오거나, 인공 환경을 만들어보자."
+이 엔트리는 그 제안을 <b>사전등록된 진단 실험</b>으로 구체화한다.</p>
+<h3>왜 이게 정확한 다음 수인가</h3>
+<p>지금까지 모든 null(FINAL 14팔·φ 사다리·BoN 90쌍·워커A 독립 스택)은 한 문장으로 수렴한다:
+<b>후보축에 학습 신호가 없다(σ_signal≈0)</b>. 그런데 이 진단에는 치명적 확증편향 위험이 있다 — 우리가 쓴
+과제(PrepareCoffee·YAM)가 <b>애초에 단기 반응형이라</b> 후보 chunk의 장기 가치차가 원래 작았을 수 있다.
+그러면 "임베딩이 문제냐 신호가 문제냐"를 영원히 못 가른다. <b>해결: 정답이 알려진, horizon이 가치를 지배하도록
+설계된 환경에서 우리 파이프라인 전체를 돌려본다.</b> 신호가 실재하도록 만들어 놓은 곳에서도 우리 critic이
+그것을 못 잡으면 → 임베딩/목적식 결함(고칠 수 있음). 잡으면 → 우리 방법은 옳고 실패는 데이터 탓
+(→ on-policy 수집). 어느 쪽이든 2년치 모호성을 한 번에 가른다.</p>
+<h3>후보 환경 — 둘 다 프로그램적 정답 보유</h3>
+<table class='num'><tr><th>옵션</th><th>무엇</th><th>왜 horizon이 가치를 가르나</th><th>비용</th></tr>
+<tr><td>A. OGBench stitch (기성)</td><td>antmaze/humanoidmaze/scene stitch 데이터셋 — BYOL-γ·TD-JEPA가 쓴 바로 그 벤치</td><td>4칸 이내 조각으로 학습, 더 긴 경로로 평가 → 조합 일반화가 성공률을 <b>정의</b>한다. 갈림길에서 후보 방향 선택이 결과를 가름</td><td>낮음 — 데이터·환경 공개, φ/critic 코드 대부분 재사용</td></tr>
+<tr><td>B. 인공 gridworld/키-문 (자작)</td><td>같은 상태에서 두 갈래: 하나는 즉시 보상 0·장기 성공, 하나는 즉시 진전·장기 막힘. horizon H를 다이얼로</td><td>ΔQ가 H에 정확히 비례하도록 설계 — γ-천장(워커A 보정) 대비 sensitivity를 H로 스캔 가능. 완전 관측·완전 정답</td><td>중 — 환경 자작이나 완전 통제(교란 0)</td></tr></table>
+<h3>사전등록 — 무엇을 보면 무엇을 결론하나</h3>
+<p>동일 파이프라인(어노테이션 → φ/raw 임베딩 → critic → 오프라인 게이트 + 롤아웃)을 이식하고, <b>horizon을
+스윕</b>한다. 판정:</p>
+<table class='num'><tr><th>관측</th><th>결론</th></tr>
+<tr><td>H↑에 따라 demo_winrate가 0.5→1로, BoN이 vla 대비 상승</td><td>우리 파이프라인은 <b>신호가 있을 때 잡는다</b> — 기존 null은 과제의 σ_signal 부재 탓. 임베딩 무죄</td></tr>
+<tr><td>H↑에도 게이트 평평(0.5)</td><td>임베딩/critic <b>목적식 결함</b> — 신호가 있어도 못 잡음. TD-SF-ARQ 벡터 SF가 이걸 고치는지 같은 환경에서 직접 비교</td></tr>
+<tr><td>raw는 되는데 φ만 안 됨</td><td>φ가 horizon 관련 정보를 버림(디코더 프로브 .546과 정합) — 표현 선택 문제로 특정</td></tr></table>
+<p><b>순서:</b> GR1 phase-1과 병행 가능(다른 자원). 먼저 <b>옵션 A(OGBench stitch)</b>로 착수 — 기성 데이터·환경이라
+가장 빠르고, TD-JEPA/BYOL-γ가 이미 이 벤치에서 성공했으므로 "신호가 실재한다"가 문헌으로 보장된다. 우리 IQL
+critic + φ를 그 위에 얹어 <b>같은 벤치에서 우리 스택이 BoN 이득을 내는지</b>가 첫 결정적 관측. 실패 시 옵션 B로
+교란을 0으로 줄여 재확인. (Task#10)</p>
+""",
+)
+
 
 # ============================================== 08-09 아침 종합
 entry(
@@ -1476,6 +1518,13 @@ milestone ≥1을 10/10 통과하지만 ≥3은 0/10, 즉 <b>과학습이 쉬운
 (예: 20k)</b>가 critic 실험엔 오히려 나을 수 있다. ② 이는 우리 σ_signal 프레임의 실기 재확인이다: 과학습→스프레드
 붕괴→선택 신호 소멸. <b>critic 실험용 기준 체크포인트는 스프레드가 살아있는 지점으로 프로그램적 선택</b>(후보
 16개 std를 체크포인트별로 재어 최대 지점)하도록 phase-1 절차에 추가한다.</p>
+<p><b>⑨ BoN 사전등록 종결 (워커A r53, 08-10 23:00) — test-time BoN 무익 확정.</b> 이전 사이클에서 유보했던
+seed 0의 첫 양(+) 신호(.800 vs .700)는 <b>노이즈로 판명</b>: seed 30·60이 정확히 동률, 90쌍 합산
+bon .711 vs vla .678(+11/−8, McNemar <b>p=0.65</b>) → 사전등록 기준 p&lt;.05 미달, null. 전권 파국(.133)과
+합치면 <b>"전권=해롭고 선택만=무익"이 demo-only critic의 천장</b> — 우리 FINAL 14팔 null과 독립 스택에서
+다시 만난다. <b>교훈(양방향):</b> 소표본 양(+) 신호를 사전등록 파워로 닫는 규율이 이번엔 워커A 쪽에서
+작동했다. test-time 선택(BoN)은 두 스택·세 데이터셋에서 닫혔고, 남은 문은 학습-시간 개입(벡터-SF critic)과
+on-policy 반사실뿐이다.</p>
 
 """,
 )
@@ -1638,6 +1687,15 @@ META = {
         "how": "demo-only 8시드 + mixed(학습중) 페어드 평가",
         "why": "모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지",
         "links": ["v12", "final", "wcurse"],
+    },
+    "horizon-probe": {
+        "date": "2026-08-11 03:30",
+        "who": "워커B(설계) + 사용자(제안)",
+        "where": "설계 문서 (구현 전)",
+        "what": "horizon이 가치를 지배하는 진단 환경 — 임베딩 결함 vs 신호 부재를 가르는 사전등록 시험",
+        "how": "OGBench stitch(기성) 우선, 인공 gridworld(자작) 백업 — 동일 파이프라인 이식+horizon 스윕",
+        "why": "모든 null이 '과제가 애초에 단기'라는 확증편향일 위험 — 신호가 실재하는 곳에서 우리 방법 검증",
+        "links": ["conservatism", "phi-ladder", "tdsf-arq", "papers-byolg", "papers-tdjepa", "final"],
     },
     "papers-byolg": {
         "date": "2026-08-11 02:40",
@@ -2415,6 +2473,39 @@ strongest pixel baseline (DMC-RGB 582.4 vs 628.8).</p>
 k~Geom(1−γ) — no bootstrap, O(B)) as a one-variable comparison against the TD arm. The "BC loss prevents
 collapse" observation is a stage-B stabilizer candidate; the TRA-pessimism analysis grounds excluding
 contrastive variants.</p>
+""",
+)
+
+en(
+    "horizon-probe",
+    "Design — a horizon-decisive diagnostic environment (the crucial test of the embedding hypothesis)",
+    """
+<p class='sub'>User proposal (08-11): "bring a task where horizon makes a difference, or build an artificial
+environment." This entry turns that into a pre-registered diagnostic.</p>
+<h3>Why this is exactly the right next move</h3>
+<p>Every null so far (FINAL 14 arms, the φ ladder, 90-pair BoN, worker A's independent stack) converges on one
+sentence: <b>there is no learning signal on the candidate axis (σ_signal≈0)</b>. But that diagnosis carries a
+fatal confound risk — the tasks we used (PrepareCoffee, YAM) may be <b>short-horizon reactive to begin with</b>,
+so candidate chunks never had much long-term value spread. Then "is it the embedding or the signal?" can never
+be separated. <b>Fix: run the whole pipeline in an environment with known ground truth, designed so horizon
+dominates value.</b> If our critic fails to capture signal we deliberately built in → embedding/objective
+defect (fixable). If it captures it → our method is right and the failure was the data (→ on-policy). Either
+way, two years of ambiguity resolved at once.</p>
+<h3>Candidate environments — both with programmatic ground truth</h3>
+<table class='num'><tr><th>Option</th><th>What</th><th>Why horizon decides value</th><th>Cost</th></tr>
+<tr><td>A. OGBench stitch (off-the-shelf)</td><td>antmaze/humanoidmaze/scene stitch datasets — the exact bench BYOL-γ and TD-JEPA used</td><td>train on ≤4-cell pieces, evaluate on longer paths → combinatorial generalization <b>defines</b> success; the choice of candidate direction at a junction decides the outcome</td><td>low — public data/env, most φ/critic code reusable</td></tr>
+<tr><td>B. Artificial gridworld / key-door (custom)</td><td>same state, two branches: one 0 immediate reward but long-term success, one immediate progress but long-term dead end; horizon H on a dial</td><td>design ΔQ exactly proportional to H — scan sensitivity against the γ-ceiling (worker A's correction) by H; fully observed, exact ground truth</td><td>medium — custom env but full control (zero confounds)</td></tr></table>
+<h3>Pre-registration — what we conclude from what we see</h3>
+<p>Port the identical pipeline (annotation → φ/raw embedding → critic → offline gate + rollout) and <b>sweep
+horizon</b>. Verdicts:</p>
+<table class='num'><tr><th>Observation</th><th>Conclusion</th></tr>
+<tr><td>as H↑, demo_winrate goes 0.5→1 and BoN rises over vla</td><td>our pipeline <b>captures signal when present</b> — prior nulls were the tasks' absent σ_signal. Embedding exonerated</td></tr>
+<tr><td>gate stays flat (0.5) even as H↑</td><td>embedding/critic <b>objective defect</b> — signal present but not captured. Test directly whether TD-SF-ARQ's vector SF fixes it in the same env</td></tr>
+<tr><td>raw works but φ does not</td><td>φ discarded horizon-relevant information (consistent with decoder probe .546) — pinned as a representation-choice problem</td></tr></table>
+<p><b>Order:</b> can run in parallel with GR1 phase-1 (different resources). Start with <b>Option A (OGBench
+stitch)</b> — off-the-shelf, fastest, and since TD-JEPA/BYOL-γ already succeed on it, "the signal is real" is
+literature-guaranteed. Putting our IQL critic + φ on top, whether <b>our stack yields a BoN gain on the same
+bench</b> is the first decisive observation. On failure, fall to Option B to drive confounds to zero. (Task#10)</p>
 """,
 )
 
