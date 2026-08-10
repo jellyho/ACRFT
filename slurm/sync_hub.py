@@ -362,12 +362,48 @@ function wbGraphInit(){
     out = out[: i_list + len('<div id="list"></div>')] + views + out[i_list + len('<div id="list"></div>') :]
     out = out.replace("</body>", js + "</body>", 1)
 
+    # HF auto-tracks files >10MB as LFS, and static Spaces serve LFS files as downloads instead of
+    # rendering them — so inline base64 figures are extracted to figs/<sha>.png and referenced by
+    # relative path, keeping index.html a small regular-git blob.
+    import base64
+    import hashlib
+
+    fig_dir = pathlib.Path("/scratch/jellyho/acrft/hub_figs")
+    fig_dir.mkdir(exist_ok=True)
+    fig_ops = []
+    seen_figs = set()
+
+    def extract_fig(m):
+        ext, b64 = m.group(1), m.group(2)
+        raw = base64.b64decode(b64)
+        name = f"figs/{hashlib.sha1(raw).hexdigest()[:16]}.{ext}"
+        if name not in seen_figs:
+            seen_figs.add(name)
+            fp = fig_dir / name.split("/")[1]
+            fp.write_bytes(raw)
+            fig_ops.append(CommitOperationAdd(path_in_repo=name, path_or_fileobj=str(fp)))
+        return f'src="{name}"'
+
+    out = re.sub(r'src="data:image/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)"', extract_fig, out)
+
     tmp = pathlib.Path("/scratch/jellyho/acrft/hub_index_new.html")
     tmp.write_text(out)
+    size_mb = tmp.stat().st_size / 1e6
+    if size_mb > 9.5:
+        raise RuntimeError(f"index.html {size_mb:.1f}MB — 10MB LFS 경계 초과 위험, 본문을 더 줄여야 함")
+    # drop the stale LFS rule for index.html so re-uploads return to regular git storage
+    attr_path = hf_hub_download(SPACE, ".gitattributes", repo_type="space")
+    attrs = pathlib.Path(attr_path).read_text()
+    ops_extra = []
+    if "index.html filter=lfs" in attrs:
+        attrs = "\n".join(line for line in attrs.splitlines() if not line.startswith("index.html ")) + "\n"
+        atmp = pathlib.Path("/scratch/jellyho/acrft/hub_gitattributes")
+        atmp.write_text(attrs)
+        ops_extra.append(CommitOperationAdd(path_in_repo=".gitattributes", path_or_fileobj=str(atmp)))
     res = api.create_commit(
         repo_id=SPACE,
         repo_type="space",
-        operations=[CommitOperationAdd(path_in_repo="index.html", path_or_fileobj=str(tmp))],
+        operations=[CommitOperationAdd(path_in_repo="index.html", path_or_fileobj=str(tmp)), *ops_extra, *fig_ops],
         commit_message=f"worker-B: {len(ours)} entries [{mm.GIT_STAMP}]",
         create_pr=True,
     )
