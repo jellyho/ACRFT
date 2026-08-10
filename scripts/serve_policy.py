@@ -60,6 +60,11 @@ class Args:
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
+    # Directory of a trained RLT critic (params.msgpack + config.json + proprio_stats.json, see
+    # scripts/export_critic_serving.py). When set, a request carrying `critic_select` gets
+    # best-of-N chosen by the critic server-side; requests without the key are untouched.
+    critic: str | None = None
+
 
 # Default checkpoints that should be used for each environment.
 DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
@@ -143,6 +148,10 @@ def main(args: Args) -> None:
     # Wrapped unconditionally: it is inert unless a request carries `num_samples`, so a plain
     # rollout pays nothing, and there is no server-side mode to remember to turn on before
     # looking at the action distribution.
+    if args.critic is not None:
+        # Selection must wrap the BARE policy: it drives the model's own shared-backbone
+        # sampler, and stacking it over MultiSamplePolicy would pay N full forwards instead.
+        policy = _policy.CriticSelectPolicy(policy, args.critic)
     policy = _policy.MultiSamplePolicy(
         policy,
         action_horizon=int(train_config.model.action_horizon),

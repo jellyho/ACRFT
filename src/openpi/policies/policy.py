@@ -180,3 +180,100 @@ class PolicyRecorder(_base_policy.BasePolicy):
 
         np.save(output_path, np.asarray(data))
         return results
+
+
+class CriticSelectPolicy(BasePolicy):
+    """Best-of-N with a trained RLT critic, selected server-side.
+
+    The client cannot run the critic itself: the critic reads the RL token, and the token never
+    leaves the model in a plain infer. So selection has to happen where the token lives. Opt-in
+    per request via a ``critic_select`` key (with an optional ``num_samples``, default 16) so a
+    plain rollout keeps today's behaviour and latency.
+
+    Sampling reuses ``extract_token_and_base_actions``: one backbone pass amortized over all N
+    flow decodes, instead of MultiSamplePolicy's N full forwards - at N=16 that is the
+    difference between one replan and sixteen.
+
+    The critic's proprioception statistics ship in ``<critic_dir>/proprio_stats.json`` (written
+    by ``scripts/export_critic_serving.py``); the annotation directory they came from is not a
+    serving artifact and cannot be assumed to exist on the robot host.
+    """
+
+    def __init__(self, policy: Policy, critic_dir, *, flow_steps: int = 10, default_samples: int = 16, seed: int = 0):
+        import json as _json
+        import pathlib as _pathlib
+
+        import openpi.rlt_critic.critic as _critic
+
+        self._pol = policy
+        self._flow_steps = int(flow_steps)
+        self._default_samples = int(default_samples)
+        self._rng = jax.random.key(seed)
+        cdir = _pathlib.Path(critic_dir)
+        model = policy._model
+        self._extract = nnx_utils.module_jit(model.extract_token_and_base_actions)
+        self._model_action_dim = int(model.action_dim)
+        # The critic was trained on ROBOT-space chunks; recover that width the same way the
+        # annotation did - decode a zero chunk and read the shape off the output transform.
+        probe = policy._output_transform(
+            {
+                "state": np.zeros((1, self._model_action_dim), np.float32),
+                "actions": np.zeros((1, int(model.action_horizon), self._model_action_dim), np.float32),
+            }
+        )
+        raw_dim = int(np.asarray(probe["actions"]).shape[-1])
+        score, _, self._macro = _critic.load_trained(
+            cdir / "params.msgpack", action_dim=raw_dim, horizon=int(model.action_horizon)
+        )
+        self._score = jax.jit(score)
+        stats_p = cdir / "proprio_stats.json"
+        self._pro = None
+        if stats_p.exists():
+            st = _json.loads(stats_p.read_text())
+            self._pro = (
+                np.asarray(st["mean"], np.float32),
+                np.asarray(st["std"], np.float32),
+                st.get("key", "observation/state"),
+            )
+
+    @override
+    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+        obs = dict(obs)
+        selected = bool(obs.pop("critic_select", False))
+        num_samples = int(obs.pop("num_samples", 0) or self._default_samples)
+        if not selected:
+            return self._pol.infer(obs, noise=noise)
+
+        raw_state = np.asarray(obs.get(self._pro[2] if self._pro else "observation/state", ()), np.float32)
+        inputs = jax.tree.map(lambda x: x, obs)
+        inputs = self._pol._input_transform(inputs)
+        inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        observation = _model.Observation.from_dict(inputs)
+        self._rng, sample_rng = jax.random.split(self._rng)
+        token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
+        chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
+        decoded = self._pol._output_transform(
+            {"state": np.zeros((chunks_model.shape[0], self._model_action_dim), np.float32), "actions": chunks_model}
+        )["actions"]
+        decoded = np.asarray(decoded, np.float32)
+
+        z = np.asarray(token, np.float32)  # [1, D]
+        if self._pro is not None:
+            mu, sd, _ = self._pro
+            p = np.where(sd > 1e-6, (raw_state - mu) / np.where(sd > 1e-6, sd, 1.0), 0.0)
+            z = np.concatenate([z, p[None, :].astype(np.float32)], axis=-1)
+        zc = jnp.repeat(jnp.asarray(z)[:, None], decoded.shape[0], axis=1)  # [1, N, D(+P)]
+        q = np.asarray(self._score(zc, jnp.asarray(decoded)[None]))
+        q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
+        q_full = q[:, -1]
+        best = int(np.argmax(q_full))
+        return {
+            "actions": decoded[best],
+            "action_samples": decoded,
+            "critic_scores": q_full,
+            "critic_choice": best,
+        }
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._pol.metadata
