@@ -423,6 +423,13 @@ def main() -> None:
         "required by the mbac/mbacv modes (sigma-rule commitment).",
     )
     ap.add_argument(
+        "--probe",
+        type=pathlib.Path,
+        default=None,
+        help="BC probe checkpoint (probe.pt from train_bc_probe): replaces the VLA's chunk "
+        "with the probe's embedding->chunk regression in the probe mode.",
+    )
+    ap.add_argument(
         "--dyn-tau",
         type=float,
         default=2.0,
