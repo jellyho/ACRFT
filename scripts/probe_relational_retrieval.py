@@ -77,11 +77,13 @@ def knn_metrics(z, name):
         act_cos.append((qry_chunk[i : i + B, None, :] * ref_chunk[top]).sum(-1).mean(1))
         dprog.append(np.abs(qry_prog[i : i + B, None] - ref_prog[top]).mean(1))
     act_cos, dprog = np.concatenate(act_cos), np.concatenate(dprog)
+    per_query[name] = act_cos
     r = {"act_cos": float(act_cos.mean()), "dprog": float(dprog.mean())}
     print(f"{name:>22}: neighbor act-cos {r['act_cos']:.3f}   |dprog| {r['dprog']:.3f}", flush=True)
     return r
 
 
+per_query = {}
 res = {"spaces": {}}
 res["spaces"]["raw_token_2048"] = knn_metrics(tok, "raw token 2048")
 res["spaces"]["phi_128"] = knn_metrics(phi, "phi 128")
@@ -129,6 +131,26 @@ for i in range(len(qry)):
     prop_cos.append((qry_chunk[i] * ref_chunk[pick]).sum(-1).mean())
 res["baselines"]["progress_and_proprio_matched"] = {"act_cos": float(np.mean(prop_cos)), "covered": len(prop_cos)}
 print(f"{'prog+proprio matched':>22}: act-cos {np.mean(prop_cos):.3f}  (n={len(prop_cos)})")
+
+per_query["progress_matched"] = np.asarray(band_cos)
+per_query["random_cross_ep"] = np.asarray(rand_cos)
+np.savez(a.out.with_suffix(".npz"), **per_query)
+
+
+def paired_ci(x, y):
+    d = x - y
+    half = 1.96 * d.std(ddof=1) / np.sqrt(len(d))
+    return {"mean": float(d.mean()), "ci95": [float(d.mean() - half), float(d.mean() + half)]}
+
+
+# per-query paired contrasts (same queries across conditions; progress_matched covers all queries here)
+pq_pm = per_query["progress_matched"]
+res["paired"] = {}
+if len(pq_pm) == len(qry):
+    res["paired"]["phi_minus_progress_matched"] = paired_ci(per_query["phi 128"], pq_pm)
+res["paired"]["phi_minus_raw_token"] = paired_ci(per_query["phi 128"], per_query["raw token 2048"])
+for k, v in res["paired"].items():
+    print(f"{k}: {v['mean']:+.3f} CI[{v['ci95'][0]:+.3f}, {v['ci95'][1]:+.3f}]")
 
 res["cfg"] = {k: (str(v) if isinstance(v, pathlib.Path) else v) for k, v in vars(a).items()}
 a.out.write_text(json.dumps(res, indent=1))
