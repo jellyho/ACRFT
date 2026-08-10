@@ -175,6 +175,14 @@ def main() -> None:
     res["action_sensitivity"] = within / (between + 1e-12)
     res["within_state_std"] = float(np.mean(np.std(q_full, axis=1)))
     res["between_state_std"] = float(np.sqrt(between))
+    # Discount-corrected resolution (user-prompted fix, 2026-08-10): the TRUE value gap between
+    # same-state chunks is bounded by dQ ~ V*|ln(gamma)|*dt, so the raw variance ratio has a
+    # gamma-dependent ceiling (a perfect critic at gamma=.9998 scores ~1e-4). Convert to TIME:
+    # how many steps of time-to-success the critic resolves between candidates. Perfect ~ H/2.
+    # EXCEEDING the ceiling means the spread is a conservatism margin, not value information.
+    _v = res.get("mc_return_mean") or 1e-6
+    res["time_resolution_steps"] = res["within_state_std"] / (_v * abs(np.log(meta["discount"])) + 1e-12)
+    res["time_resolution_ceiling"] = H / 2
 
     # Demonstrated chunk vs a chunk borrowed from a different state, scored at the SAME state.
     other = np.asarray(chunk[rng.permutation(T)[: len(idx)]])
