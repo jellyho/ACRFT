@@ -187,6 +187,15 @@ so any openpi client works unchanged.
 from a robot/client checkout it tries to build that project's dependencies instead and fails
 with something unrelated (`Failed to build ruckig`).
 
+A backslash must be the LAST character on its line. A trailing space after it escapes the
+space instead of the newline, which hands tyro an argument of `' '` — `invalid choice: ' '` —
+and then runs the next line as its own command. Copy carefully, or paste the one-line form:
+
+```bash
+cd /path/to/ACRFT
+uv run scripts/serve_policy.py --port 8000 policy:checkpoint --policy.config pi05_yam_lego_taxi_rlt --policy.dir <checkpoint>/100000
+```
+
 ```bash
 cd /path/to/ACRFT
 
@@ -208,7 +217,7 @@ uv run scripts/serve_policy.py \
 It is up when the log reads:
 
 ```
-Serving pi05_yam_lego_taxi_rlt: {'action_horizon': 30}
+Serving pi05_yam_lego_taxi_rlt: {'action_horizon': 30, 'supports_multi_sample': True}
 Creating server (host: ..., ip: ...)
 ```
 
