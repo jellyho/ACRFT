@@ -21,6 +21,12 @@ ap.add_argument("--steps", type=int, default=30000)
 ap.add_argument("--gamma", type=float, default=0.98)
 ap.add_argument("--tau", type=float, default=0.9)
 ap.add_argument("--dim", type=int, default=128)
+ap.add_argument("--hidden", type=int, default=256)
+ap.add_argument(
+    "--use-proprio",
+    action="store_true",
+    help="Concatenate z-scored proprio to the token as phi's input (stats from annot meta).",
+)
 ap.add_argument(
     "--heldout-frac",
     type=float,
@@ -36,6 +42,18 @@ rng = np.random.default_rng(a.seed)
 meta = json.loads((a.cache / "meta.json").read_text())
 n, D = meta["num_frames"], meta["dim"]
 z = np.load(a.cache / "features.npy").astype(np.float32)
+prop_stats = None
+if a.use_proprio:
+    import json as _json
+
+    _m = _json.loads((a.annot / "meta.json").read_text())
+    _pm = np.asarray(_m["proprio_mean"], np.float32)
+    _ps = np.asarray(_m["proprio_std"], np.float32)
+    _pr = np.array(np.memmap(a.annot / "proprio.dat", dtype=np.float32, mode="r", shape=(len(z), len(_pm))))
+    _pr = np.where(_ps > 1e-6, (_pr - _pm) / np.where(_ps > 1e-6, _ps, 1.0), 0.0).astype(np.float32)
+    z = np.concatenate([z, _pr], axis=1)
+    prop_stats = (_pm, _ps)
+    print(f"proprio appended: input dim {z.shape[1]}")
 z = (z - z.mean(0)) / (z.std(0) + 1e-6)
 ep = np.load(a.cache / "episode_index.npy")
 z_t = torch.from_numpy(z).to(dev)
@@ -54,8 +72,8 @@ if a.heldout_frac > 0:
     print(f"holding out {len(held)} episodes from TD training", flush=True)
 train_rows = np.flatnonzero(train_mask)
 
-phi = nn.Sequential(nn.Linear(D, 256), nn.GELU(), nn.Linear(256, a.dim)).to(dev)
-tgt = nn.Sequential(nn.Linear(D, 256), nn.GELU(), nn.Linear(256, a.dim)).to(dev)
+phi = nn.Sequential(nn.Linear(D, a.hidden), nn.GELU(), nn.Linear(a.hidden, a.dim)).to(dev)
+tgt = nn.Sequential(nn.Linear(D, a.hidden), nn.GELU(), nn.Linear(a.hidden, a.dim)).to(dev)
 tgt.load_state_dict(phi.state_dict())
 for q in tgt.parameters():
     q.requires_grad_(False)  # noqa: FBT003

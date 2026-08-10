@@ -509,12 +509,19 @@ def main() -> None:
         import torch as _torch
 
         _sd = _torch.load(args.phi, map_location="cpu")
+        # phi was trained on STANDARDIZED tokens (train_hilp_readout normalizes its input);
+        # feeding raw tokens shifted phi outputs by ~45% relative error and invalidated the
+        # first round of phi rollout arms. Standardize with the training cache's statistics.
+        _tok = np.load(args.phi.parent.parent / "rlt_cache_PrepareCoffee" / "features.npy", mmap_mode="r")
+        _tsub = np.array(_tok[:: max(1, len(_tok) // 20000)])
+        _tmu, _tsd = _tsub.mean(0).astype(np.float32), (_tsub.std(0) + 1e-6).astype(np.float32)
         _w0 = _sd["0.weight"].numpy()
         _b0 = _sd["0.bias"].numpy()
         _w2 = _sd["2.weight"].numpy()
         _b2 = _sd["2.bias"].numpy()
 
-        def _phi_fn(z, _w0=_w0, _b0=_b0, _w2=_w2, _b2=_b2):
+        def _phi_fn(z, _w0=_w0, _b0=_b0, _w2=_w2, _b2=_b2, _mu=_tmu, _sdv=_tsd):
+            z = (np.asarray(z, np.float32) - _mu) / _sdv
             h = z @ _w0.T + _b0
             h = 0.5 * h * (1.0 + np.tanh(0.7978845608 * (h + 0.044715 * h**3)))  # gelu(tanh approx)
             return (h @ _w2.T + _b2).astype(np.float32)
