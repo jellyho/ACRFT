@@ -27,6 +27,14 @@ def main():
         help="Optional z.npy (e.g. phi space). Default: the annotation's raw rl_token.dat.",
     )
     ap.add_argument("--out", type=pathlib.Path, required=True)
+    ap.add_argument(
+        "--pca-dim",
+        type=int,
+        default=0,
+        help="Project the (standardized) input to this many PCA dims before the MLP - the "
+        "dimension-matched control for low-dim embeddings (is 128d enough, or did the "
+        "objective discard information?). The projection is saved and replayed at rollout.",
+    )
     ap.add_argument("--steps", type=int, default=60000)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--hidden", type=int, default=1024)
@@ -48,6 +56,14 @@ def main():
         src = "rl_token"
     zmu, zsd = z.mean(0), z.std(0) + 1e-6
     z = (z - zmu) / zsd
+    proj = None
+    if args.pca_dim:
+        sub = z[rng.choice(len(z), min(60000, len(z)), replace=False)]
+        _, _, vt = np.linalg.svd(sub - sub.mean(0), full_matrices=False)
+        proj = vt[: args.pca_dim].T.astype(np.float32)  # [D, pca_dim]
+        z = z @ proj
+        src = f"{src}+pca{args.pca_dim}"
+        print(f"PCA control: {proj.shape[0]}d -> {proj.shape[1]}d")
     chunk = np.array(np.memmap(args.annot / "action_chunk.dat", dtype=np.float32, mode="r", shape=(n, H, A))).reshape(
         n, H * A
     )
@@ -98,6 +114,7 @@ def main():
             "net": net.state_dict(),
             "zmu": zmu,
             "zsd": zsd,
+            "proj": proj,
             "cfg": {
                 "in_dim": int(z.shape[1]),
                 "hidden": args.hidden,

@@ -529,10 +529,13 @@ def main() -> None:
         _pk = _torch.load(args.probe, map_location="cpu", weights_only=False)
         _pw = [(_pk["net"][f"{i}.weight"].numpy(), _pk["net"][f"{i}.bias"].numpy()) for i in (0, 2, 4, 6)]
         _pmu, _psd = _pk["zmu"], _pk["zsd"]
+        _pproj = _pk.get("proj")
         _pH, _pA = _pk["cfg"]["H"], _pk["cfg"]["A"]
 
-        def probe_fn(z, _w=_pw, _mu=_pmu, _sd=_psd, _hh=_pH, _aa=_pA):
+        def probe_fn(z, _w=_pw, _mu=_pmu, _sd=_psd, _hh=_pH, _aa=_pA, _proj=_pproj):
             x = (np.asarray(z, np.float32).reshape(-1) - _mu) / _sd
+            if _proj is not None:
+                x = x @ _proj
             for i, (w, b) in enumerate(_w):
                 x = x @ w.T + b
                 if i < len(_w) - 1:
