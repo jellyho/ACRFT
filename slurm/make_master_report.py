@@ -887,29 +887,80 @@ entry(
     "논문 리뷰 — TD-JEPA, HILP의 상위호환인가",
     "완결",
     """
-<p class='sub'>사용자 요청 리뷰: "HILP 말고 TD-JEPA 같은 건 어때?" (arXiv:2510.00739, FAIR·Meta, 2025-10)</p>
-<h3>무엇을 배우는가</h3>
-<p>상태 인코더 φ + <b>정책조건·행동조건 예측기</b> T(φ(s),a,z) + 잠재 정책 π_z를 <b>단일 TD 목적식</b>으로
-동시 학습하는 zero-shot RL:</p>
-<p style='text-align:center'><b>T(φ(s), a, z) ≈ φ(s′) + γ·T(φ(s′), a′, z)</b>, a′~π_z(s′)</p>
-<p>예측기가 φ의 <b>successor feature</b>(그 정책으로 미래에 방문할 상태들의 할인합 요약)를 잠재공간에서 직접
-근사한다. Q(s,a)=⟨SF, w_r⟩ 분해 덕에, 사후에 어떤 보상이 주어져도 재학습 없이 Q를 조립할 수 있다(zero-shot).
-상태/태스크 인코더 분리(비대칭 이중 예측기) + 직교 정규화로 collapse를 막는다.
-ExoRL·OGBench 65태스크, 특히 픽셀 입력에서 SOTA급.</p>
-<h3>HILP와의 차이 — 우리가 겪은 한계와 1:1 대응</h3>
+<p class='sub'>사용자 요청 리뷰: "HILP 말고 TD-JEPA 같은 건 어때?" (arXiv:2510.00739, Bagatella·Pirotta·Touati·
+Lazaric·Tirinzoni, FAIR·Meta, 2025-10-02)</p>
+
+<h3>① 문제 설정 — zero-shot RL이란</h3>
+<p>보상 없는 전이 데이터 D={(s,a,s′)}만으로 사전학습해 두고, <b>테스트 시점에 임의의 보상 r이 주어지면
+추가 학습 없이</b> 그 보상을 최대화하는 정책을 내놓는 것이 목표다. 이걸 가능하게 하는 고전적 열쇠가
+<b>successor measure</b> M^π(X|s,a) = Σ_t γ^t Pr(s_{t+1}∈X|s,a,π) — "이 상태·행동에서 정책 π로 출발하면
+미래에 어디를 얼마나 방문하나"의 <b>할인 방문 장부</b>다. 어떤 보상이든 Q^π_r(s,a) = ∫ M^π(ds⁺|s,a)·r(s⁺),
+즉 <b>Q = 방문 장부 × 보상</b>으로 즉석 조립된다. 문제는 M이 상태공간 크기의 거대한 객체라는 것 —
+그래서 저차원 인수분해가 필요하고, 그 인수분해를 어떻게 배우느냐가 이 계열(FB, HILP, TD-JEPA)의 승부처다.</p>
+
+<h3>② 방법 — 손실의 유도 과정 (MC → TD)</h3>
+<p><b>1단계 (이상형, MC-JEPA).</b> 정책 패밀리 {π_z}에 대해, 예측기가 "π_z로 미래에 방문할 상태들의 임베딩"을
+직접 맞히게 한다: 손실 E‖T(φ(s),a,z) − φ(s⁺)‖², s⁺ ~ M^{π_z}(·|s,a). 이 손실의 최적 예측기는 정확히
+<b>φ의 successor feature</b> F^{π_z}_φ(s,a)다 (Prop.1). 그러나 s⁺를 뽑으려면 각 π_z를 실제로 굴려야 해서
+(on-policy) 오프라인 데이터로는 불가.</p>
+<p><b>2단계 (핵심 기여, TD-JEPA).</b> successor feature가 벨만 방정식 F(s,a) = E[φ(s′) + γF(s′,a′)]을
+만족한다는 사실로 MC 손실을 TD로 변환:</p>
+<p style='text-align:center'><b>L = E‖T(φ(s),a,z) − φ̄(s′) − γ·T̄(φ̄(s′),a′,z)‖²</b>, a′~π_z(s′), 바(¯)=타깃망(stop-grad)</p>
+<p>이제 <b>한 스텝 전이만 있으면</b> 되므로 오프라인·off-policy 데이터로 학습 가능. a′는 데이터가 아니라
+현재 정책망 π_z에서 샘플링한다 — 우리 IQL/TD 실험과 같은 부트스트랩 구조다.</p>
+<p><b>3단계 (비대칭 이중 인코더).</b> 상태 인코더 φ(제어용 저수준 정보)와 태스크 인코더 ψ(보상 정의용 고수준
+정보)를 분리하고, 예측기도 두 벌(T_φ: φ→ψ 방향, T_ψ: ψ→φ 방향)을 서로 예측하게 학습. 로봇 비유:
+φ는 "관절·속도", ψ는 "건물 토폴로지" — 하나의 임베딩에 둘 다 담으면 어느 쪽이든 손해라는 논리.</p>
+<p><b>4단계 (정책 학습과 제로샷 추론).</b> 잠재 정책 π(φ(s), z)들을 "ψ-선형 보상 r_z(s)=⟨ψ(s),z⟩에 대해
+최적"이 되도록 actor-critic으로 동시 학습(z~Z 무작위 샘플). 테스트에 보상 r이 오면 <b>선형 회귀 한 번</b>:
+ω_r = (ψᵀψ)⁻¹ψᵀr → 정책 π(·, z=ω_r) 실행. 이게 전부다 — 재학습 없음.</p>
+
+<h3>③ 이론 — 왜 collapse하지 않고, 왜 근거가 있나</h3>
+<table class='num'><tr><th>정리</th><th>내용</th><th>의미</th></tr>
+<tr><td>Th.1/3</td><td>MC/TD-JEPA의 최적 예측기·그래디언트가 successor measure 인수분해 손실 ‖φT_zψᵀ − M^{π_z}‖²의 것과 일치(TD 쪽은 사선 투영)</td><td>"잠재 예측"이 눈속임이 아니라 실제로 M의 <b>저랭크 인수분해</b>를 배우고 있음</td></tr>
+<tr><td>Th.2</td><td>예측기를 표현보다 빠르게 학습하면 φᵀφ, ψᵀψ 공분산이 시간 불변</td><td>단위 공분산으로 초기화하면 <b>collapse(전부 0으로 수렴) 방지</b> — 직교 정규화·타깃망과 함께 실무 안정장치</td></tr>
+<tr><td>Th.4</td><td>모든 단위노름 보상에 대한 정책평가 오차 ≤ 2·L_SM ≤ c·L_TD</td><td>TD 손실을 줄이면 <b>제로샷 평가 오차의 상계</b>가 줄어든다 — 손실이 곧 보증</td></tr></table>
+<p class='sub'>한계(저자 명시): 보증은 P^π 대칭 가정에 기댄다 — 실제 로봇 dynamics는 비대칭이라 이론은
+방향 제시용이고, 실전은 실험이 말한다.</p>
+
+<h3>④ 실험 — 어디서 이기고 어디서 지나 (13 데이터셋 65태스크, 정직 판독)</h3>
+<table class='num'><tr><th>벤치</th><th>HILP</th><th>FB</th><th>TD-JEPA</th><th>판독</th></tr>
+<tr><td>DMC 픽셀 (return, avg)</td><td>391.2±23.8</td><td>456.2±8.6</td><td><b>628.8±5.5</b></td><td>픽셀에서 압도 — 전 도메인 1위(walker 738.9)</td></tr>
+<tr><td>DMC proprio (avg)</td><td>620.1±8.4</td><td>648.2±4.1</td><td><b>661.2±6.3</b></td><td>동급 상위 — 저차원 입력에선 이점 축소</td></tr>
+<tr><td>OGBench 픽셀 (success, avg)</td><td>32.6±0.9</td><td>39.9±0.5</td><td><b>41.3±0.5</b></td><td>BYOL-γ(41.6)와 공동 선두</td></tr>
+<tr><td>OGBench proprio (avg)</td><td>38.0±1.1</td><td><b>39.0±0.7</b></td><td>38.0±0.8</td><td>동률 — 그리고 <b>cube-single에서 HILP 74.2 vs TD-JEPA 34.2로 대패</b></td></tr></table>
+<p><b>주목할 정직 포인트:</b> proprio manipulation(cube 계열)에서는 HILP가 크게 이기는 도메인이 있다 —
+"TD-JEPA가 HILP의 전면 상위호환"은 과장이고, 정확히는 <b>"픽셀 입력 + 넓은 커버리지에서 상위호환,
+proprio manipulation에선 도메인 의존"</b>이다. 우리 GR1은 ego 픽셀 중심이라 유리한 쪽이긴 하다.
+ablation 요지: ① 예측 타깃을 one-step·정책무관으로 바꾸면 성능 급락 — <b>multi-step·정책조건이 핵심</b>
+② 공유 인코더(φ=ψ)보다 분리가 낫다 ③ 사전학습된 φ를 <b>동결한 채로도</b> TD3 미세조정이 from-scratch보다
+훨씬 빠르다(fast adaptation) — 표현이 실제 정보를 담고 있다는 방증.</p>
+
+<h3>⑤ HILP와의 구조 비교 — 우리가 겪은 한계와 1:1 대응</h3>
 <table class='num'><tr><th></th><th>HILP (우리 사용)</th><th>TD-JEPA</th></tr>
 <tr><td>배우는 것</td><td>도달가능성 <i>거리</i> 임베딩 (상태만)</td><td>임베딩 + 행동조건 장기예측 + 정책</td></tr>
 <tr><td>행동 정보</td><td>없음 → f(z,a)를 따로 지도학습으로 부착</td><td>T(φ(s),<b>a</b>,z)에 내장, TD로 장기 전파</td></tr>
-<tr><td>우리 실측 약점</td><td>"거리만 남고 디테일 소실"(디코더 확인), 합성게이트 action-blind(.487)</td><td>SF 근사가 가치 추정용 정보 보존을 목적식으로 강제</td></tr>
-<tr><td>구성</td><td>3단 합성: HILP φ + 지도 f + IQL V</td><td><b>단일 TD 손실</b> — 접합부 오차 소멸</td></tr></table>
-<h3>우리 판정과의 교차 — 솔직한 평가</h3>
+<tr><td>태스크 공간</td><td>거리 기반 goal-reaching에 특화</td><td>ψ-span의 <b>모든 선형 보상</b> — goal 넘어 일반 보상</td></tr>
+<tr><td>우리 실측 약점</td><td>"거리만 남고 디테일 소실"(디코더 프로브: proprio R² raw .760→φ .546), 합성게이트 action-blind(.487)</td><td>SF 근사가 가치 추정용 정보 보존을 목적식으로 강제 + frozen-adaptation 실험이 정보 보존을 실증</td></tr>
+<tr><td>구성</td><td>3단 합성: HILP φ + 지도 f + IQL V — 각 접합부가 오차원</td><td><b>단일 TD 손실</b> — 접합부 소멸</td></tr>
+<tr><td>주의점</td><td>proprio manipulation에선 여전히 강함(cube-single 74.2)</td><td>하이퍼 민감성·대칭성 가정, z-정책 다양성 필요</td></tr></table>
+
+<h3>⑥ 우리 판정과의 교차 — 어디에 꽂히는가</h3>
 <p>두 워커가 수렴한 벽("demo-only 데이터엔 동일-상태 반사실이 없다")은 TD-JEPA도 공짜로 못 넘는다:
-단일 텔레옵 데모에선 z(정책) 공간이 사실상 1개로 붕괴해 정책조건부의 이점이 죽는다. 그러나 z-조건 구조는
-"같은 상태, 다른 정책 → 다른 미래"라는 반사실을 <b>정책축에서 제조하는 장치</b>이고, 우리가 phase-2에 계획한
-on-policy K-per-scene 수집(vla/rand/noise-scale 변형)이 정확히 그 정책 패밀리를 공급한다.</p>
-<p><b>액션 (Task#8):</b> GR1 phase-1 게이트(헤드룸·rand-vs-vla) 통과 + on-policy 수집이 생기는 시점에,
-phase-2 critic을 TD-JEPA(z=정책변형, 데이터=demos+rollouts)로 <b>사전등록</b>한다. "간단한 방식 하나" 원칙과도
-정합 — 컴포넌트를 늘리는 게 아니라 셋을 하나로 줄이는 방향이다.</p>
+z-조건 예측이 의미를 가지려면 <b>데이터에 서로 다른 행동 모드가 실재</b>해야 하는데, 단일 텔레옵 데모에선
+z 공간이 사실상 1개 정책으로 붕괴한다(논문의 학습 데이터는 ExoRL 탐사 데이터·OGBench 다양 커버리지 —
+정책 다양성이 전제돼 있다). 그러나 뒤집으면 z-조건 구조는 "같은 상태, 다른 정책 → 다른 미래"라는 반사실을
+<b>정책축에서 제조하는 장치</b>다. 우리가 phase-2에 계획한 on-policy K-per-scene 수집은 vla·rand·noise-scale
+변형이라는 <b>실재하는 정책 패밀리</b>를 공급한다 — z의 값이 실제로 갈리는 데이터가 생기는 순간,
+이 프레임은 우리 문제(후보 chunk의 가치 비교)에 정확히 맞물린다: 후보 chunk를 "그 chunk를 실행하는
+단기 정책"으로 보고 T(φ(s), chunk, z)의 착지 SF로 가치를 매기는 것이 우리 model-based 시도
+Q=γ^h·V(f(z,a))의 원리적 완성형이다.</p>
+<p><b>액션 (Task#8):</b> GR1 phase-1 게이트(헤드룸·rand-vs-vla) 통과 + on-policy 수집이 생기는 시점에
+phase-2 critic을 TD-JEPA(z=정책변형, 데이터=demos+rollouts)로 <b>사전등록</b>한다. 구현 시 주의:
+① collapse 방지 3종 세트(단위 공분산 초기화·직교 정규화·타깃망) 그대로 이식 ② 예측기 lr을 표현 lr보다
+높게(Th.2 조건) ③ 첫 판정은 오프라인 게이트(합성게이트와 동일 프로토콜: demo_winrate·band)로 —
+롤아웃 전에 action-sensitivity부터. "간단한 방식 하나" 원칙과도 정합 — 컴포넌트를 늘리는 게 아니라
+셋을 하나로 줄이는 방향이다.</p>
 """,
 )
 
@@ -2021,31 +2072,78 @@ en(
     "papers-tdjepa",
     "Paper review — TD-JEPA, a strict upgrade over HILP?",
     """
-<p class='sub'>User-requested review: "what about TD-JEPA instead of HILP?" (arXiv:2510.00739, FAIR/Meta, Oct 2025)</p>
-<h3>What it learns</h3>
-<p>A state encoder φ, a <b>policy- and action-conditioned predictor</b> T(φ(s),a,z), and latent policies π_z,
-all under a <b>single TD objective</b>:</p>
-<p style='text-align:center'><b>T(φ(s), a, z) ≈ φ(s′) + γ·T(φ(s′), a′, z)</b>, a′~π_z(s′)</p>
-<p>The predictor directly approximates φ's <b>successor features</b> (the discounted summary of states the
-policy will visit) in latent space. Via Q(s,a)=⟨SF, w_r⟩, any reward given later assembles into a Q-function
-with no retraining (zero-shot). Separate state/task encoders (asymmetric dual predictors) plus orthonormality
-regularization prevent collapse. State-of-the-art-level results on 65 ExoRL/OGBench tasks, especially from
-pixels.</p>
-<h3>vs HILP — mapping 1:1 onto the limits we measured</h3>
+<p class='sub'>User-requested review: "what about TD-JEPA instead of HILP?" (arXiv:2510.00739, Bagatella,
+Pirotta, Touati, Lazaric, Tirinzoni — FAIR/Meta, 2025-10-02)</p>
+
+<h3>① The problem — what zero-shot RL means</h3>
+<p>Pretrain on reward-free transitions D={(s,a,s′)}; at test time an arbitrary reward r arrives and the agent
+must maximize it <b>with no further training</b>. The classical key is the <b>successor measure</b>
+M^π(X|s,a) = Σ_t γ^t Pr(s_{t+1}∈X|s,a,π) — a <b>discounted visitation ledger</b> of where the policy will go.
+Any reward then assembles instantly: Q^π_r(s,a) = ∫ M^π(ds⁺|s,a)·r(s⁺) — <b>Q = ledger × reward</b>. The
+catch: M is a huge object, so the game (FB, HILP, TD-JEPA) is about learning a low-rank factorization.</p>
+
+<h3>② The method — deriving the loss (MC → TD)</h3>
+<p><b>Step 1 (idealized, MC-JEPA).</b> For a policy family {π_z}, make a predictor hit "embeddings of states
+π_z will visit": E‖T(φ(s),a,z) − φ(s⁺)‖², s⁺~M^{π_z}. Its optimal predictor is exactly <b>φ's successor
+features</b> (Prop.1) — but sampling s⁺ requires rolling out every π_z (on-policy), impossible offline.</p>
+<p><b>Step 2 (the contribution).</b> Successor features obey a Bellman equation, so the loss becomes TD:</p>
+<p style='text-align:center'><b>L = E‖T(φ(s),a,z) − φ̄(s′) − γ·T̄(φ̄(s′),a′,z)‖²</b>, a′~π_z(s′), bar = target nets</p>
+<p>Now only single-step transitions are needed — offline, off-policy. a′ comes from the current policy network,
+the same bootstrap structure as our IQL/TD runs.</p>
+<p><b>Step 3 (asymmetric dual encoders).</b> A state encoder φ (low-level control information) and a task
+encoder ψ (reward-defining information) are trained separately with two predictors predicting each other
+(T_φ: φ→ψ space, T_ψ: ψ→φ space). Robot analogy: φ = joints/velocities, ψ = building topology.</p>
+<p><b>Step 4 (policies and zero-shot inference).</b> Latent policies π(φ(s), z) are trained actor-critic-style
+to be optimal for linear rewards r_z(s)=⟨ψ(s),z⟩, z~Z. At test time, one linear regression:
+ω_r = (ψᵀψ)⁻¹ψᵀr, then run π(·, z=ω_r). That's all — no retraining.</p>
+
+<h3>③ Theory — why it doesn't collapse and why it's grounded</h3>
+<table class='num'><tr><th>Thm</th><th>Statement</th><th>Meaning</th></tr>
+<tr><td>1/3</td><td>optimal predictors/gradients of (MC/TD)-JEPA match those of the successor-measure factorization loss ‖φT_zψᵀ − M^{π_z}‖² (oblique projection in the TD case)</td><td>latent prediction is not a trick — it genuinely learns a <b>low-rank factorization of M</b></td></tr>
+<tr><td>2</td><td>if predictors learn faster than encoders, the covariances φᵀφ, ψᵀψ are invariant over training</td><td>initialize with unit covariance → <b>no collapse to zero</b>; with orthonormality regularization and target nets, the practical stabilizer set</td></tr>
+<tr><td>4</td><td>policy-evaluation error over all unit-norm rewards ≤ 2·L_SM ≤ c·L_TD</td><td>reducing the TD loss <b>bounds the zero-shot evaluation error</b> — the loss is the guarantee</td></tr></table>
+<p class='sub'>Author-stated limit: guarantees assume symmetric P^π — real robot dynamics are asymmetric, so
+theory is directional and experiments decide.</p>
+
+<h3>④ Results — where it wins and where it loses (13 datasets, 65 tasks, honest reading)</h3>
+<table class='num'><tr><th>Bench</th><th>HILP</th><th>FB</th><th>TD-JEPA</th><th>Reading</th></tr>
+<tr><td>DMC pixels (return, avg)</td><td>391.2±23.8</td><td>456.2±8.6</td><td><b>628.8±5.5</b></td><td>dominant from pixels — first in every domain (walker 738.9)</td></tr>
+<tr><td>DMC proprio (avg)</td><td>620.1±8.4</td><td>648.2±4.1</td><td><b>661.2±6.3</b></td><td>top tier, margin shrinks on low-dim inputs</td></tr>
+<tr><td>OGBench pixels (success, avg)</td><td>32.6±0.9</td><td>39.9±0.5</td><td><b>41.3±0.5</b></td><td>co-leader with BYOL-γ (41.6)</td></tr>
+<tr><td>OGBench proprio (avg)</td><td>38.0±1.1</td><td><b>39.0±0.7</b></td><td>38.0±0.8</td><td>tie — and <b>HILP crushes it on cube-single, 74.2 vs 34.2</b></td></tr></table>
+<p><b>Honest note:</b> on proprioceptive manipulation (the cube family) HILP still wins big in places — "a
+strict upgrade over HILP" is an overstatement; the accurate claim is <b>"an upgrade from pixels with broad
+coverage; domain-dependent on proprio manipulation."</b> Our GR1 setting is ego-pixel-centric, the favorable
+side. Ablations: ① switching the prediction target to one-step/policy-agnostic collapses performance —
+<b>multi-step, policy-conditioned prediction is the load-bearing part</b>; ② separate encoders beat a shared
+one; ③ a <b>frozen</b> pretrained φ still enables much faster TD3 finetuning than from-scratch — evidence the
+representation retains real information.</p>
+
+<h3>⑤ Structural comparison vs HILP — 1:1 against the limits we measured</h3>
 <table class='num'><tr><th></th><th>HILP (what we used)</th><th>TD-JEPA</th></tr>
 <tr><td>Learns</td><td>reachability-<i>distance</i> embedding (states only)</td><td>embedding + action-conditioned long-horizon prediction + policies</td></tr>
 <tr><td>Action info</td><td>none → we bolted a supervised f(z,a) on top</td><td>built into T(φ(s),<b>a</b>,z), propagated long-horizon by TD</td></tr>
-<tr><td>Our measured weakness</td><td>"only distance survives" (decoder check); composition gate action-blind (.487)</td><td>SF approximation forces value-relevant information retention by objective</td></tr>
-<tr><td>Structure</td><td>three-piece: HILP φ + supervised f + IQL V</td><td><b>one TD loss</b> — the seam errors disappear</td></tr></table>
-<h3>Honest crossing with our verdicts</h3>
+<tr><td>Task space</td><td>specialized to distance/goal-reaching</td><td>all linear rewards in ψ-span — beyond goals</td></tr>
+<tr><td>Our measured weakness</td><td>"only distance survives" (decoder probe: proprio R² raw .760→φ .546); composition gate action-blind (.487)</td><td>SF approximation forces value-relevant retention; the frozen-adaptation result demonstrates it</td></tr>
+<tr><td>Structure</td><td>three-piece: HILP φ + supervised f + IQL V — every seam adds error</td><td><b>one TD loss</b> — seams gone</td></tr>
+<tr><td>Caveats</td><td>still strong on proprio manipulation (cube-single 74.2)</td><td>hyperparameter sensitivity, symmetry assumption, needs z-policy diversity</td></tr></table>
+
+<h3>⑥ Crossing with our verdicts — where it actually plugs in</h3>
 <p>The wall both workers converged on (demo-only data carries no same-state counterfactuals) is not crossed
-for free: on a single teleop behavior mode the z (policy) space collapses to one policy. But z-conditioning is
-precisely a machine for manufacturing "same state, different policy → different future" counterfactuals along
-the policy axis — and our planned phase-2 on-policy K-per-scene collection (vla/rand/noise-scale variants)
-supplies exactly that policy family.</p>
+for free: z-conditioned prediction only means something if <b>distinct behavior modes exist in the data</b> —
+on a single teleop mode the z space collapses to one policy (the paper's training sets are ExoRL exploratory
+data and diverse-coverage OGBench; policy diversity is baked in). Flipped around, z-conditioning is precisely
+a machine for manufacturing "same state, different policy → different future" counterfactuals along the policy
+axis — and our planned phase-2 on-policy K-per-scene collection (vla/rand/noise-scale variants) supplies a
+<b>real policy family</b>. Once z genuinely varies in the data, the frame locks onto our actual problem
+(valuing candidate chunks): treat each candidate chunk as a short-horizon policy and score it by the landing
+SF of T(φ(s), chunk, z) — the principled completion of our model-based attempt Q=γ^h·V(f(z,a)).</p>
 <p><b>Action (Task#8):</b> once the GR1 phase-1 gates (headroom, rand-vs-vla) pass and on-policy collection
-exists, preregister the phase-2 critic as TD-JEPA (z = policy variant, data = demos+rollouts). This also fits
-the "one simple method" principle — it does not add components, it collapses three into one.</p>
+exists, preregister the phase-2 critic as TD-JEPA (z = policy variant, data = demos+rollouts). Implementation
+notes: ① port the anti-collapse trio verbatim (unit-covariance init, orthonormality regularization, target
+nets); ② predictor lr above encoder lr (Th.2's condition); ③ first verdict through the offline gate (same
+protocol as our composition gate: demo_winrate, band) — action-sensitivity before any rollouts. Fits the
+"one simple method" principle — it collapses three components into one rather than adding any.</p>
 """,
 )
 
