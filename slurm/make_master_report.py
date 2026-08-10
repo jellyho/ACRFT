@@ -955,12 +955,28 @@ z 공간이 사실상 1개 정책으로 붕괴한다(논문의 학습 데이터�
 이 프레임은 우리 문제(후보 chunk의 가치 비교)에 정확히 맞물린다: 후보 chunk를 "그 chunk를 실행하는
 단기 정책"으로 보고 T(φ(s), chunk, z)의 착지 SF로 가치를 매기는 것이 우리 model-based 시도
 Q=γ^h·V(f(z,a))의 원리적 완성형이다.</p>
-<p><b>액션 (Task#8):</b> GR1 phase-1 게이트(헤드룸·rand-vs-vla) 통과 + on-policy 수집이 생기는 시점에
-phase-2 critic을 TD-JEPA(z=정책변형, 데이터=demos+rollouts)로 <b>사전등록</b>한다. 구현 시 주의:
-① collapse 방지 3종 세트(단위 공분산 초기화·직교 정규화·타깃망) 그대로 이식 ② 예측기 lr을 표현 lr보다
-높게(Th.2 조건) ③ 첫 판정은 오프라인 게이트(합성게이트와 동일 프로토콜: demo_winrate·band)로 —
-롤아웃 전에 action-sensitivity부터. "간단한 방식 하나" 원칙과도 정합 — 컴포넌트를 늘리는 게 아니라
-셋을 하나로 줄이는 방향이다.</p>
+<h3>⑦ 설계 확정 (08-10 저녁, 사용자 논의) — TD-SF-ARQ: 단일태스크 증류</h3>
+<p><b>사용자 논점.</b> 우리는 behavior foundation model이 목표가 아니다 — 태스크 하나, z는 local하게만
+의미 있는 데이터셋. 그래도 JEPA류 표현의 이점을 살리면서 우리 adaptive transformer critic을 유지하려면?</p>
+<p><b>답: 버릴 것과 살릴 것을 나눈다.</b> 태스크 인코더 ψ·전역 z·제로샷 추론(ω_r 회귀)·잠재 정책 학습은
+전부 "보상이 여러 개일 때"의 장치 — 버린다. 살릴 것은 단 하나, <b>critic 출력을 스칼라 Q에서 벡터
+successor feature로 바꾸고 TD 타깃도 벡터로 주는 것</b>:</p>
+<p style='text-align:center'><b>F(s, chunk) ≈ φ̄(s′) + γ·F̄(s′, chunk′)</b> (chunk-단위 MDP, s′=chunk 실행 후 상태),
+&nbsp; BoN 점수 Q = ⟨F, w⟩ (w = progress/성공 라벨의 φ 릿지 회귀, 닫힌형)</p>
+<p><b>왜 이것이 우리 진단의 처방인가.</b> 측정으로 확정된 병목은 "행동 정보는 존재하나 희미하다"(압축 좌표
++7.3%)였다. 스칼라 TD는 그 희미한 행동 의존 경로에 <b>전이당 1차원</b>의 그래디언트만 흘린다 — 약한 신호가
+굶주리는 구조(GR1 그리퍼 정규화 사고의 학습신호 버전). 벡터 SF 타깃은 <b>전이당 128차원의 밀집 감독</b>을
+행동 조건 경로에 직접 붓는다 — TD-JEPA ablation에서 one-step·정책무관 타깃으로 바꾸면 무너지는 이유가
+바로 이 축이다. 또한 model-based 시도 Q=γ^h·V(f(z,a))가 하려던 "착지점의 가치"를 f·V 접합부 없이 단일
+TD 손실로 해낸다. <b>ARQ transformer는 아키텍처 그대로, 출력 헤드만 교체</b>(HL-Gauss는 보조 헤드로 유지 가능).</p>
+<table class='num'><tr><th>단계</th><th>내용</th><th>통제</th></tr>
+<tr><td>A</td><td>φ = <b>고정</b> PCA-128, ARQ 출력만 F로 교체, chunk-단위 TD + w 회귀</td><td>collapse 원천 차단, 변인 하나. 판정 = 오프라인 게이트(demo_winrate·band) vs IQL critic 나란히</td></tr>
+<tr><td>B</td><td>φ 공동 학습으로 unfreeze</td><td>collapse 방지 3종 이식: 단위 공분산 초기화·직교 정규화·예측기 lr &gt; 표현 lr(Th.2)</td></tr>
+<tr><td>C</td><td>on-policy K-per-scene 후 z=정책변형(vla/rand/noise) local 조건화</td><td>반사실이 z축에 실리는 시점 — 그때만 z 도입</td></tr></table>
+<p><b>솔직한 기대치:</b> 동일-상태 반사실 부재의 벽은 A·B에선 그대로다 — 이것은 "약한 신호를 최대로 뽑는
+더 나은 수도관"이지 보장이 아니다. 다만 우리가 잰 +7.3%가 정확히 압축 좌표의 예측 신호였으므로, 그 신호를
+정면으로 먹는 목적식이라는 점에서 시도 가치가 가장 높은 단일 변경이다. (Task#8, GR1 phase-1 게이트 통과 시
+A단계 사전등록.)</p>
 """,
 )
 
@@ -2138,12 +2154,33 @@ axis — and our planned phase-2 on-policy K-per-scene collection (vla/rand/nois
 <b>real policy family</b>. Once z genuinely varies in the data, the frame locks onto our actual problem
 (valuing candidate chunks): treat each candidate chunk as a short-horizon policy and score it by the landing
 SF of T(φ(s), chunk, z) — the principled completion of our model-based attempt Q=γ^h·V(f(z,a)).</p>
-<p><b>Action (Task#8):</b> once the GR1 phase-1 gates (headroom, rand-vs-vla) pass and on-policy collection
-exists, preregister the phase-2 critic as TD-JEPA (z = policy variant, data = demos+rollouts). Implementation
-notes: ① port the anti-collapse trio verbatim (unit-covariance init, orthonormality regularization, target
-nets); ② predictor lr above encoder lr (Th.2's condition); ③ first verdict through the offline gate (same
-protocol as our composition gate: demo_winrate, band) — action-sensitivity before any rollouts. Fits the
-"one simple method" principle — it collapses three components into one rather than adding any.</p>
+<h3>⑦ Design settled (evening 08-10, user discussion) — TD-SF-ARQ: the single-task distillation</h3>
+<p><b>The user's point.</b> We are not building a behavior foundation model — one task, a dataset where z is
+only locally meaningful. How do we keep the JEPA-style representation benefit while preserving our adaptive
+transformer critic?</p>
+<p><b>Answer: split what to drop from what to keep.</b> The task encoder ψ, the global z-space, zero-shot
+inference (ω_r regression) and latent policy learning are all machinery for "many rewards" — dropped. What
+survives is exactly one thing: <b>replace the critic's scalar Q output with a vector successor feature and
+make the TD target a vector too</b>:</p>
+<p style='text-align:center'><b>F(s, chunk) ≈ φ̄(s′) + γ·F̄(s′, chunk′)</b> (chunk-level MDP, s′ = state after
+executing the chunk), &nbsp; BoN score Q = ⟨F, w⟩ (w = closed-form ridge regression of progress/success
+labels on φ)</p>
+<p><b>Why this is the prescription for our diagnosis.</b> The measured bottleneck was "action information
+exists but is faint" (+7.3% in compressed coordinates). Scalar TD feeds that faint action-conditioned pathway
+<b>one gradient dimension per transition</b> — a starvation structure (the learning-signal version of the GR1
+gripper-normalization incident). A vector SF target pours <b>128 dimensions of dense supervision per
+transition</b> straight into the action-conditioned path — precisely the axis whose removal collapses TD-JEPA
+in its ablations. It also achieves what our model-based attempt Q=γ^h·V(f(z,a)) was after ("value of the
+landing point") in a single TD loss with no f/V seams. <b>The ARQ transformer keeps its architecture; only
+the output head changes</b> (HL-Gauss can stay as an auxiliary head).</p>
+<table class='num'><tr><th>Stage</th><th>What</th><th>Control</th></tr>
+<tr><td>A</td><td>φ = <b>frozen</b> PCA-128; swap ARQ output to F; chunk-level TD + w regression</td><td>collapse ruled out by construction, one variable. Verdict = offline gate (demo_winrate, band) side-by-side with the IQL critic</td></tr>
+<tr><td>B</td><td>unfreeze φ for joint learning</td><td>port the anti-collapse trio: unit-covariance init, orthonormality regularization, predictor lr &gt; encoder lr (Th.2)</td></tr>
+<tr><td>C</td><td>after on-policy K-per-scene: local z-conditioning on policy variant (vla/rand/noise)</td><td>introduce z only when counterfactuals actually ride on it</td></tr></table>
+<p><b>Honest expectation:</b> the same-state-counterfactual wall stands through A and B — this is a better
+pipe for a weak signal, not a guarantee. But the +7.3% we measured lives exactly in compressed-coordinate
+prediction, and this objective consumes that signal head-on: the highest-value single change available.
+(Task#8; stage A preregistered once the GR1 phase-1 gates pass.)</p>
 """,
 )
 
