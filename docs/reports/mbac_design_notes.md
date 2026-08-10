@@ -667,3 +667,33 @@ Honest expectation stands: the same-state-counterfactual wall is untouched in
 stage A - Phase 0's harvest is what changes the data, for BOTH workers' stage C.
 Cross-replication: same offline gates (time-resolution corrected), IQL side by
 side, two independent stacks.
+
+## Iteration 13 — user challenge upheld: the "closed offline routes" claim is RETRACTED
+
+The user's argument: demos of the same task pass through semantically equivalent
+stages whose VISUAL states differ across trajectories; value backup must flow
+across trajectories at those stages, and the failures indicate the EMBEDDING
+does not encode that equivalence - not that the data lacks better actions.
+
+Re-reading our own measurements under this frame:
+- V_TD ~ MC (Spearman .97) is the SYMPTOM of failed cross-trajectory backup:
+  with no bridges, TD degenerates to within-trajectory MC.
+- Bridge evidence: raw token episode-purity .42 (no bridges) vs phi purity .13
+  + stitching .78 (bridges built, at the STATE level).
+- The action axis never got a bridged experiment: raw-token critics had no
+  state bridges; phi+calswap had bridges but manufactured margins instead of
+  backups; phi+plain-IQL had bridges but zero action-side learning signal.
+  => "semantic-bridged embedding x action-conditioned cross-trajectory TD
+  backup" is an UNTESTED cell, and it is exactly TD-SF-ARQ's backup running in
+  phi space.
+
+Amendments:
+1. Stage-A embedding should be phi, not PCA-128 (PCA does not collapse episode
+   identity - no bridges). Propose stage-A' on our side: frozen phi + vector-SF
+   TD on the unchanged ARQ, cross-replicating worker-B's stage A.
+2. The ground-truth counterfactual rollout (execute each stored candidate from
+   a saved sim state) stays: it measures HOW MUCH value spread exists to be
+   backed up - the answer key for any critic that claims to rank candidates.
+3. Language discipline: our nulls showed tried methods failed to extract the
+   signal; they never showed the signal absent. The exclusion chain is a map of
+   attempted cells, one of which (this one) was never attempted.
