@@ -1027,6 +1027,54 @@ flow 조향·AWR 어댑터(BC-앵커 내장) → DPG 액터는 on-policy 수집�
 """,
 )
 
+# ============================================== 08-11 BYOL-γ 리뷰
+entry(
+    "08-11",
+    "papers-byolg",
+    "논문 리뷰 — BYOL-γ, TD-JEPA의 선조 (그리고 우리 A단계의 MC 팔)",
+    "완결",
+    """
+<p class='sub'>사용자 요청 리뷰: "TD-JEPA의 선조격 같은데 자세히" (arXiv:2506.10137, Lawson·Hugessen·Cloutier·
+Berseth·Khetarpal, Mila·DeepMind, ICLR 2026)</p>
+<h3>문제 — stitching(조합 일반화)</h3>
+<p>goal-조건 BC는 학습에서 본 (상태,목표) 조합은 잘하지만 데이터에 완결 궤적이 없는 새 조합엔 약하다.
+궤적 s₀→s_h와 s_b→s_f가 w에서 교차하는 데이터로 학습, s₀→s_f(조각 잇기 필수)로 평가하는 설정.</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"while BC methods can
+perform well on tasks directly observed in the dataset, they often fail to perform zero-shot transfer to tasks
+requiring novel combinations of in-distribution behavior, known as combinatorial generalization." (§1)</blockquote>
+<p>BC엔 MDP 귀납 편향이 없고, TD는 있지만 "challenging to scale due to the instability of bootstrapping in
+TD learning when combined with fully offline training"(§1) — 이 딜레마를 푸는 것이 목표.</p>
+<h3>해법 — 기하분포 오프셋의 잠재 자기예측 (TD 없는 successor 근사)</h3>
+<p>successor measure(γ-할인 미래 방문 분포)를 TD 부트스트랩 대신 <b>예측 시점 k를 기하분포
+k~Geom(1−γ)로 샘플링하는 MC</b>로 근사한다: 전방 예측기 ψ_f(φ(s_t), a_t) → sg[φ(s_{t+k})], 여기에
+후방 예측기 ψ_b(φ(s_{t+k})) → φ(s_t)를 함께(FB backward의 친척). BC 보조 손실로 사용하며,</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"With ϕ affected by
+both terms, the BC loss ensures that the representation is sufficient for action prediction, preventing
+collapse." (§4.2)</blockquote>
+<p>— target-net 곡예 없이 안정한 이유. 이론: 유한 단일정책 MDP에서 SR을 근사. 혼합정책 데이터에선
+TD-SR이 "혼합정책의 SM"을, MC 계열은 "SR들의 혼합"을 잡는데, 대조학습(TRA)과의 결정적 차이:</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"CL as used in TRA
+leads to pessimism in the relationship between states sampled by different policies. … this pessimism is not
+encountered with BYOL-γ, which does not utilize negative examples." (§4.2)</blockquote>
+<p>negative가 없어 <b>서로 다른 궤적의 상태를 낙관적으로 잇는(bridging)</b> 표현 — 워커A의 08-10 측정
+"φ는 관계 기하로 bridging한다"와 같은 주제의 목적식 측 대응물이다.</p>
+<h3>결과 — 정직 판독</h3>
+<p>OGBench stitch에서 BYOL-γ+GCBC가 GCBC·TRA·오프라인 RL(IQL/QRL/CRL)을 평균 상회. 단
+<b>TD-SR이 작은 상태공간(antmaze)에선 더 좋고</b> BYOL-γ는 큰 상태공간(humanoidmaze·visual)에서 우세 —
+"BYOL-γ's simpler training procedure is beneficial in environments with larger state spaces"(§5.2).
+비용: BYOL-γ O(B) vs CL O(B²) negatives vs TD-SR O(B²) 부트스트랩.</p>
+<h3>계보와 우리 함의 — A단계에 MC 팔</h3>
+<p><b>계보:</b> BYOL(1-step) → BYOL-γ(기하 오프셋 MC, behavior 정책) → TD-JEPA(TD off-policy화 +
+정책조건 z + 태스크 인코더 = 임의 정책 SF). TD-JEPA 표에서 BYOL-γ*는 픽셀 최강 베이스라인(DMC-RGB
+582.4 vs 628.8)이었다.</p>
+<p><b>함의:</b> BYOL-γ는 (a) 단일 behavior 혼합 데이터 (b) TD 불필요 (c) 정책조건 불필요 — <b>demo-only인
+우리 설정엔 TD-JEPA보다 더 가까운 조상</b>이다. 액션: <span class='xref' data-eid='tdsf-arq'>TD-SF-ARQ</span>
+A단계에 <b>MC-기하 변형 팔</b>(T(φ(s),chunk)가 φ(s_{t+k}), k~Geom(1−γ)을 맞힘 — 부트스트랩 제거, O(B))을
+TD 팔과 나란한 한 변인 비교로 추가한다. "BC 손실이 collapse를 막는다"는 관찰은 B단계 안정장치 후보,
+TRA-비관 분석은 대조학습 계열 제외의 근거.</p>
+""",
+)
+
 
 # ============================================== 08-09 아침 종합
 entry(
@@ -1579,6 +1627,15 @@ META = {
         "how": "demo-only 8시드 + mixed(학습중) 페어드 평가",
         "why": "모든 추론-시간 트릭이 실패한 후보 구분을 학습 신호로 만들 수 있는지",
         "links": ["v12", "final", "wcurse"],
+    },
+    "papers-byolg": {
+        "date": "2026-08-11 02:40",
+        "who": "워커B(리뷰)",
+        "where": "arXiv",
+        "what": "BYOL-γ(2506.10137) 정독 — TD-JEPA 계보 확인 + TD-SF-ARQ A단계 MC 팔 도출",
+        "how": "원문 정독(인용구 병기), TD-JEPA·워커A bridging 발견과 대조",
+        "why": "사용자 질문 'TD-JEPA의 선조격?' — demo-only 설정에 더 가까운 조상 확인",
+        "links": ["papers-tdjepa", "tdsf-arq", "phi-ladder", "xworker-0808"],
     },
     "tdsf-arq": {
         "date": "2026-08-10 21:20",
@@ -2301,6 +2358,52 @@ and TD-SF-ARQ side by side on identical annotations; promote to a rollout arm on
 ③ <b>temporal resolution ≥ 30% of the γ-ceiling</b> (ΔQ≈V·|lnγ|·Δt, worker A's 08-10 correction) —
 sensitivity above the ceiling is treated as an artificial margin and rejected.
 Otherwise record null and move to the stage-C (on-policy) precondition — no tricks added.</p>
+""",
+)
+
+en(
+    "papers-byolg",
+    "Paper review — BYOL-γ, TD-JEPA's ancestor (and an MC arm for our stage A)",
+    """
+<p class='sub'>User-requested review (arXiv:2506.10137, Lawson, Hugessen, Cloutier, Berseth, Khetarpal —
+Mila/DeepMind, ICLR 2026)</p>
+<h3>Problem — stitching (combinatorial generalization)</h3>
+<p>Goal-conditioned BC handles seen (state, goal) combinations but fails on novel ones absent as complete
+trajectories: train on s₀→s_h and s_b→s_f crossing at w, evaluate on s₀→s_f (must stitch).</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"while BC methods can
+perform well on tasks directly observed in the dataset, they often fail to perform zero-shot transfer to tasks
+requiring novel combinations of in-distribution behavior, known as combinatorial generalization." (§1)</blockquote>
+<p>BC lacks the MDP inductive bias; TD has it but is "challenging to scale due to the instability of
+bootstrapping in TD learning when combined with fully offline training" (§1).</p>
+<h3>The trick — latent self-prediction at geometric offsets (successor approximation without TD)</h3>
+<p>Approximate the successor measure not by bootstrapping but by <b>sampling the prediction offset
+k~Geom(1−γ)</b>: forward predictor ψ_f(φ(s_t), a_t) → sg[φ(s_{t+k})], plus a backward predictor
+ψ_b(φ(s_{t+k})) → φ(s_t) (a cousin of FB's backward map). Used as an auxiliary loss for BC:</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"With ϕ affected by
+both terms, the BC loss ensures that the representation is sufficient for action prediction, preventing
+collapse." (§4.2)</blockquote>
+<p>Theory: approximates the SR in the finite single-policy case; on mixture data MC methods capture a
+mixture of SRs (TD-SR captures the mixture policy's SM), with a decisive contrast to contrastive learning:</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"CL as used in TRA
+leads to pessimism in the relationship between states sampled by different policies. … this pessimism is not
+encountered with BYOL-γ, which does not utilize negative examples." (§4.2)</blockquote>
+<p>No negatives → representations that <b>optimistically bridge states across trajectories</b> — the
+objective-side counterpart of worker A's 08-10 "φ bridges via relational geometry" measurement.</p>
+<h3>Results — honest reading</h3>
+<p>On OGBench stitch datasets BYOL-γ+GCBC beats GCBC, TRA and offline RL (IQL/QRL/CRL) on average; but
+<b>TD-SR wins on small state spaces (antmaze)</b> while BYOL-γ wins on large ones (humanoidmaze, visual) —
+"BYOL-γ's simpler training procedure is beneficial in environments with larger state spaces" (§5.2).
+Cost: BYOL-γ O(B) vs O(B²) for CL negatives / TD-SR bootstrap terms.</p>
+<h3>Lineage and our takeaway — an MC arm for stage A</h3>
+<p><b>Lineage:</b> BYOL (1-step) → BYOL-γ (geometric-offset MC, behavior policy) → TD-JEPA (TD off-policy +
+policy-conditioning z + task encoder = SFs of arbitrary policies). In TD-JEPA's tables BYOL-γ* was the
+strongest pixel baseline (DMC-RGB 582.4 vs 628.8).</p>
+<p><b>Takeaway:</b> BYOL-γ needs (a) a single behavior mixture, (b) no TD, (c) no policy conditioning —
+<b>closer to our demo-only setting than TD-JEPA itself</b>. Action: add an <b>MC-geometric arm</b> to
+<span class='xref' data-eid='tdsf-arq'>TD-SF-ARQ</span> stage A (T(φ(s),chunk) predicting φ(s_{t+k}),
+k~Geom(1−γ) — no bootstrap, O(B)) as a one-variable comparison against the TD arm. The "BC loss prevents
+collapse" observation is a stage-B stabilizer candidate; the TRA-pessimism analysis grounds excluding
+contrastive variants.</p>
 """,
 )
 
