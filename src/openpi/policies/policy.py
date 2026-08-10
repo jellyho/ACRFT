@@ -222,6 +222,7 @@ class CriticSelectPolicy(BasePolicy):
             }
         )
         raw_dim = int(np.asarray(probe["actions"]).shape[-1])
+        self._robot_action_dim = raw_dim
         score, _, self._macro = _critic.load_trained(
             cdir / "params.msgpack", action_dim=raw_dim, horizon=int(model.action_horizon)
         )
@@ -268,20 +269,45 @@ class CriticSelectPolicy(BasePolicy):
         q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
         q_full = q[:, -1]
         best = int(np.argmax(q_full))
+        chunk = decoded.shape[1]  # X — this replan's length, not a configured horizon
+        # Everything but `actions` is laid out PER STEP: leading axis X, matching the actions
+        # it accompanies. That is the recording contract (see the robot client's
+        # `extra_features`), and it is what lets these survive an adaptive chunk -- the client
+        # slices row i for step i without either side agreeing a horizon in advance. The values
+        # are constant across the chunk, since one replan decides them all; broadcasting is
+        # what makes them recordable, not what makes them meaningful.
         out = {
-            "actions": decoded[best],
-            "action_samples": decoded,
-            "critic_scores": q_full,
-            "critic_choice": best,
+            "actions": decoded[best],  # (X, A)
+            "action_samples": np.swapaxes(decoded, 0, 1),  # (X, N, A)
+            "critic_scores": np.broadcast_to(q_full, (chunk, q_full.shape[0])).copy(),  # (X, N)
+            "critic_choice": np.full((chunk, 1), best, np.float32),  # (X, 1)
         }
-        # The full [N, P] grid plus the candidate chunks and the choice are everything a HUD needs
-        # to reconstruct this replan (examples/robocasa/hud.py draws exactly these). They ride along
-        # only when the client sets ``critic_hud`` so a plain critic_select response stays small.
+        # The full [N, P] grid is everything a HUD needs to reconstruct this replan on top of
+        # the above (examples/robocasa/hud.py draws exactly these). It rides along only when the
+        # client sets ``critic_hud`` so a plain critic_select response stays small.
         if want_hud:
-            out["critic_grid"] = q  # Q at every (candidate, commit-length) — [N, P]
-            out["critic_best_prefix"] = int(q.shape[1] - 1)  # BoN commits the full chunk
-            out["critic_macro"] = int(self._macro)  # env steps per prefix column
+            out["critic_grid"] = np.broadcast_to(q, (chunk, *q.shape)).copy()  # (X, N, P)
+            out["critic_best_prefix"] = np.full((chunk, 1), q.shape[1] - 1, np.float32)
+            out["critic_macro"] = np.full((chunk, 1), self._macro, np.float32)
         return out
+
+    def extra_features(self, num_samples: int | None = None) -> dict:
+        """Per-step shapes to advertise at handshake, for the client to record.
+
+        One step's shape only. The chunk axis is deliberately absent: the chunk is adaptive, so
+        no number either side could agree on in advance describes it.
+
+        The HUD extras are not here. ``critic_grid`` is [N, P], and P falls out of the critic's
+        own architecture rather than anything known at construction -- advertising a guessed
+        width would put a wrong column in every episode. It stays a per-request value for a HUD
+        to consume live, which is all it was ever for.
+        """
+        n = int(num_samples or self._default_samples)
+        return {
+            "action_samples": [n, self._robot_action_dim],
+            "critic_scores": [n],
+            "critic_choice": [1],
+        }
 
     @property
     def metadata(self) -> dict[str, Any]:

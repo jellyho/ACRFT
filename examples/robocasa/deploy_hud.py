@@ -34,13 +34,24 @@ class _Info:
     __slots__ = ("best_cand", "best_prefix", "cand", "n_exec", "q", "value")
 
 
+def _first_step(array):
+    """Serving lays its extras out PER STEP -- leading axis X, matching the actions.
+
+    That is what the robot client records, and what lets the layout survive an adaptive chunk.
+    Everything a HUD wants is decided once per replan and then broadcast across X, so taking
+    row 0 recovers the per-replan value without assuming any particular X.
+    """
+    return np.asarray(array, np.float32)[0]
+
+
 def info_from_response(resp):
     """Rebuild the Replan-like object hud.Dashboard consumes from a serving response."""
-    q = np.asarray(resp["critic_grid"], np.float32)  # [N, P]
-    cand = np.asarray(resp["action_samples"], np.float32)  # [N, H, A]
-    best = int(resp["critic_choice"])
-    pp = int(resp.get("critic_best_prefix", q.shape[1] - 1))
-    macro = int(resp.get("critic_macro", 1))
+    q = _first_step(resp["critic_grid"])  # (X, N, P) -> [N, P]
+    # (X, N, A) -> [N, H, A]: the candidates are per-step on the wire, chunk-major here.
+    cand = np.swapaxes(np.asarray(resp["action_samples"], np.float32), 0, 1)
+    best = int(_first_step(resp["critic_choice"])[0])
+    pp = int(_first_step(resp["critic_best_prefix"])[0]) if "critic_best_prefix" in resp else q.shape[1] - 1
+    macro = int(_first_step(resp["critic_macro"])[0]) if "critic_macro" in resp else 1
     info = _Info()
     info.q, info.cand, info.best_cand = q, cand, best
     info.best_prefix, info.n_exec, info.value = pp, (pp + 1) * macro, float(q[best, pp])

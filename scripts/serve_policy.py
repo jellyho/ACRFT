@@ -159,6 +159,11 @@ def main(args: Args) -> None:
     )
     # Config-derived spec first, so an explicit policy_metadata entry can still override it.
     policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}
+    # What this policy sends alongside its actions, so the robot client records it without
+    # either side hard-coding a name. Per-step shapes only -- the chunk axis is adaptive.
+    declare = getattr(policy, "extra_features", None)
+    if callable(declare):
+        policy_metadata["extra_features"] = declare()
     logging.info("Serving %s: %s", train_config.name, policy_metadata)
 
     # Record the policy's behavior.
