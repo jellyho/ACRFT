@@ -94,6 +94,17 @@ class ARQCritic(nn.Module):
     # token it gets its own projection and its own place in attention.
     proprio_dim: int = 0
 
+    # floq (arXiv:2509.06863): parameterize Q as a velocity field v(t, z | s, a); read Q by ODE
+    # integration. When flow_head=True, __call__ takes (obs, actions, flow_z, flow_t) and returns the
+    # per-prefix VELOCITY. The two collapse-prevention design choices are baked in: the interpolant z
+    # is fed as a categorical (HL-Gauss-style) encoding over [flow_lo, flow_hi], and time t as a
+    # Fourier-basis embedding. Default off leaves the standard scalar/HL-Gauss critic unchanged.
+    flow_head: bool = False
+    flow_bins: int = 51
+    flow_lo: float = -1.0
+    flow_hi: float = 1.0
+    flow_fourier: int = 16
+
     @property
     def n_embd(self) -> int:
         return self.num_heads * self.head_dim
@@ -109,7 +120,7 @@ class ARQCritic(nn.Module):
         return self.horizon // self.macro_group_size
 
     @nn.compact
-    def __call__(self, obs, actions):
+    def __call__(self, obs, actions, flow_z=None, flow_t=None):
         d, mh = self.n_embd, self.macro_h
         a = actions.reshape(*actions.shape[:-2], mh, self.macro_group_size * self.action_dim)
 
@@ -147,6 +158,21 @@ class ARQCritic(nn.Module):
             h = nn.LayerNorm()(x)
             x = x + nn.Dense(d)(nn.gelu(nn.Dense(self.mlp_dim)(h)))
         x = nn.LayerNorm()(x)[..., nl:, :]  # drop the observation positions: [..., mh, d]
+
+        if self.flow_head:
+            # floq design choice 2: categorical(z) + Fourier(t), fused into the per-prefix feature
+            # before a scalar VELOCITY head. flow_z/flow_t broadcast to [..., mh].
+            centers = jnp.linspace(self.flow_lo, self.flow_hi, self.flow_bins)
+            sigma = (self.flow_hi - self.flow_lo) / (self.flow_bins - 1)
+            zc = jnp.broadcast_to(flow_z[..., None], (*x.shape[:-1], 1))  # [..., mh, 1]
+            zcat = jnp.exp(-0.5 * ((zc - centers) / sigma) ** 2)  # soft one-hot [..., mh, bins]
+            zcat = zcat / (jnp.sum(zcat, -1, keepdims=True) + 1e-8)
+            k = jnp.arange(1, self.flow_fourier + 1, dtype=jnp.float32)
+            tt = jnp.broadcast_to(flow_t[..., None], (*x.shape[:-1], 1))  # [..., mh, 1]
+            tfe = jnp.concatenate([jnp.sin(jnp.pi * k * tt), jnp.cos(jnp.pi * k * tt)], -1)  # [..., mh, 2F]
+            cond = nn.Dense(d)(jnp.concatenate([zcat, tfe], -1))
+            x = nn.LayerNorm()(x + cond)
+            return jnp.squeeze(nn.Dense(1)(x), -1)  # per-prefix velocity [..., mh]
 
         if self.head_ensemble > 1:
             # Two-layer MLP per head, NOT a linear map: linear heads on a shared feature are K

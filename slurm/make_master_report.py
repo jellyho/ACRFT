@@ -15,7 +15,26 @@ demo-only candidate collapse (consistent with us). <b>Implications for TD-SF-ARQ
 (128 dims per transition) already <b>bakes in floq's plasticity mechanism</b> — the same cure for scalar TD's
 one-dimensional starvation; ② floq's velocity-field critic is the same family as our actor-critic ladder
 (∂Q/∂a flow steering), so add it as a phase-2 on-policy critic-form candidate; ③ floq still cannot manufacture
-coverage — reaffirming our ordering (complementary to on-policy counterfactuals).</p>rt — every experiment, grouped by DATE, then by
+coverage — reaffirming our ordering (complementary to on-policy counterfactuals).</p>
+<p><b>⑪ floq implemented & tested (08-12, user request — faithful to the paper).</b> Discarded the toy and
+<b>kept our ARQ critic architecture, swapping only bootstrap+head to floq</b>: same causal-transformer trunk,
+head becomes a velocity field (critic.py <code>flow_head</code>, non-breaking commit), loss is the paper's
+Eq 4.2 <code>‖v_θ(t,z(t)|s,a)−(y−z)‖²</code>, z(t)=(1−t)z+t·y, and the TD target y=r+γ^H·V_next bootstraps by
+<b>integrating the target velocity field K steps</b>. Both collapse-prevention choices ported: initial noise
+<b>Uniform[−0.5,1]</b> (u=Q_max), interpolant z as a <b>categorical</b> encoding, time t as <b>Fourier</b>
+features. Held-out by episode:</p>
+<table class='num'><tr><th>Metric</th><th>scalar ARQ (expectile TD)</th><th>floq ARQ</th></tr>
+<tr><td>Spearman(Q, mc) — value fit</td><td>0.395</td><td><b>0.521</b> (+32%)</td></tr>
+<tr><td>action-sensitivity</td><td>0.024</td><td>0.071</td></tr>
+<tr><td>demo_winrate (demo vs VLA cand, optimistic)</td><td>0.279</td><td>0.781</td></tr></table>
+<p><b>Verdict — capacity yes, coverage no (strongly).</b> ① floq's <b>capacity gain confirmed</b>: on our real
+ARQ critic, value-fit +0.13 (+32% rel), larger than the toy. ② But <b>deployment discrimination is still
+absent</b>: sensitivity 0.071 exceeds the γ-ceiling (γ=0.99, V~0.11, Δt~16 → ΔQ ceiling ≈ <b>0.018</b>), so it
+is action style/distribution discrimination (artificial margin), not true value; and demo_winrate 0.78 is
+optimistic (it includes the demo, absent from the deployment BoN pool). <b>Conclusion: floq is a genuine
+critic-capacity / value-fit upgrade (worth adopting as the TD-SF-ARQ head), but does not solve the binding
+constraint, coverage — a mutual replication of worker A's floq reading on an independent implementation.</b>
+(Simplification: single-commit TD to isolate floq-vs-scalar; the ARQ prefix/ensemble machinery is orthogonal.)</p>rt — every experiment, grouped by DATE, then by
 experiment name within the date. Two-tier navigation: pick a day, pick the experiment.
 
 Output:
@@ -1770,6 +1789,22 @@ on-policy 반사실뿐이다.</p>
 감독)을 구조적으로 이미 내장</b> — 스칼라 TD의 1차원 감독 굶주림을 푸는 같은 원리다. ② floq의 velocity-field
 critic은 우리 actor-critic 사다리(∂Q/∂a flow 조향)와 같은 계열이므로, phase-2 on-policy에서 critic 형태 후보로
 사전등록에 추가. ③ 단 floq도 커버리지는 못 만든다 — 반사실 제조(on-policy)와 상보라는 우리 순서를 재확인.</p>
+<p><b>⑪ floq 직접 구현·테스트 (08-12, 사용자 지시 — 원본 충실).</b> 토이를 폐기하고 <b>우리 ARQ critic 아키텍처를
+그대로 두고 bootstrap+head만 floq로 교체</b>: 같은 causal-transformer 트렁크, head를 velocity field로
+(critic.py <code>flow_head</code>, non-breaking 커밋), 손실은 원본 Eq 4.2 <code>‖v_θ(t,z(t)|s,a)−(y−z)‖²</code>,
+z(t)=(1−t)z+t·y, TD 타깃 y=r+γ^H·V_next는 <b>target velocity field의 K스텝 적분</b>으로 부트스트랩. collapse
+방지 2종 이식: 초기 노이즈 <b>Uniform[−0.5,1]</b>(u=Q_max), interpolant z <b>categorical</b>+시간 t <b>Fourier</b>.
+held-out(에피소드 분할):</p>
+<table class='num'><tr><th>지표</th><th>스칼라 ARQ (expectile TD)</th><th>floq ARQ</th></tr>
+<tr><td>Spearman(Q, mc) — value fit</td><td>0.395</td><td><b>0.521</b> (+32%)</td></tr>
+<tr><td>action-sensitivity</td><td>0.024</td><td>0.071</td></tr>
+<tr><td>demo_winrate (demo vs VLA후보, 낙관)</td><td>0.279</td><td>0.781</td></tr></table>
+<p><b>판정 — capacity O, coverage X (강하게).</b> ① floq의 <b>용량 이득 확증</b>: 우리 실제 ARQ critic에서 value-fit
++0.13(+32% 상대), 토이보다 큼. ② 그러나 <b>배포 판별은 여전히 부재</b>: sensitivity 0.071은 γ-천장(γ=0.99·V~0.11·
+Δt~16 → ΔQ상한≈<b>0.018</b>)을 넘어 <b>행동 스타일/분포 판별</b>(인공 마진)이지 참 가치 판별이 아니며, demo_winrate
+0.78도 demo를 포함한 낙관치(배포 BoN엔 demo 없음). <b>결론: floq는 critic 용량·value-fit 업그레이드로 진짜
+(TD-SF-ARQ head 채택 가치), 그러나 binding constraint인 coverage는 못 푼다 — 워커A의 floq 해석을 독립 구현에서
+상호 재현.</b> (단순화: 단일-commit TD로 floq-vs-scalar만 격리; ARQ prefix/앙상블은 floq와 직교라 생략.)</p>
 
 """,
 )
