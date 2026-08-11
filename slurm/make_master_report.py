@@ -1103,10 +1103,15 @@ entry(
 <p class='sub'>사용자 요청: "HILP·cheap-z 비교처럼 TD-JEPA·BYOL-gamma도 시각화" + "한 궤적의 임베딩 하나 뽑아
 다른 궤적의 최근접 이웃을 이미지로 보여달라(내가 판단하겠다)" + BC probing 통합. 데이터: PrepareCoffee mixed
 어노테이션(807,634 토큰-프레임·1,234 에피소드, 토큰/에피소드 중앙값 582 — 결코 짧지 않음).</p>
-<p class='missing'><b>핵심 결과(TL;DR) — DiT 닫힌-루프 성공률(25트라이얼):</b> raw <b>0.60</b> · PCA-128 <b>0.40</b> ·
-φ(HILP) <b>0.04</b> · TD-JEPA <b>0.04</b> · BYOL-γ <b>0.00</b>. 오프라인 지표(BC R² 0.64~0.71·stage-purity
+<p class='missing'><b>핵심 결과(TL;DR) — DiT 닫힌-루프 probe.</b> 오프라인 지표(BC R² 0.64~0.71·stage-purity
 0.76~0.83)는 전부 평평해 이 붕괴를 못 예측했다 — <b>닫힌-루프만 진실을 드러냈다</b>. PCA-128과 φ-128은 같은
-128차원인데 14배 차이 → <b>차원이 아니라 학습 readout의 기하가 제어 정보를 파괴</b>. 상세는 아래 "DiT 닫힌-루프 probe" 절.</p>
+128차원인데 14배 차이 → <b>차원이 아니라 학습 readout의 기하가 제어 정보를 파괴</b>.</p>
+<table class='num'><tr><th>임베딩</th><th>DiT 닫힌-루프 성공률 (25트라이얼) ↑</th></tr>
+<tr><td>raw 2048</td><td><b>0.60</b></td></tr>
+<tr><td>PCA-128</td><td><b>0.40</b></td></tr>
+<tr><td>φ (HILP)</td><td>0.04</td></tr>
+<tr><td>TD-JEPA</td><td>0.04</td></tr>
+<tr><td>BYOL-γ</td><td>0.00</td></tr></table>
 <h3>설계</h3>
 <p>TD-JEPA·BYOL-gamma를 φ(HILP)가 쓴 <b>같은 frozen RLT 토큰</b> 위에 readout으로 학습(모두 같은 MLP 구조 —
 목적식만 다름). φ는 goal-조건 expectile TD(cross-episode goal 샘플링), BYOL-gamma는 기하 오프셋 자기예측
@@ -2738,11 +2743,16 @@ en(
 embedding from a trajectory and show its nearest neighbors from other trajectories as images (I'll judge)" +
 consolidate BC probing. Data: PrepareCoffee mixed annotation (807,634 token-frames, 1,234 episodes, median 582
 tokens/episode — not short).</p>
-<p class='missing'><b>Headline (TL;DR) — DiT closed-loop success (25 trials):</b> raw <b>0.60</b> · PCA-128 <b>0.40</b> ·
-φ(HILP) <b>0.04</b> · TD-JEPA <b>0.04</b> · BYOL-γ <b>0.00</b>. Every offline metric (BC R² 0.64–0.71, stage-purity
-0.76–0.83) is flat and failed to predict this collapse — <b>only closed-loop revealed it</b>. PCA-128 and φ-128
-are both 128-d yet differ 14× → <b>not dimension but the learned readout's geometry destroys control information</b>.
-Details in the "DiT closed-loop probe" section below.</p>
+<p class='missing'><b>Headline (TL;DR) — DiT closed-loop probe.</b> Every offline metric (BC R² 0.64–0.71,
+stage-purity 0.76–0.83) is flat and failed to predict this collapse — <b>only closed-loop revealed it</b>. PCA-128
+and φ-128 are both 128-d yet differ 14× → <b>not dimension but the learned readout's geometry destroys control
+information</b>.</p>
+<table class='num'><tr><th>Embedding</th><th>DiT closed-loop success (25 trials) ↑</th></tr>
+<tr><td>raw 2048</td><td><b>0.60</b></td></tr>
+<tr><td>PCA-128</td><td><b>0.40</b></td></tr>
+<tr><td>φ (HILP)</td><td>0.04</td></tr>
+<tr><td>TD-JEPA</td><td>0.04</td></tr>
+<tr><td>BYOL-γ</td><td>0.00</td></tr></table>
 <h3>Setup</h3>
 <p>Train TD-JEPA and BYOL-gamma as readouts on the <b>same frozen RLT tokens</b> phi(HILP) used (identical MLP
 arch — objective only differs). phi = goal-conditioned expectile TD (cross-episode goal sampling); BYOL-gamma =
