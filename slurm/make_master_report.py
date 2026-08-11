@@ -1146,6 +1146,52 @@ cross-ep phase 오차(↓), progress R²(↑).</p>
 패널만으로 방법을 강하게 가르긴 어렵다(판별은 정량 purity·t-SNE가 한다). ② 이웃들이 "의미 같고 시각 다름"보다 거의
 <b>near-duplicate</b>라, 원하는 invariance(시각 변이 불변)를 이 데이터로는 완전히 stress-test 하지 못한다 —
 <b>시각 다양성이 큰 데이터(GR1 신규물체·OGBench 시각변형)</b>가 그 시험대다.</p>
+<h3>정렬 축 분석 (사용자 가설 검증, 08-11) — 무엇으로 정렬되나</h3>
+<p>사용자 관찰 둘: (a) φ는 progress(goal-거리)로 정렬해 같은 모션을 속도로 갈라놓는다, (b) raw는 최근접조차
+유사도가 낮아 궤적 간 그룹화가 안 된다. 궤적 가로지르는 20만 쌍에서 임베딩 유사도가 <b>행동(모션) vs progress</b>
+중 무엇과 상관되는지, 그리고 최근접 vs 랜덤 유사도 gap(판별력)을 쟀다:</p>
+<table class='num'><tr><th>임베딩</th><th>corr(sim,action)</th><th>corr(sim,progress)</th><th>최근접 sim</th><th>랜덤 sim</th><th>판별 gap</th></tr>
+<tr><td>raw 2048</td><td>0.178</td><td>0.193</td><td>0.529</td><td>0.188</td><td><b>0.341</b>(최저)</td></tr>
+<tr><td>PCA-128</td><td>0.186</td><td>0.209</td><td>0.591</td><td>0.001</td><td><b>0.590</b>(최고)</td></tr>
+<tr><td>φ (HILP)</td><td>0.152</td><td><b>0.019</b></td><td><b>0.829</b></td><td><b>0.281</b></td><td>0.549</td></tr>
+<tr><td>BYOL-γ</td><td>0.044</td><td>0.035</td><td>0.738</td><td>0.154</td><td>0.584</td></tr>
+<tr><td>TD-JEPA</td><td>0.110</td><td>0.073</td><td>0.635</td><td>0.060</td><td>0.576</td></tr></table>
+<p><b>판독:</b> ① (b) 확증 — raw 판별 gap 0.341 최저(최근접이 랜덤보다 별로 안 가까움) = "같은 상태다"를 못 집음.
+② (a) <b>반증</b> — φ는 progress 상관 0.019(최저)이고 오히려 action(0.152)과 상관. φ는 순수 progress가 아니라
+reachability(장면+행동)를 인코딩. 같은-모션 내 progress 의존도도 φ(.249)=raw(.25)로 동일. ③ φ는 압축돼
+랜덤 쌍도 0.281로 가까움(비판별 성분), PCA는 랜덤 0.001로 가장 깔끔히 판별. <b>모든 상관이 약함(≤0.21) =
+어느 임베딩도 행동/progress 축으로 깔끔히 조직되지 않음, 주로 장면 외형이 지배.</b></p>
+<h3>Stage 정렬 (옳은 타깃 — 속도·배경 불변) — 거친 O, 정밀 X</h3>
+<p>progress는 속도 혼입 타깃이라 틀렸다. 옳은 타깃은 <b>하위과제 stage</b>(kroll 플래그 grasped/placed/machine_on의
+조합) — 속도·배경 무관한 task-relevant 라벨. "cross-궤적 최근접이 같은 stage인가"(우연 0.207):</p>
+<table class='num'><tr><th>임베딩</th><th>최근접 same-stage</th><th>chance 대비 lift</th></tr>
+<tr><td>raw / PCA</td><td>0.825 / 0.828</td><td>+0.62</td></tr>
+<tr><td>φ (HILP)</td><td>0.815</td><td>+0.61</td></tr>
+<tr><td>TD-JEPA</td><td>0.807</td><td>+0.60</td></tr>
+<tr><td>BYOL-γ</td><td>0.762</td><td>+0.55</td></tr></table>
+<p><b>판정 — 비관론의 정정:</b> 전 임베딩이 다른 궤적 최근접을 <b>~80%로 같은 하위과제</b>에서 찾는다(우연 21% 대비
++0.6). 즉 "cross-궤적에서 아무것도 같은 상태로 안 본다"는 <b>거친 하위과제 수준에선 틀리다</b> — 배경 nuisance를 안고도
+하위과제 정렬은 이미 된다. <b>정밀 종합(거친 O / 정밀 X):</b> 거친 stage 정렬 ~0.80이지만 정밀 관계 기하(정확한 컵
+pose·그리퍼 배치, 정렬-축 corr .15)는 약하다. 사용자 명제 "배경 무관·관계상태만 중요"는 <b>정밀 수준에서 참</b> —
+부족한 건 <b>같은 하위과제 안에서의 정밀 판별</b>이고, 그건 더 나은 invariance가 아니라 <b>반사실(커버리지)</b>이
+푸는 문제다. 임베딩 라인과 커버리지 라인이 같은 지점에서 만난다.</p>
+<h3>DiT 닫힌-루프 probe (본 판정, 08-11) — 오프라인 지표를 뒤집다</h3>
+<p>오프라인 BC MSE는 compounding error를 못 본다. 그래서 임베딩별 <b>DiT 정책 헤드</b>(action chunk를 H토큰으로
+시간축 self-attention + AdaLN-Zero, rectified-flow)를 학습해 PrepareCoffee 시뮬에서 <b>닫힌-루프 성공률</b>로 잰다
+(25트라이얼, 동일 VLA 백본 토큰):</p>
+<table class='num'><tr><th>임베딩</th><th>DiT 닫힌-루프 성공률 ↑</th><th>(참고) BC R²</th><th>(참고) stage-purity</th></tr>
+<tr><td>raw 2048</td><td><b>0.60</b></td><td>0.708</td><td>0.825</td></tr>
+<tr><td>PCA-128</td><td><b>0.40</b></td><td>0.697</td><td>0.828</td></tr>
+<tr><td>φ (HILP)</td><td>0.04</td><td>0.682</td><td>0.815</td></tr>
+<tr><td>TD-JEPA</td><td>0.04</td><td>0.688</td><td>0.807</td></tr>
+<tr><td>BYOL-γ</td><td>0.00</td><td>0.640</td><td>0.762</td></tr></table>
+<p><b>판정 — 세 가지 결정타:</b> ① <b>차원이 아니라 기하가 범인.</b> PCA-128(0.40)과 φ-128(0.04)은 같은 128차원인데
+14배 차이 — 분산 보존 선형투영은 제어를 살리고, <b>학습된 readout(φ·TD-JEPA·BYOL-γ)의 reachability/self-predictive
+기하가 정밀 제어 정보를 파괴</b>한다. ② <b>오프라인 지표 전멸.</b> BC R²(0.64~0.71 평평)도 stage-purity(0.76~0.83
+평평)도 이 붕괴를 예측 못 함 — <b>닫힌-루프만 진실을 드러낸다</b>(compounding error). ③ <b>"φ는 표현으로 충분"은
+확정 기각</b> — φ는 단일-스텝 BC·거친 stage는 되지만 닫힌-루프 제어엔 불충분(디코더 프로브의 proprio 손실 .760→.546이
+실은 제어 결정적이었음). <b>TD-SF-ARQ 함의:</b> critic 임베딩은 φ가 아니라 <b>PCA-128/raw</b>로 — 학습 readout은
+후보 판별에 필요한 정밀 제어 신호를 버린다. (사용자가 닫힌-루프+DiT를 고집한 판단이 정확히 옳았다.)</p>
 <h3>BC probing 통합 (5개 임베딩) — BC-충분성과 invariance는 직교</h3>
 <p>임베딩→데모 action chunk 재현 BC를 5개 전부에 대해 동일 프로토콜로(kroll, held-out):</p>
 <table class='num'><tr><th>임베딩</th><th>BC action R² ↑</th><th>(참고) 구조 purity ↓</th></tr>
@@ -2736,6 +2782,25 @@ included) finds plausible cross-trajectory neighbors — the panel alone does no
 discriminators are the quantitative purity and t-SNE). ② The neighbors are closer to near-duplicates than
 "same-semantics, different-visuals," so this data does not fully stress-test the invariance we want — <b>visually
 diverse data (GR1 novel objects, OGBench visual variants)</b> is that test bed.</p>
+<h3>DiT closed-loop probe (the verdict, 08-11) — it overturns the offline metrics</h3>
+<p>Offline BC MSE cannot see compounding error. So per embedding we train a <b>DiT policy head</b> (action chunk
+as H tokens, temporal self-attention + AdaLN-Zero, rectified flow) and measure <b>closed-loop success</b> in the
+PrepareCoffee sim (25 trials, same VLA backbone token):</p>
+<table class='num'><tr><th>Embedding</th><th>DiT closed-loop success ↑</th><th>(ref) BC R²</th><th>(ref) stage-purity</th></tr>
+<tr><td>raw 2048</td><td><b>0.60</b></td><td>0.708</td><td>0.825</td></tr>
+<tr><td>PCA-128</td><td><b>0.40</b></td><td>0.697</td><td>0.828</td></tr>
+<tr><td>φ (HILP)</td><td>0.04</td><td>0.682</td><td>0.815</td></tr>
+<tr><td>TD-JEPA</td><td>0.04</td><td>0.688</td><td>0.807</td></tr>
+<tr><td>BYOL-γ</td><td>0.00</td><td>0.640</td><td>0.762</td></tr></table>
+<p><b>Verdict — three decisive points:</b> ① <b>Geometry, not dimension, is the culprit.</b> PCA-128 (0.40) and
+φ-128 (0.04) are both 128-d yet differ 14× — a variance-preserving linear projection keeps control, while the
+<b>learned readouts' (φ/TD-JEPA/BYOL-γ) reachability/self-predictive geometry destroys the fine control
+information</b>. ② <b>Offline metrics all fail.</b> Neither BC R² (0.64–0.71, flat) nor stage-purity (0.76–0.83,
+flat) predicts the collapse — <b>only closed-loop reveals it</b> (compounding error). ③ <b>"φ is sufficient as a
+representation" is firmly rejected</b> — φ handles single-step BC and coarse stage but is insufficient for
+closed-loop control (the decoder probe's proprio loss .760→.546 was control-critical after all). <b>TD-SF-ARQ
+implication:</b> use <b>PCA-128/raw, not φ</b>, for the critic embedding — learned readouts throw away the fine
+control signal candidate discrimination needs. (The user's insistence on closed-loop + DiT was exactly right.)</p>
 <h3>BC probing consolidated (5 embeddings) — BC-sufficiency ⊥ invariance</h3>
 <p>Embedding → demo-action-chunk BC under the identical protocol for all five (kroll, held-out):</p>
 <table class='num'><tr><th>Embedding</th><th>BC action R² ↑</th><th>(ref) structure purity ↓</th></tr>
