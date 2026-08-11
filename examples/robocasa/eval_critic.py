@@ -165,8 +165,15 @@ def proprio_stats(critic_path):
     cfg = json.loads(cfg_p.read_text())
     if not cfg.get("use_proprio"):
         return None
-    meta = json.loads((pathlib.Path(cfg["data"]) / "meta.json").read_text())
-    return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
+    annot = pathlib.Path(cfg["data"])
+    meta = json.loads((annot / "meta.json").read_text())
+    if "proprio_mean" in meta:
+        return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
+    # Older annotations carry the raw proprio column but not its statistics - recompute them the way
+    # the trainer z-scores (per-dim over the frames), so the rollout normalises identically.
+    pd_ = meta["proprio_dim"]
+    pr = np.memmap(annot / "proprio.dat", dtype=np.float32, mode="r", shape=(meta["num_frames"], pd_))
+    return np.asarray(pr.mean(0), np.float32), np.asarray(pr.std(0), np.float32)
 
 
 class DynCommit:
