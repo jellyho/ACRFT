@@ -519,7 +519,8 @@ def main() -> None:
         # phi was trained on STANDARDIZED tokens (train_hilp_readout normalizes its input);
         # feeding raw tokens shifted phi outputs by ~45% relative error and invalidated the
         # first round of phi rollout arms. Standardize with the training cache's statistics.
-        _tok = np.load(args.phi.parent.parent / "rlt_cache_PrepareCoffee" / "features.npy", mmap_mode="r")
+        _cache_dir = args.phi.parent.parent / f"rlt_cache_{args.task}"
+        _tok = np.load(_cache_dir / "features.npy", mmap_mode="r")
         _tsub = np.array(_tok[:: max(1, len(_tok) // 20000)])
         _tmu, _tsd = _tsub.mean(0).astype(np.float32), (_tsub.std(0) + 1e-6).astype(np.float32)
         _w0 = _sd["0.weight"].numpy()
