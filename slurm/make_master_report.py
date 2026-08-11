@@ -1376,6 +1376,23 @@ L2 proprio 프로브(R² raw .760→φ .546)와 <b>독립 지표에서 같은 �
 <a href="videos/decoder/23_diff_phi128_recon.png" target="_blank">φ 패널</a> ·
 <a href="videos/decoder/23_diff_raw_walk.mp4" target="_blank">raw 워크</a> ·
 <a href="videos/decoder/23_diff_phi128_walk.mp4" target="_blank">φ 워크</a> (정성 참고 — 판정은 위 MSE로). (Task#9 완료)</p>
+<h3>φ→action BC probe (08-11, 사용자 요청 — 이전에 슬립됐던 실험)</h3>
+<p>디코더 probe는 "φ가 이미지·proprio를 얼마나 재구성하나"를 쟀다. 그러나 우리가 정작 알아야 할 건
+<b>φ가 행동을 재현할 만큼의 정보를 갖는가</b>다. 그래서 임베딩→데모 action chunk(H=8×12, z-score) BC MLP를
+raw/PCA/φ 동일 프로토콜로 학습해 held-out을 비교했다(디코더 probe와 같은 kroll 정렬 데이터):</p>
+<table class='num'><tr><th>임베딩</th><th>action R² ↑</th><th>held-out MSE ↓</th></tr>
+<tr><td>raw 2048</td><td>0.708</td><td>0.258</td></tr>
+<tr><td>PCA-128</td><td>0.697</td><td>0.267</td></tr>
+<tr><td><b>φ-128</b></td><td><b>0.682</b></td><td>0.280</td></tr></table>
+<p><b>판정 — 디코더 서사의 보정:</b> φ는 <b>행동 정보를 거의 다 보존한다</b>(R² .682 vs raw .708, 상대차 3.6%).
+디코더 probe의 "φ가 재구성 정보를 3.1배 잃는다"와 얼핏 모순이지만 해소된다: <b>φ가 버린 것(세밀한 시각 디테일·
+재구성용 그리퍼 각도)은 행동 예측에 불필요한 정보</b>였고, 데모 행동을 맞히는 부분공간은 φ가 지켰다. 함의 둘:
+① "φ가 정보를 버려서 못 쓴다"는 설명은 <b>기각</b> — φ는 action-sufficient. 따라서 φ-critic이 BoN을 못 연 건
+표현 결함이 아니라 <b>반사실 부재(축2)</b>다(우리 결론 강화). ② <b>표현 축은 BC에 거의 평평</b>(raw .708 / PCA
+.697 / φ .682 — 셋 다 비슷) — TD-SF-ARQ A단계에서 임베딩 선택(φ vs PCA)은 결정적 변인이 아니며, φ를 써도
+행동 정보 손실 걱정은 없다. <b>주의(BC≠판별):</b> 이 probe는 "한 데모 행동 재현"이지 "같은 상태 후보 판별"이
+아니다 — φ가 act-sufficient라도 반사실 신호가 없으면 critic은 여전히 막힌다. 두 사실은 함께 "표현은 충분,
+데이터가 부족"으로 수렴한다.</p>
 ④ <b>critic 사다리 확정(n=8):</b> RLT2048 −0.065 / PCA-128 −0.040 / <b>φ-128 −0.010 CI[−0.078,+0.058],
 McN +62/−66 p=0.791 — null 확정.</b> n=4의 +0.035와 단조 배열은 새 4시드(−0.02/−0.10/+0.02/−0.12)에서 소멸 —
 v11 AQC 전례("n=4 신호를 믿지 말 것")의 재연이며, 그 규칙이 옳았음의 재확인. φ 결합팔(v19: φ×다양화×veto)도
@@ -2670,6 +2687,26 @@ probe (R² raw .760 → φ .546). So "φ discards short-range information" holds
 <a href="videos/decoder/23_diff_phi128_recon.png" target="_blank">φ panel</a> ·
 <a href="videos/decoder/23_diff_raw_walk.mp4" target="_blank">raw walk</a> ·
 <a href="videos/decoder/23_diff_phi128_walk.mp4" target="_blank">φ walk</a> (qualitative; verdict is the MSE). (Task#9 done)</p>
+<h3>φ→action BC probe (08-11, user-requested — an experiment that had slipped)</h3>
+<p>The decoder probe measured how well φ reconstructs images/proprio. But what we actually need is whether
+<b>φ carries enough information to reproduce the action</b>. So we trained an embedding→demo-action-chunk
+(H=8×12, z-scored) BC MLP under the identical protocol for raw/PCA/φ and compared held-out (same kroll
+alignment as the decoder probe):</p>
+<table class='num'><tr><th>Embedding</th><th>action R² ↑</th><th>held-out MSE ↓</th></tr>
+<tr><td>raw 2048</td><td>0.708</td><td>0.258</td></tr>
+<tr><td>PCA-128</td><td>0.697</td><td>0.267</td></tr>
+<tr><td><b>φ-128</b></td><td><b>0.682</b></td><td>0.280</td></tr></table>
+<p><b>Verdict — correcting the decoder narrative:</b> φ <b>retains nearly all the action information</b>
+(R² .682 vs raw .708, 3.6% relative). This seems to contradict the decoder probe's "φ loses 3.1× the
+reconstruction info," but it resolves: <b>what φ discards (fine visual detail, reconstruction-grade gripper
+angle) is not needed to predict the action</b>; φ keeps the action-relevant subspace. Two implications:
+① the "φ threw away info so it can't be used" explanation is <b>rejected</b> — φ is action-sufficient, so
+φ-critic's failure to open BoN is not a representation defect but the <b>absent counterfactual (axis 2)</b>
+(strengthening our conclusion). ② the <b>representation axis is nearly flat for BC</b> (raw .708 / PCA .697 /
+φ .682) — the embedding choice (φ vs PCA) is not a decisive variable for TD-SF-ARQ stage A, and using φ costs
+no action information. <b>Caveat (BC≠discrimination):</b> this probe reproduces one demo action, not
+same-state candidate discrimination — φ being act-sufficient doesn't lift the critic if the counterfactual
+signal is absent. Together the two facts converge on "representation sufficient, data insufficient."</p>
 """,
 )
 
