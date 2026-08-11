@@ -58,6 +58,8 @@ def main():
     ap.add_argument("--annot", type=pathlib.Path, default=pathlib.Path(".scratch/annot_yam_s200"))
     ap.add_argument("--episode", type=int, default=-1, help="-1 = auto-pick the most multimodal episode")
     ap.add_argument("--stride", type=int, default=3, help="score every k-th frame")
+    ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi", help="LeRobot source dataset for the camera")
+    ap.add_argument("--no-camera", action="store_true", help="render the distribution alone")
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/value_dist_video.mp4"))
     ap.add_argument("--fps", type=int, default=12)
     a = ap.parse_args()
@@ -79,6 +81,7 @@ def main():
     tok = np.memmap(a.annot / "rl_token.dat", dtype=np.float32, mode="r", shape=(n, D))
     chunk = np.memmap(a.annot / "action_chunk.dat", dtype=np.float32, mode="r", shape=(n, H, A))
     ep = np.asarray(np.memmap(a.annot / "episode_index.dat", dtype=np.int32, mode="r", shape=(n,)))
+    fr = np.asarray(np.memmap(a.annot / "frame_index.dat", dtype=np.int32, mode="r", shape=(n,)))
     mc = np.asarray(np.memmap(a.annot / "mc_return.dat", dtype=np.float32, mode="r", shape=(n,)))
     use_prop = cfg.get("proprio_mode") == "concat" and (a.annot / "proprio.dat").exists()
     if use_prop:
@@ -109,17 +112,37 @@ def main():
         a.episode = int(best)
         print(f"auto-picked episode {a.episode} (mean multimodality {best_score:.3f})", flush=True)
 
-    rows = np.flatnonzero(ep == a.episode)[:: a.stride]
-    dists = np.stack([dist_at(int(r)) for r in rows])  # [T, atoms]
+    sel = np.flatnonzero(ep == a.episode)[:: a.stride]
+    fidx = fr[sel]  # frame index within the source episode
+    dists = np.stack([dist_at(int(r)) for r in sel])  # [T, atoms]
     means = (dists * centers).sum(-1)
-    mcs = mc[rows]
+    mcs = mc[sel]
+
+    # camera: the source LeRobot episode aligns 1:1 with the annotation (same episode/frame index)
+    cam = None
+    if not a.no_camera:
+        try:
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        except Exception:
+            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        try:
+            cam = LeRobotDataset(a.repo_id, episodes=[a.episode])
+            print(f"camera loaded: {a.repo_id} ep {a.episode} ({cam.num_frames} frames)", flush=True)
+        except Exception as e:
+            print(f"camera unavailable ({type(e).__name__}: {e}); rendering distribution only", flush=True)
+
+    def cam_frame(k):
+        item = cam[int(fidx[k])]
+        img = np.asarray(item["observation.images.agentview"])  # [3,H,W] float [0,1]
+        return (np.transpose(img, (1, 2, 0)) * 255).astype(np.uint8)
 
     import imageio
+    from PIL import Image
 
     frames = []
     ymax = float(dists.max()) * 1.15
     for i, (d, m, mcr) in enumerate(zip(dists, means, mcs, strict=True)):
-        fig, ax = plt.subplots(figsize=(5.2, 3.4))
+        fig, ax = plt.subplots(figsize=(5.2, 3.6))
         ax.fill_between(centers, d, color=report_style.PALETTE[0], alpha=0.85, step="mid")
         ax.axvline(m, color=report_style.PALETTE[3], lw=1.6, label=f"mean {m:.2f}")
         ax.axvline(mcr, color="#555", lw=1.4, ls="--", label=f"mc_return {mcr:.2f}")
@@ -127,15 +150,26 @@ def main():
         ax.set_ylim(0, ymax)
         ax.set_xlabel("value")
         ax.set_ylabel("probability")
-        ax.set_title(f"ep {a.episode}   frame {int(rows[i])}   ({i + 1}/{len(rows)})")
+        ax.set_title(f"value distribution   frame {int(fidx[i])}   ({i + 1}/{len(sel)})")
         ax.legend(fontsize=8, loc="upper left")
         fig.tight_layout()
         fig.canvas.draw()
-        frames.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
+        plot = np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()
         plt.close(fig)
+        if cam is not None:
+            ph = plot.shape[0]
+            c = cam_frame(i)
+            cw = int(c.shape[1] * ph / c.shape[0])
+            c = np.asarray(Image.fromarray(c).resize((cw, ph), Image.LANCZOS))
+            frames.append(np.concatenate([c, plot], axis=1))
+        else:
+            frames.append(plot)
 
     imageio.mimwrite(a.out, frames, fps=a.fps, quality=8, macro_block_size=1)
-    print(f"wrote {a.out}  ({len(frames)} frames, episode {a.episode})", flush=True)
+    print(
+        f"wrote {a.out}  ({len(frames)} frames, episode {a.episode}, camera={'yes' if cam is not None else 'no'})",
+        flush=True,
+    )
 
 
 def multimodality(p):
