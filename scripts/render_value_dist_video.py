@@ -60,6 +60,11 @@ def main():
     ap.add_argument("--stride", type=int, default=3, help="score every k-th frame")
     ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi", help="LeRobot source dataset for the camera")
     ap.add_argument("--no-camera", action="store_true", help="render the distribution alone")
+    ap.add_argument(
+        "--candidates",
+        action="store_true",
+        help="overlay the value distribution of every VLA candidate chunk (spread = do they separate?)",
+    )
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/value_dist_video.mp4"))
     ap.add_argument("--fps", type=int, default=12)
     a = ap.parse_args()
@@ -91,14 +96,28 @@ def main():
         cap = min(n, 400000)
         mu, sd = prop[:cap].mean(0), prop[:cap].std(0)
 
-    def dist_at(r):
+    N = meta["num_samples"]
+    cand = np.memmap(a.annot / "base_action.dat", dtype=np.float32, mode="r", shape=(n, N, H, A))
+
+    def obs_z(r):
         z = tok[r].astype(np.float32)
         if use_prop:
             p = np.where(sd > 1e-6, (prop[r] - mu) / np.where(sd > 1e-6, sd, 1.0), 0.0).astype(np.float32)
             z = np.concatenate([z, p])
+        return z
+
+    def dist_at(r):
+        z = obs_z(r)
         # critic expects obs [S, M, D] and actions [S, M, H, A]; here S=M=1
         pr = np.asarray(probs(jnp.asarray(z)[None, None], jnp.asarray(chunk[r])[None, None]))  # [K,1,1,P,atoms]
         return pr.mean(0)[0, 0, -1]  # ensemble-mean, full prefix -> [atoms]
+
+    def dist_cands(r):
+        # value distribution of every VLA candidate chunk at this state -> [N, atoms]
+        z = obs_z(r)
+        zc = jnp.repeat(jnp.asarray(z)[None, None], N, axis=1)  # [1, N, D]
+        pr = np.asarray(probs(zc, jnp.asarray(cand[r])[None]))  # [K,1,N,P,atoms]
+        return pr.mean(0)[0, :, -1]  # [N, atoms]
 
     # auto-pick: episode whose frames are most often multimodal (mass outside the dominant mode)
     eps = np.unique(ep[: min(n, 400000)])
@@ -114,9 +133,10 @@ def main():
 
     sel = np.flatnonzero(ep == a.episode)[:: a.stride]
     fidx = fr[sel]  # frame index within the source episode
-    dists = np.stack([dist_at(int(r)) for r in sel])  # [T, atoms]
+    dists = np.stack([dist_at(int(r)) for r in sel])  # [T, atoms] (demo chunk)
     means = (dists * centers).sum(-1)
     mcs = mc[sel]
+    cdists = np.stack([dist_cands(int(r)) for r in sel]) if a.candidates else None  # [T, N, atoms]
 
     # camera: the source LeRobot episode aligns 1:1 with the annotation (same episode/frame index)
     cam = None
@@ -140,17 +160,28 @@ def main():
     from PIL import Image
 
     frames = []
-    ymax = float(dists.max()) * 1.15
+    ymax = float(max(dists.max(), cdists.max() if cdists is not None else 0)) * 1.15
     for i, (d, m, mcr) in enumerate(zip(dists, means, mcs, strict=True)):
         fig, ax = plt.subplots(figsize=(5.2, 3.6))
-        ax.fill_between(centers, d, color=report_style.PALETTE[0], alpha=0.85, step="mid")
-        ax.axvline(m, color=report_style.PALETTE[3], lw=1.6, label=f"mean {m:.2f}")
-        ax.axvline(mcr, color="#555", lw=1.4, ls="--", label=f"mc_return {mcr:.2f}")
+        if cdists is not None:
+            cd = cdists[i]  # [N, atoms]
+            cmeans = (cd * centers).sum(-1)
+            best = int(np.argmax(cmeans))
+            for j in range(cd.shape[0]):  # every candidate's value distribution, faint
+                ax.plot(centers, cd[j], color=report_style.PALETTE[0], alpha=0.30, lw=0.9)
+            ax.plot(centers, cd[best], color=report_style.PALETTE[1], lw=2.0, label=f"argmax cand #{best}")
+            ax.set_title(
+                f"per-candidate value   frame {int(fidx[i])}   spread {cmeans.std():.3f}   ({i + 1}/{len(sel)})"
+            )
+        else:
+            ax.fill_between(centers, d, color=report_style.PALETTE[0], alpha=0.85, step="mid")
+            ax.set_title(f"value distribution   frame {int(fidx[i])}   ({i + 1}/{len(sel)})")
+        ax.axvline(m, color=report_style.PALETTE[3], lw=1.4, label=f"demo mean {m:.2f}")
+        ax.axvline(mcr, color="#555", lw=1.2, ls="--", label=f"mc_return {mcr:.2f}")
         ax.set_xlim(cfg.get("v_min", 0.0), cfg.get("v_max", 1.0))
         ax.set_ylim(0, ymax)
         ax.set_xlabel("value")
         ax.set_ylabel("probability")
-        ax.set_title(f"value distribution   frame {int(fidx[i])}   ({i + 1}/{len(sel)})")
         ax.legend(fontsize=8, loc="upper left")
         fig.tight_layout()
         fig.canvas.draw()
