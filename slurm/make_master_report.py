@@ -5,7 +5,17 @@ pooled bon .711 vs vla .678 (+11/−8, McNemar <b>p=0.65</b>) — below the pre-
 full-authority catastrophe (.133), <b>"full authority harms, selection-only is futile" is the ceiling of a
 demo-only critic</b> — meeting our FINAL 14-arm null again from an independent stack. Test-time selection (BoN)
 is closed across two stacks and three datasets; the remaining doors are training-time intervention (the
-vector-SF critic) and on-policy counterfactuals.</p>rt — every experiment, grouped by DATE, then by
+vector-SF critic) and on-policy counterfactuals.</p>
+<p><b>08-11 — floq (flow-matching critic) cross-review, and its contact with TD-SF-ARQ.</b> Worker A r56
+reviewed floq ("critic as a velocity field, integrate K steps to read the value," OGBench hard 1.8×) and its
+dissection: the gain is not distributional modeling but ① test-time recovery (integration damps initial error)
+and ② <b>plasticity</b> (dense velocity supervision re-weights features under non-stationary TD targets), 2×/5×
+at high UTD. Worker A's read: a capacity/optimization axis, not a coverage axis — useful online, useless for
+demo-only candidate collapse (consistent with us). <b>Implications for TD-SF-ARQ:</b> ① our vector-SF target
+(128 dims per transition) already <b>bakes in floq's plasticity mechanism</b> — the same cure for scalar TD's
+one-dimensional starvation; ② floq's velocity-field critic is the same family as our actor-critic ladder
+(∂Q/∂a flow steering), so add it as a phase-2 on-policy critic-form candidate; ③ floq still cannot manufacture
+coverage — reaffirming our ordering (complementary to on-policy counterfactuals).</p>rt — every experiment, grouped by DATE, then by
 experiment name within the date. Two-tier navigation: pick a day, pick the experiment.
 
 Output:
@@ -1669,6 +1679,15 @@ bon .711 vs vla .678(+11/−8, McNemar <b>p=0.65</b>) → 사전등록 기준 p&
 다시 만난다. <b>교훈(양방향):</b> 소표본 양(+) 신호를 사전등록 파워로 닫는 규율이 이번엔 워커A 쪽에서
 작동했다. test-time 선택(BoN)은 두 스택·세 데이터셋에서 닫혔고, 남은 문은 학습-시간 개입(벡터-SF critic)과
 on-policy 반사실뿐이다.</p>
+<h3>⑩ 08-11 — floq(flow-matching critic) 교차 리뷰: TD-SF-ARQ와의 접점</h3>
+<p>워커A r56이 floq("critic을 velocity field로, K스텝 적분해 값 읽기", OGBench hard 1.8×)와 후속 해부를 정독.
+핵심: 이득의 출처는 distributional 모델링이 아니라 ① test-time recovery(적분이 초기오차 감쇠) ②
+<b>plasticity</b>(dense velocity 감독 → 비정상 TD 타깃에 피처 재가중), high-UTD에서 2×/5×. 워커A 판정:
+<b>커버리지 축이 아니라 용량·최적화 축</b> — 온라인 phase 유효, demo-only 후보붕괴엔 무효(우리 결론과 정합).</p>
+<p><b>우리 TD-SF-ARQ에 주는 함의:</b> ① 우리 <b>벡터 SF 타깃(전이당 128차원)이 floq의 plasticity 메커니즘(dense
+감독)을 구조적으로 이미 내장</b> — 스칼라 TD의 1차원 감독 굶주림을 푸는 같은 원리다. ② floq의 velocity-field
+critic은 우리 actor-critic 사다리(∂Q/∂a flow 조향)와 같은 계열이므로, phase-2 on-policy에서 critic 형태 후보로
+사전등록에 추가. ③ 단 floq도 커버리지는 못 만든다 — 반사실 제조(on-policy)와 상보라는 우리 순서를 재확인.</p>
 
 """,
 )
