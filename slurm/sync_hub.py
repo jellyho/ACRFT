@@ -49,6 +49,11 @@ body{background:#ffffff}
 .wbx th{background:#f3f4f8}.wbx img{max-width:100%;border:1px solid #e2e2e2;border-radius:8px;margin:8px 0;background:#fff}
 .wbx .missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
 .wbx code{background:#f3f4f8;padding:1px 5px;border-radius:4px;color:#1a1a1a}
+/* 떠 있는 내비 버튼: 리포트를 한참 스크롤한 뒤 목록/맨위로 바로 이동 */
+#wb-float{position:fixed;right:18px;bottom:18px;z-index:80;display:none;flex-direction:column;gap:8px}
+#wb-float button{width:46px;height:46px;border-radius:50%;border:1px solid #cfd4dd;background:#fff;
+  color:#1f2430;font-size:18px;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.18);line-height:1}
+#wb-float button:hover{border-color:#3730a3;color:#3730a3}
 .wbx .tl{position:relative;margin:14px 0 14px 8px;border-left:3px solid #3730a3;padding-left:22px}
 .wbx .node{position:relative;margin-bottom:18px}
 .wbx .node:before{content:'';position:absolute;left:-31px;top:6px;width:12px;height:12px;border-radius:50%;background:#3730a3}
@@ -359,6 +364,25 @@ function wbGraphInit(){
     requestAnimationFrame(tick);}
   _wbG=true; tick();
 }
+// ---- 떠 있는 내비: 리포트 열람 중 목록으로/맨위로 즉시 이동
+(function(){
+  function ensure(){
+    if(document.getElementById('wb-float')) return;
+    const box=document.createElement('div'); box.id='wb-float';
+    const home=document.createElement('button'); home.textContent='☰'; home.title='목록으로';
+    home.onclick=function(){ if(typeof goHome==='function') goHome(); else location.hash=''; window.scrollTo(0,0); };
+    const top=document.createElement('button'); top.textContent='↑'; top.title='맨 위로';
+    top.onclick=function(){ window.scrollTo({top:0,behavior:'smooth'}); };
+    box.appendChild(home); box.appendChild(top); document.body.appendChild(box);
+  }
+  function inReader(){ const r=document.getElementById('reader'); return r && !r.hidden; }
+  function upd(){ ensure(); const f=document.getElementById('wb-float');
+    f.style.display=(inReader() && window.scrollY>320)?'flex':'none'; }
+  addEventListener('scroll',upd,{passive:true});
+  addEventListener('click',()=>setTimeout(upd,60));
+  addEventListener('DOMContentLoaded',()=>{ensure();upd();});
+  ensure();
+})();
 </script>"""
     m = re.search(r'(<div class="sub">[^<]*</div>)', out)
     out = out[: m.end()] + tabs + out[m.end() :]
