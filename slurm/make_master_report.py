@@ -1082,6 +1082,60 @@ TRA-비관 분석은 대조학습 계열 제외의 근거.</p>
 """,
 )
 
+# ============================================== 08-11 DBC/bisimulation 리뷰
+entry(
+    "08-11",
+    "papers-dbc",
+    "논문 리뷰 — DBC(bisimulation): 우리가 원하는 invariance의 정면 정의",
+    "완결",
+    """
+<p class='sub'>사용자 질문 발: "우리가 원하는 invariance는 semantic하게 비슷한 장면(컵 손잡이로 다가간다)이
+visual하게 달라도 비슷한 임베딩이 되는 것. BYOL-γ도 도움이 되나, 다른 연구가 있나?" → 그 invariance를 <b>정면으로
+정의</b>하는 계보가 bisimulation이다. (arXiv:2006.10742, Zhang·McAllister·Calandra·Gal·Levine, ICLR 2021 oral)</p>
+<h3>무엇을 정의하나 — behavioral 등가</h3>
+<p>bisimulation은 두 상태를 "픽셀이 비슷한가"가 아니라 <b>"행동적으로 구분 불가능한가"</b>로 같다고 본다:
+같은 보상을 주고, 어떤 행동에도 (다음 상태의) bisimulation-등가 분포로 전이하면 등가. DBC는 이 거리를 임베딩
+거리로 <b>직접</b> 심는다:</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"Our method trains
+encoders such that distances in latent space equal bisimulation distances in state space." (Abstract)</blockquote>
+<p style='text-align:center'><b>J(φ) = ( ‖z_i−z_j‖₁ − |r_i−r_j| − γ·W₂(P̂(·|z̄_i,a_i), P̂(·|z̄_j,a_j)) )²</b></p>
+<p>즉 두 임베딩 거리가 <b>보상 차이 + 다음-상태 분포의 Wasserstein 거리</b>와 같아지게 회귀한다(z̄=stop-grad,
+동역학 모델 P̂ 동시 학습). 재구성이 전혀 없어서 과제-무관 시각 요소는 애초에 표현되지 않는다:</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"state elements are
+relevant not only if they influence the current reward, but also if they influence state elements in the future
+that in turn influence future rewards … an ideal representation is one that is predictive of reward, and also
+predictive of itself in the future." (§1)</blockquote>
+<p>실험도 정확히 우리 관심사: MuJoCo 배경을 움직이는 distractor·자연 영상으로 바꿔도, 운전 태스크에서 구름·날씨·
+시간대가 바뀌어도 invariant.</p>
+<h3>SR/BYOL-γ와의 관계 — 보상축의 유무</h3>
+<table class='num'><tr><th></th><th>SR/BYOL-γ (successor)</th><th>bisimulation/DBC</th></tr>
+<tr><td>같다고 보는 기준</td><td>미래 <b>방문 분포</b>가 같으면</td><td>미래 <b>보상 결과</b>가 같으면(보상+전이)</td></tr>
+<tr><td>보상축</td><td>없음 (dynamics-only)</td><td>있음 — |r_i−r_j| 항</td></tr>
+<tr><td>우리 want와의 거리</td><td>proxy (semantics≡미래결과일 때 tight)</td><td><b>정의 그 자체</b></td></tr>
+<tr><td>실무 위험</td><td>collapse (BYOL-γ는 BC앵커로 방지)</td><td>W₂·동역학 공동학습 불안정성(논문도 언급)</td></tr></table>
+<p>즉 BYOL-γ는 "미래 방문이 같으면 붙인다"는 <b>보상 없는 사촌</b>, DBC는 "보상 결과가 같으면 붙인다"는 정본.
+우리가 원하는 "손잡이 접근은 배경 달라도 같게"는 — 손잡이 접근이 같은 미래 보상(잡기 성공)으로 이어지는 한 —
+둘 다 잡지만, DBC가 더 직접적이다.</p>
+<h3>인접 계보 (같은 목표, 다른 손잡이)</h3>
+<table class='num'><tr><th>계열</th><th>대표</th><th>거리의 의미</th></tr>
+<tr><td>Bisimulation</td><td>DBC(2021), DeepMDP(2019)</td><td>보상+전이 등가</td></tr>
+<tr><td>Value-implicit</td><td>VIP(2023)</td><td>목표 진행도</td></tr>
+<tr><td>Quasimetric</td><td>QRL(2023)</td><td>최적 도달 스텝(비대칭)</td></tr>
+<tr><td>Temporal-contrastive</td><td>TRA(2025)·CRL·TCN</td><td>시간 근접/같은 목표</td></tr>
+<tr><td>Object-centric</td><td>slot attention 계열</td><td>관계 배치 직접(배경 무관)</td></tr></table>
+<h3>우리 결론과의 연결 — invariance = 커버리지 해금</h3>
+<p>핵심 통찰: 더 나은 semantic invariance는 <b>궤적 간 반사실 공유</b> 장치다. φ가 궤적 A의 "손잡이 접근"과 B의
+"손잡이 접근"을 같은 임베딩으로 붙이면, A(a₁→성공)와 B(a₂→실패)가 <b>같은-임베딩 상태의 반사실 쌍</b>이 된다 —
+원 궤적은 달라도. 즉 invariance는 오프라인 데이터에 숨은 반사실을 풀어내 <b>유효 커버리지를 늘린다</b>(OGBench
+stitch가 되는 이유). <b>한계 둘:</b> ① 데이터에 잠재 반사실이 있어야 풀 게 있다(단일 데모 모드면 0). ② 우리
+downstream(후보 판별)엔 반사실이 어디든 존재해야 한다. 그래서 invariance(잠재 해금)와 on-policy(신규 제조)는
+상보. <b>우리 증거:</b> φ(successor 계열)가 이미 관계 기하로 궤적 간 bridging(워커A act-cos .661 vs .334) —
+이 계보가 우리 스택에서 실제로 작동함을 확인했다. <b>다음:</b> TD-JEPA·BYOL-γ readout을 φ·raw와 같은 배터리로
+비교(embed-compare 엔트리), bisimulation(보상축 추가)은 GR1에서 progress 보상으로 시도 가능.</p>
+""",
+)
+
+
 # ============================================== 08-11 커버리지 역방향 ablation 설계
 entry(
     "08-11",
@@ -1729,6 +1783,15 @@ META = {
         "how": "TD-BoN이 OGBench서 성공 = 존재증명. 같은 env 반사실 밀도만 감축 → demo-only 레짐 재현 여부",
         "why": "커버리지(반사실)가 OGBench 장점이자 VLA null의 인과 변인 후보 — 한 변인 통제로 확정",
         "links": ["conservatism", "phi-ladder", "tdsf-arq", "papers-byolg", "papers-tdjepa", "gr1-port", "final"],
+    },
+    "papers-dbc": {
+        "date": "2026-08-11 05:10",
+        "who": "워커B(리뷰)",
+        "where": "arXiv",
+        "what": "DBC/bisimulation(2006.10742) 정독 — 우리가 원하는 semantic invariance의 정면 정의",
+        "how": "원문 인용 병기, SR/BYOL-γ와 보상축 유무로 대조, invariance=커버리지 해금 종합",
+        "why": "사용자 질문 'semantic 비슷하면 임베딩도 비슷하게, 다른 연구 있나?'",
+        "links": ["papers-byolg", "papers-tdjepa", "phi-ladder", "tdsf-arq", "xworker-0808"],
     },
     "papers-byolg": {
         "date": "2026-08-11 02:40",
@@ -2508,6 +2571,61 @@ collapse" observation is a stage-B stabilizer candidate; the TRA-pessimism analy
 contrastive variants.</p>
 """,
 )
+
+en(
+    "papers-dbc",
+    "Paper review — DBC (bisimulation): the head-on definition of the invariance we want",
+    """
+<p class='sub'>From the user's question: "the invariance we want is that semantically similar scenes (approaching
+the cup by its handle), visually different, get similar embeddings — does BYOL-γ help, or is there other work?"
+→ the lineage that defines that invariance head-on is bisimulation. (arXiv:2006.10742, Zhang, McAllister,
+Calandra, Gal, Levine, ICLR 2021 oral)</p>
+<h3>What it defines — behavioral equivalence</h3>
+<p>Bisimulation calls two states equal not by "similar pixels" but by <b>"behaviorally indistinguishable"</b>:
+same reward, and under every action transition to a bisimulation-equivalent distribution of next states. DBC
+plants that distance <b>directly</b> as latent distance:</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"Our method trains
+encoders such that distances in latent space equal bisimulation distances in state space." (Abstract)</blockquote>
+<p style='text-align:center'><b>J(φ) = ( ‖z_i−z_j‖₁ − |r_i−r_j| − γ·W₂(P̂(·|z̄_i,a_i), P̂(·|z̄_j,a_j)) )²</b></p>
+<p>Latent distance is regressed onto <b>reward difference + Wasserstein distance of next-state distributions</b>
+(z̄ = stop-grad, dynamics model P̂ trained jointly). No reconstruction at all, so task-irrelevant visuals are
+never represented:</p>
+<blockquote class="sub" style="border-left:3px solid #c7cbd4;margin:8px 0;padding:4px 12px">"state elements are
+relevant not only if they influence the current reward, but also if they influence state elements in the future
+that in turn influence future rewards … an ideal representation is one that is predictive of reward, and also
+predictive of itself in the future." (§1)</blockquote>
+<p>Experiments are exactly our concern: invariant to moving-distractor / natural-video backgrounds in MuJoCo,
+and to clouds/weather/time-of-day in driving.</p>
+<h3>Relation to SR/BYOL-γ — the reward axis</h3>
+<table class='num'><tr><th></th><th>SR/BYOL-γ (successor)</th><th>bisimulation/DBC</th></tr>
+<tr><td>Equality criterion</td><td>same future <b>visitation</b></td><td>same future <b>reward outcome</b> (reward+transition)</td></tr>
+<tr><td>Reward axis</td><td>none (dynamics-only)</td><td>yes — the |r_i−r_j| term</td></tr>
+<tr><td>Distance to our want</td><td>proxy (tight when semantics≡future outcome)</td><td><b>the definition itself</b></td></tr>
+<tr><td>Practical risk</td><td>collapse (BYOL-γ prevents via BC anchor)</td><td>W₂ + joint-dynamics instability (paper notes it)</td></tr></table>
+<p>BYOL-γ is the <b>reward-free cousin</b> ("same visitation → merge"), DBC the canonical form ("same reward
+outcome → merge"). Our "handle-approach equal despite background" — as long as handle-approach leads to the same
+future reward (grasp success) — is caught by both, DBC more directly.</p>
+<h3>Adjacent lineage (same goal, different handle)</h3>
+<table class='num'><tr><th>Family</th><th>Representative</th><th>Distance means</th></tr>
+<tr><td>Bisimulation</td><td>DBC(2021), DeepMDP(2019)</td><td>reward+transition equivalence</td></tr>
+<tr><td>Value-implicit</td><td>VIP(2023)</td><td>goal progress</td></tr>
+<tr><td>Quasimetric</td><td>QRL(2023)</td><td>optimal steps-to-reach (asymmetric)</td></tr>
+<tr><td>Temporal-contrastive</td><td>TRA(2025), CRL, TCN</td><td>temporal proximity / same goal</td></tr>
+<tr><td>Object-centric</td><td>slot-attention family</td><td>relational layout directly (background-agnostic)</td></tr></table>
+<h3>Connection to our conclusion — invariance = unlocking coverage</h3>
+<p>Key insight: better semantic invariance is a <b>cross-trajectory counterfactual-sharing</b> device. If φ
+merges trajectory A's "handle approach" with B's, then A(a₁→success) and B(a₂→failure) become a
+<b>same-embedding-state counterfactual pair</b> despite different source trajectories. So invariance unlocks
+latent counterfactuals in offline data, raising <b>effective coverage</b> (why OGBench stitch works).
+<b>Two limits:</b> ① there must be latent counterfactuals to unlock (a single demo mode has zero); ② our
+downstream (candidate discrimination) needs the counterfactuals to exist somewhere. So invariance (unlock
+latent) and on-policy (manufacture new) are complementary. <b>Our evidence:</b> φ (a successor-family readout)
+already bridges cross-trajectory via relational geometry (worker A act-cos .661 vs .334) — this lineage
+demonstrably works in our stack. <b>Next:</b> compare TD-JEPA/BYOL-γ readouts against φ/raw on the same battery
+(embed-compare entry); bisimulation (adding the reward axis) is tryable on GR1 with a progress reward.</p>
+""",
+)
+
 
 en(
     "horizon-probe",
