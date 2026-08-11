@@ -1116,6 +1116,11 @@ cross-ep phase 오차(↓), progress R²(↑).</p>
 <tr><td>BYOL-gamma</td><td>0.917</td><td>0.175</td><td>0.180</td><td>정체성 <b>증폭</b> (γ=0.9; γ=0.98이면 R²=−3.7로 붕괴)</td></tr>
 <tr><td>TD-JEPA (SR)</td><td>0.610</td><td>0.126</td><td>0.650</td><td>≈ raw (제거 실패)</td></tr></table>
 <p><img src="videos/embed/24_embed_compare.png" alt="embedding battery + PCA-2 projection"></p>
+<p class='sub'>위 산점도는 <b>PCA-2</b>(선형) 투영이다. 아래는 같은 임베딩의 <b>t-SNE</b>(비선형) 투영 — 색은 task progress:</p>
+<p><img src="videos/embed/26_tsne_embed.png" alt="t-SNE of 5 embeddings colored by progress"></p>
+<p><b>t-SNE 판독:</b> φ는 progress가 <b>하나의 일관된 매니폴드</b>로 흐른다(궤적을 가로질러 과제 단계 정렬).
+<b>BYOL-gamma는 ~60개 작은 섬으로 파편화</b> — 각 섬이 자기 안에 progress 그라디언트를 가짐 = 에피소드별
+독립 타임라인(purity .92의 육안 증거). raw/PCA는 그라디언트는 있으나 덜 정돈, TD-JEPA는 중간.</p>
 <h3>핵심 통찰 — TD vs MC가 아니라 "cross-episode 대조가 있느냐"</h3>
 <p>BYOL-gamma(미래 자기예측)도 TD-JEPA readout(TD successor, action-free)도 <b>궤적 내부 미래만</b> 예측한다 →
 궤적을 가로질러 붙일 압력이 없음. 우리 RLT 토큰은 이미 에피소드 정체성이 강해서(raw purity .59),
@@ -1127,19 +1132,20 @@ cross-ep phase 오차(↓), progress R²(↑).</p>
 <p class='sub'><b>정정:</b> 첫 BYOL-gamma 붕괴를 "짧은 에피소드+end-clamp"로 오진했으나, 확인 결과 에피소드는
 중앙값 582 토큰으로 길다. γ를 0.98→0.9로 낮춰도 purity가 .92로 여전히 높아(붕괴 완화일 뿐), 원인은 horizon이
 아니라 위의 <b>self-prediction 정체성 증폭</b>으로 확정됐다.</p>
-<h3>정성 이웃 패널 (사용자 방법) — 그리고 그 한계</h3>
-<p>쿼리 프레임 하나당 <b>다른 에피소드</b>의 최근접 4개를 이미지로 나란히 붙였다(같은-에피소드 배제):
-<a href="videos/embed/25_xneighbor_phi128.png" target="_blank">φ</a> ·
-<a href="videos/embed/25_xneighbor_raw2048.png" target="_blank">raw</a> ·
-<a href="videos/embed/25_xneighbor_byolg128.png" target="_blank">BYOL-gamma</a> ·
-<a href="videos/embed/25_xneighbor_pca128.png" target="_blank">PCA</a> ·
-<a href="videos/embed/25_xneighbor_tdjepa128.png" target="_blank">TD-JEPA</a>.
-φ의 이웃은 다른 에피소드의 같은 과제 순간(같은 팔 자세·같은 물체 배치)으로 일관됐다 — 원하던 invariance가
-눈으로도 확인된다. <b>단, 정직한 한계 둘:</b> ① PrepareCoffee는 주방 장면이 반복돼 <b>모든</b> 임베딩(raw 포함)이
-시각적으로 비슷한 cross-episode 이웃을 찾는다 — 패널이 방법을 강하게 가르지 못한다(판별은 정량 purity가 한다).
-② 그 이웃들은 "의미 같고 시각 다름"이 아니라 거의 <b>near-duplicate</b>라, 정작 원하는 invariance(시각 변이에
-불변)를 이 데이터로는 stress-test 하지 못한다. 이 성질은 <b>시각 다양성이 큰 데이터(GR1 신규물체·OGBench 시각변형)</b>에서
-제대로 시험된다.</p>
+<h3>정성 이웃 행렬 (사용자 설계) — 세로줄 = 같은 궤적</h3>
+<p>레이아웃: <b>행 = query 에피소드 7개</b>(각각 랜덤 프레임 하나), <b>열 = 고정된 다른 에피소드 7개</b>(모든 행에서 동일),
+셀[i,j] = 열-에피소드 j에서 query i와 코사인 최근접 프레임. 각 셀은 <b>위 agentview / 아래 wrist</b>, 숫자는 코사인 유사도.
+세로줄이 항상 같은 궤적이라 "각 임베딩이 다른 궤적들에서 query와 무엇을 같다고 보는가"를 직접 비교할 수 있다.</p>
+<p><b>φ (HILP)</b><br><img src="videos/embed/25_xneighbor_phi128.png" alt="phi neighbor matrix"></p>
+<p><b>raw 2048</b><br><img src="videos/embed/25_xneighbor_raw2048.png" alt="raw neighbor matrix"></p>
+<p><b>BYOL-gamma</b><br><img src="videos/embed/25_xneighbor_byolg128.png" alt="byolg neighbor matrix"></p>
+<p><b>PCA-128</b><br><img src="videos/embed/25_xneighbor_pca128.png" alt="pca neighbor matrix"></p>
+<p><b>TD-JEPA</b><br><img src="videos/embed/25_xneighbor_tdjepa128.png" alt="tdjepa neighbor matrix"></p>
+<p>φ의 이웃은 다른 궤적에서 같은 과제 순간(같은 팔-물체 배치, wrist 뷰의 컵/머그)으로 일관되는 경향. <b>정직한 한계 둘:</b>
+① PrepareCoffee는 주방 장면이 반복돼 <b>모든</b> 임베딩(raw 포함)이 시각적으로 그럴듯한 cross-궤적 이웃을 찾는다 —
+패널만으로 방법을 강하게 가르긴 어렵다(판별은 정량 purity·t-SNE가 한다). ② 이웃들이 "의미 같고 시각 다름"보다 거의
+<b>near-duplicate</b>라, 원하는 invariance(시각 변이 불변)를 이 데이터로는 완전히 stress-test 하지 못한다 —
+<b>시각 다양성이 큰 데이터(GR1 신규물체·OGBench 시각변형)</b>가 그 시험대다.</p>
 <h3>BC probing 통합 (5개 임베딩) — BC-충분성과 invariance는 직교</h3>
 <p>임베딩→데모 action chunk 재현 BC를 5개 전부에 대해 동일 프로토콜로(kroll, held-out):</p>
 <table class='num'><tr><th>임베딩</th><th>BC action R² ↑</th><th>(참고) 구조 purity ↓</th></tr>
@@ -2695,6 +2701,13 @@ purity (↓ = less episode identity), cross-episode phase error (↓), progress 
 <tr><td>BYOL-gamma</td><td>0.917</td><td>0.175</td><td>0.180</td><td><b>amplifies</b> identity (γ=0.9; at γ=0.98 it collapses, R²=−3.7)</td></tr>
 <tr><td>TD-JEPA (SR)</td><td>0.610</td><td>0.126</td><td>0.650</td><td>≈ raw (fails to remove)</td></tr></table>
 <p><img src="videos/embed/24_embed_compare.png" alt="embedding battery + PCA-2 projection"></p>
+<p class='sub'>The scatter above is a <b>PCA-2</b> (linear) projection. Below is a <b>t-SNE</b> (nonlinear)
+projection of the same embeddings, color = task progress:</p>
+<p><img src="videos/embed/26_tsne_embed.png" alt="t-SNE of 5 embeddings colored by progress"></p>
+<p><b>t-SNE reading:</b> phi flows as <b>one coherent progress manifold</b> (task phase aligned across
+trajectories). <b>BYOL-gamma fragments into ~60 small islands</b> — each with its own internal progress
+gradient = per-episode timelines (the visual proof of purity .92). raw/PCA have a gradient but less organized;
+TD-JEPA is intermediate.</p>
 <h3>Key insight — not TD vs MC, but whether the objective contrasts across episodes</h3>
 <p>BYOL-gamma (future self) and the TD-JEPA readout (TD successor, action-free) both predict <b>within-trajectory
 futures only</b> → no pressure to merge across trajectories. Our RLT tokens already carry strong episode identity
@@ -2707,19 +2720,22 @@ invariance we want requires a cross-trajectory contrast / goal sampling in the o
 <p class='sub'><b>Correction:</b> I first misdiagnosed the BYOL-gamma collapse as "short episodes + end-clamp,"
 but episodes are long (median 582 tokens). Lowering γ 0.98→0.9 still leaves purity .92 (only softens the
 collapse), confirming the cause is not horizon but the <b>self-prediction identity amplification</b> above.</p>
-<h3>Qualitative neighbor panels (user's method) — and their limit</h3>
-<p>For each query frame, the 4 nearest neighbors from <b>other episodes</b> side by side (same-episode excluded):
-<a href="videos/embed/25_xneighbor_phi128.png" target="_blank">phi</a> ·
-<a href="videos/embed/25_xneighbor_raw2048.png" target="_blank">raw</a> ·
-<a href="videos/embed/25_xneighbor_byolg128.png" target="_blank">BYOL-gamma</a> ·
-<a href="videos/embed/25_xneighbor_pca128.png" target="_blank">PCA</a> ·
-<a href="videos/embed/25_xneighbor_tdjepa128.png" target="_blank">TD-JEPA</a>.
-phi's neighbors are consistently the same task moment from other episodes (same arm pose, same object layout) —
-the invariance is visible. <b>Two honest limits:</b> ① PrepareCoffee reuses kitchen scenes, so <b>every</b>
-embedding (raw included) finds visually-similar cross-episode neighbors — the panel does not strongly separate
-methods (the discriminator is the quantitative purity). ② Those neighbors are near-duplicates, not
-"same-semantics different-visuals," so this data does not truly stress-test the invariance we care about. That
-property is properly tested on <b>visually diverse data (GR1 novel objects, OGBench visual variants)</b>.</p>
+<h3>Qualitative neighbor matrix (user's design) — columns = one trajectory</h3>
+<p>Layout: <b>rows = 7 query episodes</b> (one random frame each), <b>columns = 7 fixed other episodes</b> (same
+across all rows), cell[i,j] = the frame in column-episode j closest to query i. Each cell is <b>top agentview /
+bottom wrist</b>, number = cosine similarity. Because each column is always the same trajectory, you can directly
+compare "what each embedding considers equal to the query in other trajectories."</p>
+<p><b>phi (HILP)</b><br><img src="videos/embed/25_xneighbor_phi128.png" alt="phi neighbor matrix"></p>
+<p><b>raw 2048</b><br><img src="videos/embed/25_xneighbor_raw2048.png" alt="raw neighbor matrix"></p>
+<p><b>BYOL-gamma</b><br><img src="videos/embed/25_xneighbor_byolg128.png" alt="byolg neighbor matrix"></p>
+<p><b>PCA-128</b><br><img src="videos/embed/25_xneighbor_pca128.png" alt="pca neighbor matrix"></p>
+<p><b>TD-JEPA</b><br><img src="videos/embed/25_xneighbor_tdjepa128.png" alt="tdjepa neighbor matrix"></p>
+<p>phi's neighbors tend to be the same task moment across trajectories (same arm-object layout, cups/mugs in the
+wrist view). <b>Two honest limits:</b> ① PrepareCoffee reuses kitchen scenes, so <b>every</b> embedding (raw
+included) finds plausible cross-trajectory neighbors — the panel alone does not strongly separate methods (the
+discriminators are the quantitative purity and t-SNE). ② The neighbors are closer to near-duplicates than
+"same-semantics, different-visuals," so this data does not fully stress-test the invariance we want — <b>visually
+diverse data (GR1 novel objects, OGBench visual variants)</b> is that test bed.</p>
 <h3>BC probing consolidated (5 embeddings) — BC-sufficiency ⊥ invariance</h3>
 <p>Embedding → demo-action-chunk BC under the identical protocol for all five (kroll, held-out):</p>
 <table class='num'><tr><th>Embedding</th><th>BC action R² ↑</th><th>(ref) structure purity ↓</th></tr>
