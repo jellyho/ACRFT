@@ -1082,6 +1082,63 @@ TRA-비관 분석은 대조학습 계열 제외의 근거.</p>
 """,
 )
 
+
+# ============================================== 08-11 임베딩 구조 비교
+entry(
+    "08-11",
+    "embed-compare",
+    "임베딩 구조 비교 — raw/PCA/phi/BYOL-gamma/TD-JEPA (무엇이 궤적을 가로질러 붙이나)",
+    "완결",
+    """
+<p class='sub'>사용자 요청: "HILP·cheap-z 비교처럼 TD-JEPA·BYOL-gamma도 시각화" + "한 궤적의 임베딩 하나 뽑아
+다른 궤적의 최근접 이웃을 이미지로 보여달라(내가 판단하겠다)" + BC probing 통합. 데이터: PrepareCoffee mixed
+어노테이션(807,634 토큰-프레임·1,234 에피소드, 토큰/에피소드 중앙값 582 — 결코 짧지 않음).</p>
+<h3>설계</h3>
+<p>TD-JEPA·BYOL-gamma를 φ(HILP)가 쓴 <b>같은 frozen RLT 토큰</b> 위에 readout으로 학습(모두 같은 MLP 구조 —
+목적식만 다름). φ는 goal-조건 expectile TD(cross-episode goal 샘플링), BYOL-gamma는 기하 오프셋 자기예측
+(EMA 타깃), TD-JEPA는 action-free TD successor. 같은 배터리로 채점: kNN 에피소드 purity(↓=에피소드 정체성 적음),
+cross-ep phase 오차(↓), progress R²(↑).</p>
+<h3>정량 결과 (배터리)</h3>
+<table class='num'><tr><th>임베딩</th><th>purity ↓</th><th>phase_err ↓</th><th>prog R² ↑</th><th>해석</th></tr>
+<tr><td>raw 2048</td><td>0.589</td><td>0.114</td><td>0.690</td><td>기준</td></tr>
+<tr><td>PCA-128</td><td>0.511</td><td>0.111</td><td>0.694</td><td>차원만 축소</td></tr>
+<tr><td><b>phi (HILP)</b></td><td><b>0.382</b></td><td><b>0.097</b></td><td><b>0.715</b></td><td><b>유일하게 에피소드 정체성 제거</b></td></tr>
+<tr><td>BYOL-gamma</td><td>0.917</td><td>0.175</td><td>0.180</td><td>정체성 <b>증폭</b> (γ=0.9; γ=0.98이면 R²=−3.7로 붕괴)</td></tr>
+<tr><td>TD-JEPA (SR)</td><td>0.610</td><td>0.126</td><td>0.650</td><td>≈ raw (제거 실패)</td></tr></table>
+<p><img src="videos/embed/24_embed_compare.png" alt="embedding battery + PCA-2 projection"></p>
+<h3>핵심 통찰 — TD vs MC가 아니라 "cross-episode 대조가 있느냐"</h3>
+<p>BYOL-gamma(미래 자기예측)도 TD-JEPA readout(TD successor, action-free)도 <b>궤적 내부 미래만</b> 예측한다 →
+궤적을 가로질러 붙일 압력이 없음. 우리 RLT 토큰은 이미 에피소드 정체성이 강해서(raw purity .59),
+순수 자기예측은 <b>가장 예측하기 쉬운 방향 = 에피소드 내내 천천히 변하는 정체성 특징</b>에 lock-on 하고 오히려
+증폭한다(BYOL-gamma purity .92). 오직 φ(HILP)만 goal을 <b>cross-episode로 샘플링</b>해 다른 궤적 간 대조를
+강제하므로 정체성을 벗긴다(.38). <b>DBC도 같은 패턴</b> — |r_i−r_j|+W₂가 permuted-batch의 임의 상태 쌍 대조라
+궤적을 가로지른다. <b>결론: 원하는 cross-trajectory invariance엔 목적식에 궤적을 가로지르는 대조/goal 샘플링이
+반드시 필요하다.</b> 순수 self-prediction(BYOL-gamma·TD-SR)엔 그게 없다.</p>
+<p class='sub'><b>정정:</b> 첫 BYOL-gamma 붕괴를 "짧은 에피소드+end-clamp"로 오진했으나, 확인 결과 에피소드는
+중앙값 582 토큰으로 길다. γ를 0.98→0.9로 낮춰도 purity가 .92로 여전히 높아(붕괴 완화일 뿐), 원인은 horizon이
+아니라 위의 <b>self-prediction 정체성 증폭</b>으로 확정됐다.</p>
+<h3>정성 이웃 패널 (사용자 방법) — 그리고 그 한계</h3>
+<p>쿼리 프레임 하나당 <b>다른 에피소드</b>의 최근접 4개를 이미지로 나란히 붙였다(같은-에피소드 배제):
+<a href="videos/embed/25_xneighbor_phi128.png" target="_blank">φ</a> ·
+<a href="videos/embed/25_xneighbor_raw2048.png" target="_blank">raw</a> ·
+<a href="videos/embed/25_xneighbor_byolg128.png" target="_blank">BYOL-gamma</a> ·
+<a href="videos/embed/25_xneighbor_pca128.png" target="_blank">PCA</a> ·
+<a href="videos/embed/25_xneighbor_tdjepa128.png" target="_blank">TD-JEPA</a>.
+φ의 이웃은 다른 에피소드의 같은 과제 순간(같은 팔 자세·같은 물체 배치)으로 일관됐다 — 원하던 invariance가
+눈으로도 확인된다. <b>단, 정직한 한계 둘:</b> ① PrepareCoffee는 주방 장면이 반복돼 <b>모든</b> 임베딩(raw 포함)이
+시각적으로 비슷한 cross-episode 이웃을 찾는다 — 패널이 방법을 강하게 가르지 못한다(판별은 정량 purity가 한다).
+② 그 이웃들은 "의미 같고 시각 다름"이 아니라 거의 <b>near-duplicate</b>라, 정작 원하는 invariance(시각 변이에
+불변)를 이 데이터로는 stress-test 하지 못한다. 이 성질은 <b>시각 다양성이 큰 데이터(GR1 신규물체·OGBench 시각변형)</b>에서
+제대로 시험된다.</p>
+<h3>BC probing 통합 — 표현은 충분</h3>
+<p>φ→action BC(임베딩→데모 action chunk 재현)는 φ가 <b>행동 정보를 거의 다 보존</b>함을 보였다(R² φ .682 vs
+raw .708 vs PCA .697 — 표현 축이 BC엔 거의 평평). 종합하면: φ는 (a) 행동 정보 보존(BC .682) (b) 에피소드
+정체성 제거(purity .38) (c) 궤적 간 관계 bridging(워커A act-cos .661) — <b>표현으로서 충분하다</b>. 그럼에도
+φ-critic이 BoN을 못 연 건 표현 결함이 아니라 <b>같은-상태 반사실 부재(데이터)</b>다. "표현은 충분, 데이터가 부족"이
+디코더·BC·구조 비교 세 독립 프로브에서 같은 결론으로 수렴한다.</p>
+""",
+)
+
 # ============================================== 08-11 DBC/bisimulation 리뷰
 entry(
     "08-11",
@@ -1783,6 +1840,23 @@ META = {
         "how": "TD-BoN이 OGBench서 성공 = 존재증명. 같은 env 반사실 밀도만 감축 → demo-only 레짐 재현 여부",
         "why": "커버리지(반사실)가 OGBench 장점이자 VLA null의 인과 변인 후보 — 한 변인 통제로 확정",
         "links": ["conservatism", "phi-ladder", "tdsf-arq", "papers-byolg", "papers-tdjepa", "gr1-port", "final"],
+    },
+    "embed-compare": {
+        "date": "2026-08-11 06:30",
+        "who": "워커B + 사용자(방법 제안)",
+        "where": "PrepareCoffee mixed 어노테이션 (frozen RLT 토큰)",
+        "what": "raw/PCA/phi/BYOL-gamma/TD-JEPA 구조 배터리 + cross-episode 이웃 이미지 패널 + BC probe 통합",
+        "how": "같은 토큰 위 readout 학습, 동일 배터리 채점, kroll 이미지로 이웃 패널",
+        "why": "사용자 요청 — 어떤 목적식이 궤적을 가로질러 붙이나. 답: cross-episode 대조가 열쇠",
+        "links": [
+            "phi-ladder",
+            "papers-byolg",
+            "papers-tdjepa",
+            "papers-dbc",
+            "tdsf-arq",
+            "xworker-0808",
+            "conservatism",
+        ],
     },
     "papers-dbc": {
         "date": "2026-08-11 05:10",
@@ -2569,6 +2643,62 @@ strongest pixel baseline (DMC-RGB 582.4 vs 628.8).</p>
 k~Geom(1−γ) — no bootstrap, O(B)) as a one-variable comparison against the TD arm. The "BC loss prevents
 collapse" observation is a stage-B stabilizer candidate; the TRA-pessimism analysis grounds excluding
 contrastive variants.</p>
+""",
+)
+
+en(
+    "embed-compare",
+    "Embedding-structure comparison — raw/PCA/phi/BYOL-gamma/TD-JEPA (what bridges across trajectories)",
+    """
+<p class='sub'>User request: "visualize TD-JEPA and BYOL-gamma like the HILP-vs-cheap-z comparison" + "take one
+embedding from a trajectory and show its nearest neighbors from other trajectories as images (I'll judge)" +
+consolidate BC probing. Data: PrepareCoffee mixed annotation (807,634 token-frames, 1,234 episodes, median 582
+tokens/episode — not short).</p>
+<h3>Setup</h3>
+<p>Train TD-JEPA and BYOL-gamma as readouts on the <b>same frozen RLT tokens</b> phi(HILP) used (identical MLP
+arch — objective only differs). phi = goal-conditioned expectile TD (cross-episode goal sampling); BYOL-gamma =
+geometric-offset self-prediction (EMA target); TD-JEPA = action-free TD successor. Same battery: kNN episode
+purity (↓ = less episode identity), cross-episode phase error (↓), progress R² (↑).</p>
+<h3>Quantitative (battery)</h3>
+<table class='num'><tr><th>Embedding</th><th>purity ↓</th><th>phase_err ↓</th><th>prog R² ↑</th><th>Reading</th></tr>
+<tr><td>raw 2048</td><td>0.589</td><td>0.114</td><td>0.690</td><td>baseline</td></tr>
+<tr><td>PCA-128</td><td>0.511</td><td>0.111</td><td>0.694</td><td>dimension only</td></tr>
+<tr><td><b>phi (HILP)</b></td><td><b>0.382</b></td><td><b>0.097</b></td><td><b>0.715</b></td><td><b>the only one that removes episode identity</b></td></tr>
+<tr><td>BYOL-gamma</td><td>0.917</td><td>0.175</td><td>0.180</td><td><b>amplifies</b> identity (γ=0.9; at γ=0.98 it collapses, R²=−3.7)</td></tr>
+<tr><td>TD-JEPA (SR)</td><td>0.610</td><td>0.126</td><td>0.650</td><td>≈ raw (fails to remove)</td></tr></table>
+<p><img src="videos/embed/24_embed_compare.png" alt="embedding battery + PCA-2 projection"></p>
+<h3>Key insight — not TD vs MC, but whether the objective contrasts across episodes</h3>
+<p>BYOL-gamma (future self) and the TD-JEPA readout (TD successor, action-free) both predict <b>within-trajectory
+futures only</b> → no pressure to merge across trajectories. Our RLT tokens already carry strong episode identity
+(raw purity .59), so pure self-prediction locks onto <b>the most predictable direction = the slowly-varying
+identity feature</b> and amplifies it (BYOL-gamma purity .92). Only phi (HILP) samples goals <b>cross-episode</b>,
+forcing a contrast between trajectories that strips identity (.38). <b>DBC follows the same pattern</b> — |r_i−r_j|
++ W₂ over permuted-batch arbitrary pairs is a cross-trajectory contrast. <b>Conclusion: the cross-trajectory
+invariance we want requires a cross-trajectory contrast / goal sampling in the objective.</b> Pure self-prediction
+(BYOL-gamma, TD-SR) lacks it.</p>
+<p class='sub'><b>Correction:</b> I first misdiagnosed the BYOL-gamma collapse as "short episodes + end-clamp,"
+but episodes are long (median 582 tokens). Lowering γ 0.98→0.9 still leaves purity .92 (only softens the
+collapse), confirming the cause is not horizon but the <b>self-prediction identity amplification</b> above.</p>
+<h3>Qualitative neighbor panels (user's method) — and their limit</h3>
+<p>For each query frame, the 4 nearest neighbors from <b>other episodes</b> side by side (same-episode excluded):
+<a href="videos/embed/25_xneighbor_phi128.png" target="_blank">phi</a> ·
+<a href="videos/embed/25_xneighbor_raw2048.png" target="_blank">raw</a> ·
+<a href="videos/embed/25_xneighbor_byolg128.png" target="_blank">BYOL-gamma</a> ·
+<a href="videos/embed/25_xneighbor_pca128.png" target="_blank">PCA</a> ·
+<a href="videos/embed/25_xneighbor_tdjepa128.png" target="_blank">TD-JEPA</a>.
+phi's neighbors are consistently the same task moment from other episodes (same arm pose, same object layout) —
+the invariance is visible. <b>Two honest limits:</b> ① PrepareCoffee reuses kitchen scenes, so <b>every</b>
+embedding (raw included) finds visually-similar cross-episode neighbors — the panel does not strongly separate
+methods (the discriminator is the quantitative purity). ② Those neighbors are near-duplicates, not
+"same-semantics different-visuals," so this data does not truly stress-test the invariance we care about. That
+property is properly tested on <b>visually diverse data (GR1 novel objects, OGBench visual variants)</b>.</p>
+<h3>BC probing consolidated — the representation is sufficient</h3>
+<p>The phi→action BC probe (embedding → reproduce demo action chunk) showed phi <b>retains nearly all action
+information</b> (R² phi .682 vs raw .708 vs PCA .697 — the representation axis is nearly flat for BC). Together:
+phi (a) retains action info (BC .682), (b) removes episode identity (purity .38), (c) bridges relationally across
+trajectories (worker A act-cos .661) — it is <b>sufficient as a representation</b>. That phi-critic still fails to
+open BoN is therefore not a representation defect but the <b>absent same-state counterfactual (data)</b>.
+"Representation sufficient, data insufficient" now converges from three independent probes (decoder, BC, structure).</p>
 """,
 )
 
