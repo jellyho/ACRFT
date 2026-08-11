@@ -65,6 +65,7 @@ def main():
         action="store_true",
         help="overlay the value distribution of every VLA candidate chunk (spread = do they separate?)",
     )
+    ap.add_argument("--zoom", action="store_true", help="magnify the x-axis to where the mass lives per frame")
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/value_dist_video.mp4"))
     ap.add_argument("--fps", type=int, default=12)
     a = ap.parse_args()
@@ -178,8 +179,16 @@ def main():
             ax.set_title(f"value distribution   frame {int(fidx[i])}   ({i + 1}/{len(sel)})")
         ax.axvline(m, color=report_style.PALETTE[3], lw=1.4, label=f"demo mean {m:.2f}")
         ax.axvline(mcr, color="#555", lw=1.2, ls="--", label=f"mc_return {mcr:.2f}")
-        ax.set_xlim(cfg.get("v_min", 0.0), cfg.get("v_max", 1.0))
-        ax.set_ylim(0, ymax)
+        if a.zoom:  # magnify the x-window to where the mass actually lives (candidates are tight)
+            src = cdists[i] if cdists is not None else d[None]
+            active = np.flatnonzero(src.max(0) > src.max() * 0.02)
+            lo, hi = centers[active.min()], centers[active.max()]
+            pad = max((hi - lo) * 0.35, 0.008)
+            ax.set_xlim(lo - pad, hi + pad)
+            ax.set_ylim(0, float(src.max()) * 1.15)
+        else:
+            ax.set_xlim(cfg.get("v_min", 0.0), cfg.get("v_max", 1.0))
+            ax.set_ylim(0, ymax)
         ax.set_xlabel("value")
         ax.set_ylabel("probability")
         ax.legend(fontsize=8, loc="upper left")
