@@ -34,7 +34,16 @@ is action style/distribution discrimination (artificial margin), not true value;
 optimistic (it includes the demo, absent from the deployment BoN pool). <b>Conclusion: floq is a genuine
 critic-capacity / value-fit upgrade (worth adopting as the TD-SF-ARQ head), but does not solve the binding
 constraint, coverage — a mutual replication of worker A's floq reading on an independent implementation.</b>
-(Simplification: single-commit TD to isolate floq-vs-scalar; the ARQ prefix/ensemble machinery is orthogonal.)</p>rt — every experiment, grouped by DATE, then by
+(Simplification: single-commit TD to isolate floq-vs-scalar; the ARQ prefix/ensemble machinery is orthogonal.)</p>
+<p><b>Flow visualization.</b> How Q is read: q(t) integrating along the velocity field from noise at t=0
+(uniform [−0.5,1]) to the Q-value at t=1 — a <b>funnel</b>. Color = true mc_return. Different noise seeds for the
+same state converge to the same Q (the velocity's z-dependence, floq's capacity source): most (low mc) land near
+0, a few high-mc states split to 0.75–0.85.
+<a href="videos/floq/27_floq_flow.mp4" target="_blank">▶ animation</a></p>
+<p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
+<p class='sub'>Curvature 0.0135 is small — rectified flow is near-straight per trajectory (our curvature metric is
+per-trajectory deviation from its own straight line, trivially small for rectified flow); the capacity comes from
+the <b>spread across noise seeds (z-conditioning)</b>, not dramatic bending.</p>rt — every experiment, grouped by DATE, then by
 experiment name within the date. Two-tier navigation: pick a day, pick the experiment.
 
 Output:
@@ -1805,6 +1814,13 @@ held-out(에피소드 분할):</p>
 0.78도 demo를 포함한 낙관치(배포 BoN엔 demo 없음). <b>결론: floq는 critic 용량·value-fit 업그레이드로 진짜
 (TD-SF-ARQ head 채택 가치), 그러나 binding constraint인 coverage는 못 푼다 — 워커A의 floq 해석을 독립 구현에서
 상호 재현.</b> (단순화: 단일-commit TD로 floq-vs-scalar만 격리; ARQ prefix/앙상블은 floq와 직교라 생략.)</p>
+<p><b>flow 시각화.</b> Q를 어떻게 읽는지 — q(t)가 t=0의 노이즈(균등 [−0.5,1])에서 t=1의 Q값으로 velocity field를
+따라 적분되는 <b>깔때기(funnel)</b>. 색 = 실제 mc_return. 서로 다른 노이즈에서 출발해도 같은 상태는 같은 Q로 수렴
+(=velocity의 z-의존성, floq 용량의 물리적 원천). 대부분(낮은 mc)은 0 근처, 소수 고-mc는 0.75~0.85로 갈린다.
+<a href="videos/floq/27_floq_flow.mp4" target="_blank">▶ 애니메이션</a></p>
+<p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
+<p class='sub'>곡률 0.0135로 작다 — rectified-flow는 궤적당 거의 직선이라(제 곡률 지표가 궤적 자기 직선 대비 이탈이라
+사소) 극적 bending은 없고, 용량은 <b>노이즈 간 갈림(z-조건화)</b>에서 온다.</p>
 
 """,
 )
