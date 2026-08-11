@@ -1445,8 +1445,20 @@ grasp 순간을 <b>수백만 배로 폭발</b>시켜 flow 손실을 지배 — �
 부수: GR1Outputs가 2D를 가정해 3D 후보 배열에서 truncate가 무연산이 되는 버그도 수정(커밋).
 <b>pilot-2 재학습 발차</b>(gigabyte_pro6000, 수리된 stats, 이번엔 체크포인트를 /scratch로 직접 지정 —
 사고 ⑩ 재발 원천 차단). 다른 4개 태스크 데이터셋도 같은 수리를 적용할 것.</p>
-<p><b>다음 순서:</b> pilot-2 학습(~14h) → 20k 중간 진단(개루프 MSE + 25트라이얼) → 30k phase-1 4잡
+<p><b>다음 순서:</b> pilot-2 학습 → 20k 중간 진단(개루프 MSE + 25트라이얼) → 30k phase-1 4잡
 (vla/rand × 시드분할) → 유효 시 주석·critic·페어드. PR#4는 사용자 머지 대기.</p>
+<h3>학습 자원 결정 — 이 클러스터 접고 node200/B200으로 (08-11)</h3>
+<p><b>왜.</b> pi05(3B) GR1 파일럿을 이 클러스터 PRO6000(96GB)에서 반복 시도했으나, 노드들이 GPU를
+<b>오버서브스크립션</b>(gres/gpu:1인데 물리 카드를 다른 잡과 공유)해서 batch16 워킹셋(~22GB)이 이미 74GB+
+점유된 카드에 안 들어가 <b>공유-카드 OOM이 반복</b>됐다(node55/57 등). batch8로 낮추면 진입은 가능하나
+언더트레이닝·불안정 우려. <b>사용자 판정(08-11): 학습은 여기서 하지 않는다</b> — 원래 옵션 A였던 node200/B200
+(train_rlt.slurm·/data5, 기존 VLA 미세조정 인프라)으로 이관.</p>
+<p><b>핸드오프 준비(전부 완료·리포 커밋).</b> ① config <code>pi05_gr1_rlt</code>(action_dim 48, 30k) 등록됨,
+② <b>수리된 norm stats</b>(<code>assets/pi05_gr1_rlt/…/norm_stats.json</code> — 그리퍼 dim 12/34의 붕괴된
+quantile을 데이터 실측 min/max로 확장, 사고록 참조) 커밋됨, ③ GR1 정책 변환(gr1_policy·weight_loaders shape-drop)
+커밋됨, ④ 데이터 v3(PnPCanToDrawerClose 2.9G 등 5태스크) — node200 접근 스토리지로 복사 필요. ⑤ 체크포인트는
+반드시 /scratch 등 여유 디스크로(사고 ⑩: /home 100% 풀 ENOSPC). <b>다음:</b> node200에서 학습 개시 → 완주 시
+평가 하네스(이 리포에 커밋된 serve_bon_policy + rollout_client, A6000·PREALLOCATE=false E2E 검증 완료)로 phase-1.</p>
 """,
 )
 
@@ -3256,8 +3268,21 @@ legs/neck are harmless and untouched). Also fixed: GR1Outputs assumed 2D so its 
 candidate arrays (committed). <b>pilot-2 retrain launched</b> (gigabyte_pro6000, repaired stats, checkpoints
 pointed straight at /scratch this time — incident ⑩ prevented at the source). The same repair will be applied
 to the other four task datasets.</p>
-<p><b>Next:</b> pilot-2 training (~14h) → 20k mid-flight diagnostic (open-loop MSE + 25 trials) → 30k phase-1
+<p><b>Next:</b> pilot-2 training → 20k mid-flight diagnostic (open-loop MSE + 25 trials) → 30k phase-1
 (vla/rand × seed split) → if valid, annotate/critic/paired verdicts. PR#4 awaits the user's merge.</p>
+<h3>Training-resource decision — off this cluster, onto node200/B200 (08-11)</h3>
+<p><b>Why.</b> Repeated attempts to finetune the pi05 (3B) GR1 pilot on this cluster's PRO6000 (96GB) kept
+hitting <b>shared-card OOM</b>: the nodes <b>oversubscribe GPUs</b> (gres/gpu:1 but the physical card is shared
+with other jobs), so the batch-16 working set (~22GB) doesn't fit on a card already >74GB occupied. Dropping to
+batch-8 gets in but risks undertraining/instability. <b>User's call (08-11): don't train here</b> — move to the
+original option A, node200/B200 (train_rlt.slurm, /data5, the existing VLA-finetune infra).</p>
+<p><b>Handoff ready (all committed to the repo).</b> ① config <code>pi05_gr1_rlt</code> (action_dim 48, 30k)
+registered; ② <b>repaired norm stats</b> (<code>assets/pi05_gr1_rlt/…/norm_stats.json</code> — the collapsed
+quantile span on gripper dims 12/34 widened to the dataset's true min/max, see incident ledger) committed;
+③ GR1 policy transforms (gr1_policy, weight_loaders shape-drop) committed; ④ v3 data (PnPCanToDrawerClose 2.9G +
+the 5 tasks) — needs copying to node200-accessible storage; ⑤ point checkpoints at /scratch-like free disk
+(incident ⑩: /home ENOSPC). <b>Then:</b> train on node200 → at completion, phase-1 via the committed eval harness
+(serve_bon_policy + rollout_client, E2E-verified on A6000 with PREALLOCATE=false).</p>
 """,
 )
 
