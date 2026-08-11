@@ -84,3 +84,57 @@ def test_num_samples_never_reaches_the_policy_or_the_callers_dict():
 def test_metadata_passes_through():
     policy, inner = _policy()
     assert policy.metadata == inner.metadata
+
+
+class _CriticLike:
+    """Stands in for CriticSelectPolicy: reads num_samples itself, declares its own features."""
+
+    metadata: ClassVar[dict] = {}
+
+    def __init__(self):
+        self.calls = 0
+        self.saw_num_samples = "missing"
+
+    def infer(self, obs, *, noise=None):
+        self.calls += 1
+        self.saw_num_samples = obs.get("num_samples", "missing")
+        return {"actions": np.zeros((5, 14), np.float32)}
+
+    def extra_features(self, num_samples=None):
+        return {"critic_scores": [16]}
+
+
+def test_a_critic_request_is_not_sampled_over_again():
+    """The critic already draws N candidates from one backbone pass and picks between them.
+
+    Sampling again here pays N FULL forwards on top of that — at N=16, sixteen replans' work
+    for a result that is then discarded.
+    """
+    critic = _CriticLike()
+    policy = MultiSamplePolicy(critic, action_horizon=30, action_dim=32)
+
+    policy.infer({"state": np.zeros(42), "critic_select": True, "num_samples": 8})
+
+    assert critic.calls == 1
+
+
+def test_num_samples_reaches_the_critic_that_reads_it():
+    """Popping it unconditionally left the critic on its own default, silently."""
+    critic = _CriticLike()
+    policy = MultiSamplePolicy(critic, action_horizon=30, action_dim=32)
+
+    policy.infer({"state": np.zeros(42), "critic_select": True, "num_samples": 8})
+
+    assert critic.saw_num_samples == 8
+
+
+def test_an_inner_declaration_reaches_the_handshake():
+    """This wrapper is the outermost one serve_policy holds. A declaration it does not forward
+    never reaches the client, which then records nothing — with no error anywhere."""
+    policy = MultiSamplePolicy(_CriticLike(), action_horizon=30, action_dim=32)
+    assert policy.extra_features() == {"critic_scores": [16]}
+
+
+def test_a_policy_that_declares_nothing_forwards_nothing():
+    policy, _ = _policy()
+    assert policy.extra_features() == {}

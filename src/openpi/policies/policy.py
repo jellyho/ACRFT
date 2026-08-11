@@ -141,6 +141,15 @@ class MultiSamplePolicy(BasePolicy):
         obs = dict(obs)
         num_samples = int(obs.pop("num_samples", 0) or 0)
 
+        # A critic-selected request already samples N candidates from ONE backbone pass and
+        # picks between them, and it reads `num_samples` itself. Drawing more here would both
+        # hide that key from it and pay N full forwards on top of the N it already did -- at
+        # N=16, sixteen replans' work for a result that gets thrown away.
+        if obs.get("critic_select"):
+            if num_samples:
+                obs["num_samples"] = num_samples
+            return self._policy.infer(obs)
+
         result = self._policy.infer(obs)
         if num_samples <= 1:
             return result
@@ -155,6 +164,16 @@ class MultiSamplePolicy(BasePolicy):
     @property
     def metadata(self) -> dict[str, Any]:
         return self._policy.metadata
+
+    def extra_features(self, *args, **kwargs) -> dict:
+        """Whatever the wrapped policy declares, if it declares anything.
+
+        This wrapper is the outermost one serve_policy holds, so a declaration made by an
+        inner policy (a critic's, say) only reaches the handshake if it is forwarded. Without
+        this it silently did not, and the client recorded nothing.
+        """
+        declare = getattr(self._policy, "extra_features", None)
+        return declare(*args, **kwargs) if callable(declare) else {}
 
 
 class PolicyRecorder(_base_policy.BasePolicy):

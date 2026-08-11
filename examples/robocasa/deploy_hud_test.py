@@ -1,9 +1,8 @@
 """The serving layout and the HUD have to agree about which axis is which."""
 
+import deploy_hud
 import numpy as np
 import pytest
-
-import deploy_hud
 
 N, P, X, A = 6, 4, 9, 14
 
@@ -18,22 +17,33 @@ def _response(*, chunk=X):
     q = np.arange(N * P, dtype=np.float32).reshape(N, P)
     candidates = np.arange(N * chunk * A, dtype=np.float32).reshape(N, chunk, A)
     best = int(np.argmax(q[:, -1]))
-    return {
-        "actions": candidates[best],
-        "action_samples": np.swapaxes(candidates, 0, 1),
-        "critic_scores": np.broadcast_to(q[:, -1], (chunk, N)).copy(),
-        "critic_choice": np.full((chunk, 1), best, np.float32),
-        "critic_grid": np.broadcast_to(q, (chunk, N, P)).copy(),
-        "critic_best_prefix": np.full((chunk, 1), P - 1, np.float32),
-        "critic_macro": np.full((chunk, 1), 2, np.float32),
-    }, q, candidates, best
+    return (
+        {
+            "actions": candidates[best],
+            "action_samples": np.swapaxes(candidates, 0, 1),
+            "critic_scores": np.broadcast_to(q[:, -1], (chunk, N)).copy(),
+            "critic_choice": np.full((chunk, 1), best, np.float32),
+            "critic_grid": np.broadcast_to(q, (chunk, N, P)).copy(),
+            "critic_best_prefix": np.full((chunk, 1), P - 1, np.float32),
+            "critic_macro": np.full((chunk, 1), 2, np.float32),
+        },
+        q,
+        candidates,
+        best,
+    )
 
 
 def test_every_extra_leads_with_the_chunk_axis():
     """The one rule the recording contract asks for."""
     response, _, _, _ = _response()
-    for key in ("action_samples", "critic_scores", "critic_choice",
-                "critic_grid", "critic_best_prefix", "critic_macro"):
+    for key in (
+        "action_samples",
+        "critic_scores",
+        "critic_choice",
+        "critic_grid",
+        "critic_best_prefix",
+        "critic_macro",
+    ):
         assert np.asarray(response[key]).shape[0] == X, key
 
 
