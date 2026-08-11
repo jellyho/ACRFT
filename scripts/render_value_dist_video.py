@@ -93,7 +93,8 @@ def main():
         if use_prop:
             p = np.where(sd > 1e-6, (prop[r] - mu) / np.where(sd > 1e-6, sd, 1.0), 0.0).astype(np.float32)
             z = np.concatenate([z, p])
-        pr = np.asarray(probs(jnp.asarray(z)[None], jnp.asarray(chunk[r])[None, None]))  # [K,1,1,P,atoms]
+        # critic expects obs [S, M, D] and actions [S, M, H, A]; here S=M=1
+        pr = np.asarray(probs(jnp.asarray(z)[None, None], jnp.asarray(chunk[r])[None, None]))  # [K,1,1,P,atoms]
         return pr.mean(0)[0, 0, -1]  # ensemble-mean, full prefix -> [atoms]
 
     # auto-pick: episode whose frames are most often multimodal (mass outside the dominant mode)
