@@ -1140,12 +1140,21 @@ cross-ep phase 오차(↓), progress R²(↑).</p>
 ② 그 이웃들은 "의미 같고 시각 다름"이 아니라 거의 <b>near-duplicate</b>라, 정작 원하는 invariance(시각 변이에
 불변)를 이 데이터로는 stress-test 하지 못한다. 이 성질은 <b>시각 다양성이 큰 데이터(GR1 신규물체·OGBench 시각변형)</b>에서
 제대로 시험된다.</p>
-<h3>BC probing 통합 — 표현은 충분</h3>
-<p>φ→action BC(임베딩→데모 action chunk 재현)는 φ가 <b>행동 정보를 거의 다 보존</b>함을 보였다(R² φ .682 vs
-raw .708 vs PCA .697 — 표현 축이 BC엔 거의 평평). 종합하면: φ는 (a) 행동 정보 보존(BC .682) (b) 에피소드
-정체성 제거(purity .38) (c) 궤적 간 관계 bridging(워커A act-cos .661) — <b>표현으로서 충분하다</b>. 그럼에도
-φ-critic이 BoN을 못 연 건 표현 결함이 아니라 <b>같은-상태 반사실 부재(데이터)</b>다. "표현은 충분, 데이터가 부족"이
-디코더·BC·구조 비교 세 독립 프로브에서 같은 결론으로 수렴한다.</p>
+<h3>BC probing 통합 (5개 임베딩) — BC-충분성과 invariance는 직교</h3>
+<p>임베딩→데모 action chunk 재현 BC를 5개 전부에 대해 동일 프로토콜로(kroll, held-out):</p>
+<table class='num'><tr><th>임베딩</th><th>BC action R² ↑</th><th>(참고) 구조 purity ↓</th></tr>
+<tr><td>raw 2048</td><td>0.708</td><td>0.589</td></tr>
+<tr><td>PCA-128</td><td>0.697</td><td>0.511</td></tr>
+<tr><td>phi (HILP)</td><td>0.682</td><td><b>0.382</b></td></tr>
+<tr><td>TD-JEPA</td><td>0.688</td><td>0.610</td></tr>
+<tr><td>BYOL-gamma</td><td>0.640</td><td>0.917</td></tr></table>
+<p><b>판독:</b> BC R²가 <b>전 임베딩에서 거의 평평(0.64~0.71)</b> — 에피소드 정체성에 붕괴한 BYOL-gamma조차
+행동 정보는 대부분 보존(0.640). 즉 <b>행동 예측(BC)과 cross-trajectory invariance는 직교</b>한다: BYOL-gamma는
+BC는 되지만(0.64) bridging은 최악(purity 0.92)이고, φ는 둘 다(0.68 / 0.38). 이는 "BC를 잘한다 ≠ 좋은 임베딩"을
+정량화한다 — 우리 목표(같은 상태 후보 판별)엔 BC-충분성이 아니라 invariance가 필요하고, 그 invariance는
+cross-episode 대조 목적식(φ)만 준다. 종합: φ는 (a) 행동정보 보존(BC .68) (b) 정체성 제거(purity .38)
+(c) 관계 bridging(워커A act-cos .661) — <b>표현으로 충분</b>. φ-critic의 BoN 실패는 표현이 아니라
+<b>반사실 부재(데이터)</b>. 디코더·BC·구조 세 독립 프로브가 "표현 충분, 데이터 부족"으로 수렴.</p>
 """,
 )
 
@@ -2711,13 +2720,23 @@ embedding (raw included) finds visually-similar cross-episode neighbors — the 
 methods (the discriminator is the quantitative purity). ② Those neighbors are near-duplicates, not
 "same-semantics different-visuals," so this data does not truly stress-test the invariance we care about. That
 property is properly tested on <b>visually diverse data (GR1 novel objects, OGBench visual variants)</b>.</p>
-<h3>BC probing consolidated — the representation is sufficient</h3>
-<p>The phi→action BC probe (embedding → reproduce demo action chunk) showed phi <b>retains nearly all action
-information</b> (R² phi .682 vs raw .708 vs PCA .697 — the representation axis is nearly flat for BC). Together:
-phi (a) retains action info (BC .682), (b) removes episode identity (purity .38), (c) bridges relationally across
-trajectories (worker A act-cos .661) — it is <b>sufficient as a representation</b>. That phi-critic still fails to
-open BoN is therefore not a representation defect but the <b>absent same-state counterfactual (data)</b>.
-"Representation sufficient, data insufficient" now converges from three independent probes (decoder, BC, structure).</p>
+<h3>BC probing consolidated (5 embeddings) — BC-sufficiency ⊥ invariance</h3>
+<p>Embedding → demo-action-chunk BC under the identical protocol for all five (kroll, held-out):</p>
+<table class='num'><tr><th>Embedding</th><th>BC action R² ↑</th><th>(ref) structure purity ↓</th></tr>
+<tr><td>raw 2048</td><td>0.708</td><td>0.589</td></tr>
+<tr><td>PCA-128</td><td>0.697</td><td>0.511</td></tr>
+<tr><td>phi (HILP)</td><td>0.682</td><td><b>0.382</b></td></tr>
+<tr><td>TD-JEPA</td><td>0.688</td><td>0.610</td></tr>
+<tr><td>BYOL-gamma</td><td>0.640</td><td>0.917</td></tr></table>
+<p><b>Reading:</b> BC R² is <b>nearly flat across all embeddings (0.64–0.71)</b> — even the episode-identity-
+collapsed BYOL-gamma retains most action info (0.640). So <b>action prediction (BC) and cross-trajectory
+invariance are orthogonal</b>: BYOL-gamma does BC (0.64) but is the worst at bridging (purity 0.92), while phi
+does both (0.68 / 0.38). This quantifies "good at BC ≠ good embedding" — our goal (same-state candidate
+discrimination) needs invariance, not BC-sufficiency, and only the cross-episode-contrast objective (phi)
+provides it. Together phi (a) retains action info (BC .68), (b) removes identity (purity .38), (c) bridges
+relationally (worker A act-cos .661) — <b>sufficient as a representation</b>. phi-critic's BoN failure is thus
+not a representation defect but the <b>absent same-state counterfactual (data)</b>. Decoder, BC, and structure
+probes converge on "representation sufficient, data insufficient."</p>
 """,
 )
 
