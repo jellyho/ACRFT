@@ -43,7 +43,16 @@ same state converge to the same Q (the velocity's z-dependence, floq's capacity 
 <p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
 <p class='sub'>Curvature 0.0135 is small — rectified flow is near-straight per trajectory (our curvature metric is
 per-trajectory deviation from its own straight line, trivially small for rectified flow); the capacity comes from
-the <b>spread across noise seeds (z-conditioning)</b>, not dramatic bending.</p>rt — every experiment, grouped by DATE, then by
+the <b>spread across noise seeds (z-conditioning)</b>, not dramatic bending.</p>
+<p><b>Trajectory HUD video (multi-peak-experiment style).</b> Along a successful held-out kroll trajectory:
+<b>left the robot ego view</b> + <b>right the floq return distribution</b> (256 integrated noise samples), with
+the floq mean and the scalar Q (dashed) for contrast. <a href="videos/floq/28_floq_traj.mp4" target="_blank">▶
+HUD video</a></p>
+<p><img src="videos/floq/28_floq_traj.png" alt="floq trajectory HUD: robot + return distribution"></p>
+<p class='sub'>Reading: the distribution is mostly <b>unimodal and peaked</b> (sparse binary reward makes the return
+near-degenerate; dramatic multi-peak only at genuinely uncertain outcomes). The floq mean and scalar Q can
+diverge on some frames (the scalar ARQ is less calibrated in this simplified setup). The qualitative difference
+is that floq gives a <b>distribution</b>, not a point.</p>rt — every experiment, grouped by DATE, then by
 experiment name within the date. Two-tier navigation: pick a day, pick the experiment.
 
 Output:
@@ -1821,6 +1830,13 @@ held-out(에피소드 분할):</p>
 <p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
 <p class='sub'>곡률 0.0135로 작다 — rectified-flow는 궤적당 거의 직선이라(제 곡률 지표가 궤적 자기 직선 대비 이탈이라
 사소) 극적 bending은 없고, 용량은 <b>노이즈 간 갈림(z-조건화)</b>에서 온다.</p>
+<p><b>궤적 HUD 영상 (다봉 실험 스타일).</b> 성공한 held-out kroll 궤적을 따라 <b>왼쪽 로봇 ego 영상</b> +
+<b>오른쪽 floq return 분포</b>(노이즈 256개 적분 샘플) + floq 평균과 스칼라 Q(점선) 대조.
+<a href="videos/floq/28_floq_traj.mp4" target="_blank">▶ HUD 영상</a></p>
+<p><img src="videos/floq/28_floq_traj.png" alt="floq trajectory HUD: robot + return distribution"></p>
+<p class='sub'>판독: 분포는 대체로 <b>단봉·뾰족</b>(희소 이진 보상 → return이 거의 축퇴, 극적 다봉은 결과가
+진짜 불확실할 때만). 프레임에 따라 floq 평균과 스칼라 Q가 크게 어긋나기도 한다(단순화 세팅의 스칼라 ARQ가
+덜 캘리브레이션됨). floq은 점이 아니라 <b>분포</b>를 준다는 게 스칼라와의 질적 차이.</p>
 
 """,
 )
