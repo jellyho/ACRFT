@@ -1654,6 +1654,48 @@ run-level CI</b>로 넘긴다(후속). single critic(앙상블 없음)도 단순
 그림 <code>probes/plot_pfx.py</code>. 결과 <code>bon_pfx_compare.json</code> 커밋.</p>""",
 )
 
+# ============================================== 08-13 DEAS 방법론 — critic 부트스트랩 정정
+entry(
+    "08-13",
+    "deas",
+    "정정 — 우리 BoN 실패는 td-max 과대평가였다 (DEAS: detached value learning)",
+    "진행 중",
+    """
+<p class='sub'><b>워커A에게 알림 + 우리 앞선 판정의 정정.</b> <span class='xref' data-eid='critic-heads'>critic-heads</span>·
+<span class='xref' data-eid='critic-pfx'>critic-pfx</span>에서 "어느 critic도 VLA를 BoN으로 못 이긴다 → binding constraint는
+coverage"라고 판정했다. 사용자가 이 결론을 의심했다("cand[0]도 VLA 샘플인데 argmax가 그보다 나쁠 리 없다").
+문헌을 뒤진 결과 — <b>우리 결론은 부분적으로 틀렸을 수 있다. 원인은 coverage가 아니라 우리가 고른 부트스트랩
+연산자(td-max)였다.</b></p>
+
+<h3>DEAS (arXiv:2510.07730) — 우리와 같은 도메인이 이 문제를 정확히 지적</h3>
+<p>DEAS("DEtached value learning with Action Sequence", Changyeon Kim·Younggyo Seo·Kimin Lee·Yuke Zhu)는
+<b>VLA + RoboCasa Kitchen + action sequence(청크) + distributional value + BoN</b> — 우리 스택과 판박이다. 원문:</p>
+<blockquote class='sub'>"directly adopting such sequences in actor-critic algorithms introduces <b>excessive value
+overestimation</b>, which we address through <b>detached value learning that steers value estimates toward
+in-distribution actions</b> that achieve high return in the offline dataset."</blockquote>
+<p><b>우리 critic-pfx의 부트스트랩 `V_next = max_j Q(s′, cand_j)`(td-max)가 정확히 이 "excessive value
+overestimation"이다.</b> 근사-데모 후보 8~16개 중 critic이 <b>가장 과대평가한</b> 것을 부트스트랩에 넣으니 값이
+부풀고, 배포 argmax가 그 부푼 후보를 골라 승자의 저주가 심해진다. DEAS는 <b>max를 버리고</b> expectile 상태가치 V로
+부트스트랩해 이를 억제한다. 그리고 <b>DEAS는 RoboCasa에서 GR00T baseline을 이긴다</b>(예: PnPCounterToMicrowave
+~45%→~65%) — critic BoN이 VLA를 이길 수 있음을 같은 도메인에서 보인다.</p>
+
+<h3>DEAS 방법론 (원본 코드 <code>deas_critic.py</code> 실측)</h3>
+<p><b>① V 손실 = expectile + HL-Gauss(분류) 병용</b> — expectile은 손실에 곱하는 스칼라 가중이라 categorical CE와 공존한다:</p>
+<table class='num'><tr><td><code>q_demo = min(Q1_tgt, Q2_tgt)(s, a_demo)</code>  # in-distribution 데모 액션, detached</td></tr>
+<tr><td><code>g = where(q_demo &gt;= V, τ, 1−τ)</code>  ;  <code>L_V = mean( g · CE(V_logits, HLGauss(q_demo)) )</code></td></tr></table>
+<p><b>② Q 손실 = V로 부트스트랩(후보 max 아님)</b> — dual discount γ1(청크 내 보상 합)·γ2(청크 간):</p>
+<table class='num'><tr><td><code>target = Σ_i γ1^i·r_i + γ2^(nH)·(1−done)·V(s′)</code>  ;  <code>L_Q = (HLGauss_CE(Q1,target)+HLGauss_CE(Q2,target))/2</code></td></tr></table>
+<p>double critic min + EMA target. 배포 BoN: <code>score=min(Q1,Q2)(z,cand)</code>, argmax.</p>
+
+<h3>우리가 지금 돌리는 것 — 방법론만, 백본은 우리 것</h3>
+<p>원본 Isaac-GR00T 스택을 통째로 세우지 않고, <b>우리 pi05 백본·주석(mixed)·AQC 트렁크는 그대로 두고 DEAS 방법론만</b>
+이식했다(<code>probes/eval_deas.py</code>): V=HL-Gauss+expectile, Q는 V로 부트스트랩(td-max 폐기), double-min,
+head는 scalar/HL-Gauss/floq 셋. <b>이번엔 BoN이 VLA를 이기는지</b>가 판가름 난다 — 이기면 우리 앞선 "coverage가 벽"
+결론은 <b>연산자 아티팩트였다</b>로 정정되고, 못 이기면 coverage가 진짜 벽이라는 근거가 강해진다. (실행 중, 결과 도착 시 이 포스트 갱신.)</p>
+<p class='sub'>참조: DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code>(로컬 클론 정독). 우리 재현
+<code>probes/eval_deas.py</code>. 사용자 지적("BoN이 VLA보다 못할 리 없다")이 이 정정의 출발점.</p>""",
+)
+
 # ============================================== 08-09 model-based 본질 회귀
 entry(
     "08-07",
@@ -2222,7 +2264,16 @@ META = {
         "what": "부트스트랩 교정 재검 — td-max over 후보 + per-prefix + (후보×prefix) joint argmax, 여전히 critic이 VLA 못 이김",
         "how": "프로덕션 targets() 충실 재현(착지 후보 max·per-prefix·mc하한); scalar/HLG/floq 동일 타깃, joint-argmax 롤아웃 + randh null",
         "why": "사용자 지적 'TD면 샘플 액션 max로 부트스트랩·per-prefix로 내야' — 앞 실험의 데모-부트스트랩 결함 교정",
-        "links": ["critic-heads", "model-based", "conservatism", "calql", "final"],
+        "links": ["critic-heads", "deas", "model-based", "conservatism", "calql", "final"],
+    },
+    "deas": {
+        "date": "2026-08-13 02:00",
+        "who": "워커B(리뷰·구현) → 워커A에 알림",
+        "where": "arXiv:2510.07730 + github DEAS-Isaac-GR00T + 우리 pi05 백본(eval_deas.py)",
+        "what": "정정 — 우리 BoN 실패는 td-max 과대평가였다; DEAS의 detached value learning(expectile-V 부트스트랩)을 우리 백본에 이식",
+        "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
+        "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
+        "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
     },
     "xworker-0808": {
         "date": "2026-08-08 14:10",
@@ -3372,6 +3423,47 @@ counterfactual candidates below the demo) and <b>on-policy counterfactual genera
 <span class='xref' data-eid='conservatism'>conservatism</span> / <span class='xref' data-eid='calql'>Cal-QL</span> path.</p>
 <p class='sub'>Reproduce: <code>probes/eval_bon_pfx.py</code> (per-prefix td-max train → VLA joint-argmax rollout),
 figure <code>probes/plot_pfx.py</code>. Result <code>bon_pfx_compare.json</code> committed.</p>""",
+)
+
+en(
+    "deas",
+    "Correction — our BoN failure was td-max overestimation (DEAS: detached value learning)",
+    """
+<p class='sub'><b>A note to worker A + a correction of our earlier verdict.</b> In
+<span class='xref' data-eid='critic-heads'>critic-heads</span> and <span class='xref' data-eid='critic-pfx'>critic-pfx</span>
+we concluded "no critic beats the VLA via BoN → the binding constraint is coverage." The user doubted this
+("cand[0] is itself a VLA sample, so an arg-max shouldn't do worse"). A literature search says — <b>our conclusion
+may be partly wrong. The cause was not coverage but the bootstrap operator we chose (td-max).</b></p>
+
+<h3>DEAS (arXiv:2510.07730) — our exact domain names this failure</h3>
+<p>DEAS ("DEtached value learning with Action Sequence", Changyeon Kim, Younggyo Seo, Kimin Lee, Yuke Zhu) is
+<b>VLA + RoboCasa Kitchen + action sequences (chunks) + distributional value + BoN</b> — our stack. Verbatim:</p>
+<blockquote class='sub'>"directly adopting such sequences in actor-critic algorithms introduces <b>excessive value
+overestimation</b>, which we address through <b>detached value learning that steers value estimates toward
+in-distribution actions</b> that achieve high return in the offline dataset."</blockquote>
+<p><b>Our critic-pfx bootstrap `V_next = max_j Q(s′, cand_j)` (td-max) is exactly this excessive overestimation.</b>
+Among 8–16 near-demo candidates, the max feeds the one the critic <b>most overestimates</b> into the bootstrap;
+the value inflates and the deployment arg-max then executes that inflated candidate — the winner's curse, amplified.
+DEAS <b>drops the max</b> and bootstraps from an expectile state value V. And <b>DEAS beats the GR00T baseline on
+RoboCasa</b> (e.g. PnPCounterToMicrowave ~45%→~65%) — a critic BoN CAN beat the VLA, in our own domain.</p>
+
+<h3>DEAS methodology (from the original <code>deas_critic.py</code>)</h3>
+<p><b>① V loss = expectile + HL-Gauss together</b> — the expectile is a scalar weight on the loss, so it composes
+with categorical cross-entropy:</p>
+<table class='num'><tr><td><code>q_demo = min(Q1_tgt, Q2_tgt)(s, a_demo)</code>  # in-distribution demo action, detached</td></tr>
+<tr><td><code>g = where(q_demo &gt;= V, τ, 1−τ)</code>  ;  <code>L_V = mean( g · CE(V_logits, HLGauss(q_demo)) )</code></td></tr></table>
+<p><b>② Q loss = bootstrap from V (not a candidate max)</b> — dual discount γ1 (within-chunk reward) and γ2 (across-chunk):</p>
+<table class='num'><tr><td><code>target = Σ_i γ1^i·r_i + γ2^(nH)·(1−done)·V(s′)</code>  ;  <code>L_Q = (HLGauss_CE(Q1,target)+HLGauss_CE(Q2,target))/2</code></td></tr></table>
+<p>double critic min + EMA targets. Deploy BoN: <code>score=min(Q1,Q2)(z,cand)</code>, arg-max.</p>
+
+<h3>What we are running — methodology only, our own backbone</h3>
+<p>Rather than standing up the whole Isaac-GR00T stack, we <b>keep our pi05 backbone, our (mixed) annotation and AQC
+trunk, and port only the DEAS methodology</b> (<code>probes/eval_deas.py</code>): V = HL-Gauss + expectile, Q bootstraps
+from V (td-max dropped), double-min, heads scalar / HL-Gauss / floq. <b>Whether BoN now beats the VLA</b> is the test —
+if it does, our earlier "coverage is the wall" verdict is corrected to "an operator artifact"; if it does not, the
+coverage argument is strengthened. (Running; this post updates when results land.)</p>
+<p class='sub'>Refs: DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> (cloned and read); our reproduction
+<code>probes/eval_deas.py</code>. The user's objection ("BoN can't be worse than the VLA") started this correction.</p>""",
 )
 
 en(
