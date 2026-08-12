@@ -85,11 +85,14 @@ body[data-wblang=en] .wbx-ko{display:none}
 MM_COLS = [
     ("기반 탐색", ["genesis", "vbias", "families", "wcurse", "duel"]),
     ("정합성 검증", ["singlefit", "ladders", "fullfit", "highpower"]),
-    ("진단·방법", ["randh", "aqc", "autopsy", "pools", "failpipe"]),
-    ("판정 캠페인", ["v11", "v12", "final"]),
-    ("확장·인프라", ["kper", "td-segv", "video-gallery", "flow"]),
+    ("진단·방법", ["randh", "aqc", "autopsy", "pools", "failpipe", "calql", "v14"]),
+    ("판정·종합", ["v11", "v12", "final", "conservatism", "morning-0808", "morning-0809"]),
+    ("표현·설계", ["phi-ladder", "model-based", "embed-compare", "tdsf-arq"]),
+    ("논문·교차", ["papers-value-steering", "papers-tdjepa", "papers-byolg", "papers-dbc", "xworker-0808"]),
+    ("이식·인프라", ["kper", "td-segv", "video-gallery", "flow", "gr1-port", "horizon-probe"]),
 ]
-MM_COLORS = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3"]
+# seaborn deep — 7 국면 + '신규'(마지막)
+MM_COLORS = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860", "#da8bc3"]
 
 
 def summary_of(body: str) -> str:
