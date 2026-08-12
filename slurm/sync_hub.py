@@ -88,7 +88,7 @@ MM_COLS = [
     ("진단·방법", ["randh", "aqc", "autopsy", "pools", "failpipe", "calql", "v14"]),
     ("판정·종합", ["v11", "v12", "final", "conservatism", "morning-0808", "morning-0809"]),
     ("표현·설계", ["phi-ladder", "model-based", "embed-compare", "tdsf-arq"]),
-    ("논문·교차", ["papers-value-steering", "papers-tdjepa", "papers-byolg", "papers-dbc", "xworker-0808"]),
+    ("논문·교차", ["papers-value-steering", "papers-tdjepa", "papers-byolg", "papers-dbc", "xworker-0808", "floq"]),
     ("이식·인프라", ["kper", "td-segv", "video-gallery", "flow", "gr1-port", "horizon-probe"]),
 ]
 # seaborn deep — 7 국면 + '신규'(마지막)

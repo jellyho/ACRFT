@@ -16,43 +16,7 @@ demo-only candidate collapse (consistent with us). <b>Implications for TD-SF-ARQ
 one-dimensional starvation; ② floq's velocity-field critic is the same family as our actor-critic ladder
 (∂Q/∂a flow steering), so add it as a phase-2 on-policy critic-form candidate; ③ floq still cannot manufacture
 coverage — reaffirming our ordering (complementary to on-policy counterfactuals).</p>
-<p><b>⑪ floq implemented & tested (08-12, user request — faithful to the paper).</b> Discarded the toy and
-<b>kept our ARQ critic architecture, swapping only bootstrap+head to floq</b>: same causal-transformer trunk,
-head becomes a velocity field (critic.py <code>flow_head</code>, non-breaking commit), loss is the paper's
-Eq 4.2 <code>‖v_θ(t,z(t)|s,a)−(y−z)‖²</code>, z(t)=(1−t)z+t·y, and the TD target y=r+γ^H·V_next bootstraps by
-<b>integrating the target velocity field K steps</b>. Both collapse-prevention choices ported: initial noise
-<b>Uniform[−0.5,1]</b> (u=Q_max), interpolant z as a <b>categorical</b> encoding, time t as <b>Fourier</b>
-features. Held-out by episode:</p>
-<table class='num'><tr><th>Metric</th><th>scalar ARQ (expectile TD)</th><th>floq ARQ</th></tr>
-<tr><td>Spearman(Q, mc) — value fit</td><td>0.395</td><td><b>0.521</b> (+32%)</td></tr>
-<tr><td>action-sensitivity</td><td>0.024</td><td>0.071</td></tr>
-<tr><td>demo_winrate (demo vs VLA cand, optimistic)</td><td>0.279</td><td>0.781</td></tr></table>
-<p><b>Verdict — capacity yes, coverage no (strongly).</b> ① floq's <b>capacity gain confirmed</b>: on our real
-ARQ critic, value-fit +0.13 (+32% rel), larger than the toy. ② But <b>deployment discrimination is still
-absent</b>: sensitivity 0.071 exceeds the γ-ceiling (γ=0.99, V~0.11, Δt~16 → ΔQ ceiling ≈ <b>0.018</b>), so it
-is action style/distribution discrimination (artificial margin), not true value; and demo_winrate 0.78 is
-optimistic (it includes the demo, absent from the deployment BoN pool). <b>Conclusion: floq is a genuine
-critic-capacity / value-fit upgrade (worth adopting as the TD-SF-ARQ head), but does not solve the binding
-constraint, coverage — a mutual replication of worker A's floq reading on an independent implementation.</b>
-(Simplification: single-commit TD to isolate floq-vs-scalar; the ARQ prefix/ensemble machinery is orthogonal.)</p>
-<p><b>Flow visualization.</b> How Q is read: q(t) integrating along the velocity field from noise at t=0
-(uniform [−0.5,1]) to the Q-value at t=1 — a <b>funnel</b>. Color = true mc_return. Different noise seeds for the
-same state converge to the same Q (the velocity's z-dependence, floq's capacity source): most (low mc) land near
-0, a few high-mc states split to 0.75–0.85.
-<a href="videos/floq/27_floq_flow.mp4" target="_blank">▶ animation</a></p>
-<p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
-<p class='sub'>Curvature 0.0135 is small — rectified flow is near-straight per trajectory (our curvature metric is
-per-trajectory deviation from its own straight line, trivially small for rectified flow); the capacity comes from
-the <b>spread across noise seeds (z-conditioning)</b>, not dramatic bending.</p>
-<p><b>Trajectory HUD video (multi-peak-experiment style).</b> Along a successful held-out kroll trajectory:
-<b>left the robot ego view</b> + <b>right the floq return distribution</b> (256 integrated noise samples), with
-the floq mean and the scalar Q (dashed) for contrast. <a href="videos/floq/28_floq_traj.mp4" target="_blank">▶
-HUD video</a></p>
-<p><img src="videos/floq/28_floq_traj.png" alt="floq trajectory HUD: robot + return distribution"></p>
-<p class='sub'>Reading: the distribution is mostly <b>unimodal and peaked</b> (sparse binary reward makes the return
-near-degenerate; dramatic multi-peak only at genuinely uncertain outcomes). The floq mean and scalar Q can
-diverge on some frames (the scalar ARQ is less calibrated in this simplified setup). The qualitative difference
-is that floq gives a <b>distribution</b>, not a point.</p>rt — every experiment, grouped by DATE, then by
+<p><b>⑪ floq implemented & tested → split into its own report:</b> see <span class="xref" data-eid="floq-impl">floq — flow-matching critic (implementation, test, visualization)</span> (08-12).</p>rt — every experiment, grouped by DATE, then by
 experiment name within the date. Two-tier navigation: pick a day, pick the experiment.
 
 Output:
@@ -1499,6 +1463,49 @@ quantile을 데이터 실측 min/max로 확장, 사고록 참조) 커밋됨, ③
 """,
 )
 
+
+# ============================================== 08-12 floq 구현·테스트·시각화
+entry(
+    "08-12",
+    "floq",
+    "floq — flow-matching critic 실증·시각화 (원본 충실 구현)",
+    "완결",
+    """
+<p class='sub'>사용자 지시로 floq(arXiv:2509.06863, "Training Critics via Flow-Matching")를 <b>우리 critic에 직접
+구현</b>하고 테스트·시각화했다. 배경: 워커A r56의 floq 리뷰(<span class='xref' data-eid='xworker-0808'>교차 워커 리뷰</span>)에서
+파생 — "이득은 distributional이 아니라 capacity·plasticity"라는 해석을 우리 데이터·독립 구현으로 검증한다.</p>
+<p><b>⑪ floq 직접 구현·테스트 (08-12, 사용자 지시 — 원본 충실).</b> 토이를 폐기하고 <b>우리 ARQ critic 아키텍처를
+그대로 두고 bootstrap+head만 floq로 교체</b>: 같은 causal-transformer 트렁크, head를 velocity field로
+(critic.py <code>flow_head</code>, non-breaking 커밋), 손실은 원본 Eq 4.2 <code>‖v_θ(t,z(t)|s,a)−(y−z)‖²</code>,
+z(t)=(1−t)z+t·y, TD 타깃 y=r+γ^H·V_next는 <b>target velocity field의 K스텝 적분</b>으로 부트스트랩. collapse
+방지 2종 이식: 초기 노이즈 <b>Uniform[−0.5,1]</b>(u=Q_max), interpolant z <b>categorical</b>+시간 t <b>Fourier</b>.
+held-out(에피소드 분할):</p>
+<table class='num'><tr><th>지표</th><th>스칼라 ARQ (expectile TD)</th><th>floq ARQ</th></tr>
+<tr><td>Spearman(Q, mc) — value fit</td><td>0.395</td><td><b>0.521</b> (+32%)</td></tr>
+<tr><td>action-sensitivity</td><td>0.024</td><td>0.071</td></tr>
+<tr><td>demo_winrate (demo vs VLA후보, 낙관)</td><td>0.279</td><td>0.781</td></tr></table>
+<p><b>판정 — capacity O, coverage X (강하게).</b> ① floq의 <b>용량 이득 확증</b>: 우리 실제 ARQ critic에서 value-fit
++0.13(+32% 상대), 토이보다 큼. ② 그러나 <b>배포 판별은 여전히 부재</b>: sensitivity 0.071은 γ-천장(γ=0.99·V~0.11·
+Δt~16 → ΔQ상한≈<b>0.018</b>)을 넘어 <b>행동 스타일/분포 판별</b>(인공 마진)이지 참 가치 판별이 아니며, demo_winrate
+0.78도 demo를 포함한 낙관치(배포 BoN엔 demo 없음). <b>결론: floq는 critic 용량·value-fit 업그레이드로 진짜
+(TD-SF-ARQ head 채택 가치), 그러나 binding constraint인 coverage는 못 푼다 — 워커A의 floq 해석을 독립 구현에서
+상호 재현.</b> (단순화: 단일-commit TD로 floq-vs-scalar만 격리; ARQ prefix/앙상블은 floq와 직교라 생략.)</p>
+<p><b>flow 시각화.</b> Q를 어떻게 읽는지 — q(t)가 t=0의 노이즈(균등 [−0.5,1])에서 t=1의 Q값으로 velocity field를
+따라 적분되는 <b>깔때기(funnel)</b>. 색 = 실제 mc_return. 서로 다른 노이즈에서 출발해도 같은 상태는 같은 Q로 수렴
+(=velocity의 z-의존성, floq 용량의 물리적 원천). 대부분(낮은 mc)은 0 근처, 소수 고-mc는 0.75~0.85로 갈린다.
+<a href="videos/floq/27_floq_flow.mp4" target="_blank">▶ 애니메이션</a></p>
+<p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
+<p class='sub'>곡률 0.0135로 작다 — rectified-flow는 궤적당 거의 직선이라(제 곡률 지표가 궤적 자기 직선 대비 이탈이라
+사소) 극적 bending은 없고, 용량은 <b>노이즈 간 갈림(z-조건화)</b>에서 온다.</p>
+<p><b>궤적 HUD 영상 (다봉 실험 스타일).</b> 성공한 held-out kroll 궤적을 따라 <b>왼쪽 로봇 ego 영상</b> +
+<b>오른쪽 floq return 분포</b>(노이즈 256개 적분 샘플) + floq 평균과 스칼라 Q(점선) 대조.
+<a href="videos/floq/28_floq_traj.mp4" target="_blank">▶ HUD 영상</a></p>
+<p><img src="videos/floq/28_floq_traj.png" alt="floq trajectory HUD: robot + return distribution"></p>
+<p class='sub'>판독: 분포는 대체로 <b>단봉·뾰족</b>(희소 이진 보상 → return이 거의 축퇴, 극적 다봉은 결과가
+진짜 불확실할 때만). 프레임에 따라 floq 평균과 스칼라 Q가 크게 어긋나기도 한다(단순화 세팅의 스칼라 ARQ가
+덜 캘리브레이션됨). floq은 점이 아니라 <b>분포</b>를 준다는 게 스칼라와의 질적 차이.</p>""",
+)
+
 # ============================================== 08-09 model-based 본질 회귀
 entry(
     "08-07",
@@ -1807,36 +1814,7 @@ on-policy 반사실뿐이다.</p>
 감독)을 구조적으로 이미 내장</b> — 스칼라 TD의 1차원 감독 굶주림을 푸는 같은 원리다. ② floq의 velocity-field
 critic은 우리 actor-critic 사다리(∂Q/∂a flow 조향)와 같은 계열이므로, phase-2 on-policy에서 critic 형태 후보로
 사전등록에 추가. ③ 단 floq도 커버리지는 못 만든다 — 반사실 제조(on-policy)와 상보라는 우리 순서를 재확인.</p>
-<p><b>⑪ floq 직접 구현·테스트 (08-12, 사용자 지시 — 원본 충실).</b> 토이를 폐기하고 <b>우리 ARQ critic 아키텍처를
-그대로 두고 bootstrap+head만 floq로 교체</b>: 같은 causal-transformer 트렁크, head를 velocity field로
-(critic.py <code>flow_head</code>, non-breaking 커밋), 손실은 원본 Eq 4.2 <code>‖v_θ(t,z(t)|s,a)−(y−z)‖²</code>,
-z(t)=(1−t)z+t·y, TD 타깃 y=r+γ^H·V_next는 <b>target velocity field의 K스텝 적분</b>으로 부트스트랩. collapse
-방지 2종 이식: 초기 노이즈 <b>Uniform[−0.5,1]</b>(u=Q_max), interpolant z <b>categorical</b>+시간 t <b>Fourier</b>.
-held-out(에피소드 분할):</p>
-<table class='num'><tr><th>지표</th><th>스칼라 ARQ (expectile TD)</th><th>floq ARQ</th></tr>
-<tr><td>Spearman(Q, mc) — value fit</td><td>0.395</td><td><b>0.521</b> (+32%)</td></tr>
-<tr><td>action-sensitivity</td><td>0.024</td><td>0.071</td></tr>
-<tr><td>demo_winrate (demo vs VLA후보, 낙관)</td><td>0.279</td><td>0.781</td></tr></table>
-<p><b>판정 — capacity O, coverage X (강하게).</b> ① floq의 <b>용량 이득 확증</b>: 우리 실제 ARQ critic에서 value-fit
-+0.13(+32% 상대), 토이보다 큼. ② 그러나 <b>배포 판별은 여전히 부재</b>: sensitivity 0.071은 γ-천장(γ=0.99·V~0.11·
-Δt~16 → ΔQ상한≈<b>0.018</b>)을 넘어 <b>행동 스타일/분포 판별</b>(인공 마진)이지 참 가치 판별이 아니며, demo_winrate
-0.78도 demo를 포함한 낙관치(배포 BoN엔 demo 없음). <b>결론: floq는 critic 용량·value-fit 업그레이드로 진짜
-(TD-SF-ARQ head 채택 가치), 그러나 binding constraint인 coverage는 못 푼다 — 워커A의 floq 해석을 독립 구현에서
-상호 재현.</b> (단순화: 단일-commit TD로 floq-vs-scalar만 격리; ARQ prefix/앙상블은 floq와 직교라 생략.)</p>
-<p><b>flow 시각화.</b> Q를 어떻게 읽는지 — q(t)가 t=0의 노이즈(균등 [−0.5,1])에서 t=1의 Q값으로 velocity field를
-따라 적분되는 <b>깔때기(funnel)</b>. 색 = 실제 mc_return. 서로 다른 노이즈에서 출발해도 같은 상태는 같은 Q로 수렴
-(=velocity의 z-의존성, floq 용량의 물리적 원천). 대부분(낮은 mc)은 0 근처, 소수 고-mc는 0.75~0.85로 갈린다.
-<a href="videos/floq/27_floq_flow.mp4" target="_blank">▶ 애니메이션</a></p>
-<p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
-<p class='sub'>곡률 0.0135로 작다 — rectified-flow는 궤적당 거의 직선이라(제 곡률 지표가 궤적 자기 직선 대비 이탈이라
-사소) 극적 bending은 없고, 용량은 <b>노이즈 간 갈림(z-조건화)</b>에서 온다.</p>
-<p><b>궤적 HUD 영상 (다봉 실험 스타일).</b> 성공한 held-out kroll 궤적을 따라 <b>왼쪽 로봇 ego 영상</b> +
-<b>오른쪽 floq return 분포</b>(노이즈 256개 적분 샘플) + floq 평균과 스칼라 Q(점선) 대조.
-<a href="videos/floq/28_floq_traj.mp4" target="_blank">▶ HUD 영상</a></p>
-<p><img src="videos/floq/28_floq_traj.png" alt="floq trajectory HUD: robot + return distribution"></p>
-<p class='sub'>판독: 분포는 대체로 <b>단봉·뾰족</b>(희소 이진 보상 → return이 거의 축퇴, 극적 다봉은 결과가
-진짜 불확실할 때만). 프레임에 따라 floq 평균과 스칼라 Q가 크게 어긋나기도 한다(단순화 세팅의 스칼라 ARQ가
-덜 캘리브레이션됨). floq은 점이 아니라 <b>분포</b>를 준다는 게 스칼라와의 질적 차이.</p>
+<p><b>⑪ floq 직접 구현·테스트 → 독립 리포트로 분리:</b> <span class="xref" data-eid="floq">floq — flow-matching critic 실증·시각화</span> (08-12) 참조.</p>
 
 """,
 )
@@ -2070,6 +2048,15 @@ META = {
         "how": "원문 정독 후 FINAL 결론·우리 스택과 대조",
         "why": "'robo-value-RL' 탐색 요청 — FINAL null의 해석과 다음 수(그래디언트 조향)의 문헌 근거",
         "links": ["final", "calql", "wcurse"],
+    },
+    "floq": {
+        "date": "2026-08-12 03:00",
+        "who": "워커B(구현·실험)",
+        "where": "우리 ARQ critic (flow_head) + PrepareCoffee mixed annot",
+        "what": "floq 원본 충실 구현(critic.py flow_head) + value-fit 테스트 + flow funnel·궤적 HUD 영상",
+        "how": "ARQ 트렁크 그대로, head를 velocity field로, 손실·부트스트랩만 floq(Eq4.2)",
+        "why": "사용자 지시 '멋대로 말고 원본대로 우리 critic에' — 워커A floq 해석 상호 재현",
+        "links": ["xworker-0808", "papers-tdjepa", "tdsf-arq", "conservatism", "final"],
     },
     "xworker-0808": {
         "date": "2026-08-08 14:10",
@@ -3015,6 +3002,53 @@ the OGBench loader. First output: a 3–4-point counterfactual-density sweep. (T
 """,
 )
 
+
+en(
+    "floq",
+    "floq — flow-matching critic (implementation, test, visualization)",
+    """
+<p class='sub'>Per user request, floq (arXiv:2509.06863, "Training Critics via Flow-Matching") was implemented
+<b>directly on our critic</b>, tested and visualized. Grew from worker A's r56 floq review
+(<span class='xref' data-eid='xworker-0808'>cross-worker review</span>): we verify the "gain is capacity/plasticity,
+not distributional" reading on our data and an independent implementation.</p>
+<p><b>⑪ floq implemented & tested (08-12, user request — faithful to the paper).</b> Discarded the toy and
+<b>kept our ARQ critic architecture, swapping only bootstrap+head to floq</b>: same causal-transformer trunk,
+head becomes a velocity field (critic.py <code>flow_head</code>, non-breaking commit), loss is the paper's
+Eq 4.2 <code>‖v_θ(t,z(t)|s,a)−(y−z)‖²</code>, z(t)=(1−t)z+t·y, and the TD target y=r+γ^H·V_next bootstraps by
+<b>integrating the target velocity field K steps</b>. Both collapse-prevention choices ported: initial noise
+<b>Uniform[−0.5,1]</b> (u=Q_max), interpolant z as a <b>categorical</b> encoding, time t as <b>Fourier</b>
+features. Held-out by episode:</p>
+<table class='num'><tr><th>Metric</th><th>scalar ARQ (expectile TD)</th><th>floq ARQ</th></tr>
+<tr><td>Spearman(Q, mc) — value fit</td><td>0.395</td><td><b>0.521</b> (+32%)</td></tr>
+<tr><td>action-sensitivity</td><td>0.024</td><td>0.071</td></tr>
+<tr><td>demo_winrate (demo vs VLA cand, optimistic)</td><td>0.279</td><td>0.781</td></tr></table>
+<p><b>Verdict — capacity yes, coverage no (strongly).</b> ① floq's <b>capacity gain confirmed</b>: on our real
+ARQ critic, value-fit +0.13 (+32% rel), larger than the toy. ② But <b>deployment discrimination is still
+absent</b>: sensitivity 0.071 exceeds the γ-ceiling (γ=0.99, V~0.11, Δt~16 → ΔQ ceiling ≈ <b>0.018</b>), so it
+is action style/distribution discrimination (artificial margin), not true value; and demo_winrate 0.78 is
+optimistic (it includes the demo, absent from the deployment BoN pool). <b>Conclusion: floq is a genuine
+critic-capacity / value-fit upgrade (worth adopting as the TD-SF-ARQ head), but does not solve the binding
+constraint, coverage — a mutual replication of worker A's floq reading on an independent implementation.</b>
+(Simplification: single-commit TD to isolate floq-vs-scalar; the ARQ prefix/ensemble machinery is orthogonal.)</p>
+<p><b>Flow visualization.</b> How Q is read: q(t) integrating along the velocity field from noise at t=0
+(uniform [−0.5,1]) to the Q-value at t=1 — a <b>funnel</b>. Color = true mc_return. Different noise seeds for the
+same state converge to the same Q (the velocity's z-dependence, floq's capacity source): most (low mc) land near
+0, a few high-mc states split to 0.75–0.85.
+<a href="videos/floq/27_floq_flow.mp4" target="_blank">▶ animation</a></p>
+<p><img src="videos/floq/27_floq_flow.png" alt="floq flow: q(t) integration funnel"></p>
+<p class='sub'>Curvature 0.0135 is small — rectified flow is near-straight per trajectory (our curvature metric is
+per-trajectory deviation from its own straight line, trivially small for rectified flow); the capacity comes from
+the <b>spread across noise seeds (z-conditioning)</b>, not dramatic bending.</p>
+<p><b>Trajectory HUD video (multi-peak-experiment style).</b> Along a successful held-out kroll trajectory:
+<b>left the robot ego view</b> + <b>right the floq return distribution</b> (256 integrated noise samples), with
+the floq mean and the scalar Q (dashed) for contrast. <a href="videos/floq/28_floq_traj.mp4" target="_blank">▶
+HUD video</a></p>
+<p><img src="videos/floq/28_floq_traj.png" alt="floq trajectory HUD: robot + return distribution"></p>
+<p class='sub'>Reading: the distribution is mostly <b>unimodal and peaked</b> (sparse binary reward makes the return
+near-degenerate; dramatic multi-peak only at genuinely uncertain outcomes). The floq mean and scalar Q can
+diverge on some frames (the scalar ARQ is less calibrated in this simplified setup). The qualitative difference
+is that floq gives a <b>distribution</b>, not a point.</p>""",
+)
 
 en(
     "xworker-0808",
