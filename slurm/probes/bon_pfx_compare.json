@@ -1,0 +1,255 @@
+{
+  "vla": {
+    "success_rate": 0.56,
+    "successes": 14,
+    "num_trials": 25,
+    "wilson95": [
+      0.371,
+      0.733
+    ],
+    "per_trial": [
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1
+    ]
+  },
+  "rand": {
+    "success_rate": 0.68,
+    "successes": 17,
+    "num_trials": 25,
+    "wilson95": [
+      0.484,
+      0.828
+    ],
+    "per_trial": [
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1
+    ],
+    "vs_vla_mcnemar": {
+      "gain": 6,
+      "loss": 3,
+      "delta_rate": 0.12
+    }
+  },
+  "randh": {
+    "success_rate": 0.52,
+    "successes": 13,
+    "num_trials": 25,
+    "wilson95": [
+      0.335,
+      0.7
+    ],
+    "per_trial": [
+      0,
+      1,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      1,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1
+    ],
+    "vs_vla_mcnemar": {
+      "gain": 4,
+      "loss": 5,
+      "delta_rate": -0.04
+    }
+  },
+  "scalar": {
+    "success_rate": 0.36,
+    "successes": 9,
+    "num_trials": 25,
+    "wilson95": [
+      0.202,
+      0.555
+    ],
+    "per_trial": [
+      0,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "vs_vla_mcnemar": {
+      "gain": 3,
+      "loss": 8,
+      "delta_rate": -0.2
+    }
+  },
+  "hlgauss": {
+    "success_rate": 0.44,
+    "successes": 11,
+    "num_trials": 25,
+    "wilson95": [
+      0.267,
+      0.629
+    ],
+    "per_trial": [
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+    ],
+    "vs_vla_mcnemar": {
+      "gain": 3,
+      "loss": 6,
+      "delta_rate": -0.12
+    }
+  },
+  "floq": {
+    "success_rate": 0.24,
+    "successes": 6,
+    "num_trials": 25,
+    "wilson95": [
+      0.115,
+      0.434
+    ],
+    "per_trial": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1
+    ],
+    "vs_vla_mcnemar": {
+      "gain": 2,
+      "loss": 10,
+      "delta_rate": -0.32
+    }
+  },
+  "meta": {
+    "gamma": 0.997,
+    "N": 8,
+    "seed": 8000,
+    "steps": 15000,
+    "P": 8,
+    "MG": 2,
+    "NB_boot": 8,
+    "objective": "td-max-over-candidates",
+    "select": "joint(candidate,prefix) argmax",
+    "task": "PrepareCoffee"
+  }
+}

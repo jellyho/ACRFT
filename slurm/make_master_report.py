@@ -1594,6 +1594,66 @@ VLA CI[0.61,0.91]와 겹쳐 "<b>HL-Gauss &lt; VLA</b>"는 미확정(McNemar p≈
 결과 JSON: <code>floq_critic.json</code>·<code>bon_critic_compare.json</code>. 모두 커밋.</p>""",
 )
 
+# ============================================== 08-12 per-prefix td-max 재검
+entry(
+    "08-12",
+    "critic-pfx",
+    "부트스트랩 교정 — per-prefix TD-max + joint argmax로도 critic은 VLA를 못 이긴다",
+    "완결",
+    """
+<p class='sub'>바로 앞 <span class='xref' data-eid='critic-heads'>critic head 3종 비교</span>의 결함을 교정한 재검.
+사용자 지적: "TD를 할 거면 데이터셋 액션을 샘플해 <b>max</b> 취해 부트스트랩해야 하고, critic은 per-prefix로
+Q를 내야 한다." 앞 실험의 부트스트랩은 <b>데모의 다음 액션</b>으로 값을 이었는데(SARSA식), 그건 데모 정책의
+값이지 optimal이 아니다. 이번엔 그 둘을 고쳐 결론이 바뀌는지 본다.</p>
+
+<h3>무엇을 고쳤나 (프로덕션 트레이너 targets() 충실 재현)</h3>
+<ul>
+<li><b>부트스트랩 = TD-max over 후보</b>: 착지 상태에서 저장된 VLA 후보(base_action 16개 중 8개)에 대해
+<b>V(s′)=max_j Q(s′, cand_j)</b>. 오프라인에서 max_a Q를 세우는 유일한 방법 — 상태당 데모가 하나뿐이라
+"여러 액션"이 필요하고, 그 재료가 후보 풀이다.</li>
+<li><b>per-prefix native</b>: prefix p(커밋 길이)마다 <b>y_p = Σ_{i&lt;p}γ^i r + γ^p·(1−ended_p)·V_next(착지_p)</b>,
+mc 하한. floq은 prefix마다 적분해 Q를 읽는다.</li>
+<li><b>배포 = (후보 × prefix) joint argmax</b>: 후보와 커밋 길이 n_exec를 동시에 고름(실제 AQC 배포 규칙).
+null 대조에 <b>randh</b>(랜덤 후보 + 랜덤 prefix — joint argmax의 정직한 null) 추가.</li>
+</ul>
+<p class='sub'>세 head(scalar/HL-Gauss/floq)를 <b>같은 td-max 타깃</b>에 학습(표현만 차이). γ=0.997, 단일 critic(앙상블
+없음, 명시적 단순화). PrepareCoffee, N=8, 25장면 scene-paired, Wilson 95% + paired McNemar.</p>
+
+<h3>결과 — 여전히 아무 critic도 VLA를 못 이긴다</h3>
+<table class='num'><tr><th>모드</th><th>성공</th><th>성공률</th><th>Wilson 95%</th><th>vs VLA (승/패)</th></tr>
+<tr><td><b>VLA (baseline)</b></td><td>14/25</td><td><b>0.56</b></td><td>[0.37, 0.73]</td><td>—</td></tr>
+<tr><td>rand (null)</td><td>17/25</td><td><b>0.68</b></td><td>[0.48, 0.83]</td><td>6승 / 3패 (+0.12)</td></tr>
+<tr><td>randh (joint null)</td><td>13/25</td><td>0.52</td><td>[0.33, 0.70]</td><td>4승 / 5패</td></tr>
+<tr><td>scalar BoN</td><td>9/25</td><td>0.36</td><td>[0.20, 0.55]</td><td>3승 / 8패 (−0.20)</td></tr>
+<tr><td>HL-Gauss BoN</td><td>11/25</td><td>0.44</td><td>[0.27, 0.63]</td><td>3승 / 6패 (−0.12)</td></tr>
+<tr><td>floq BoN</td><td>6/25</td><td><b>0.24</b></td><td>[0.11, 0.43]</td><td>2승 / <b>10패</b> (−0.32)</td></tr></table>
+<p><img src="videos/critic-pfx/30_pfx_bon.png" alt="per-prefix td-max joint-argmax BoN success"></p>
+
+<h3>판정</h3>
+<p>① <b>부트스트랩·배포 규칙을 다 고쳐도 결론 불변.</b> scalar·HL-Gauss·floq 셋 다 VLA 아래, floq 최악(0.24).
+<b>rand(0.68)이 critic들보다 높다</b> — "다시 뽑기"는 돕는데 "critic argmax"는 해친다. td-max·per-prefix로도
+<b>승자의 저주</b>가 그대로다.</p>
+<p>② <b>왜 안 바뀌나 — binding constraint는 head도 배포규칙도 아닌 coverage.</b> td-max가 max를 취해도, 후보 16개가
+모두 <b>같은 VLA가 뽑은 near-demo</b>라 데모에서 크게 벗어난 <b>반사실 행동이 안 만들어진다.</b> 그래서 max는
+"비슷비슷한 후보 중 critic이 가장 과대평가한 것"을 고르는 것으로 귀결 — 이건 정확히
+<span class='xref' data-eid='model-based'>후보축 학습신호 부재</span>·<span class='xref' data-eid='conservatism'>보수화 2축</span>이
+말한 실패다. <b>두 독립 배포 설계(데모-부트스트랩·full-chunk / td-max·per-prefix joint)에서 같은 음성 결론에 수렴</b>한다.</p>
+
+<h3>정직한 경고 — n=25 단일시드는 과소검정</h3>
+<p>VLA baseline이 앞 실험 <b>0.80 → 이번 0.56</b>으로 크게 흔들린다(같은 seed·N인데). 긴 지평 sim + bf16 VLA 추론의
+노드 간 수치차가 borderline 장면을 뒤집는 것으로 보인다. 즉 <b>절대 성공률은 n=25에서 불안정</b>하고, 신뢰할
+신호는 <b>런 내부 paired 방향</b>(critic argmax &lt; 재샘플 &lt; VLA, McNemar)이다. 확정 판정은 <b>multi-seed
+run-level CI</b>로 넘긴다(후속). single critic(앙상블 없음)도 단순화 — 앙상블-min의 비관은 승자의 저주를
+줄이는 직교 축이라 다음 후보다.</p>
+
+<h3>그래서 다음</h3>
+<p>head(HL-Gauss)도, 배포(joint argmax)도, 부트스트랩(td-max)도 coverage를 못 만든다. 남은 정면 승부는
+<b>training-time에 후보축을 누르는 CalQL식 보수화</b>(반사실 후보를 데모 아래로)와 <b>on-policy 반사실 제조</b>다 —
+<span class='xref' data-eid='conservatism'>보수화</span>·<span class='xref' data-eid='calql'>CalQL</span> 경로로 재수렴.</p>
+<p class='sub'>재현: <code>probes/eval_bon_pfx.py</code>(per-prefix td-max 학습→VLA joint-argmax 롤아웃),
+그림 <code>probes/plot_pfx.py</code>. 결과 <code>bon_pfx_compare.json</code> 커밋.</p>""",
+)
+
 # ============================================== 08-09 model-based 본질 회귀
 entry(
     "08-07",
@@ -2153,7 +2213,16 @@ META = {
         "what": "critic head 3종 비교 — 오프라인 랭킹 3지표 + closed-loop BoN 성공률(vla/rand/critic별, n=25, N=8)",
         "how": "같은 AQC 트렁크에 head/loss만 3종, γ=0.997·단일샘플 부트스트랩; critic 저장→VLA BoN 롤아웃, scene-paired McNemar",
         "why": "사용자 지시 '실제 evaluation으로 critic이 VLA를 향상시키는지 테스트' + flow냐 categorical이냐 가르기",
-        "links": ["floq", "conservatism", "embed-compare", "tdsf-arq", "model-based", "final"],
+        "links": ["floq", "critic-pfx", "conservatism", "embed-compare", "tdsf-arq", "model-based", "final"],
+    },
+    "critic-pfx": {
+        "date": "2026-08-12 19:00",
+        "who": "워커B(구현·실험)",
+        "where": "우리 AQC critic (per-prefix td-max) + PrepareCoffee closed-loop",
+        "what": "부트스트랩 교정 재검 — td-max over 후보 + per-prefix + (후보×prefix) joint argmax, 여전히 critic이 VLA 못 이김",
+        "how": "프로덕션 targets() 충실 재현(착지 후보 max·per-prefix·mc하한); scalar/HLG/floq 동일 타깃, joint-argmax 롤아웃 + randh null",
+        "why": "사용자 지적 'TD면 샘플 액션 max로 부트스트랩·per-prefix로 내야' — 앞 실험의 데모-부트스트랩 결함 교정",
+        "links": ["critic-heads", "model-based", "conservatism", "calql", "final"],
     },
     "xworker-0808": {
         "date": "2026-08-08 14:10",
@@ -3241,6 +3310,68 @@ uncertain-outcome states. <a href="videos/critic-heads/28_floq_traj.mp4" target=
 <p class='sub'>Reproduce: offline 3-way <code>probes/floq_critic.py</code> (HL-Gauss head added), closed-loop
 <code>probes/eval_bon.py</code> (save critics → VLA BoN rollout), figure <code>probes/plot_bon.py</code>
 (JSON→figure). Result JSONs: <code>floq_critic.json</code>·<code>bon_critic_compare.json</code>. All committed.</p>""",
+)
+
+en(
+    "critic-pfx",
+    "Bootstrap fix — per-prefix TD-max + joint arg-max still can't beat the VLA",
+    """
+<p class='sub'>A re-run that fixes the flaw in the previous <span class='xref' data-eid='critic-heads'>critic-head
+comparison</span>. Per the user: "if you do TD, you must sample dataset actions and take the <b>max</b> to
+bootstrap, and the critic must output Q <b>per prefix</b>." The previous bootstrap used the <b>demo's next
+action</b> (SARSA-style), which is the demo-policy value, not the optimal. Here both are corrected — does the
+conclusion change?</p>
+
+<h3>What changed (faithful to the production trainer's targets())</h3>
+<ul>
+<li><b>Bootstrap = TD-max over candidates</b>: at the landing state, over the stored VLA candidates (8 of the 16
+base_action samples), <b>V(s′)=max_j Q(s′, cand_j)</b>. The only way to form max_a Q offline — each state has one
+demo, so you need "several actions", and the candidate pool is that material.</li>
+<li><b>per-prefix native</b>: for each prefix p (commit length), <b>y_p = Σ_{i&lt;p}γ^i r + γ^p·(1−ended_p)·V_next(landing_p)</b>,
+with an mc floor. floq integrates per prefix to read Q.</li>
+<li><b>Deploy = joint (candidate × prefix) arg-max</b>: pick the candidate AND the commit length n_exec together (the
+real AQC deployment rule). Null control adds <b>randh</b> (random candidate AND random prefix — the honest null for a
+joint arg-max).</li>
+</ul>
+<p class='sub'>Three heads (scalar/HL-Gauss/floq) trained against the <b>same td-max target</b> (representation only
+differs). γ=0.997, single critic (no ensemble, an explicit simplification). PrepareCoffee, N=8, 25 scene-paired
+trials, Wilson 95% + paired McNemar.</p>
+
+<h3>Result — still no critic beats the VLA</h3>
+<table class='num'><tr><th>mode</th><th>success</th><th>rate</th><th>Wilson 95%</th><th>vs VLA (win/loss)</th></tr>
+<tr><td><b>VLA (baseline)</b></td><td>14/25</td><td><b>0.56</b></td><td>[0.37, 0.73]</td><td>—</td></tr>
+<tr><td>rand (null)</td><td>17/25</td><td><b>0.68</b></td><td>[0.48, 0.83]</td><td>6 / 3 (+0.12)</td></tr>
+<tr><td>randh (joint null)</td><td>13/25</td><td>0.52</td><td>[0.33, 0.70]</td><td>4 / 5</td></tr>
+<tr><td>scalar BoN</td><td>9/25</td><td>0.36</td><td>[0.20, 0.55]</td><td>3 / 8 (−0.20)</td></tr>
+<tr><td>HL-Gauss BoN</td><td>11/25</td><td>0.44</td><td>[0.27, 0.63]</td><td>3 / 6 (−0.12)</td></tr>
+<tr><td>floq BoN</td><td>6/25</td><td><b>0.24</b></td><td>[0.11, 0.43]</td><td>2 / <b>10</b> (−0.32)</td></tr></table>
+<p><img src="videos/critic-pfx/30_pfx_bon.png" alt="per-prefix td-max joint-argmax BoN success"></p>
+
+<h3>Verdict</h3>
+<p>① <b>Fixing the bootstrap and the selection rule changes nothing.</b> scalar, HL-Gauss and floq all sit below the
+VLA, floq worst (0.24). <b>rand (0.68) tops the critics</b> — resampling helps, critic arg-max hurts. The
+<b>winner's curse</b> survives td-max and per-prefix.</p>
+<p>② <b>Why — the binding constraint is neither the head nor the deployment rule, it is coverage.</b> Even with the
+max, all 16 candidates are <b>the same VLA's near-demo samples</b>, so no <b>counterfactual action</b> far from the
+demo is ever manufactured. The max then just picks "whichever near-demo candidate the critic most overvalues" — exactly
+the failure that <span class='xref' data-eid='model-based'>the missing candidate-axis signal</span> and
+<span class='xref' data-eid='conservatism'>two-axis conservatism</span> named. <b>Two independent deployment designs
+(demo-bootstrap/full-chunk and td-max/per-prefix joint) converge on the same negative conclusion.</b></p>
+
+<h3>Honest caveat — n=25 single seed is underpowered</h3>
+<p>The VLA baseline swung <b>0.80 (prior) → 0.56 (here)</b> at the same seed and N. A long-horizon sim plus bf16 VLA
+inference differing across GPU nodes flips borderline scenes. So <b>absolute rates are unstable at n=25</b>; the
+trustworthy signal is the <b>within-run paired direction</b> (critic arg-max &lt; resample &lt; VLA, by McNemar). A
+confirmed verdict is deferred to a <b>multi-seed run-level CI</b> (follow-up). Single critic (no ensemble) is also a
+simplification — min-ensemble pessimism is an orthogonal axis that curbs the winner's curse, a natural next lever.</p>
+
+<h3>So next</h3>
+<p>Neither the head (HL-Gauss), the deployment (joint arg-max), nor the bootstrap (td-max) manufactures coverage. The
+remaining head-on move is <b>training-time conservatism that pushes the candidate axis down</b> (CalQL-style: push
+counterfactual candidates below the demo) and <b>on-policy counterfactual generation</b> — reconverging on the
+<span class='xref' data-eid='conservatism'>conservatism</span> / <span class='xref' data-eid='calql'>Cal-QL</span> path.</p>
+<p class='sub'>Reproduce: <code>probes/eval_bon_pfx.py</code> (per-prefix td-max train → VLA joint-argmax rollout),
+figure <code>probes/plot_pfx.py</code>. Result <code>bon_pfx_compare.json</code> committed.</p>""",
 )
 
 en(
