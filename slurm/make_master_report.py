@@ -1506,6 +1506,94 @@ held-out(에피소드 분할):</p>
 덜 캘리브레이션됨). floq은 점이 아니라 <b>분포</b>를 준다는 게 스칼라와의 질적 차이.</p>""",
 )
 
+# ============================================== 08-12 critic head 3종 + closed-loop BoN
+entry(
+    "08-12",
+    "critic-heads",
+    "critic head 3종 (scalar/HL-Gauss/floq) — 오프라인 랭킹 vs closed-loop BoN 판정",
+    "완결",
+    """
+<p class='sub'>사용자 지시: floq을 우리 critic에 넣은 뒤 "이득이 <b>flow 메커니즘</b> 덕이냐 <b>categorical 표현</b>
+덕이냐"를 가르고, 나아가 "<b>실제 evaluation으로 이 critic이 VLA를 향상시키는지</b>"를 closed-loop로 판정한다.
+<span class='xref' data-eid='floq'>floq 구현 포스트</span>의 직접 후속.</p>
+
+<h3>설계 — 같은 트렁크, head/loss만 3종 (method-only-diff)</h3>
+<p>우리 표준 <b>AQC critic</b>(ARQCritic: [obs 토큰, action-macro 토큰] 위 causal transformer, macro_group_size=2,
+full-chunk prefix로 스코어)의 <b>트렁크를 한 줄도 안 바꾸고</b> 출력 head와 학습 손실만 셋으로 바꿔 나란히 학습한다:</p>
+<table class='num'><tr><th>head</th><th>표현</th><th>학습 손실</th><th>Q 읽기</th></tr>
+<tr><td><b>scalar</b></td><td>스칼라 1개</td><td>expectile-TD(0.9) 회귀</td><td>그 스칼라</td></tr>
+<tr><td><b>HL-Gauss</b></td><td>51-atom 로짓</td><td>Gaussian-smoothed 타깃에 cross-entropy(분류)</td><td>Σ softmax·centers</td></tr>
+<tr><td><b>floq</b></td><td>속도장 v(t,z|s,a)</td><td>flow-matching(Eq 4.2)</td><td>노이즈→K스텝 적분</td></tr></table>
+<p class='sub'>이 세 개가 <b>회귀 → 분류 → flow</b>의 사다리다. HL-Gauss가 결정적 중간항: floq의 붕괴방지도 z를
+categorical로 인코딩하니, "같은 51-atom 분류지만 flow 없음"인 HL-Gauss를 끼우면 <b>이득의 출처가 categorical이냐
+flow냐</b>가 갈린다. 공통 설정: γ=0.997(유효 지평 확대), 부트스트랩은 <b>단일 샘플 적분</b>(원본 floq 충실 — 평균은
+분포를 뭉갠다), PrepareCoffee mixed annotation, held-out은 에피소드 분할. 각 head 30k step.</p>
+
+<h3>① 오프라인 — head가 액션을 랭킹하는가</h3>
+<table class='num'><tr><th>지표</th><th>scalar (회귀)</th><th>HL-Gauss (분류)</th><th>floq (flow)</th></tr>
+<tr><td>Spearman(Q, mc) — value fit</td><td>0.398</td><td><b>0.594</b></td><td>0.518</td></tr>
+<tr><td>action-sensitivity</td><td>0.018</td><td>0.011</td><td><b>0.281</b></td></tr>
+<tr><td>demo_winrate (데모 vs VLA후보, 낙관)</td><td>0.226</td><td><b>0.905</b></td><td>0.851</td></tr></table>
+<p><b>오프라인 판독.</b> ① <b>이득의 대부분은 categorical 표현</b>이다: HL-Gauss가 winrate 0.23→0.91, Spearman
+0.40→0.59로 <b>flow 없이도 floq만큼(오히려 더) 잘 랭킹</b>한다. floq이 scalar를 이긴 건 flow 메커니즘이 아니라
+categorical head 덕이 컸다. ② floq의 sensitivity 0.281은 <b>γ-천장</b>(γ=0.99·V~0.11·Δt~16 → 참 값차 상한
+ΔQ≈<b>0.018</b>, 워커A 교정)을 <b>14배 초과</b> — 단일-샘플 부트스트랩이 액션 민감도를 키웠지만 이건 참 가치가 아니라
+<b>행동 스타일 판별 아티팩트</b>다. winrate 0.85~0.91도 데모를 후보 풀에 포함한 낙관치(배포 BoN엔 데모 없음).</p>
+
+<h3>② closed-loop — BoN이 실제로 VLA를 이기는가 (판정: 아니오)</h3>
+<p>저장한 세 critic을 <b>실제 BoN 배포</b>에 꽂는다: PrepareCoffee 25장면, 매 replan마다 VLA가 <b>N=8 후보</b>를
+샘플→critic이 스코어→argmax 후보 실행. 대조군 둘 — <b>VLA baseline</b>(후보 0 그대로 실행) + <b>rand null</b>
+(랜덤 후보 실행). rand가 핵심 대조다: BoN이 VLA는 이겨도 rand를 못 이기면 "다시 뽑은 게 도움"일 뿐 critic이
+고른 게 아니다. run_trials가 장면을 (seed,trial)로 고정하므로 <b>모든 모드가 동일 25장면</b>을 본다(scene-paired).</p>
+<table class='num'><tr><th>모드</th><th>성공</th><th>성공률</th><th>Wilson 95% CI</th><th>vs VLA (paired McNemar: 승/패)</th></tr>
+<tr><td><b>VLA (baseline)</b></td><td>20/25</td><td><b>0.80</b></td><td>[0.61, 0.91]</td><td>—</td></tr>
+<tr><td>rand (null)</td><td>17/25</td><td>0.68</td><td>[0.48, 0.83]</td><td>3승 / 6패</td></tr>
+<tr><td>scalar BoN</td><td>10/25</td><td>0.40</td><td>[0.23, 0.59]</td><td><b>0승 / 10패</b></td></tr>
+<tr><td>HL-Gauss BoN</td><td>16/25</td><td>0.64</td><td>[0.45, 0.80]</td><td>3승 / 7패</td></tr>
+<tr><td>floq BoN</td><td>11/25</td><td>0.44</td><td>[0.27, 0.63]</td><td><b>1승 / 10패</b></td></tr></table>
+<p><img src="videos/critic-heads/29_bon_compare.png" alt="offline demo-winrate vs closed-loop BoN success"></p>
+<p class='sub'>왼쪽: 오프라인 winrate(HL-Gauss·floq 0.91·0.85 압승). 오른쪽: closed-loop 성공률 — 검은 점선이 VLA
+기준. 색: 회색=scalar, 초록=HL-Gauss, 빨강=floq, 검정=VLA, 회색(rand)=null. 오차막대는 Wilson 95%.</p>
+
+<h3>판정</h3>
+<p><b>어느 critic head도 BoN으로 VLA를 향상시키지 못한다.</b></p>
+<p>① <b>scalar·floq은 랜덤 null보다도 나쁘다</b>(0.40·0.44 &lt; rand 0.68). paired McNemar로 scalar는 VLA 대비
+<b>0승 10패</b>, floq은 <b>1승 10패</b> — 통계적으로 유의하게 유해하다. critic의 argmax가 랜덤보다 <b>더 나쁜</b>
+후보를 고른다는 뜻: 후보 N개 중 critic이 <b>가장 과대평가</b>한 것을 뽑는데, 그 과대평가는 참 가치가 아니라
+추정오차·off-distribution과 상관한다(<b>승자의 저주</b>=estimation-error exploitation, <span class='xref'
+data-eid='conservatism'>2축 보수화</span>의 정확히 그 실패). 후보들이 다 웬만해서 rand는 0.68에 그치는데,
+argmax는 그중 최악을 짚어 더 떨어진다.</p>
+<p>② <b>오프라인 winrate가 closed-loop를 완전히 잘못 예측했다.</b> HL-Gauss winrate 0.905인데 BoN 0.64. 이것은
+<span class='xref' data-eid='embed-compare'>임베딩-DiT 뒤집힘</span>(오프라인 BC/디코더는 "표현 충분"이라 했으나
+closed-loop이 뒤집음)에 이은 <b>두 번째 "오프라인→closed-loop 불일치"</b>다. 이유: winrate는 <b>in-dist 데모 상태</b>에서
+데모 vs 후보를 재지만, 배포는 <b>VLA가 방문한 상태에서 VLA 자기 후보</b>를 argmax한다 — 분포가 다르고, argmax가
+오차를 증폭한다. 오프라인 랭킹 지표는 배포 성공의 신뢰할 대리가 아니다.</p>
+<p>③ <b>head 층위 결론</b>: categorical(HL-Gauss)이 flow보다 싸고 오프라인·closed-loop 모두 낫다(BoN 0.64로 가장 덜
+나쁨, 유일하게 rand와 비슷). floq의 flow는 sensitivity만 γ-천장 14배로 폭증시켜 <b>스타일 아티팩트로 후보를 갈라
+오히려 유해</b>했다. → <span class='xref' data-eid='tdsf-arq'>TD-SF-ARQ</span> head는 <b>HL-Gauss</b>가 옳다(floq flow 아님).</p>
+<p>④ <b>근본 재확인</b>: 문제는 head가 아니라 <b>배포 방식과 데이터</b>다. demo-only critic을 자기 후보 argmax(BoN)로
+쓰는 건 보수화 없이는 승자의 저주에 진다. 어떤 head도 <b>coverage(반사실 후보)</b> 없이는 못 구한다 —
+<span class='xref' data-eid='model-based'>후보축 학습신호 부재</span>·<span class='xref' data-eid='conservatism'>보수화 2축</span>과
+같은 결론에 독립 경로로 재도달했다.</p>
+
+<h3>한계 (정직)</h3>
+<p>n=25 단일 시드라 <b>잠정</b>이다. VLA가 이미 0.80으로 강해 BoN <b>상승 여지가 작고 하락 여지는 큰</b> 천장 효과가
+있다(더 약한 baseline 과제에서 재검 필요). full-chunk commit만 썼다(ARQ prefix 선택 미사용). HL-Gauss CI[0.45,0.80]는
+VLA CI[0.61,0.91]와 겹쳐 "<b>HL-Gauss &lt; VLA</b>"는 미확정(McNemar p≈0.34) — <b>확정된 것은 scalar·floq의 유해성</b>이다.</p>
+
+<h3>참고 — flow 시각화 (γ=0.997, 단일-샘플 부트스트랩)</h3>
+<p>같은 재학습의 floq flow. γ를 0.99→0.997로 올리자 flow <b>곡률이 0.0135→0.0317</b>로 커졌다(유효 지평이 늘어 velocity
+경로가 더 휨). 궤적 HUD: 왼쪽 로봇 ego + 오른쪽 floq return 분포(노이즈 256 적분). 단일-샘플 부트스트랩이라 결과가
+불확실한 상태에서 분포가 더 벌어진다.
+<a href="videos/critic-heads/28_floq_traj.mp4" target="_blank">▶ HUD 영상</a> ·
+<a href="videos/critic-heads/27_floq_flow.mp4" target="_blank">▶ funnel 영상</a></p>
+<p><img src="videos/critic-heads/28_floq_traj.png" alt="floq HUD gamma=0.997 single-sample bootstrap"></p>
+
+<p class='sub'>재현: 오프라인 3-way <code>probes/floq_critic.py</code>(HL-Gauss head 추가), closed-loop
+<code>probes/eval_bon.py</code>(critic 저장→VLA BoN 롤아웃), 그림 <code>probes/plot_bon.py</code>(JSON→figure).
+결과 JSON: <code>floq_critic.json</code>·<code>bon_critic_compare.json</code>. 모두 커밋.</p>""",
+)
+
 # ============================================== 08-09 model-based 본질 회귀
 entry(
     "08-07",
@@ -2056,7 +2144,16 @@ META = {
         "what": "floq 원본 충실 구현(critic.py flow_head) + value-fit 테스트 + flow funnel·궤적 HUD 영상",
         "how": "ARQ 트렁크 그대로, head를 velocity field로, 손실·부트스트랩만 floq(Eq4.2)",
         "why": "사용자 지시 '멋대로 말고 원본대로 우리 critic에' — 워커A floq 해석 상호 재현",
-        "links": ["xworker-0808", "papers-tdjepa", "tdsf-arq", "conservatism", "final"],
+        "links": ["critic-heads", "xworker-0808", "papers-tdjepa", "tdsf-arq", "conservatism", "final"],
+    },
+    "critic-heads": {
+        "date": "2026-08-12 15:30",
+        "who": "워커B(구현·실험)",
+        "where": "우리 AQC critic (scalar/HL-Gauss/floq head) + PrepareCoffee (오프라인 mixed annot + closed-loop 롤아웃)",
+        "what": "critic head 3종 비교 — 오프라인 랭킹 3지표 + closed-loop BoN 성공률(vla/rand/critic별, n=25, N=8)",
+        "how": "같은 AQC 트렁크에 head/loss만 3종, γ=0.997·단일샘플 부트스트랩; critic 저장→VLA BoN 롤아웃, scene-paired McNemar",
+        "why": "사용자 지시 '실제 evaluation으로 critic이 VLA를 향상시키는지 테스트' + flow냐 categorical이냐 가르기",
+        "links": ["floq", "conservatism", "embed-compare", "tdsf-arq", "model-based", "final"],
     },
     "xworker-0808": {
         "date": "2026-08-08 14:10",
@@ -3048,6 +3145,102 @@ HUD video</a></p>
 near-degenerate; dramatic multi-peak only at genuinely uncertain outcomes). The floq mean and scalar Q can
 diverge on some frames (the scalar ARQ is less calibrated in this simplified setup). The qualitative difference
 is that floq gives a <b>distribution</b>, not a point.</p>""",
+)
+
+en(
+    "critic-heads",
+    "Critic heads (scalar/HL-Gauss/floq) — offline ranking vs closed-loop BoN verdict",
+    """
+<p class='sub'>Per user request: after putting floq on our critic, separate whether the gain comes from the
+<b>flow mechanism</b> or the <b>categorical representation</b>, and then decide by closed loop whether
+<b>this critic actually improves the VLA</b>. Direct follow-up to the <span class='xref' data-eid='floq'>floq
+implementation post</span>.</p>
+
+<h3>Design — same trunk, only the head/loss differ (method-only-diff)</h3>
+<p>Our standard <b>AQC critic</b> (ARQCritic: a causal transformer over [obs token, action-macro tokens],
+macro_group_size=2, scored at the full-chunk prefix) has its <b>trunk left untouched</b>; only the output head
+and training loss are swapped into three variants, trained side by side:</p>
+<table class='num'><tr><th>head</th><th>representation</th><th>loss</th><th>read Q</th></tr>
+<tr><td><b>scalar</b></td><td>one scalar</td><td>expectile-TD(0.9) regression</td><td>the scalar</td></tr>
+<tr><td><b>HL-Gauss</b></td><td>51-atom logits</td><td>cross-entropy to a Gaussian-smoothed target (classification)</td><td>Σ softmax·centers</td></tr>
+<tr><td><b>floq</b></td><td>velocity field v(t,z|s,a)</td><td>flow-matching (Eq 4.2)</td><td>integrate noise K steps</td></tr></table>
+<p class='sub'>The three form a <b>regression → classification → flow</b> ladder. HL-Gauss is the decisive middle
+term: floq's collapse-prevention also encodes z categorically, so inserting HL-Gauss ("same 51-atom
+classification but no flow") <b>splits whether the gain is categorical or flow</b>. Shared setup: γ=0.997 (longer
+effective horizon), <b>single-sample bootstrap</b> (faithful floq — averaging washes out the distribution),
+PrepareCoffee mixed annotation, held-out by episode. 30k steps per head.</p>
+
+<h3>① Offline — does the head rank actions?</h3>
+<table class='num'><tr><th>metric</th><th>scalar (regression)</th><th>HL-Gauss (classification)</th><th>floq (flow)</th></tr>
+<tr><td>Spearman(Q, mc) — value fit</td><td>0.398</td><td><b>0.594</b></td><td>0.518</td></tr>
+<tr><td>action-sensitivity</td><td>0.018</td><td>0.011</td><td><b>0.281</b></td></tr>
+<tr><td>demo_winrate (demo vs VLA cand, optimistic)</td><td>0.226</td><td><b>0.905</b></td><td>0.851</td></tr></table>
+<p><b>Offline reading.</b> ① <b>Most of the gain is the categorical representation</b>: HL-Gauss lifts winrate
+0.23→0.91 and Spearman 0.40→0.59, ranking <b>as well as (better than) floq without any flow</b>. floq beating
+scalar was largely the categorical head, not the flow mechanism. ② floq's sensitivity 0.281 exceeds the
+<b>γ-ceiling</b> (γ=0.99, V~0.11, Δt~16 → true value-diff ceiling ΔQ≈<b>0.018</b>, worker A's correction) by
+<b>14×</b> — the single-sample bootstrap raised action-sensitivity, but this is <b>action-style discrimination
+artifact</b>, not true value. And winrate 0.85–0.91 is optimistic (the demo is in the pool; the deployment BoN has none).</p>
+
+<h3>② Closed-loop — does BoN actually beat the VLA? (verdict: no)</h3>
+<p>The three saved critics are placed in a <b>real BoN deployment</b>: PrepareCoffee, 25 scenes, and at each
+replan the VLA samples <b>N=8 candidates</b> → the critic scores → the argmax candidate is executed. Two controls —
+<b>VLA baseline</b> (execute candidate 0) and a <b>rand null</b> (execute a random candidate). rand is the key
+control: BoN beating VLA but not rand would only show resampling helps, not that the critic picked. run_trials
+pins the scene by (seed, trial), so <b>every mode faces the identical 25 scenes</b> (scene-paired).</p>
+<table class='num'><tr><th>mode</th><th>success</th><th>rate</th><th>Wilson 95% CI</th><th>vs VLA (paired McNemar: win/loss)</th></tr>
+<tr><td><b>VLA (baseline)</b></td><td>20/25</td><td><b>0.80</b></td><td>[0.61, 0.91]</td><td>—</td></tr>
+<tr><td>rand (null)</td><td>17/25</td><td>0.68</td><td>[0.48, 0.83]</td><td>3 / 6</td></tr>
+<tr><td>scalar BoN</td><td>10/25</td><td>0.40</td><td>[0.23, 0.59]</td><td><b>0 / 10</b></td></tr>
+<tr><td>HL-Gauss BoN</td><td>16/25</td><td>0.64</td><td>[0.45, 0.80]</td><td>3 / 7</td></tr>
+<tr><td>floq BoN</td><td>11/25</td><td>0.44</td><td>[0.27, 0.63]</td><td><b>1 / 10</b></td></tr></table>
+<p><img src="videos/critic-heads/29_bon_compare.png" alt="offline demo-winrate vs closed-loop BoN success"></p>
+<p class='sub'>Left: offline winrate (HL-Gauss·floq dominate at 0.91·0.85). Right: closed-loop success — the black
+dashed line is the VLA baseline. Colors: gray=scalar, green=HL-Gauss, red=floq, black=VLA, gray=rand null. Error
+bars are Wilson 95%.</p>
+
+<h3>Verdict</h3>
+<p><b>No critic head improves the VLA via BoN.</b></p>
+<p>① <b>scalar and floq fall below the random null</b> (0.40·0.44 &lt; rand 0.68). By paired McNemar, scalar is
+<b>0 wins / 10 losses</b> vs VLA and floq <b>1 / 10</b> — significantly harmful. The critic's argmax picks a
+<b>worse</b> candidate than random: among N candidates it takes the one it <b>most overestimates</b>, and that
+overestimation correlates with estimation error / off-distribution, not true value (the <b>winner's curse</b> =
+estimation-error exploitation, exactly the failure mode of <span class='xref' data-eid='conservatism'>two-axis
+conservatism</span>). The candidates are all decent (rand only drops to 0.68), so argmax singling out the worst
+drops further.</p>
+<p>② <b>Offline winrate badly mispredicted the closed loop.</b> HL-Gauss winrate 0.905, BoN 0.64. This is the
+<b>second "offline → closed-loop" disconnect</b>, after the <span class='xref' data-eid='embed-compare'>embedding-DiT
+overturn</span> (offline BC/decoder said "representation sufficient"; closed loop overturned it). Reason: winrate
+scores demo vs candidates at <b>in-dist demo states</b>, but deployment argmaxes over <b>the VLA's own candidates at
+the states the VLA visits</b> — a different distribution, where the argmax amplifies error. Offline ranking metrics
+are not a trustworthy proxy for deployment success.</p>
+<p>③ <b>Head-level conclusion</b>: categorical (HL-Gauss) is cheaper than flow and better both offline and closed
+loop (BoN 0.64, the least harmful, the only one near rand). floq's flow only inflated sensitivity to 14× the
+γ-ceiling, <b>splitting candidates on style artifacts and hurting</b>. → the <span class='xref'
+data-eid='tdsf-arq'>TD-SF-ARQ</span> head should be <b>HL-Gauss</b>, not the floq flow.</p>
+<p>④ <b>Root cause restated</b>: the problem is not the head but <b>the deployment scheme and the data</b>. Using a
+demo-only critic to argmax over its own candidates (BoN) loses to the winner's curse without conservatism. No head
+is saved without <b>coverage (counterfactual candidates)</b> — an independent path back to the same conclusion as
+<span class='xref' data-eid='model-based'>the missing candidate-axis signal</span> and
+<span class='xref' data-eid='conservatism'>two-axis conservatism</span>.</p>
+
+<h3>Limits (honest)</h3>
+<p>n=25, single seed, so <b>provisional</b>. The VLA is already strong (0.80), a ceiling effect that leaves <b>little
+room to rise, much to fall</b> (needs a rerun on a weaker-baseline task). Full-chunk commit only (no ARQ prefix
+selection). HL-Gauss CI [0.45,0.80] overlaps VLA [0.61,0.91], so "<b>HL-Gauss &lt; VLA</b>" is unconfirmed (McNemar
+p≈0.34) — what is <b>confirmed is the harm of scalar and floq</b>.</p>
+
+<h3>Aside — flow visualization (γ=0.997, single-sample bootstrap)</h3>
+<p>The floq flow from the same retrain. Raising γ 0.99→0.997 grew the flow <b>curvature 0.0135→0.0317</b> (the
+longer horizon bends the velocity path more). Trajectory HUD: left the robot ego view, right the floq return
+distribution (256 integrated noise samples). With the single-sample bootstrap the distribution spreads more at
+uncertain-outcome states. <a href="videos/critic-heads/28_floq_traj.mp4" target="_blank">▶ HUD video</a> ·
+<a href="videos/critic-heads/27_floq_flow.mp4" target="_blank">▶ funnel video</a></p>
+<p><img src="videos/critic-heads/28_floq_traj.png" alt="floq HUD gamma=0.997 single-sample bootstrap"></p>
+
+<p class='sub'>Reproduce: offline 3-way <code>probes/floq_critic.py</code> (HL-Gauss head added), closed-loop
+<code>probes/eval_bon.py</code> (save critics → VLA BoN rollout), figure <code>probes/plot_bon.py</code>
+(JSON→figure). Result JSONs: <code>floq_critic.json</code>·<code>bon_critic_compare.json</code>. All committed.</p>""",
 )
 
 en(

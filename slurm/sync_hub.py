@@ -86,7 +86,7 @@ MM_COLS = [
     ("기반 탐색", ["genesis", "vbias", "families", "wcurse", "duel"]),
     ("정합성 검증", ["singlefit", "ladders", "fullfit", "highpower"]),
     ("진단·방법", ["randh", "aqc", "autopsy", "pools", "failpipe", "calql", "v14"]),
-    ("판정·종합", ["v11", "v12", "final", "conservatism", "morning-0808", "morning-0809"]),
+    ("판정·종합", ["v11", "v12", "final", "conservatism", "morning-0808", "morning-0809", "critic-heads"]),
     ("표현·설계", ["phi-ladder", "model-based", "embed-compare", "tdsf-arq"]),
     ("논문·교차", ["papers-value-steering", "papers-tdjepa", "papers-byolg", "papers-dbc", "xworker-0808", "floq"]),
     ("이식·인프라", ["kper", "td-segv", "video-gallery", "flow", "gr1-port", "horizon-probe"]),
