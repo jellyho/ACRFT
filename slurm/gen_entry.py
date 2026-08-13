@@ -8,7 +8,54 @@ import make_master_report as mm
 
 EID = sys.argv[1]
 STATUS = {"완결": "finding", "진행 중": "ongoing", "살아있음": "living"}
-PHASE = {"mb-arq": ["표현", "MB-AC", "설명"], "exp-board": ["실험", "보드"]}
+# extra tag chips (for the tag bar) per eid
+TAGS = {"mb-arq": ["표현", "MB-AC", "설명"], "exp-board": ["실험", "보드"]}
+# mindmap column (worker A's phase taxonomy) per eid — the client-side mindmap groups by this
+PHASE_MAP = {
+    "genesis": "기반 탐색",
+    "vbias": "기반 탐색",
+    "families": "기반 탐색",
+    "wcurse": "기반 탐색",
+    "duel": "기반 탐색",
+    "singlefit": "정합성 검증",
+    "ladders": "정합성 검증",
+    "fullfit": "정합성 검증",
+    "highpower": "정합성 검증",
+    "randh": "진단·방법",
+    "aqc": "진단·방법",
+    "autopsy": "진단·방법",
+    "pools": "진단·방법",
+    "failpipe": "진단·방법",
+    "calql": "진단·방법",
+    "v14": "진단·방법",
+    "v11": "판정·종합",
+    "v12": "판정·종합",
+    "final": "판정·종합",
+    "conservatism": "판정·종합",
+    "morning-0808": "판정·종합",
+    "morning-0809": "판정·종합",
+    "critic-heads": "판정·종합",
+    "critic-pfx": "판정·종합",
+    "deas": "판정·종합",
+    "phi-ladder": "표현·설계",
+    "model-based": "표현·설계",
+    "embed-compare": "표현·설계",
+    "tdsf-arq": "표현·설계",
+    "mb-arq": "표현·설계",
+    "papers-value-steering": "논문·교차",
+    "papers-tdjepa": "논문·교차",
+    "papers-byolg": "논문·교차",
+    "papers-dbc": "논문·교차",
+    "xworker-0808": "논문·교차",
+    "floq": "논문·교차",
+    "kper": "이식·인프라",
+    "td-segv": "이식·인프라",
+    "video-gallery": "이식·인프라",
+    "flow": "이식·인프라",
+    "gr1-port": "이식·인프라",
+    "horizon-probe": "이식·인프라",
+    "exp-board": "이식·인프라",
+}
 
 
 def wrap(b):
@@ -34,7 +81,9 @@ entry = {
     "title": f"🧪 [워커B] {title}",
     "status": STATUS.get(status, "finding"),
     "summary": summ(body),
-    "tags": ["워커B", "RoboCasa", *PHASE.get(eid, [])],
+    "tags": ["워커B", "RoboCasa", *TAGS.get(eid, [])],
+    "phase": PHASE_MAP.get(eid, "신규"),  # mindmap column
+    "links": mm.META.get(eid, {}).get("links", []),  # mindmap edges (semantic connections)
     "body_html": wrap(dual),
 }
 out = pathlib.Path(f"/scratch/jellyho/acrft/entry_{eid}.json")
