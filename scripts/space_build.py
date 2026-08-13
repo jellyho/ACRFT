@@ -50,6 +50,9 @@ _INJECT = (
     "s.id='r'+i;s.setAttribute('data-eid',e.eid||('r'+i));s.hidden=true;s.innerHTML=e.body_html||'';rd.appendChild(s);});"
     "render();"
     "if(window.buildThread){window.buildThread();}"
+    # feed the mindmap live graph data (nodes/links/phases) before it is first drawn
+    "if(window.buildGraphData){var _gd=document.getElementById('wb-graph-data');"
+    "if(_gd)_gd.textContent=JSON.stringify(window.buildGraphData());}"
     # delegated navigation: any [data-eid] link (xref, thread item) opens that entry by eid
     "if(!window.__eidnav){window.__eidnav=1;document.addEventListener('click',function(ev){"
     "var el=ev.target.closest('[data-eid]');if(!el||el.classList.contains('report'))return;"
@@ -93,6 +96,23 @@ THREAD_JS = (
     'html+="</ul></div>";});'
     'html+="</div>";el.innerHTML=html;};</script>'
 )
+
+# The 🗺️ mindmap graph is regenerated client-side from the live feed too (it used to read a
+# frozen JSON snapshot with stale array-index links). Nodes are keyed by eid; edges come from
+# each entry's `links: [eid,...]`; the column/colour comes from its `phase`. New entries with
+# no phase land in the '신규' column automatically.
+GRAPH_JS = (
+    "<script>window.buildGraphData=function(){"
+    'var PHASES=["기반 탐색","정합성 검증","진단·방법","판정·종합","표현·설계","논문·교차","이식·인프라","신규"];'
+    'var COLORS=["#4c72b0","#dd8452","#55a868","#c44e52","#8172b3","#937860","#da8bc3","#64b5cd"];'
+    "var known={};REPORTS.forEach(function(r){known[r.eid]=1;});"
+    "var nodes=REPORTS.map(function(r){var ci=PHASES.indexOf(r.phase||'신규');if(ci<0)ci=PHASES.length-1;"
+    "return{id:r.eid,cat:ci,date:r.date,what:r.title,sum:r.summary};});"
+    "var seen={},links=[];"
+    "REPORTS.forEach(function(r){(r.links||[]).forEach(function(t){if(!known[t])return;"
+    "var k=r.eid<t?r.eid+'|'+t:t+'|'+r.eid;if(seen[k])return;seen[k]=1;links.push([r.eid,t]);});});"
+    "return{nodes:nodes,links:links,colors:COLORS,phases:PHASES};};</script>"
+)
 BOOTSTRAP = (
     "fetch('entries.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){"
     + _INJECT
@@ -126,11 +146,23 @@ def build(src_html: str, inline_entries=None) -> str:
     if n_or != 1:
         raise SystemExit("could not patch openReport for eid navigation")
     h = h.replace("b.onclick=()=>openReport(r.idx);", "b.onclick=()=>openReport(r.eid||r.idx);", 1)
+    # mindmap: click a node by eid (was a stale array index), and empty the frozen graph snapshot
+    # so the client-side buildGraphData() repopulates it from the live feed.
+    h = h.replace("openReport(n.idx)", "openReport(n.id)", 1)
+    h, n_gd = re.subn(
+        r"(<script id='wb-graph-data'[^>]*>).*?(</script>)",
+        lambda _m: _m.group(1) + '{"nodes":[],"links":[],"colors":[],"phases":[]}' + _m.group(2),
+        h,
+        count=1,
+        flags=re.DOTALL,
+    )
+    if n_gd != 1:
+        raise SystemExit("could not empty the baked wb-graph-data snapshot")
     # 5) white/light override (append inside <style> so it wins the cascade)
     h = h.replace("</style>", WHITE_OVERRIDE + "</style>", 1)
-    # 6) real math typesetting (MathJax) + client-side daily-thread rebuild
+    # 6) real math typesetting (MathJax) + client-side daily-thread & mindmap rebuild
     h = h.replace("</head>", MATHJAX_HEAD + "</head>", 1)
-    return h.replace("</body>", THREAD_JS + "</body>", 1)
+    return h.replace("</body>", THREAD_JS + GRAPH_JS + "</body>", 1)
 
 
 def main():
