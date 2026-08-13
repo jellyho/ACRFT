@@ -28,6 +28,12 @@ class Checkpoint:
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
     dir: str
+    # Which assets dir inside the checkpoint holds this run's norm stats, when it is not the
+    # config's default (`asset_id or repo_id`). The data-scaling study needs this: each point
+    # trains on a different subset, so it computes and trains with its own `--asset-id`, and
+    # serving has to ask for the same one. Without it a scaling checkpoint fails to load with
+    # "Norm stats file not found" while the stats sit right there under their own name.
+    asset_id: str | None = None
 
 
 @dataclasses.dataclass
@@ -54,6 +60,11 @@ class Args:
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
+    # Directory of a trained RLT critic (params.msgpack + config.json + proprio_stats.json, see
+    # scripts/export_critic_serving.py). When set, a request carrying `critic_select` gets
+    # best-of-N chosen by the critic server-side; requests without the key are untouched.
+    critic: str | None = None
+
 
 # Default checkpoints that should be used for each environment.
 DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
@@ -76,29 +87,84 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
-def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
-    """Create a default policy for the given environment."""
-    if checkpoint := DEFAULT_CHECKPOINT.get(env):
-        return _policy_config.create_trained_policy(
-            _config.get_config(checkpoint.config), checkpoint.dir, default_prompt=default_prompt
-        )
-    raise ValueError(f"Unsupported environment mode: {env}")
+def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
+    """Create a policy from the given arguments, with the config it was built from.
 
-
-def create_policy(args: Args) -> _policy.Policy:
-    """Create a policy from the given arguments."""
+    The config comes back too so the server can describe the policy to its client (see
+    `spec_metadata`) without anyone hard-coding numbers per robot.
+    """
     match args.policy:
         case Checkpoint():
-            return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+            train_config = _config.get_config(args.policy.config)
+            if args.policy.asset_id is not None:
+                # Same override compute_norm_stats and train already take, so all three stages
+                # can name the same assets dir.
+                train_config = dataclasses.replace(
+                    train_config,
+                    data=dataclasses.replace(
+                        train_config.data,
+                        assets=dataclasses.replace(train_config.data.assets, asset_id=args.policy.asset_id),
+                    ),
+                )
+            return (
+                _policy_config.create_trained_policy(train_config, args.policy.dir, default_prompt=args.default_prompt),
+                train_config,
             )
         case Default():
-            return create_default_policy(args.env, default_prompt=args.default_prompt)
+            checkpoint = DEFAULT_CHECKPOINT.get(args.env)
+            if checkpoint is None:
+                raise ValueError(f"Unsupported environment mode: {args.env}")
+            train_config = _config.get_config(checkpoint.config)
+            return (
+                _policy_config.create_trained_policy(train_config, checkpoint.dir, default_prompt=args.default_prompt),
+                train_config,
+            )
+
+
+def spec_metadata(train_config: _config.TrainConfig) -> dict:
+    """The part of the obs/action spec a client can act on, read off the train config.
+
+    Every model config carries `action_horizon`, so this is the same code for RoboCasa,
+    YAM, or anything added later — no per-robot branch. Without it the chunk size has to
+    reach the client out of band, and a checkpoint trained at 30 served to a client
+    assuming 16 raises nothing: it silently discards half of every chunk.
+
+    `model.action_dim` is deliberately not advertised. It is the model's padded width (32
+    for pi05), while the output transform slices the chunk back to the robot's real action
+    size on the way out — 14 for YAM. Publishing 32 would describe something no client ever
+    receives, which is worse than publishing nothing.
+    """
+    return {
+        "action_horizon": int(train_config.model.action_horizon),
+        # Tells a client it may ask for several chunks per observation (see MultiSamplePolicy).
+        # Without it a viewer has to try and interpret the absence of `action_samples` in the
+        # reply, which is indistinguishable from a server that simply ignored the request.
+        "supports_multi_sample": True,
+    }
 
 
 def main(args: Args) -> None:
-    policy = create_policy(args)
-    policy_metadata = policy.metadata
+    policy, train_config = create_policy(args)
+    # Wrapped unconditionally: it is inert unless a request carries `num_samples`, so a plain
+    # rollout pays nothing, and there is no server-side mode to remember to turn on before
+    # looking at the action distribution.
+    if args.critic is not None:
+        # Selection must wrap the BARE policy: it drives the model's own shared-backbone
+        # sampler, and stacking it over MultiSamplePolicy would pay N full forwards instead.
+        policy = _policy.CriticSelectPolicy(policy, args.critic)
+    policy = _policy.MultiSamplePolicy(
+        policy,
+        action_horizon=int(train_config.model.action_horizon),
+        action_dim=int(train_config.model.action_dim),
+    )
+    # Config-derived spec first, so an explicit policy_metadata entry can still override it.
+    policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}
+    # What this policy sends alongside its actions, so the robot client records it without
+    # either side hard-coding a name. Per-step shapes only -- the chunk axis is adaptive.
+    declare = getattr(policy, "extra_features", None)
+    if callable(declare):
+        policy_metadata["extra_features"] = declare()
+    logging.info("Serving %s: %s", train_config.name, policy_metadata)
 
     # Record the policy's behavior.
     if args.record:

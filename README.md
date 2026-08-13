@@ -99,6 +99,11 @@ uv run scripts/train_rlt_critic.py --data data/rlt_critic/PrepareCoffee --kind a
 
 # Evaluate a policy checkpoint (sim rollouts, every checkpoint)
 examples/robocasa/run_eval.sh PrepareCoffee
+
+# Serve a trained checkpoint to a robot / sim client (see "Serving a policy")
+uv run scripts/serve_policy.py --port 8000 policy:checkpoint \
+    --policy.config pi05_robocasa_PrepareCoffee_rlt \
+    --policy.dir checkpoints/pi05_robocasa_PrepareCoffee_rlt/PrepareCoffee_rlt/100000
 ```
 
 ---
@@ -169,6 +174,86 @@ writing `summary.csv` + a plot. Override the config/exp to evaluate an RLT run:
 CONFIG=pi05_robocasa_PrepareCoffee_rlt EXP=PrepareCoffee_rlt examples/robocasa/run_eval.sh PrepareCoffee
 uv run examples/robocasa/plot_eval.py --task PrepareCoffee   # success-rate-vs-checkpoint plot
 ```
+
+---
+
+## Serving a policy
+
+`scripts/serve_policy.py` loads a checkpoint and serves it over a websocket, so a robot (or a
+sim client) can send an observation and get an action chunk back. It speaks openpi's protocol,
+so any openpi client works unchanged.
+
+`uv run` resolves the project from the working directory, so run it from **this repo** —
+from a robot/client checkout it tries to build that project's dependencies instead and fails
+with something unrelated (`Failed to build ruckig`).
+
+A backslash must be the LAST character on its line. A trailing space after it escapes the
+space instead of the newline, which hands tyro an argument of `' '` — `invalid choice: ' '` —
+and then runs the next line as its own command. Copy carefully, or paste the one-line form:
+
+```bash
+cd /path/to/ACRFT
+uv run scripts/serve_policy.py --port 8000 policy:checkpoint --policy.config pi05_yam_lego_taxi_rlt --policy.dir <checkpoint>/100000
+```
+
+```bash
+cd /path/to/ACRFT
+
+# YAM, relative-joint actions (the default convention)
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_rlt \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s200/100000
+
+# same checkpoint family, absolute joint targets
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_none_rlt \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_none_rlt_s200/100000
+```
+
+It is up when the log reads:
+
+```
+Serving pi05_yam_lego_taxi_rlt: {'action_horizon': 30, 'supports_multi_sample': True}
+Creating server (host: ..., ip: ...)
+```
+
+`action_horizon` is read off the train config and sent to the client as metadata, so nobody has
+to hard-code the chunk size per robot. A checkpoint trained at 30 served to a client assuming 16
+raises nothing — it silently throws away half of every chunk.
+
+### `--policy.asset-id` (usually unnecessary)
+
+Norm stats live inside the checkpoint at `assets/<asset_id>/norm_stats.json`, and `asset_id`
+defaults to the data config's `repo_id`. That default does not hold for the data-scaling study:
+each point trains on a different subset of episodes and so needs its own stats, which is why
+`compute_norm_stats.py` takes `--asset-id` and `train.py` takes the matching
+`--data.assets.asset-id`. Nothing in the checkpoint records which name was used, so serving
+cannot derive it.
+
+It does not have to. A save writes exactly one `asset_id`, so a checkpoint has exactly one set
+of norm stats, and when the config's name does not match, the only one present is the only one
+it could have meant. Loading takes it and says so:
+
+```
+WARNING No norm stats under asset_id 'jellyho/yam_lego_taxi'; using the only ones this
+        checkpoint has, at .../assets/jellyho/yam_lego_taxi_s200.
+```
+
+So the commands above work without the flag. Pass it to pin the choice and silence the warning,
+or when a checkpoint really does carry several — which takes deliberately saving twice into one
+step directory. Then the choice matters, and guessing would quietly normalise with the wrong
+statistics rather than fail, so loading refuses and lists them:
+
+```
+FileNotFoundError: No norm stats under asset_id 'jellyho/yam_lego_taxi', and this checkpoint
+has several to choose from: jellyho/a, jellyho/b. Pass the right one (serving: --policy.asset-id).
+```
+
+Only the checkpoint step you serve has to be on disk (~13 GB), not the whole run.
 
 ---
 
