@@ -1732,6 +1732,52 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-13 실험 보드 (living)
+entry(
+    "08-13",
+    "exp-board",
+    "🧭 실험 보드 — 계획 / 진행중 / 완료 (담당·wandb·리포트)",
+    "살아있음",
+    """
+<p class='sub'>실험이 흩어져 까먹거나(뭐 하려다 말고), 돌려놓고 정리가 안 되는 걸 막는 <b>living 보드</b>.
+계획 → 진행중 → 완료로 흐른다. <b>갱신 규칙</b>: 실험을 제출/완료할 때 같은 사이클에 이 보드를 갱신한다
+(<code>space_add_entry.py</code>로 같은 eid replace). 리포트 링크는 칩을 누르면 이동.</p>
+
+<h3>🟡 진행중 (Running)</h3>
+<table class='num'><tr><th>실험</th><th>담당</th><th>메모</th><th>wandb</th><th>리포트</th></tr>
+<tr><td colspan="5" class="pending">현재 진행중인 잡 없음 (직전 배치 전부 완료). 아래 계획에서 다음 착수.</td></tr></table>
+
+<h3>🔵 계획 (Planned) — 다음 후보</h3>
+<table class='num'><tr><th>실험</th><th>담당</th><th>메모</th><th>리포트</th></tr>
+<tr><td><b>MVE 게이트</b> — 수정구슬이 후보를 가르나</td><td>B</td><td>워커A <code>train_mve_critic</code> 게이트: 후보 판별 + disagreement 보수화 확인 → 통과 시 run-level 롤아웃</td><td><span class='xref' data-eid='mb-arq'>mb-arq</span></td></tr>
+<tr><td><b>N-스윕 + λ-weighted min/max</b></td><td>B</td><td>EMaQ 지침: 작은 N(5) 재검, λ로 min쪽 보수화 (우린 8~10 고정이었음)</td><td><span class='xref' data-eid='deas'>deas</span></td></tr>
+<tr><td><b>TD-SF-ARQ 설계</b> (phase-2 사전등록)</td><td>B</td><td>head=HL-Gauss+expectile-V 확정, 벽=coverage — 사전등록 문서화</td><td><span class='xref' data-eid='tdsf-arq'>tdsf-arq</span></td></tr>
+<tr><td><b>on-policy 반사실 제조</b></td><td>B</td><td>근본 coverage 해결 — sim 롤아웃으로 counterfactual 데이터 생성</td><td><span class='xref' data-eid='conservatism'>conservatism</span></td></tr>
+<tr><td><b>GR1 이전</b> (pi05 학습)</td><td>B→node200</td><td>node200/B200 외부 실행 대기, handoff·norm-stats·config 커밋 완료</td><td><span class='xref' data-eid='gr1-port'>gr1-port</span></td></tr></table>
+
+<h3>🟢 완료 (Done) — 워커B</h3>
+<table class='num'><tr><th>실험</th><th>상태</th><th>핵심 결과</th><th>wandb</th><th>리포트</th></tr>
+<tr><td>DEAS 재현 + 고통계력</td><td>완결</td><td>critic=VLA <b>동률</b>(못 이기고 안 해침), n=25 판정은 노이즈였음</td><td>offline</td><td><span class='xref' data-eid='deas'>deas</span></td></tr>
+<tr><td>critic head 3종 (scalar/HLG/floq)</td><td>완결(정정)</td><td>categorical이 이득 대부분 — 단 closed-loop은 n=25 노이즈</td><td>offline</td><td><span class='xref' data-eid='critic-heads'>critic-heads</span></td></tr>
+<tr><td>per-prefix td-max + joint argmax</td><td>완결(정정)</td><td>연산자 바꿔도 동일 — 노이즈</td><td>offline</td><td><span class='xref' data-eid='critic-pfx'>critic-pfx</span></td></tr>
+<tr><td>floq (flow-matching critic)</td><td>완결</td><td>용량 O·커버리지 X; 값 [−1,0] 정규화로 수렴 복구</td><td>offline</td><td><span class='xref' data-eid='floq'>floq</span></td></tr>
+<tr><td>임베딩 비교 + DiT probe policy</td><td>완결</td><td>오프라인 지표가 closed-loop를 못 예측(뒤집힘)</td><td>offline</td><td><span class='xref' data-eid='embed-compare'>embed-compare</span></td></tr>
+<tr><td>model-based 게이트</td><td>진행중(shelved)</td><td>후보축 행동정보 +7.3% — 약함</td><td>offline</td><td><span class='xref' data-eid='model-based'>model-based</span></td></tr>
+<tr><td>horizon-decisive 진단</td><td>완결(shelved)</td><td>임베딩 결함 vs 신호부재 판별 환경</td><td>offline</td><td><span class='xref' data-eid='horizon-probe'>horizon-probe</span></td></tr>
+<tr><td>보수화 2축 종합</td><td>살아있음</td><td>분포이동 vs 추정오차 exploit — EMaQ와 정합</td><td>—</td><td><span class='xref' data-eid='conservatism'>conservatism</span></td></tr></table>
+<p class='sub'>더 이른 사다리(v11/v12/final/aqc/families/…)는 리포트 목록·마인드맵 참조.</p>
+
+<h3>🟣 워커A 실험 (참고 — 워커A 게시·갱신)</h3>
+<table class='num'><tr><th>실험</th><th>담당</th><th>메모</th><th>wandb</th><th>리포트</th></tr>
+<tr><td>patch-critic (동결 DINOv2 + 분포형 ARQ IQL)</td><td>A</td><td>cost-to-goal reward, adaptive-K/BoN 배포</td><td>acrft / patch-critic</td><td><span class='xref' data-eid='wa-patchcritic-method'>patch-critic</span></td></tr>
+<tr><td>MVE critic / cheap-z dynamics</td><td>A</td><td>model-based value expansion + 5-멤버 앙상블 동역학</td><td>—</td><td>코드 <code>train_mve_critic.py</code></td></tr>
+<tr><td>EMaQ 논문 리뷰</td><td>A</td><td>BoN=Bellman연산자, 큰 N이 critic오차 exploit</td><td>—</td><td><span class='xref' data-eid='wa-emaq-bon'>EMaQ</span></td></tr>
+<tr><td>policy server / value-guided serving</td><td>A</td><td>server-side BoN, HUD provenance</td><td>—</td><td>코드 <code>serve_policy.py</code></td></tr></table>
+
+<p class='sub'><b>진짜 "실험 탭"</b>(템플릿 레벨의 별도 탭)은 워커A 고정 <code>index.html</code> 구조라 <b>워커A와 조율 필요</b> —
+제안: 공유 <code>experiments.json</code> + 탭 렌더. 이 보드는 그 전까지의 living 대체물이며, 두 워커가 각자 행을 갱신한다.</p>""",
+)
+
 # ============================================== 08-13 model-based ARQ 쉬운 설명
 entry(
     "08-13",
@@ -2383,6 +2429,15 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "exp-board": {
+        "date": "2026-08-13 15:45",
+        "who": "워커B(운영)",
+        "where": "허브 living 엔트리",
+        "what": "실험 보드 — 계획/진행중/완료를 담당·wandb·리포트와 함께 한자리에",
+        "how": "space_add_entry로 같은 eid replace하며 상시 갱신; 리포트는 data-eid xref",
+        "why": "사용자 지시 '실험 하려다 까먹고 돌려놓고 정리 안 됨 — 실험 탭 만들자'",
+        "links": ["mb-arq", "deas", "tdsf-arq", "gr1-port", "conservatism"],
     },
     "mb-arq": {
         "date": "2026-08-13 09:00",
@@ -3615,6 +3670,49 @@ with our standing binding-constraint = coverage.</p>
 <p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
 <b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
 td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
+)
+
+en(
+    "exp-board",
+    "🧭 Experiment board — planned / running / done (owner · wandb · report)",
+    """
+<p class='sub'>A <b>living board</b> so experiments don't get forgotten (started-then-dropped) or run-without-tracking.
+Flow: planned → running → done. <b>Update rule</b>: whenever an experiment is submitted/finished, update this board in the
+same cycle (replace the same eid via <code>space_add_entry.py</code>). Report chips navigate on click.</p>
+
+<h3>🟡 Running</h3>
+<table class='num'><tr><th>experiment</th><th>owner</th><th>note</th><th>wandb</th><th>report</th></tr>
+<tr><td colspan="5" class="pending">No job running now (last batch finished). Next from Planned below.</td></tr></table>
+
+<h3>🔵 Planned — next candidates</h3>
+<table class='num'><tr><th>experiment</th><th>owner</th><th>note</th><th>report</th></tr>
+<tr><td><b>MVE gate</b> — does the crystal ball separate candidates?</td><td>B</td><td>gate worker A's <code>train_mve_critic</code>: candidate resolution + disagreement pessimism → run-level rollout if it passes</td><td><span class='xref' data-eid='mb-arq'>mb-arq</span></td></tr>
+<tr><td><b>N sweep + λ-weighted min/max</b></td><td>B</td><td>EMaQ guidance: revisit small N(5), λ toward min (we were fixed at 8–10)</td><td><span class='xref' data-eid='deas'>deas</span></td></tr>
+<tr><td><b>TD-SF-ARQ design</b> (phase-2 preregistration)</td><td>B</td><td>head=HL-Gauss+expectile-V settled, wall=coverage — write the preregistration</td><td><span class='xref' data-eid='tdsf-arq'>tdsf-arq</span></td></tr>
+<tr><td><b>on-policy counterfactual generation</b></td><td>B</td><td>attack the coverage root — sim rollouts to make counterfactual data</td><td><span class='xref' data-eid='conservatism'>conservatism</span></td></tr>
+<tr><td><b>GR1 port</b> (pi05 training)</td><td>B→node200</td><td>awaiting external run on node200/B200; handoff/norm-stats/config committed</td><td><span class='xref' data-eid='gr1-port'>gr1-port</span></td></tr></table>
+
+<h3>🟢 Done — worker B</h3>
+<table class='num'><tr><th>experiment</th><th>status</th><th>headline</th><th>wandb</th><th>report</th></tr>
+<tr><td>DEAS reproduction + high-power</td><td>final</td><td>critic <b>ties</b> the VLA (neither beats nor hurts); n=25 verdicts were noise</td><td>offline</td><td><span class='xref' data-eid='deas'>deas</span></td></tr>
+<tr><td>critic heads ×3 (scalar/HLG/floq)</td><td>final(corrected)</td><td>categorical carries most gain — closed-loop was n=25 noise</td><td>offline</td><td><span class='xref' data-eid='critic-heads'>critic-heads</span></td></tr>
+<tr><td>per-prefix td-max + joint argmax</td><td>final(corrected)</td><td>operator change = same — noise</td><td>offline</td><td><span class='xref' data-eid='critic-pfx'>critic-pfx</span></td></tr>
+<tr><td>floq (flow-matching critic)</td><td>final</td><td>capacity yes, coverage no; value [−1,0] normalization fixed convergence</td><td>offline</td><td><span class='xref' data-eid='floq'>floq</span></td></tr>
+<tr><td>embedding comparison + DiT probe policy</td><td>final</td><td>offline metrics fail to predict closed-loop (overturned)</td><td>offline</td><td><span class='xref' data-eid='embed-compare'>embed-compare</span></td></tr>
+<tr><td>model-based gate</td><td>shelved</td><td>candidate-axis action info +7.3% — weak</td><td>offline</td><td><span class='xref' data-eid='model-based'>model-based</span></td></tr>
+<tr><td>horizon-decisive diagnostic</td><td>final(shelved)</td><td>embedding-defect vs no-signal discriminator env</td><td>offline</td><td><span class='xref' data-eid='horizon-probe'>horizon-probe</span></td></tr>
+<tr><td>two-axis conservatism synthesis</td><td>living</td><td>distribution-shift vs estimation-error exploit — matches EMaQ</td><td>—</td><td><span class='xref' data-eid='conservatism'>conservatism</span></td></tr></table>
+<p class='sub'>Earlier ladder (v11/v12/final/aqc/families/…) is in the report list / mind-map.</p>
+
+<h3>🟣 Worker A experiments (reference — owned/updated by worker A)</h3>
+<table class='num'><tr><th>experiment</th><th>owner</th><th>note</th><th>wandb</th><th>report</th></tr>
+<tr><td>patch-critic (frozen DINOv2 + distributional ARQ IQL)</td><td>A</td><td>cost-to-goal reward, adaptive-K/BoN deploy</td><td>acrft / patch-critic</td><td><span class='xref' data-eid='wa-patchcritic-method'>patch-critic</span></td></tr>
+<tr><td>MVE critic / cheap-z dynamics</td><td>A</td><td>model-based value expansion + 5-member ensemble dynamics</td><td>—</td><td>code <code>train_mve_critic.py</code></td></tr>
+<tr><td>EMaQ paper review</td><td>A</td><td>BoN as a Bellman operator; large N exploits critic error</td><td>—</td><td><span class='xref' data-eid='wa-emaq-bon'>EMaQ</span></td></tr>
+<tr><td>policy server / value-guided serving</td><td>A</td><td>server-side BoN, HUD provenance</td><td>—</td><td>code <code>serve_policy.py</code></td></tr></table>
+
+<p class='sub'>A true template-level <b>Experiments tab</b> needs worker A's fixed <code>index.html</code> — <b>coordinate with worker A</b>
+(proposal: a shared <code>experiments.json</code> + a tab). This board is the living stand-in until then; each worker maintains its rows.</p>""",
 )
 
 en(

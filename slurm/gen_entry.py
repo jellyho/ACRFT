@@ -8,7 +8,7 @@ import make_master_report as mm
 
 EID = sys.argv[1]
 STATUS = {"완결": "finding", "진행 중": "ongoing", "살아있음": "living"}
-PHASE = {"mb-arq": ["표현", "MB-AC", "설명"]}
+PHASE = {"mb-arq": ["표현", "MB-AC", "설명"], "exp-board": ["실험", "보드"]}
 
 
 def wrap(b):
