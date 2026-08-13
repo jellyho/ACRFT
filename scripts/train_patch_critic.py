@@ -142,6 +142,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", nargs="+", required=True)
     ap.add_argument("--horizon", type=int, default=16)
+    ap.add_argument(
+        "--num-atoms", type=int, default=51, help="HL-Gauss value bins (raise for a wide cost_to_goal support)"
+    )
+    ap.add_argument("--macro-group-size", type=int, default=2, help="frames per commitment macro-group")
     ap.add_argument("--steps", type=int, default=40000)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--discount", type=float, default=None, help="default 0.99 (sparse) / 0.98 (cost_to_goal)")
@@ -179,6 +183,8 @@ def main():
         backbone=a.backbone,
         v_min=v_min,
         v_max=v_max,
+        num_atoms=a.num_atoms,
+        macro_group_size=a.macro_group_size,
         reward_scheme=a.reward_scheme,
         h_goal=a.h_goal,
         mc_floor=mc_floor,
