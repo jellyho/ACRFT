@@ -1513,6 +1513,9 @@ entry(
     "critic head 3종 (scalar/HL-Gauss/floq) — 오프라인 랭킹 vs closed-loop BoN 판정",
     "완결",
     """
+<p class='missing'><b>정정(2026-08-13):</b> 이 포스트의 "critic BoN이 VLA·랜덤보다 <b>유의하게 나쁘다</b>"는 판정은
+<b>n=25 단일시드 노이즈</b>였다. 고통계력(6시드) 재검에서 critic은 VLA와 <b>동률</b>이다(못 이기고 안 해침).
+<span class='xref' data-eid='deas'>DEAS 재현·정정</span> 참조.</p>
 <p class='sub'>사용자 지시: floq을 우리 critic에 넣은 뒤 "이득이 <b>flow 메커니즘</b> 덕이냐 <b>categorical 표현</b>
 덕이냐"를 가르고, 나아가 "<b>실제 evaluation으로 이 critic이 VLA를 향상시키는지</b>"를 closed-loop로 판정한다.
 <span class='xref' data-eid='floq'>floq 구현 포스트</span>의 직접 후속.</p>
@@ -1601,6 +1604,9 @@ entry(
     "부트스트랩 교정 — per-prefix TD-max + joint argmax로도 critic은 VLA를 못 이긴다",
     "완결",
     """
+<p class='missing'><b>정정(2026-08-13):</b> 이 포스트의 "critic이 VLA·랜덤보다 <b>유의하게 나쁘다</b>(floq 2승10패 등)"는
+<b>n=25 단일시드 노이즈</b>였다. 고통계력(6시드)에선 critic이 VLA와 <b>동률</b>이고 td-max ≈ DEAS다.
+<span class='xref' data-eid='deas'>DEAS 재현·정정</span> 참조.</p>
 <p class='sub'>바로 앞 <span class='xref' data-eid='critic-heads'>critic head 3종 비교</span>의 결함을 교정한 재검.
 사용자 지적: "TD를 할 거면 데이터셋 액션을 샘플해 <b>max</b> 취해 부트스트랩해야 하고, critic은 per-prefix로
 Q를 내야 한다." 앞 실험의 부트스트랩은 <b>데모의 다음 액션</b>으로 값을 이었는데(SARSA식), 그건 데모 정책의
@@ -1658,8 +1664,8 @@ run-level CI</b>로 넘긴다(후속). single critic(앙상블 없음)도 단순
 entry(
     "08-13",
     "deas",
-    "정정 — 우리 BoN 실패는 td-max 과대평가였다 (DEAS: detached value learning)",
-    "진행 중",
+    "DEAS 재현·정정 — critic은 VLA와 동률(못 이기고 안 해침), 지난 'critic 유해' 판정은 n=25 노이즈였다",
+    "완결",
     """
 <p class='sub'><b>워커A에게 알림 + 우리 앞선 판정의 정정.</b> <span class='xref' data-eid='critic-heads'>critic-heads</span>·
 <span class='xref' data-eid='critic-pfx'>critic-pfx</span>에서 "어느 critic도 VLA를 BoN으로 못 이긴다 → binding constraint는
@@ -1687,13 +1693,43 @@ overestimation"이다.</b> 근사-데모 후보 8~16개 중 critic이 <b>가장 
 <table class='num'><tr><td><code>target = Σ_i γ1^i·r_i + γ2^(nH)·(1−done)·V(s′)</code>  ;  <code>L_Q = (HLGauss_CE(Q1,target)+HLGauss_CE(Q2,target))/2</code></td></tr></table>
 <p>double critic min + EMA target. 배포 BoN: <code>score=min(Q1,Q2)(z,cand)</code>, argmax.</p>
 
-<h3>우리가 지금 돌리는 것 — 방법론만, 백본은 우리 것</h3>
-<p>원본 Isaac-GR00T 스택을 통째로 세우지 않고, <b>우리 pi05 백본·주석(mixed)·AQC 트렁크는 그대로 두고 DEAS 방법론만</b>
-이식했다(<code>probes/eval_deas.py</code>): V=HL-Gauss+expectile, Q는 V로 부트스트랩(td-max 폐기), double-min,
-head는 scalar/HL-Gauss/floq 셋. <b>이번엔 BoN이 VLA를 이기는지</b>가 판가름 난다 — 이기면 우리 앞선 "coverage가 벽"
-결론은 <b>연산자 아티팩트였다</b>로 정정되고, 못 이기면 coverage가 진짜 벽이라는 근거가 강해진다. (실행 중, 결과 도착 시 이 포스트 갱신.)</p>
-<p class='sub'>참조: DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code>(로컬 클론 정독). 우리 재현
-<code>probes/eval_deas.py</code>. 사용자 지적("BoN이 VLA보다 못할 리 없다")이 이 정정의 출발점.</p>""",
+<h3>결과 (1) — 방법론만 이식, 백본은 우리 것 (DEAS GR00T 값 그대로)</h3>
+<p>원본 Isaac-GR00T 스택 대신 <b>우리 pi05 백본·mixed 주석·AQC 트렁크에 DEAS 방법론만</b> 이식(<code>probes/eval_deas.py</code>):
+V=HL-Gauss+expectile, Q는 V로 부트스트랩(td-max 폐기), double-min, <b>dual-discount γ1=0.9/γ2=0.99, negative-reward
+(−1/스텝, support [−100,0]), τ=0.7</b> — DEAS의 RoboCasa 재현 명령 값 그대로. <b>PrepareCoffee 단일태스크</b>, N=10 argmax.</p>
+<p><b>축1 — DEAS 고정, head 스윕 (n=25 잠정):</b> scalar 0.52 / <b>HL-Gauss 0.64 = VLA 0.64 (동률)</b> / floq 0.36.
+HL-Gauss가 최선. floq은 support [−100,0]에서 flow 속도 폭발로 미수렴(q_loss 58.8)이었는데, <b>값을 [−1,0]으로 정규화하니
+완전 수렴(q_loss 0.008)</b> — 스케일 문제였을 뿐(사용자 지적). 정규화 후에도 n=25 BoN 0.40으로 랭킹은 HL-Gauss만 못하나 n=25라 불확정.</p>
+
+<h3>결과 (2) — 우리 td-max vs DEAS, 같은 장면 고통계력 판정</h3>
+<p>n=25 단일시드가 런마다 0.52~0.64로 흔들려(같은 critic·다른 노드) 판정 불가였다. 그래서 <b>HL-Gauss 고정, 부트스트랩만
+바꿔</b>(td-max = 착지 후보 max / DEAS = expectile-V) <b>6시드 × 25 = 150 trial/arm</b>, 같은 장면 paired, run-level t-CI:</p>
+<table class='num'><tr><th>arm</th><th>부트스트랩</th><th>run-level 성공률</th><th>±95% t-CI</th></tr>
+<tr><td>VLA (baseline)</td><td>—</td><td>0.640</td><td>±0.084</td></tr>
+<tr><td>rand (null)</td><td>—</td><td>0.553</td><td>±0.062</td></tr>
+<tr><td><b>td-max (우리)</b></td><td>max_j Q(s′,cand_j)</td><td><b>0.660</b></td><td>±0.115</td></tr>
+<tr><td><b>DEAS</b></td><td>expectile-V</td><td><b>0.633</b></td><td>±0.097</td></tr></table>
+<table class='num'><tr><th>paired Δ̄ (시드별 차)</th><th>값</th><th>95% t-CI</th><th>유의?</th></tr>
+<tr><td>td-max − VLA</td><td>+0.02</td><td>±0.10</td><td>아니오 (0 포함)</td></tr>
+<tr><td>DEAS − VLA</td><td>−0.01</td><td>±0.13</td><td>아니오</td></tr>
+<tr><td>DEAS − td-max</td><td>−0.03</td><td>±0.14</td><td>아니오</td></tr></table>
+<p><img src="videos/deas/31_runlevel_cmp.png" alt="run-level 6-seed comparison vla/rand/tdmax/deas"></p>
+<p class='sub'>막대=run-level 평균±95% t-CI, 점=시드별 성공률(그 넓은 산포가 n=25 단일시드 판정을 못 믿게 한 이유).</p>
+
+<h3>판정 — 셋 다 VLA와 통계적으로 구별 안 됨 (지난 판정 정정 포함)</h3>
+<p>① <b>critic(td-max·DEAS)은 VLA와 동률 — 해치지 않는다.</b> ② <b>이기지도 못한다</b>(Δ̄≈0, CI가 0 포함).
+③ <b>td-max ≈ DEAS</b> — 부트스트랩 연산자(max vs expectile-V)가 여기선 차이 없다. 내 "td-max가 THE 문제"도,
+"DEAS가 고친다"도 <b>둘 다 지지 안 됨</b>. ④ <b>rand(0.55)만 살짝 아래</b> — critic은 랜덤보단 잘 고르나(0.66>0.55)
+VLA 자기 top 샘플을 못 넘는다.</p>
+<p><b>중요 정정.</b> <span class='xref' data-eid='critic-heads'>critic-heads</span>·<span class='xref' data-eid='critic-pfx'>critic-pfx</span>의
+"critic이 VLA·랜덤보다 <b>유의하게 나쁘다</b>(McNemar 0/10 등)"는 <b>n=25 단일시드 노이즈 아티팩트</b>였다. 고통계력에선
+좋은 head(HL-Gauss)+double-min이면 VLA 동률이다. 두 포스트에 정정 배너를 달았다.</p>
+<p>⑤ <b>coverage 재확인.</b> 단일태스크 PrepareCoffee(VLA 이미 0.64)에선 BoN 상승 여지가 작다. DEAS가 GR00T에서
+이긴 건 <b>24태스크 다양성 = 넓은 coverage</b> 덕이고, 우리 <b>단일태스크 near-demo</b>와 다르다 — 우리가 계속 말한
+binding constraint=coverage와 정합.</p>
+<p class='sub'><b>메타 교훈.</b> closed-loop 판정을 n=25 단일시드로 다섯 번 돌려 다 노이즈였다. 앞으로 판정은 처음부터
+<b>run-level 다중시드</b>로. 재현: <code>probes/eval_deas.py</code>(DEAS 방법론)·<code>eval_compare.py</code>(td-max vs DEAS 고통계력)·
+<code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
 # ============================================== 08-09 model-based 본질 회귀
@@ -3427,7 +3463,7 @@ figure <code>probes/plot_pfx.py</code>. Result <code>bon_pfx_compare.json</code>
 
 en(
     "deas",
-    "Correction — our BoN failure was td-max overestimation (DEAS: detached value learning)",
+    "DEAS reproduction + correction — the critic ties the VLA (neither beats nor hurts); our earlier 'critic harmful' verdict was n=25 noise",
     """
 <p class='sub'><b>A note to worker A + a correction of our earlier verdict.</b> In
 <span class='xref' data-eid='critic-heads'>critic-heads</span> and <span class='xref' data-eid='critic-pfx'>critic-pfx</span>
@@ -3456,14 +3492,47 @@ with categorical cross-entropy:</p>
 <table class='num'><tr><td><code>target = Σ_i γ1^i·r_i + γ2^(nH)·(1−done)·V(s′)</code>  ;  <code>L_Q = (HLGauss_CE(Q1,target)+HLGauss_CE(Q2,target))/2</code></td></tr></table>
 <p>double critic min + EMA targets. Deploy BoN: <code>score=min(Q1,Q2)(z,cand)</code>, arg-max.</p>
 
-<h3>What we are running — methodology only, our own backbone</h3>
-<p>Rather than standing up the whole Isaac-GR00T stack, we <b>keep our pi05 backbone, our (mixed) annotation and AQC
-trunk, and port only the DEAS methodology</b> (<code>probes/eval_deas.py</code>): V = HL-Gauss + expectile, Q bootstraps
-from V (td-max dropped), double-min, heads scalar / HL-Gauss / floq. <b>Whether BoN now beats the VLA</b> is the test —
-if it does, our earlier "coverage is the wall" verdict is corrected to "an operator artifact"; if it does not, the
-coverage argument is strengthened. (Running; this post updates when results land.)</p>
-<p class='sub'>Refs: DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> (cloned and read); our reproduction
-<code>probes/eval_deas.py</code>. The user's objection ("BoN can't be worse than the VLA") started this correction.</p>""",
+<h3>Result (1) — methodology ported to our backbone (DEAS's GR00T values verbatim)</h3>
+<p>Instead of the whole Isaac-GR00T stack, we ported <b>only the DEAS methodology onto our pi05 backbone, mixed
+annotation and AQC trunk</b> (<code>probes/eval_deas.py</code>): V = HL-Gauss + expectile, Q bootstraps from V (td-max
+dropped), double-min, <b>dual-discount γ1=0.9/γ2=0.99, negative reward (−1/step, support [−100,0]), τ=0.7</b> — exactly
+DEAS's RoboCasa reproduction values. <b>Single task, PrepareCoffee</b>, N=10 arg-max.</p>
+<p><b>Axis 1 — DEAS fixed, sweep the head (n=25, provisional):</b> scalar 0.52 / <b>HL-Gauss 0.64 = VLA 0.64 (tie)</b> /
+floq 0.36. HL-Gauss is best. floq diverged on the [−100,0] support (flow velocities ~100, q_loss 58.8); <b>normalizing
+the value into [−1,0] fixed convergence entirely (q_loss 0.008)</b> — a pure scale issue (the user's point). Even so,
+normalized floq's n=25 BoN is 0.40, below HL-Gauss, but n=25 is inconclusive.</p>
+
+<h3>Result (2) — our td-max vs DEAS, one paired run, high power</h3>
+<p>n=25 single-seed swung 0.52–0.64 run to run (same critic, different node) — undecidable. So we <b>fixed the head
+(HL-Gauss) and varied only the bootstrap</b> (td-max = candidate max / DEAS = expectile-V), <b>6 seeds × 25 = 150
+trials/arm</b>, scene-paired, run-level t-CI:</p>
+<table class='num'><tr><th>arm</th><th>bootstrap</th><th>run-level rate</th><th>±95% t-CI</th></tr>
+<tr><td>VLA (baseline)</td><td>—</td><td>0.640</td><td>±0.084</td></tr>
+<tr><td>rand (null)</td><td>—</td><td>0.553</td><td>±0.062</td></tr>
+<tr><td><b>td-max (ours)</b></td><td>max_j Q(s′,cand_j)</td><td><b>0.660</b></td><td>±0.115</td></tr>
+<tr><td><b>DEAS</b></td><td>expectile-V</td><td><b>0.633</b></td><td>±0.097</td></tr></table>
+<table class='num'><tr><th>paired Δ̄ (per-seed diff)</th><th>value</th><th>95% t-CI</th><th>significant?</th></tr>
+<tr><td>td-max − VLA</td><td>+0.02</td><td>±0.10</td><td>no (CI spans 0)</td></tr>
+<tr><td>DEAS − VLA</td><td>−0.01</td><td>±0.13</td><td>no</td></tr>
+<tr><td>DEAS − td-max</td><td>−0.03</td><td>±0.14</td><td>no</td></tr></table>
+<p><img src="videos/deas/31_runlevel_cmp.png" alt="run-level 6-seed comparison vla/rand/tdmax/deas"></p>
+<p class='sub'>Bars = run-level mean ±95% t-CI, dots = per-seed rates (that spread is why single-seed n=25 could not be trusted).</p>
+
+<h3>Verdict — all three are statistically indistinguishable from the VLA (with a correction)</h3>
+<p>① <b>the critic (td-max and DEAS) ties the VLA — it does not hurt.</b> ② <b>nor does it beat it</b> (Δ̄≈0, CI spans 0).
+③ <b>td-max ≈ DEAS</b> — the bootstrap operator (max vs expectile-V) makes no difference here. Both my "td-max was THE
+problem" and "DEAS fixes it" are <b>unsupported</b>. ④ <b>only rand (0.55) dips</b> — the critic out-ranks random
+(0.66>0.55) but cannot exceed the VLA's own top sample.</p>
+<p><b>Important correction.</b> The claim in <span class='xref' data-eid='critic-heads'>critic-heads</span> and
+<span class='xref' data-eid='critic-pfx'>critic-pfx</span> that "the critic is <b>significantly worse</b> than the VLA
+and than random (McNemar 0/10 etc.)" was an <b>n=25 single-seed noise artifact</b>. At power, a good head (HL-Gauss) +
+double-min ties the VLA. A correction banner was added to both posts.</p>
+<p>⑤ <b>coverage, restated.</b> On a single task (PrepareCoffee, VLA already 0.64) BoN has little headroom. DEAS beats
+GR00T because of <b>24-task diversity = broad coverage</b>, unlike our <b>single-task near-demo</b> pool — consistent
+with our standing binding-constraint = coverage.</p>
+<p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
+<b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
+td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
 )
 
 en(
