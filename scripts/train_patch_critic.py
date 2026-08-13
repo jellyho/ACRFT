@@ -36,9 +36,12 @@ class Cfg:
     v_min: float = 0.0
     v_max: float = 1.0
     backbone: str = "small"
+    reward_scheme: str = "sparse"  # "sparse" {0,1} terminal | "cost_to_goal" {-1,0} living-penalty (V-GPS)
+    h_goal: int = 3  # cost_to_goal: last H_goal steps of a SUCCESS episode are the absorbing goal (reward 0)
+    calql_floor: bool = True  # MC-return floor on the Bellman target (drop for cost_to_goal / pure IQL)
 
 
-def load_dirs(dirs, horizon, discount, frames_cap=0):
+def load_dirs(dirs, horizon, discount, frames_cap=0, reward_scheme="sparse", h_goal=3):
     """Concatenate per-step rollout dirs -> images, state, chunk[t]=action[t:t+H], reward, done, mc, ep."""
     IM, ST, AC, RW, DN, EP = [], [], [], [], [], []
     ep_off = 0
@@ -80,6 +83,23 @@ def load_dirs(dirs, horizon, discount, frames_cap=0):
         print(f"  subsampled -> {len(action)} frames from {len(keep)} episodes ({int(succ.sum())} success eps kept)")
     n, A = action.shape
     H = horizon
+    # ---- reward scheme ----------------------------------------------------------------
+    # sparse {0,1}: keep the logged terminal-success reward + episode-end done as-is.
+    # cost_to_goal {-1,0} (V-GPS): every step costs -1; the last h_goal steps of a SUCCESS episode
+    # are the absorbing goal (reward 0, done=1 -> no bootstrap, value pinned to 0). FAILURE episodes
+    # are -1 throughout with done=0 (time-limit truncation -> keep bootstrapping, value stays deeply
+    # negative). This makes V = -(discounted steps-to-goal), spread across the whole support, instead
+    # of collapsing near 0 like the sparse scheme (the action-blind failure mode).
+    if reward_scheme == "cost_to_goal":
+        new_reward = -np.ones(n, np.float32)
+        new_done = np.zeros(n, np.int32)
+        for e in np.unique(ep):
+            eidx = np.flatnonzero(ep == e)
+            if reward[eidx].max() > 0.5:  # success (detected from the original {0,1} labels)
+                goal = eidx[-h_goal:]
+                new_reward[goal] = 0.0
+                new_done[goal] = 1
+        reward, done = new_reward, new_done
     # chunk[t] = action[t:t+H], zeroed where it would cross into another episode
     chunk = np.zeros((n, H, A), np.float32)
     for i in range(H):
@@ -113,17 +133,39 @@ def main():
     ap.add_argument("--horizon", type=int, default=16)
     ap.add_argument("--steps", type=int, default=40000)
     ap.add_argument("--batch", type=int, default=256)
-    ap.add_argument("--discount", type=float, default=0.99)
+    ap.add_argument("--discount", type=float, default=None, help="default 0.99 (sparse) / 0.98 (cost_to_goal)")
     ap.add_argument("--expectile", type=float, default=0.7)
     ap.add_argument("--backbone", default="small")
+    ap.add_argument("--reward-scheme", choices=["sparse", "cost_to_goal"], default="sparse")
+    ap.add_argument("--h-goal", type=int, default=3, help="cost_to_goal: absorbing goal length (last k success steps)")
+    ap.add_argument("--v-min", type=float, default=None, help="HL-Gauss support min (default 0 / -1/(1-gamma))")
+    ap.add_argument(
+        "--v-max", type=float, default=None, help="HL-Gauss support max (default 1 sparse / 0 cost_to_goal)"
+    )
+    ap.add_argument("--calql-floor", default=None, action=argparse.BooleanOptionalAction, help="MC-return floor")
     ap.add_argument("--max-frames", type=int, default=0, help="cap total frames (smoke test)")
     ap.add_argument("--num-workers", type=int, default=6, help="prefetch worker threads (host gather + H2D)")
     ap.add_argument("--wandb", action="store_true", help="log to wandb (project acrft, group patch-critic)")
     ap.add_argument("--wandb-group", default="patch-critic")
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/patch_critic"))
     a = ap.parse_args()
+    cg = a.reward_scheme == "cost_to_goal"
+    discount = a.discount if a.discount is not None else (0.98 if cg else 0.99)
+    v_min = a.v_min if a.v_min is not None else (-1.0 / (1.0 - discount) if cg else 0.0)
+    v_max = a.v_max if a.v_max is not None else (0.0 if cg else 1.0)
+    calql_floor = a.calql_floor if a.calql_floor is not None else (not cg)
     cfg = Cfg(
-        horizon=a.horizon, steps=a.steps, batch=a.batch, discount=a.discount, expectile=a.expectile, backbone=a.backbone
+        horizon=a.horizon,
+        steps=a.steps,
+        batch=a.batch,
+        discount=discount,
+        expectile=a.expectile,
+        backbone=a.backbone,
+        v_min=v_min,
+        v_max=v_max,
+        reward_scheme=a.reward_scheme,
+        h_goal=a.h_goal,
+        calql_floor=calql_floor,
     )
 
     import jax
@@ -148,11 +190,18 @@ def main():
         )
         print(f"wandb: {wb.url}", flush=True)
 
-    D = load_dirs(a.data, cfg.horizon, cfg.discount, a.max_frames)  # max_frames caps by whole episodes
+    D = load_dirs(a.data, cfg.horizon, cfg.discount, a.max_frames, cfg.reward_scheme, cfg.h_goal)
     n = D["n"]
-    print(
-        f"loaded {n} transitions from {len(a.data)} task(s); {int((D['reward'] > 0).sum())} success steps", flush=True
-    )
+    if cfg.reward_scheme == "cost_to_goal":
+        r = D["reward"]
+        print(
+            f"loaded {n} transitions; cost_to_goal reward in [{r.min():.0f},{r.max():.0f}], "
+            f"{int((D['done'] > 0).sum())} goal steps, support [{cfg.v_min:.1f},{cfg.v_max:.1f}] "
+            f"gamma={cfg.discount} calql_floor={cfg.calql_floor}",
+            flush=True,
+        )
+    else:
+        print(f"loaded {n} transitions; {int((D['reward'] > 0).sum())} success steps", flush=True)
 
     # --- precompute frozen DINOv2 patches once (cached on device as f16; critic casts up) ---
     # 256 patches/cam (16x16) is O(P^2)-expensive in the critic's attention; 2x2 avg-pool -> 64/cam
@@ -253,10 +302,13 @@ def main():
         term = (done[nxt] > 0)[..., None]  # [B, P_, 1]
         tgt = jnp.where(term, hl.to_probs(reward[nxt]), tgt)
         # Cal-QL floor at the distribution level: where the behaviour's MC return exceeds the bootstrap
-        # mean, replace the target with a HL-Gauss spike at that return (success-only data needs this).
-        tmean = jnp.sum(tgt * centers, -1)  # [B, P_]
-        floor = mc[idx][:, None] > tmean
-        tgt = jnp.where(floor[..., None], hl.to_probs(jnp.broadcast_to(mc[idx][:, None], tmean.shape)), tgt)
+        # mean, replace the target with a HL-Gauss spike at that return (success-only sparse data needs
+        # this). Dropped for cost_to_goal: pure IQL has no OOD push-down to calibrate, and the {-1,0}
+        # reward is itself the fix for the value collapse the floor used to band-aid.
+        if cfg.calql_floor:
+            tmean = jnp.sum(tgt * centers, -1)  # [B, P_]
+            floor = mc[idx][:, None] > tmean
+            tgt = jnp.where(floor[..., None], hl.to_probs(jnp.broadcast_to(mc[idx][:, None], tmean.shape)), tgt)
         return tgt, valid.astype(jnp.float32)  # [B, P_, atoms], [B, P_]
 
     def loss_fn(params, v_params, tgt_p, idx, rng, pd):
