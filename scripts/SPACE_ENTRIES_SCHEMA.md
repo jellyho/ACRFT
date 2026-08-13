@@ -43,6 +43,26 @@
 ### 국면(phase) 8종 (컬럼 순서 = 색 순서)
 `기반 탐색` · `정합성 검증` · `진단·방법` · `판정·종합` · `표현·설계` · `논문·교차` · `이식·인프라` · `신규`
 
+## 🧭 실험 보드 탭 — `experiments.json` (공유, 두 워커가 각자 행 갱신)
+
+허브의 **🧭 실험 보드** 탭은 별도의 `experiments.json`에서 클라이언트가 렌더한다(계획/진행중/완료).
+`entries.json`(리포트)과 분리 — 리포트는 완결된 글, 실험 보드는 상시 갱신되는 living 상태판이다.
+
+```jsonc
+{
+  "status": "planned" | "running" | "done",   // 🔵 계획 / 🟡 진행중 / 🟢 완료
+  "title":  "실험 이름",
+  "owner":  "A" | "B" (| "B→node200" 등 자유),
+  "note":   "한 줄 메모 (지침·결과·상태)",
+  "wandb":  "https://wandb.ai/... 또는 ''",     // 있으면 wandb 칩
+  "report": "관련 리포트 엔트리의 eid 또는 ''"    // 있으면 '리포트' 칩(data-eid xref)
+}
+```
+
+**갱신 규칙**: 실험을 제출/완료할 때 같은 사이클에 자기 행을 갱신한다. 남의 행은 건드리지 않는다.
+배포는 `experiments.json`만 올리면 됨(템플릿 불변) — `create_commit(parent_commit=head)`.
+worker B의 `exp-board` living 엔트리는 이 탭으로 대체되었으니, 이제 `experiments.json` 행을 갱신하면 된다.
+
 ## 이중 언어 & 수식
 
 - body는 `<div class="wbx wbx-ko">…</div>` + `<div class="wbx wbx-en">…</div>` (KO/EN 토글).

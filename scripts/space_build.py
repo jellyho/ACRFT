@@ -113,6 +113,30 @@ GRAPH_JS = (
     "var k=r.eid<t?r.eid+'|'+t:t+'|'+r.eid;if(seen[k])return;seen[k]=1;links.push([r.eid,t]);});});"
     "return{nodes:nodes,links:links,colors:COLORS,phases:PHASES};};</script>"
 )
+
+# The 🧭 experiment board is a real template-level tab (worker B's request), rendered client-side
+# from a SHARED experiments.json so both workers only ever update rows. Planned / Running / Done,
+# each with owner, note, a wandb link, and a report chip that navigates by eid.
+EXP_JS = (
+    "<script>window.buildExperiments=function(){"
+    "var el=document.getElementById('wb-exp-body');if(!el)return;"
+    "function esc(x){return (x||'').replace(/</g,'&lt;');}"
+    "function render(D){"
+    "var groups=[['running','🟡 진행중 (Running)'],['planned','🔵 계획 (Planned)'],['done','🟢 완료 (Done)']];"
+    "var html='';groups.forEach(function(g){var rows=D.filter(function(r){return r.status===g[0];});"
+    'html+="<h3>"+g[1]+" <span class=\'sm\'>("+rows.length+")</span></h3>";'
+    "if(!rows.length){html+=\"<p class='sm'>없음</p>\";return;}"
+    "html+=\"<div class='tblwrap'><table><thead><tr><th>실험</th><th>담당</th><th>메모</th><th>wandb</th><th>리포트</th></tr></thead><tbody>\";"
+    "rows.forEach(function(r){"
+    "var wb=r.wandb?(\"<a href='\"+r.wandb+\"' target='_blank' rel='noopener'>wandb</a>\"):\"—\";"
+    'var rep=r.report?("<a data-eid=\'"+r.report+"\' style=\'cursor:pointer\'>리포트</a>"):"—";'
+    'html+="<tr><td>"+esc(r.title)+"</td><td>"+esc(r.owner)+"</td><td>"+esc(r.note)+"</td><td>"+wb+"</td><td>"+rep+"</td></tr>";});'
+    'html+="</tbody></table></div>";});el.innerHTML=html;}'
+    "if(window.__EXP){render(window.__EXP);return;}"
+    "fetch('experiments.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){"
+    'window.__EXP=D;render(D);}).catch(function(e){el.innerHTML="<p style=\'color:var(--red)\'>experiments.json load failed: "+e+"</p>";});'
+    "};</script>"
+)
 BOOTSTRAP = (
     "fetch('entries.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){"
     + _INJECT
@@ -158,11 +182,35 @@ def build(src_html: str, inline_entries=None) -> str:
     )
     if n_gd != 1:
         raise SystemExit("could not empty the baked wb-graph-data snapshot")
+    # 4b) experiment board tab (worker B's request): a real template-level tab rendered from a
+    # shared experiments.json. Insert the tab button, the view container, and the wbView branch.
+    h, n_tab = re.subn(
+        r'(<button id="wb-lang")',
+        lambda _m: '<button class="wb-tab" data-v="exp" onclick="wbView(\'exp\')">🧭 실험 보드</button>' + _m.group(1),
+        h,
+        count=1,
+    )
+    h = h.replace(
+        "<!--/wb-views-->",
+        '<div id="wb-exp" hidden><div class="wbx"><p>계획 → 진행중 → 완료. 두 워커가 각자 행을 갱신한다'
+        ' (<code>experiments.json</code>). 리포트 칩을 누르면 이동.</p><div id="wb-exp-body"></div></div></div>'
+        "<!--/wb-views-->",
+        1,
+    )
+    h = h.replace(
+        "document.getElementById('wb-map').hidden=(v!=='map');",
+        "document.getElementById('wb-map').hidden=(v!=='map');"
+        "var _ex=document.getElementById('wb-exp');if(_ex)_ex.hidden=(v!=='exp');"
+        "if(v==='exp'&&window.buildExperiments)window.buildExperiments();",
+        1,
+    )
+    if n_tab != 1:
+        raise SystemExit("could not insert the experiment-board tab button")
     # 5) white/light override (append inside <style> so it wins the cascade)
     h = h.replace("</style>", WHITE_OVERRIDE + "</style>", 1)
     # 6) real math typesetting (MathJax) + client-side daily-thread & mindmap rebuild
     h = h.replace("</head>", MATHJAX_HEAD + "</head>", 1)
-    return h.replace("</body>", THREAD_JS + GRAPH_JS + "</body>", 1)
+    return h.replace("</body>", THREAD_JS + GRAPH_JS + EXP_JS + "</body>", 1)
 
 
 def main():
