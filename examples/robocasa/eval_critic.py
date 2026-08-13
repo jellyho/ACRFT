@@ -122,6 +122,9 @@ class VLA:
             )
 
         self._extract = _extract
+        # Optional post-extraction transform of the token (e.g. the HILP phi readout, so a critic
+        # trained on phi(z) can be evaluated at rollout without touching the VLA side).
+        self.token_transform = None
         probe = self._out(
             {
                 "state": np.zeros((1, self.model_config.action_dim), np.float32),
@@ -147,7 +150,10 @@ class VLA:
         obs = _model.Observation.from_dict(inp)
         self._rng[0], k = jax.random.split(self._rng[0])
         z, base = self._extract(k, obs)
-        return np.asarray(z, np.float32), self._decode(np.asarray(base[0], np.float32))
+        z = np.asarray(z, np.float32)
+        if self.token_transform is not None:
+            z = self.token_transform(z)
+        return z, self._decode(np.asarray(base[0], np.float32))
 
 
 def proprio_stats(critic_path):
@@ -165,8 +171,15 @@ def proprio_stats(critic_path):
     cfg = json.loads(cfg_p.read_text())
     if cfg.get("use_proprio") is False:  # only legacy token-only runs recorded False
         return None
-    meta = json.loads((pathlib.Path(cfg["data"]) / "meta.json").read_text())
-    return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
+    annot = pathlib.Path(cfg["data"])
+    meta = json.loads((annot / "meta.json").read_text())
+    if "proprio_mean" in meta:
+        return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
+    # Older annotations carry the raw proprio column but not its statistics - recompute them the way
+    # the trainer z-scores (per-dim over the frames), so the rollout normalises identically.
+    pd_ = meta["proprio_dim"]
+    pr = np.memmap(annot / "proprio.dat", dtype=np.float32, mode="r", shape=(meta["num_frames"], pd_))
+    return np.asarray(pr.mean(0), np.float32), np.asarray(pr.std(0), np.float32)
 
 
 def load_token_transform(critic_path):
@@ -337,6 +350,25 @@ def make_policy_fn(
             pp = int(np.argmax(q[i]))
         elif mode == "bon":
             i, pp = choice, q.shape[1] - 1
+        elif mode in ("mbac", "mbacf"):
+            # selection = critic at full horizon (as bon); commitment = dyn sigma rule.
+            # mbacf first vetoes the high-sigma half of the candidates: E2 measured that one-step
+            # disagreement alone tells behaviourally consistent chunks from inconsistent ones
+            # (binding .817), so the critic only ranks chunks the model recognises - bounding how
+            # far the arg-max can wander into exploitable actions.
+            qsel = np.array(q[:, -1])
+            if mode == "mbacf":
+                sig_c = dyn.sigma_candidates(z_phi, cand)
+                veto = sig_c > np.median(sig_c)
+                # candidate 0 is the pure policy sample - never veto it, so the worst case
+                # degrades to vla instead of to "best of the leftovers" (worker-B 9a8ce85).
+                veto[0] = False
+                qsel[veto] = -np.inf
+            i = int(np.argmax(qsel))
+            n_exec, _sig = dyn.commit(z_phi, cand[i], dyn.simstep)
+            dyn.simstep += n_exec
+            pp = min(n_exec // dyn.stride - 1, q.shape[1] - 1)
+            return cand[i], n_exec, Replan(q, cand, i, int(pp), n_exec, float(q[i, -1]))
         elif mode == "prefix":
             i, pp = 0, choice
         else:
@@ -403,8 +435,8 @@ def build_policy(
         noise_scale=_parse_noise_scales(noise_scales, num_samples) if noise_scales else 1.0,
     )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
-    if mode == "vla":
-        return make_policy_fn(vla, None, None, mode=mode, **kw), vla.H, None
+    if mode in ("vla", "mbacv", "probe"):
+        return make_policy_fn(vla, None, None, mode=mode, dyn=dyn, probe=probe, **kw), vla.H, None
     score, _, macro = _critic.load_trained(critic_path, action_dim=vla.raw_dim, horizon=vla.H)
     pro = proprio_stats(critic_path)
     if pro is not None:
@@ -449,6 +481,34 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--checkpoint", required=True, type=pathlib.Path)
     ap.add_argument("--critic", type=pathlib.Path, default=None, help="Trained critic params.msgpack.")
+    ap.add_argument(
+        "--phi",
+        type=pathlib.Path,
+        default=None,
+        help="HILP phi readout (phi.pt): apply phi to the extracted token before the "
+        "critic, for critics trained on the phi space.",
+    )
+    ap.add_argument(
+        "--dyn",
+        type=pathlib.Path,
+        default=None,
+        help="DynV1 ensemble (ensemble_v1.pt) trained on the SAME phi space as --phi; "
+        "required by the mbac/mbacv modes (sigma-rule commitment).",
+    )
+    ap.add_argument(
+        "--probe",
+        type=pathlib.Path,
+        default=None,
+        help="BC probe checkpoint (probe.pt from train_bc_probe): replaces the VLA's chunk "
+        "with the probe's embedding->chunk regression in the probe mode.",
+    )
+    ap.add_argument(
+        "--dyn-tau",
+        type=float,
+        default=2.0,
+        help="Cut when a macro-step's ensemble disagreement exceeds tau x the running "
+        "median. Higher = longer commitment.",
+    )
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
         "--modes",
@@ -570,6 +630,60 @@ def main() -> None:
         model_overrides=_vla_ov,
     )
 
+    if args.phi is not None:
+        import torch as _torch
+
+        _sd = _torch.load(args.phi, map_location="cpu")
+        # phi was trained on STANDARDIZED tokens (train_hilp_readout normalizes its input);
+        # feeding raw tokens shifted phi outputs by ~45% relative error and invalidated the
+        # first round of phi rollout arms. Standardize with the training cache's statistics.
+        _cache_dir = args.phi.parent.parent / f"rlt_cache_{args.task}"
+        _tok = np.load(_cache_dir / "features.npy", mmap_mode="r")
+        _tsub = np.array(_tok[:: max(1, len(_tok) // 20000)])
+        _tmu, _tsd = _tsub.mean(0).astype(np.float32), (_tsub.std(0) + 1e-6).astype(np.float32)
+        _w0 = _sd["0.weight"].numpy()
+        _b0 = _sd["0.bias"].numpy()
+        _w2 = _sd["2.weight"].numpy()
+        _b2 = _sd["2.bias"].numpy()
+
+        def _phi_fn(z, _w0=_w0, _b0=_b0, _w2=_w2, _b2=_b2, _mu=_tmu, _sdv=_tsd):
+            z = (np.asarray(z, np.float32) - _mu) / _sdv
+            h = z @ _w0.T + _b0
+            h = 0.5 * h * (1.0 + np.tanh(0.7978845608 * (h + 0.044715 * h**3)))  # gelu(tanh approx)
+            return (h @ _w2.T + _b2).astype(np.float32)
+
+        shared_vla.token_transform = _phi_fn
+        logger.info(f"phi adapter active: token {_w0.shape[1]} -> {_w2.shape[0]}")
+
+    probe_fn = None
+    if args.probe is not None:
+        import torch as _torch
+
+        _pk = _torch.load(args.probe, map_location="cpu", weights_only=False)
+        _pw = [(_pk["net"][f"{i}.weight"].numpy(), _pk["net"][f"{i}.bias"].numpy()) for i in (0, 2, 4, 6)]
+        _pmu, _psd = _pk["zmu"], _pk["zsd"]
+        _pproj = _pk.get("proj")
+        _pH, _pA = _pk["cfg"]["H"], _pk["cfg"]["A"]
+
+        def probe_fn(z, _w=_pw, _mu=_pmu, _sd=_psd, _hh=_pH, _aa=_pA, _proj=_pproj):
+            x = (np.asarray(z, np.float32).reshape(-1) - _mu) / _sd
+            if _proj is not None:
+                x = x @ _proj
+            for i, (w, b) in enumerate(_w):
+                x = x @ w.T + b
+                if i < len(_w) - 1:
+                    x = 0.5 * x * (1.0 + np.tanh(0.7978845608 * (x + 0.044715 * x**3)))
+            return x.reshape(_hh, _aa).astype(np.float32)
+
+        logger.info(f"probe policy active: {_pk['cfg']['z_src']} ({_pk['cfg']['in_dim']}d) -> chunk")
+
+    dyn_commit = None
+    if args.dyn is not None:
+        dyn_commit = DynCommit(args.dyn, tau_mult=args.dyn_tau)
+        logger.info(
+            f"dyn commitment active: stride {dyn_commit.stride}, hist {dyn_commit.hist}, tau x{dyn_commit.tau_mult}"
+        )
+
     for mode in args.modes:
         policy, H, macro = build_policy(
             args.config,
@@ -585,6 +699,8 @@ def main() -> None:
             model_overrides=_vla_ov,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
+            dyn=dyn_commit,
+            probe=probe_fn,
         )
         trace, frames, box = [], [], {"trial": 0, "proj": None, "wproj": None}
         record = args.video_dir is not None
@@ -645,6 +761,8 @@ def main() -> None:
             logger.info(
                 f"[{_mode}] trial {trial + 1}/{args.num_trials}: {'SUCCESS' if success else 'failure'} in {steps} steps"
             )
+            if dyn_commit is not None:
+                dyn_commit.reset()
             if _rec and trial < args.num_videos and _frames:
                 import imageio
 

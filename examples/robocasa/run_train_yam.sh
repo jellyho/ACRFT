@@ -54,6 +54,8 @@ TRAIN_FLAGS=()
 # YAM decodes three camera streams per sample, so the loader is the bottleneck at the default of 2
 # workers. Scale it with the CPUs the job actually got.
 [ -n "${NUM_WORKERS:-}" ] && TRAIN_FLAGS+=(--num-workers "$NUM_WORKERS")
+# Extend training past the config default (e.g. TRAIN_STEPS=200000 continues s200 to 200k).
+[ -n "${TRAIN_STEPS:-}" ] && TRAIN_FLAGS+=(--num-train-steps "$TRAIN_STEPS")
 exec env XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-1.0}" \
   uv run python scripts/train.py "$CONFIG" \
   --exp-name="$EXP" --project-name "$PROJECT" --wandb-entity "$ENTITY" \
