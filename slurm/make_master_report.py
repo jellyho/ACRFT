@@ -1732,6 +1732,79 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-13 model-based ARQ 쉬운 설명
+entry(
+    "08-13",
+    "mb-arq",
+    "쉽게 풀어쓴 model-based critic — '상상하는 심판'은 VLA를 이길 수 있나",
+    "살아있음",
+    """
+<p class='sub'>이 글은 수식·용어 없이 <b>model-based critic(=model-based ARQ, MVE)</b> 하나만 처음부터 끝까지
+비유로 설명한다. 우리가 왜 이걸 시도하는지, 무엇이고, 될 것 같은지·안 될 것 같은지까지.</p>
+
+<h3>0. 무대 — 로봇, 후보, 심판</h3>
+<p>우리 로봇 정책(<b>VLA</b>)은 매 순간 "다음에 이렇게 움직일게" 하는 <b>동작 후보를 여러 개</b> 제안한다(예: 8~16개).
+같은 상황을 조금씩 다르게 실행하는 변주들이다. 우리는 그중 <b>제일 좋은 걸 골라줄 심판(critic)</b>을 원한다 —
+이 "여러 개 뽑아 best 고르기"를 <b>Best-of-N(BoN)</b>이라 부른다. 심판이 잘 고르면 로봇이 더 잘하게 된다.</p>
+
+<h3>1. 오늘 밤 우리가 확인한 것 — 심판이 로봇을 못 이긴다</h3>
+<p>여러 방식의 심판을 만들어 붙여봤는데(<span class='xref' data-eid='deas'>DEAS 재현·정정</span>), <b>제대로 재보니
+심판을 붙인 성공률이 그냥 로봇(첫 후보 실행)과 똑같았다.</b> 왜 못 이길까? 이유가 둘이다:</p>
+<ul>
+<li><b>후보가 다 비슷하다</b>: 같은 로봇이 뽑은 변주라 서로 엇비슷하다. 그중 "미세하게 나은 것"을 가려야 하는데 재료가 빈약하다.</li>
+<li><b>심판이 대안을 본 적이 없다</b>: 학습 데이터(사람 시연)엔 매 상황에 <b>실제로 한 동작</b>만 있고, "다른 동작을 했으면
+어땠을까"는 없다. 그래서 심판은 안 해본 후보에 대해 <b>사실상 찍는다</b>. 게다가 찍을 때 하필 <b>자기가 과대평가한
+엉뚱한 후보</b>를 고르는 경향(=<b>승자의 저주</b>)까지 있어 오히려 손해를 본다.</li>
+</ul>
+<p class='sub'>핵심 병목을 우리는 <b>coverage(커버리지)</b>라 불러왔다 — "안 해본 행동의 결과를 모른다"는 데이터의 구멍.</p>
+
+<h3>2. 새 아이디어 — 심판에게 '수정구슬'을 준다 (이게 model-based)</h3>
+<p>심판이 후보를 직접 감으로 매기지 말고, <b>세상 돌아가는 법을 흉내내는 모델(수정구슬)</b>을 하나 줘서
+<b>각 후보를 실행하면 무슨 일이 벌어질지 "상상"</b>하게 한 뒤, <b>그 상상된 결과가 얼마나 좋은지</b>를 평가하자.</p>
+<p>체스 엔진을 떠올리면 된다: "여기 두면 판이 이렇게 되고 → 그 판은 유리해." 우리도 "이 후보로 팔을 움직이면 →
+로봇이 이 상태에 도달하고 → 그 상태는 성공에 가깝다"로 점수를 준다. 이게 <b>model-based critic</b>이다.
+(수식으로는 <code>후보 점수 = 상상한 즉시보상 + γ·V(상상한 도착지)</code> 한 줄. V는 "이 상태가 얼마나 좋은가"를 재는 기존 심판.)</p>
+
+<h3>3. 과대평가 방지 — 수정구슬 5개로 '모르면 비관'</h3>
+<p>상상은 틀릴 수 있다. 그래서 <b>서로 다르게 학습한 수정구슬 5개</b>를 두고, 한 후보에 대해 <b>5개가 크게 엇갈리면(불확실)
+가장 나쁜 값으로 깎는다</b>(min). 자신 있게 예측하는(=엇갈림 적은) 후보만 높은 점수를 받는다. 이렇게 하면
+<b>모르는 후보를 과대평가하는 승자의 저주</b>를 구조적으로 막는다. 이게 오늘 밤 우리에게 없던 안전장치다.
+(이 방식을 <b>MVE, model-based value expansion</b>라 한다. 워커A가 이미 <code>train_mve_critic.py</code>로 구현해뒀다.)</p>
+
+<h3>4. 그런데 — <u>수정구슬은 어떻게 만드나?</u> (여기가 진짜 관건)</h3>
+<p>수정구슬(모델)은 <b>로봇이 실제로 한 것</b>으로 배운다: "이 상황에서 이 동작을 했더니 → 여기 도달했다"를 잔뜩 모아
+(상황, 동작) → (도착지)를 맞히게 학습한다. 문제가 여기서 똑같이 터진다:</p>
+<ul>
+<li>데이터엔 <b>한 상황에 한 동작</b>만 있다. 그래서 모델은 "이 상황이면 대개 여기로 간다"는 잘 배우지만,
+<b>"동작을 바꾸면 도착지가 어떻게 달라지나"는 거의 못 배운다.</b> (우리가 옛날에 쟀을 때 동작이 예측에 더하는 정보가
+겨우 +7.3%였다.) → <b>같은 coverage 벽</b>이 모델 학습에도 그대로 있다.</li>
+<li>특히 <b>"이 후보가 머그를 진짜 잡나?"</b> 같은 <b>물체 상호작용 결과</b>는 안 해본 동작에 대해 <b>원리적으로 못 배운다</b> —
+그 데이터가 없으니까.</li>
+</ul>
+
+<h3>5. 그래도 되는 이유 — 물리(팔의 움직임)는 싸게 배운다</h3>
+<p>수정구슬이 <b>확실히 잘 배우는 것</b>이 하나 있다: <b>팔의 물리</b>. "오른쪽으로 가라고 명령하면 팔이 오른쪽으로 간다" —
+이건 결정적이고 시연에도 항상 보여서 잘 배운다. 그래서 모델은 <b>각 후보에 대해 '팔이 어디로 향하나'는 선명하게 상상</b>할 수 있다.
+만약 좋은 후보와 나쁜 후보를 가르는 게 <b>"팔이 머그 쪽으로 제대로 가느냐"</b>라면, 물체 결과를 못 맞혀도 <b>궤적 품질</b>만으로
+후보를 가를 수 있다. <b>단, 조건</b>: 모델이 도는 표현 공간이 그 <b>팔·위치 디테일을 보존</b>해야 한다. 우리
+<span class='xref' data-eid='embed-compare'>임베딩 비교</span>에서 봤듯 "얼마나 다 됐나"만 남기는 진행도-표현(φ)은
+<b>제어 정보를 파괴</b>하므로, 그런 공간에서 모델을 배우면 후보를 못 가른다. <b>표현 선택이 성패를 가른다.</b></p>
+
+<h3>6. 정직한 결론 & 다음 한 수</h3>
+<p><b>model-based critic은</b> "감으로 랭킹"을 "상상해서 랭킹 + 모르면 비관"으로 바꿔주는 원리적으로 옳은 방향이다.
+<b>하지만</b> 수정구슬은 데모 데이터의 구멍(coverage)을 그대로 물려받는다: <b>팔 궤적은 상상하되, 안 해본 동작의 물체 결과는 못
+상상한다.</b> 그러니:</p>
+<ul>
+<li><b>될 수 있는 경우</b>: 후보 판별이 대체로 "팔이 올바로 향하나"로 결정되면 — 궤적 채널 + 앙상블 비관으로 로봇을 이길 여지.</li>
+<li><b>안 되는 경우</b>: 물체 결과 예측이 꼭 필요하면 — 결국 <b>후보를 실제로 시뮬에서 해봐서</b> 데이터를 만드는 수밖에 없다(on-policy).
+우리가 계속 도달하는 그 결론.</li>
+</ul>
+<p><b>그래서 다음 실험은</b> "수정구슬이 정말 후보를 가르나"를 먼저 재는 <b>게이트</b>다: 학습한 모델이 (a) 아는 후보는 값이
+갈리고, (b) 모르는 후보는 5개가 엇갈려 비관으로 빠지는지. 이게 통과해야 실제 롤아웃(그것도 <b>여러 시드 평균</b>으로 —
+오늘 밤 배운 대로 n=25 한 번은 노이즈다)로 넘어간다. <span class='xref' data-eid='model-based'>이전 model-based 실험</span>과
+이어진다.</p>""",
+)
+
 # ============================================== 08-09 model-based 본질 회귀
 entry(
     "08-07",
@@ -2310,6 +2383,15 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "mb-arq": {
+        "date": "2026-08-13 09:00",
+        "who": "워커B(해설)",
+        "where": "개념 설명 (워커A train_mve_critic.py·train_cheapz_dynamics 참조)",
+        "what": "model-based critic(MVE)을 비유로 쉽게 설명 — '상상하는 심판' + 수정구슬(월드모델)을 어떻게 배우나·왜 어렵나",
+        "how": "수식 최소화, 체스엔진·수정구슬 비유로 처음부터; 우리 coverage·승자의저주·임베딩 findings와 연결",
+        "why": "사용자 요청 '너무 어렵다 — model-based ARQ를 포스트 하나로 쉽게 설명해달라'",
+        "links": ["model-based", "deas", "embed-compare", "conservatism"],
     },
     "xworker-0808": {
         "date": "2026-08-08 14:10",
@@ -3533,6 +3615,79 @@ with our standing binding-constraint = coverage.</p>
 <p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
 <b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
 td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
+)
+
+en(
+    "mb-arq",
+    "Model-based critic, in plain words — can an 'imagining judge' beat the VLA?",
+    """
+<p class='sub'>This post explains one thing — the <b>model-based critic (model-based ARQ / MVE)</b> — from scratch,
+by analogy, with almost no math: why we try it, what it is, and whether it is likely to work.</p>
+
+<h3>0. The stage — robot, candidates, judge</h3>
+<p>Our robot policy (<b>VLA</b>) proposes, at every moment, <b>several candidate moves</b> (say 8–16) — small variations
+of the same situation. We want a <b>judge (critic) to pick the best one</b> — "propose N, keep the best" is
+<b>Best-of-N (BoN)</b>. A good judge makes the robot better.</p>
+
+<h3>1. What we found tonight — the judge can't beat the robot</h3>
+<p>We built several judges (<span class='xref' data-eid='deas'>DEAS reproduction/correction</span>) and, measured
+properly, <b>the success rate with a judge equalled just trusting the robot (execute the first candidate).</b> Why?
+Two reasons:</p>
+<ul>
+<li><b>The candidates are all alike</b> — variations from the same robot, so telling "slightly better" apart is thin.</li>
+<li><b>The judge never saw the alternatives</b>: the training data (human demos) has only the <b>one action actually taken</b>
+per situation, never "what if a different action." So the judge essentially <b>guesses</b> on unseen candidates — and when
+guessing it tends to pick the one it <b>over-values by mistake</b> (the <b>winner's curse</b>), so it loses.</li>
+</ul>
+<p class='sub'>We call this binding gap <b>coverage</b> — the data hole of "not knowing the outcome of actions never tried."</p>
+
+<h3>2. The idea — give the judge a 'crystal ball' (this is model-based)</h3>
+<p>Instead of ranking candidates by gut, give the judge a <b>model that mimics how the world works (a crystal ball)</b>,
+let it <b>imagine what happens if each candidate is executed</b>, then score <b>how good that imagined result is</b>.
+Like a chess engine: "if I play here → the board becomes this → that board is winning." We score
+<code>candidate = imagined immediate reward + γ·V(imagined landing state)</code>, where V is the usual "how good is this state" judge.</p>
+
+<h3>3. Avoiding over-valuation — 5 crystal balls, 'be pessimistic when unsure'</h3>
+<p>Imagination can be wrong. So keep <b>5 differently-trained crystal balls</b>; if they <b>disagree a lot</b> about a
+candidate (uncertain), <b>take the worst value</b> (min). Only candidates the ensemble confidently predicts score high —
+structurally blocking the winner's curse of over-valuing unknown candidates. This safeguard is what we lacked tonight.
+(This is <b>MVE, model-based value expansion</b>; worker A already implemented it in <code>train_mve_critic.py</code>.)</p>
+
+<h3>4. But — <u>how do you build the crystal ball?</u> (the real crux)</h3>
+<p>The model learns from <b>what the robot actually did</b>: collect "in this situation, this action led here" and fit
+(situation, action) → (landing). The same problem hits here:</p>
+<ul>
+<li>The data has <b>one action per situation</b>. So the model learns "this situation usually goes here" well, but
+<b>barely learns "how changing the action changes the landing"</b> (when we measured it, the action added only +7.3% of
+predictive info). → the <b>same coverage wall</b> lives inside model learning.</li>
+<li>In particular <b>"does this candidate actually grasp the mug?"</b> — object-interaction outcomes for untried actions —
+<b>cannot be learned in principle</b>, because there is no such data.</li>
+</ul>
+
+<h3>5. Why it might still work — the physics (arm motion) is cheap to learn</h3>
+<p>One thing the crystal ball <b>does</b> learn well: <b>the arm's physics</b>. "Command right → the arm goes right" is
+deterministic and always visible, so it is learned reliably. So the model can <b>clearly imagine 'where the arm heads'</b>
+for each candidate. If good-vs-bad candidates are decided mostly by <b>"is the arm heading correctly toward the mug,"</b>
+then even without predicting object outcomes, <b>trajectory quality</b> can separate them. <b>Condition</b>: the
+representation the model runs in must <b>preserve that arm/position detail</b>. As our
+<span class='xref' data-eid='embed-compare'>embedding comparison</span> showed, a progress-only representation (φ) that keeps
+only "how close to done" <b>destroys control information</b> — learn the model there and it cannot separate candidates.
+<b>The representation choice decides it.</b></p>
+
+<h3>6. Honest conclusion & the next single step</h3>
+<p>The model-based critic is a principled upgrade — "rank by gut" becomes "imagine then rank + be pessimistic when unsure."
+<b>But</b> the crystal ball inherits the demo data's hole (coverage): <b>it can imagine the arm's path, but not the object
+outcome of untried actions.</b> So:</p>
+<ul>
+<li><b>Could work</b>: if candidate quality is mostly "is the arm heading right" — the trajectory channel + ensemble pessimism
+leaves room to beat the robot.</li>
+<li><b>Won't</b>: if predicting object outcomes is essential — then you must <b>actually try candidates in sim</b> to make the
+data (on-policy), the conclusion we keep reaching.</li>
+</ul>
+<p><b>So the next experiment</b> is a <b>gate</b>: does the trained model actually separate candidates — (a) confident
+candidates get distinct values, (b) unknown candidates make the 5 disagree and fall to pessimism? Only if it passes do we go
+to real rollouts (and averaged over <b>several seeds</b> — tonight taught us a single n=25 is noise). Continues
+<span class='xref' data-eid='model-based'>the earlier model-based work</span>.</p>""",
 )
 
 en(
