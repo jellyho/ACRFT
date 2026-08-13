@@ -79,6 +79,14 @@ def main() -> None:
         "this policy degrades badly on partial-chunk execution.",
     )
     ap.add_argument("--camera-size", type=int, default=256, help="Camera height/width for the env.")
+    ap.add_argument(
+        "--env-action-order",
+        action="store_true",
+        help="Treat the policy's 12-d action as ALREADY in env/HDF5 order [ee_pos(3), ee_rot(3), "
+        "gripper(1), base_motion(4), control_mode(1)] and pass it straight through, skipping the "
+        "LeRobot->env reorder. Needed for checkpoints trained on RoboCasa's official LeRobot layout "
+        "(e.g. the pi05_pretrain_human300 release), whose action column is already HDF5-ordered.",
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
         "--video-dir", type=pathlib.Path, default=None, help="If set, save mp4 rollouts here (needs imageio)."
@@ -174,7 +182,9 @@ def main() -> None:
             # the chunk length keeps the client config-free: no hardcoded horizon here.
             replan = args.replan_steps if args.replan_steps is not None else len(action_chunk)
             for action in action_chunk[:replan]:
-                obs, _, _, _ = env.step(_lerobot_action_to_env(np.asarray(action)))
+                a = np.asarray(action)
+                env_action = a[:12] if args.env_action_order else _lerobot_action_to_env(a)
+                obs, _, _, _ = env.step(env_action)
                 step += 1
                 if record:
                     frame = _image(obs, _CAMERAS["observation/image"])

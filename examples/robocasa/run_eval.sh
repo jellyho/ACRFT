@@ -153,6 +153,7 @@ PY
   "$EVAL_PYTHON" examples/robocasa/main.py --task "$TASK" --host 127.0.0.1 --port "$PORT" \
       --num-trials "$NUM_TRIALS" --num-videos "$NUM_VIDEOS" --seed "$SEED" \
       --action-dist-samples "${ACTION_DIST_SAMPLES:-0}" \
+      ${ENV_ACTION_ORDER:+--env-action-order} \
       --video-dir "$STEP_OUT/videos" --output-json "$STEP_OUT/results.json" \
       2>&1 | tee "$STEP_OUT/client.log" || echo "  !! rollouts failed for $STEP"
 

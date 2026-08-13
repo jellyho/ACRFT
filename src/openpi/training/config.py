@@ -182,6 +182,10 @@ class DataConfigFactory(abc.ABC):
     assets: AssetsConfig = dataclasses.field(default_factory=AssetsConfig)
     # Base config that will be updated by the factory.
     base_config: tyro.conf.Suppress[DataConfig | None] = None
+    # Force mean/std normalization even for pi05. Needed to serve checkpoints trained with mean/std
+    # norm stats (e.g. the official RoboCasa 365 pi05_pretrain_human300 release), whose norm_stats
+    # carry no q01/q99 quantiles. Default False preserves the model-type-derived behavior.
+    force_mean_std_norm: bool = False
 
     @abc.abstractmethod
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -195,7 +199,7 @@ class DataConfigFactory(abc.ABC):
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
-            use_quantile_norm=model_config.model_type != ModelType.PI0,
+            use_quantile_norm=(model_config.model_type != ModelType.PI0) and not self.force_mean_std_norm,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
@@ -1038,6 +1042,20 @@ _CONFIGS = [
         num_train_steps=100_000,
         save_interval=10_000,
         action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
+    ),
+    # Serving config for the OFFICIAL RoboCasa 365 pi05 release (robocasa/robocasa365_checkpoints,
+    # pi05_pretrain_human300/multitask_learning/75000). Same architecture as pi05_robocasa but that
+    # checkpoint was trained with mean/std norm (its norm_stats carry no quantiles), so force it.
+    TrainConfig(
+        name="pi05_robocasa_pretrained",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id="jellyho/robocasa365-PrepareCoffee",
+            base_config=DataConfig(prompt_from_task=True),
+            force_mean_std_norm=True,
+        ),
+        batch_size=32,
+        num_train_steps=1,
     ),
     # RLT ("RL Token") variant of pi05_robocasa: learns the compact RL-token bottleneck jointly with
     # the BC finetune (language-conditioned token, single forward). Same data/optimizer as pi05_robocasa;
