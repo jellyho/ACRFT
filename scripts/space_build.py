@@ -24,7 +24,19 @@ WHITE_OVERRIDE = """
 :root{--bg:#ffffff;--card:#f9f9f7;--card2:#f2f1ec;--text:#0b0b0b;--muted:#6b6560;--line:#e1e0d9;
   --green:#008300;--red:#c0392b;--yellow:#c98a00;--blue:#2a78d6;--purple:#7c3aed}
 body{background:#ffffff}
+/* MathJax display equations: journal-style, centered, black, breathing room */
+mjx-container[display="true"]{margin:1.05em 0!important;overflow-x:auto;overflow-y:hidden}
+mjx-container{color:var(--text)}
 """
+
+# Real math typesetting (MathJax v3, SVG so glyphs are self-contained & inherit text colour).
+# Only \(...\) and \[...\] are active delimiters — never $...$, so existing worker bodies are untouched.
+MATHJAX_HEAD = (
+    "<script>window.MathJax={tex:{inlineMath:[['\\\\(','\\\\)']],displayMath:[['\\\\[','\\\\]']],"
+    "tags:'none'},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code'],"
+    "ignoreHtmlClass:'no-mathjax'},svg:{fontCache:'global'}};</script>"
+    '<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>'
+)
 
 _INJECT = (
     "D.sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});"
@@ -33,6 +45,9 @@ _INJECT = (
     "D.forEach(function(e,i){var s=document.createElement('section');s.className='report';"
     "s.id='r'+i;s.hidden=true;s.innerHTML=e.body_html||'';rd.appendChild(s);});"
     "render();"
+    # typeset math once bodies are in the DOM (MathJax loads async → poll until ready)
+    "(function tj(){if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetPromise();}"
+    "else{setTimeout(tj,150);}})();"
 )
 BOOTSTRAP = (
     "fetch('entries.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){"
@@ -62,7 +77,9 @@ def build(src_html: str, inline_entries=None) -> str:
     last = h.rfind("render();")
     h = h[:last] + boot + h[last + len("render();") :]
     # 4) white/light override (append inside <style> so it wins the cascade)
-    return h.replace("</style>", WHITE_OVERRIDE + "</style>", 1)
+    h = h.replace("</style>", WHITE_OVERRIDE + "</style>", 1)
+    # 5) real math typesetting (MathJax) — load in <head>
+    return h.replace("</head>", MATHJAX_HEAD + "</head>", 1)
 
 
 def main():
