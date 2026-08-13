@@ -118,6 +118,8 @@ def main():
     ap.add_argument("--backbone", default="small")
     ap.add_argument("--max-frames", type=int, default=0, help="cap total frames (smoke test)")
     ap.add_argument("--num-workers", type=int, default=6, help="prefetch worker threads (host gather + H2D)")
+    ap.add_argument("--wandb", action="store_true", help="log to wandb (project acrft, group patch-critic)")
+    ap.add_argument("--wandb-group", default="patch-critic")
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/patch_critic"))
     a = ap.parse_args()
     cfg = Cfg(
@@ -133,6 +135,18 @@ def main():
     from openpi.patch_critic.critic import HLGauss
     from openpi.patch_critic.critic import PatchCriticEnsemble
     from openpi.patch_critic.critic import PatchV
+
+    wb = None
+    if a.wandb:
+        import wandb
+
+        wb = wandb.init(
+            project="acrft",
+            group=a.wandb_group,
+            name=a.out.name,
+            config={**dataclasses.asdict(cfg), "data": [str(d) for d in a.data], "max_frames": a.max_frames},
+        )
+        print(f"wandb: {wb.url}", flush=True)
 
     D = load_dirs(a.data, cfg.horizon, cfg.discount, a.max_frames)  # max_frames caps by whole episodes
     n = D["n"]
@@ -290,6 +304,8 @@ def main():
     for s in range(cfg.steps):
         rng, k = jax.random.split(rng)
         carry, info = step(carry, k, patches_dev)
+        if wb is not None and s % 100 == 0:
+            wb.log({k2: float(v) for k2, v in info.items()}, step=s)
         if s % 1000 == 0 or s == cfg.steps - 1:
             i = jax.tree.map(lambda x: float(x), info)
             rate = (s + 1) / (_time.perf_counter() - t0)
@@ -306,6 +322,8 @@ def main():
     (a.out / "params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(params)))
     (a.out / "config.json").write_text(json.dumps({**dataclasses.asdict(cfg), "num_patches": int(P)}, indent=2))
     print(f"saved -> {a.out}", flush=True)
+    if wb is not None:
+        wb.finish()
 
 
 if __name__ == "__main__":
