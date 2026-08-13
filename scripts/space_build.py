@@ -40,14 +40,58 @@ MATHJAX_HEAD = (
 
 _INJECT = (
     "D.sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});"
-    "REPORTS=D.map(function(e){return{date:e.date,title:e.title,summary:e.summary,tags:e.tags,status:e.status};});"
+    # keep each entry's stable eid alongside the feed metadata (used for eid-based navigation)
+    "REPORTS=D.map(function(e){return{eid:e.eid,date:e.date,title:e.title,summary:e.summary,tags:e.tags,status:e.status};});"
+    "window.EID2I={};REPORTS.forEach(function(r,i){if(r.eid)window.EID2I[r.eid]=i;});"
     "var rd=document.getElementById('reader');"
     "D.forEach(function(e,i){var s=document.createElement('section');s.className='report';"
-    "s.id='r'+i;s.hidden=true;s.innerHTML=e.body_html||'';rd.appendChild(s);});"
+    # DOM id stays r{index} for the reader, but the stable eid rides along as data-eid so
+    # cross-links resolve by eid regardless of how the merged feed is re-sorted.
+    "s.id='r'+i;s.setAttribute('data-eid',e.eid||('r'+i));s.hidden=true;s.innerHTML=e.body_html||'';rd.appendChild(s);});"
     "render();"
+    "if(window.buildThread){window.buildThread();}"
+    # delegated navigation: any [data-eid] link (xref, thread item) opens that entry by eid
+    "if(!window.__eidnav){window.__eidnav=1;document.addEventListener('click',function(ev){"
+    "var el=ev.target.closest('[data-eid]');if(!el||el.classList.contains('report'))return;"
+    "var eid=el.getAttribute('data-eid');if(!eid)return;ev.preventDefault();openReport(eid);});}"
     # typeset math once bodies are in the DOM (MathJax loads async → poll until ready)
     "(function tj(){if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetPromise();}"
     "else{setTimeout(tj,150);}})();"
+)
+
+# eid-first openReport: accepts a stable eid string OR a numeric array index (back-compat).
+# This is what makes two-worker cross-links survive re-sorting of the merged feed.
+OPENREPORT_EID = (
+    "function openReport(ref){"
+    "var i=(typeof ref==='number')?ref:((window.EID2I&&(ref in window.EID2I))?window.EID2I[ref]"
+    ":(/^\\d+$/.test(ref)?+ref:-1));"
+    "if(i<0||!REPORTS[i])return;"
+    'document.getElementById("home").hidden=true;'
+    'document.getElementById("reader").hidden=false;'
+    'document.querySelectorAll(".report").forEach(function(s){s.hidden=true;});'
+    'var sec=document.getElementById("r"+i);if(sec)sec.hidden=false;'
+    'document.getElementById("rtitle").textContent=REPORTS[i].title;'
+    'document.getElementById("rdate").textContent=REPORTS[i].date;'
+    "window.scrollTo(0,0);}"
+)
+
+# The 🧵 daily thread is regenerated client-side from the live feed (it used to be a frozen
+# snapshot that went stale + carried stale index links). Links target eids → never break.
+THREAD_JS = (
+    "<script>window.buildThread=function(){"
+    "var el=document.getElementById('wb-thread');if(!el)return;"
+    "var esc=function(x){return (x||'').replace(/</g,'&lt;');};"
+    "var byDay={};REPORTS.forEach(function(r){var d=(r.date||'').slice(0,10);(byDay[d]=byDay[d]||[]).push(r);});"
+    "var days=Object.keys(byDay).sort(function(a,b){return b.localeCompare(a);});"
+    "var html=\"<div class='wbx'><p>일자별로 올라온 리포트 전부(양쪽 워커 포함). 제목을 누르면 해당 리포트로 이동한다.</p>\";"
+    "days.forEach(function(d){"
+    "var items=byDay[d].slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});"
+    'html+="<div class=\'day\'><h3>"+d+" <span class=\'sm\'>("+items.length+"건)</span></h3><ul>";'
+    "items.forEach(function(r){var t=(r.date||'').slice(11);"
+    'html+="<li><span class=\'sm\'>"+t+"</span> <a data-eid=\'"+r.eid+"\' style=\'cursor:pointer\'>"+esc(r.title)+"</a>"'
+    "+\"<div class='sm'>\"+esc((r.summary||'').slice(0,120))+\"</div></li>\";});"
+    'html+="</ul></div>";});'
+    'html+="</div>";el.innerHTML=html;};</script>'
 )
 BOOTSTRAP = (
     "fetch('entries.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){"
@@ -76,10 +120,17 @@ def build(src_html: str, inline_entries=None) -> str:
     )
     last = h.rfind("render();")
     h = h[:last] + boot + h[last + len("render();") :]
-    # 4) white/light override (append inside <style> so it wins the cascade)
+    # 4) eid-based navigation: stable cross-links that survive re-sorting the merged feed
+    # replacement passed as a callable so backslashes (e.g. \d) aren't treated as regex escapes
+    h, n_or = re.subn(r"function openReport\(i\)\{.*?\n\}", lambda _m: OPENREPORT_EID, h, count=1, flags=re.DOTALL)
+    if n_or != 1:
+        raise SystemExit("could not patch openReport for eid navigation")
+    h = h.replace("b.onclick=()=>openReport(r.idx);", "b.onclick=()=>openReport(r.eid||r.idx);", 1)
+    # 5) white/light override (append inside <style> so it wins the cascade)
     h = h.replace("</style>", WHITE_OVERRIDE + "</style>", 1)
-    # 5) real math typesetting (MathJax) — load in <head>
-    return h.replace("</head>", MATHJAX_HEAD + "</head>", 1)
+    # 6) real math typesetting (MathJax) + client-side daily-thread rebuild
+    h = h.replace("</head>", MATHJAX_HEAD + "</head>", 1)
+    return h.replace("</body>", THREAD_JS + "</body>", 1)
 
 
 def main():
