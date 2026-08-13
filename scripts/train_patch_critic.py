@@ -38,7 +38,7 @@ class Cfg:
     backbone: str = "small"
     reward_scheme: str = "sparse"  # "sparse" {0,1} terminal | "cost_to_goal" {-1,0} living-penalty (V-GPS)
     h_goal: int = 3  # cost_to_goal: last H_goal steps of a SUCCESS episode are the absorbing goal (reward 0)
-    calql_floor: bool = True  # MC-return floor on the Bellman target (drop for cost_to_goal / pure IQL)
+    mc_floor: bool = True  # floor the Bellman target at the behaviour MC return (a valid lower bound)
 
 
 def load_dirs(dirs, horizon, discount, frames_cap=0, reward_scheme="sparse", h_goal=3):
@@ -90,12 +90,15 @@ def load_dirs(dirs, horizon, discount, frames_cap=0, reward_scheme="sparse", h_g
     # are -1 throughout with done=0 (time-limit truncation -> keep bootstrapping, value stays deeply
     # negative). This makes V = -(discounted steps-to-goal), spread across the whole support, instead
     # of collapsing near 0 like the sparse scheme (the action-blind failure mode).
+    success_ep = {}
     if reward_scheme == "cost_to_goal":
         new_reward = -np.ones(n, np.float32)
         new_done = np.zeros(n, np.int32)
         for e in np.unique(ep):
             eidx = np.flatnonzero(ep == e)
-            if reward[eidx].max() > 0.5:  # success (detected from the original {0,1} labels)
+            succ = reward[eidx].max() > 0.5  # success (detected from the original {0,1} labels)
+            success_ep[int(e)] = succ
+            if succ:
                 goal = eidx[-h_goal:]
                 new_reward[goal] = 0.0
                 new_done[goal] = 1
@@ -106,7 +109,10 @@ def load_dirs(dirs, horizon, discount, frames_cap=0, reward_scheme="sparse", h_g
         j = np.minimum(np.arange(n) + i, n - 1)
         same = ep[j] == ep
         chunk[:, i] = np.where(same[:, None], action[j], 0.0)
-    # discounted MC return-to-go within episode (sparse reward)
+    # discounted MC return-to-go within episode. For cost_to_goal the reverse scan gives the true
+    # negative time-to-goal ONLY for SUCCESS episodes (which end at the reward-0 goal). A FAILURE
+    # episode's scan bottoms out at g=0 as if the goal were reached at truncation -> too optimistic,
+    # so it is NOT a valid lower bound; pin those to v_min so the MC floor is a no-op there.
     mc = np.zeros(n, np.float32)
     for e in np.unique(ep):
         idx = np.flatnonzero(ep == e)
@@ -114,6 +120,11 @@ def load_dirs(dirs, horizon, discount, frames_cap=0, reward_scheme="sparse", h_g
         for t in idx[::-1]:
             g = reward[t] + discount * g
             mc[t] = g
+    if reward_scheme == "cost_to_goal":
+        v_min = -1.0 / (1.0 - discount)
+        for e in np.unique(ep):
+            if not success_ep[int(e)]:
+                mc[ep == e] = v_min
     return {
         "images": images,
         "state": state,
@@ -142,7 +153,12 @@ def main():
     ap.add_argument(
         "--v-max", type=float, default=None, help="HL-Gauss support max (default 1 sparse / 0 cost_to_goal)"
     )
-    ap.add_argument("--calql-floor", default=None, action=argparse.BooleanOptionalAction, help="MC-return floor")
+    ap.add_argument(
+        "--mc-floor",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="floor the target at the behaviour MC return (valid lower bound); default on sparse / off cost_to_goal",
+    )
     ap.add_argument("--max-frames", type=int, default=0, help="cap total frames (smoke test)")
     ap.add_argument("--num-workers", type=int, default=6, help="prefetch worker threads (host gather + H2D)")
     ap.add_argument("--wandb", action="store_true", help="log to wandb (project acrft, group patch-critic)")
@@ -153,7 +169,7 @@ def main():
     discount = a.discount if a.discount is not None else (0.98 if cg else 0.99)
     v_min = a.v_min if a.v_min is not None else (-1.0 / (1.0 - discount) if cg else 0.0)
     v_max = a.v_max if a.v_max is not None else (0.0 if cg else 1.0)
-    calql_floor = a.calql_floor if a.calql_floor is not None else (not cg)
+    mc_floor = a.mc_floor if a.mc_floor is not None else (not cg)
     cfg = Cfg(
         horizon=a.horizon,
         steps=a.steps,
@@ -165,7 +181,7 @@ def main():
         v_max=v_max,
         reward_scheme=a.reward_scheme,
         h_goal=a.h_goal,
-        calql_floor=calql_floor,
+        mc_floor=mc_floor,
     )
 
     import jax
@@ -197,7 +213,7 @@ def main():
         print(
             f"loaded {n} transitions; cost_to_goal reward in [{r.min():.0f},{r.max():.0f}], "
             f"{int((D['done'] > 0).sum())} goal steps, support [{cfg.v_min:.1f},{cfg.v_max:.1f}] "
-            f"gamma={cfg.discount} calql_floor={cfg.calql_floor}",
+            f"gamma={cfg.discount} mc_floor={cfg.mc_floor}",
             flush=True,
         )
     else:
@@ -301,11 +317,12 @@ def main():
         # terminal successor -> deterministic mass at its own reward
         term = (done[nxt] > 0)[..., None]  # [B, P_, 1]
         tgt = jnp.where(term, hl.to_probs(reward[nxt]), tgt)
-        # Cal-QL floor at the distribution level: where the behaviour's MC return exceeds the bootstrap
-        # mean, replace the target with a HL-Gauss spike at that return (success-only sparse data needs
-        # this). Dropped for cost_to_goal: pure IQL has no OOD push-down to calibrate, and the {-1,0}
-        # reward is itself the fix for the value collapse the floor used to band-aid.
-        if cfg.calql_floor:
+        # MC lower-bound floor: where the behaviour's MC return-to-go exceeds the bootstrap mean,
+        # replace the target with a HL-Gauss spike at that return. V* >= behaviour return, so this is a
+        # valid lower bound (Cal-QL's calibration idea without the CQL penalty). For cost_to_goal it
+        # injects the true steps-to-goal on SUCCESS trajectories; FAILURE mc is pinned to v_min upstream
+        # so it never binds there.
+        if cfg.mc_floor:
             tmean = jnp.sum(tgt * centers, -1)  # [B, P_]
             floor = mc[idx][:, None] > tmean
             tgt = jnp.where(floor[..., None], hl.to_probs(jnp.broadcast_to(mc[idx][:, None], tmean.shape)), tgt)
