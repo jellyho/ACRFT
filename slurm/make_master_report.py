@@ -1749,11 +1749,8 @@ entry(
 
 <h3>🔵 계획 (Planned) — 다음 후보</h3>
 <table class='num'><tr><th>실험</th><th>담당</th><th>메모</th><th>리포트</th></tr>
-<tr><td><b>MVE 게이트</b> — 수정구슬이 후보를 가르나</td><td>B</td><td>워커A <code>train_mve_critic</code> 게이트: 후보 판별 + disagreement 보수화 확인 → 통과 시 run-level 롤아웃</td><td><span class='xref' data-eid='mb-arq'>mb-arq</span></td></tr>
-<tr><td><b>N-스윕 + λ-weighted min/max</b></td><td>B</td><td>EMaQ 지침: 작은 N(5) 재검, λ로 min쪽 보수화 (우린 8~10 고정이었음)</td><td><span class='xref' data-eid='deas'>deas</span></td></tr>
-<tr><td><b>TD-SF-ARQ 설계</b> (phase-2 사전등록)</td><td>B</td><td>head=HL-Gauss+expectile-V 확정, 벽=coverage — 사전등록 문서화</td><td><span class='xref' data-eid='tdsf-arq'>tdsf-arq</span></td></tr>
-<tr><td><b>on-policy 반사실 제조</b></td><td>B</td><td>근본 coverage 해결 — sim 롤아웃으로 counterfactual 데이터 생성</td><td><span class='xref' data-eid='conservatism'>conservatism</span></td></tr>
-<tr><td><b>GR1 이전</b> (pi05 학습)</td><td>B→node200</td><td>node200/B200 외부 실행 대기, handoff·norm-stats·config 커밋 완료</td><td><span class='xref' data-eid='gr1-port'>gr1-port</span></td></tr></table>
+<tr><td><b>N-스윕 + λ-weighted min/max</b></td><td>B</td><td>EMaQ 지침: 작은 N(5) 재검, λ로 min쪽 보수화 (우린 8~10 고정이었음)</td><td><span class='xref' data-eid='deas'>deas</span></td></tr></table>
+<p class='sub'>(취소됨: MVE 게이트·TD-SF-ARQ 설계·on-policy 반사실·GR1 이전 — 2026-08-14 사용자 지시.)</p>
 
 <h3>🟢 완료 (Done) — 워커B</h3>
 <table class='num'><tr><th>실험</th><th>상태</th><th>핵심 결과</th><th>wandb</th><th>리포트</th></tr>
@@ -3686,11 +3683,8 @@ same cycle (replace the same eid via <code>space_add_entry.py</code>). Report ch
 
 <h3>🔵 Planned — next candidates</h3>
 <table class='num'><tr><th>experiment</th><th>owner</th><th>note</th><th>report</th></tr>
-<tr><td><b>MVE gate</b> — does the crystal ball separate candidates?</td><td>B</td><td>gate worker A's <code>train_mve_critic</code>: candidate resolution + disagreement pessimism → run-level rollout if it passes</td><td><span class='xref' data-eid='mb-arq'>mb-arq</span></td></tr>
-<tr><td><b>N sweep + λ-weighted min/max</b></td><td>B</td><td>EMaQ guidance: revisit small N(5), λ toward min (we were fixed at 8–10)</td><td><span class='xref' data-eid='deas'>deas</span></td></tr>
-<tr><td><b>TD-SF-ARQ design</b> (phase-2 preregistration)</td><td>B</td><td>head=HL-Gauss+expectile-V settled, wall=coverage — write the preregistration</td><td><span class='xref' data-eid='tdsf-arq'>tdsf-arq</span></td></tr>
-<tr><td><b>on-policy counterfactual generation</b></td><td>B</td><td>attack the coverage root — sim rollouts to make counterfactual data</td><td><span class='xref' data-eid='conservatism'>conservatism</span></td></tr>
-<tr><td><b>GR1 port</b> (pi05 training)</td><td>B→node200</td><td>awaiting external run on node200/B200; handoff/norm-stats/config committed</td><td><span class='xref' data-eid='gr1-port'>gr1-port</span></td></tr></table>
+<tr><td><b>N sweep + λ-weighted min/max</b></td><td>B</td><td>EMaQ guidance: revisit small N(5), λ toward min (we were fixed at 8–10)</td><td><span class='xref' data-eid='deas'>deas</span></td></tr></table>
+<p class='sub'>(cancelled: MVE gate · TD-SF-ARQ design · on-policy counterfactual · GR1 port — per user, 2026-08-14.)</p>
 
 <h3>🟢 Done — worker B</h3>
 <table class='num'><tr><th>experiment</th><th>status</th><th>headline</th><th>wandb</th><th>report</th></tr>
