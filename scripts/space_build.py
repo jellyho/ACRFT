@@ -220,9 +220,11 @@ def build(src_html: str, inline_entries=None) -> str:
         raise SystemExit("could not insert the experiment-board tab button")
     # 5) white/light override (append inside <style> so it wins the cascade)
     h = h.replace("</style>", WHITE_OVERRIDE + "</style>", 1)
-    # 6) real math typesetting (MathJax) + client-side daily-thread & mindmap rebuild
-    h = h.replace("</head>", MATHJAX_HEAD + "</head>", 1)
-    return h.replace("</body>", THREAD_JS + GRAPH_JS + EXP_JS + "</body>", 1)
+    # 6) real math typesetting (MathJax) + the client-side view builders. The builders go in <head>
+    # so window.buildThread/buildGraphData/buildExperiments are DEFINED before the bootstrap runs —
+    # otherwise the fetch-free preview (a synchronous bootstrap) calls them before their <script>
+    # at end-of-body has parsed, and the mindmap/thread/board silently render nothing.
+    return h.replace("</head>", MATHJAX_HEAD + THREAD_JS + GRAPH_JS + EXP_JS + "</head>", 1)
 
 
 def main():
