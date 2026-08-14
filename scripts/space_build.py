@@ -53,6 +53,9 @@ _INJECT = (
     # feed the mindmap live graph data (nodes/links/phases) before it is first drawn
     "if(window.buildGraphData){var _gd=document.getElementById('wb-graph-data');"
     "if(_gd)_gd.textContent=JSON.stringify(window.buildGraphData());}"
+    # if the mindmap tab was opened before the fetch resolved, it drew an empty graph and bailed
+    # (no gate); now that data is in, redraw it.
+    "if(window.wbGraphInit){var _wm=document.getElementById('wb-map');if(_wm&&!_wm.hidden)wbGraphInit();}"
     # delegated navigation: any [data-eid] link (xref, thread item) opens that entry by eid
     "if(!window.__eidnav){window.__eidnav=1;document.addEventListener('click',function(ev){"
     "var el=ev.target.closest('[data-eid]');if(!el||el.classList.contains('report'))return;"
@@ -182,6 +185,12 @@ def build(src_html: str, inline_entries=None) -> str:
     )
     if n_gd != 1:
         raise SystemExit("could not empty the baked wb-graph-data snapshot")
+    # race guard: if wbGraphInit runs before the feed is fetched, bail on empty data WITHOUT setting
+    # the once-only gate, so the post-fetch redraw (in the bootstrap) can draw the real graph.
+    gd_read = "const D=JSON.parse(document.getElementById('wb-graph-data').textContent);"
+    if gd_read not in h:
+        raise SystemExit("could not find wbGraphInit data read for the race guard")
+    h = h.replace(gd_read, gd_read + "if(!D.nodes||!D.nodes.length)return;", 1)
     # 4b) experiment board tab (worker B's request): a real template-level tab rendered from a
     # shared experiments.json. Insert the tab button, the view container, and the wbView branch.
     h, n_tab = re.subn(
