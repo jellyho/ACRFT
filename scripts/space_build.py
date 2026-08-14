@@ -108,11 +108,14 @@ GRAPH_JS = (
     "<script>window.buildGraphData=function(){"
     'var PHASES=["기반 탐색","정합성 검증","진단·방법","판정·종합","표현·설계","논문·교차","이식·인프라","신규"];'
     'var COLORS=["#4c72b0","#dd8452","#55a868","#c44e52","#8172b3","#937860","#da8bc3","#64b5cd"];'
-    "var known={};REPORTS.forEach(function(r){known[r.eid]=1;});"
-    "var nodes=REPORTS.map(function(r){var ci=PHASES.indexOf(r.phase||'신규');if(ci<0)ci=PHASES.length-1;"
+    # only entries that belong on the graph: connected (has links) OR carrying a real phase (not '신규').
+    # this drops legacy uncurated entries (no links, no phase) that would otherwise pile into one column.
+    "var keep=REPORTS.filter(function(r){return (r.links&&r.links.length)||(r.phase&&r.phase!=='신규');});"
+    "var known={};keep.forEach(function(r){known[r.eid]=1;});"
+    "var nodes=keep.map(function(r){var ci=PHASES.indexOf(r.phase||'신규');if(ci<0)ci=PHASES.length-1;"
     "return{id:r.eid,cat:ci,date:r.date,what:r.title,sum:r.summary};});"
     "var seen={},links=[];"
-    "REPORTS.forEach(function(r){(r.links||[]).forEach(function(t){if(!known[t])return;"
+    "keep.forEach(function(r){(r.links||[]).forEach(function(t){if(!known[t])return;"
     "var k=r.eid<t?r.eid+'|'+t:t+'|'+r.eid;if(seen[k])return;seen[k]=1;links.push([r.eid,t]);});});"
     "return{nodes:nodes,links:links,colors:COLORS,phases:PHASES};};</script>"
 )
