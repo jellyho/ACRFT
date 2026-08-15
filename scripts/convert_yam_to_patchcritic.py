@@ -49,7 +49,9 @@ def main():
 
     import lerobot.datasets.lerobot_dataset as lrd
 
-    ds = lrd.LeRobotDataset(a.repo_id, root=a.root)
+    # a looser timestamp tolerance keeps a single ~1e-4 s frame-sync mismatch from raising
+    # FrameTimestampError mid-conversion (LeRobot itself advises ignoring such frames).
+    ds = lrd.LeRobotDataset(a.repo_id, root=a.root, tolerance_s=0.05)
     n_total = ds.num_frames
     # episode -> [from, to) GLOBAL frame index, from the episodes metadata
     epds = ds.meta.episodes
@@ -99,11 +101,21 @@ def main():
         s, t = int(starts[e]), int(ends[e])
         is_succ = outc.get(e) == "success"
         for i in range(s, t):
-            fr = ds[i]
-            for c, cam in enumerate(CAMS):
-                images[w, c] = to_hwc_uint8(fr[cam], S)
-            state[w] = np.asarray(fr["observation.state"], np.float32).reshape(-1)
-            action[w] = np.asarray(fr["action"], np.float32).reshape(-1)
+            try:
+                fr = ds[i]
+                cams = [to_hwc_uint8(fr[cam], S) for cam in CAMS]
+                st = np.asarray(fr["observation.state"], np.float32).reshape(-1)
+                ac = np.asarray(fr["action"], np.float32).reshape(-1)
+            except Exception as ex:
+                if w == 0:
+                    continue  # nothing to fall back to yet; skip the frame entirely
+                print(f"  skip frame {i} (reuse prev): {type(ex).__name__}", flush=True)
+                cams = [images[w - 1, c].copy() for c in range(len(CAMS))]
+                st, ac = state[w - 1].copy(), action[w - 1].copy()
+            for c in range(len(CAMS)):
+                images[w, c] = cams[c]
+            state[w] = st
+            action[w] = ac
             epidx[w] = new_e
             last = i == t - 1
             done[w] = 1 if last else 0
