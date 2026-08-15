@@ -140,6 +140,12 @@ def spec_metadata(train_config: _config.TrainConfig) -> dict:
         # Without it a viewer has to try and interpret the absence of `action_samples` in the
         # reply, which is indistinguishable from a server that simply ignored the request.
         "supports_multi_sample": True,
+        # Which stack is behind the port, and which checkpoint. Several serve this same wire --
+        # upstream openpi, this fork, a LeRobot checkpoint behind an adapter on the robot side --
+        # and they do not take interchangeable observations. Serving the wrong one still returns a
+        # well-formed chunk of the right shape, so the handshake is the only place to catch it.
+        "framework": "acrft",
+        "policy_name": str(train_config.name),
     }
 
 
