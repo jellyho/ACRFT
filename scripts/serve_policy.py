@@ -65,6 +65,15 @@ class Args:
     # best-of-N chosen by the critic server-side; requests without the key are untouched.
     critic: str | None = None
 
+    # How many action-chunk samples MultiSamplePolicy declares at handshake, so a client's
+    # `num_samples` requests actually get an `action_samples` column in its recorded dataset
+    # (see MultiSamplePolicy.extra_features). 0 (default): num_samples requests are still served,
+    # just not recorded -- today's behaviour. The dataset schema is fixed at handshake, so every
+    # request against this server has to ask for exactly this many samples; a client asking for a
+    # different N gets a reshape error at record time, same constraint --critic already has via
+    # its own default_samples.
+    num_samples: int = 0
+
 
 # Default checkpoints that should be used for each environment.
 DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
@@ -158,10 +167,25 @@ def main(args: Args) -> None:
         # Selection must wrap the BARE policy: it drives the model's own shared-backbone
         # sampler, and stacking it over MultiSamplePolicy would pay N full forwards instead.
         policy = _policy.CriticSelectPolicy(policy, args.critic)
+    robot_action_dim = None
+    if args.num_samples > 1:
+        # A critic already probed this at its own construction; reuse it rather than decode a
+        # second zero chunk through the same output transform.
+        robot_action_dim = (
+            policy.robot_action_dim
+            if isinstance(policy, _policy.CriticSelectPolicy)
+            else _policy.probe_robot_action_dim(
+                policy,
+                model_action_dim=int(train_config.model.action_dim),
+                action_horizon=int(train_config.model.action_horizon),
+            )
+        )
     policy = _policy.MultiSamplePolicy(
         policy,
         action_horizon=int(train_config.model.action_horizon),
         action_dim=int(train_config.model.action_dim),
+        robot_action_dim=robot_action_dim,
+        default_samples=args.num_samples,
     )
     # Config-derived spec first, so an explicit policy_metadata entry can still override it.
     policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}

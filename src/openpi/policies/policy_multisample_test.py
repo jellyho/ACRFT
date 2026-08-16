@@ -43,15 +43,29 @@ def test_num_samples_of_one_is_also_a_single_inference():
 
 
 def test_samples_are_distinct_and_include_the_chunk_that_will_be_executed():
-    """Row 0 IS `actions`, so the drawn distribution contains the decision actually taken --
-    otherwise the picture shows what the policy might have done, not what it did."""
+    """Candidate 0 IS `actions`, so the drawn distribution contains the decision actually taken
+    -- otherwise the picture shows what the policy might have done, not what it did.
+
+    The array is per-step (leading axis = chunk step, matching `actions`), not candidate-major --
+    see test_action_samples_is_per_step_not_candidate_major for why."""
     policy, inner = _policy()
     result = policy.infer({"state": np.zeros(42), "num_samples": 5})
 
-    assert result["action_samples"].shape == (5, 30, 14)
-    assert np.allclose(result["action_samples"][0], result["actions"])
-    assert len({float(s.mean()) for s in result["action_samples"]}) == 5
+    assert result["action_samples"].shape == (30, 5, 14)
+    assert np.allclose(result["action_samples"][:, 0, :], result["actions"])
+    assert len({float(s.mean()) for s in np.swapaxes(result["action_samples"], 0, 1)}) == 5
     assert len(inner.noises) == 5
+
+
+def test_action_samples_is_per_step_not_candidate_major():
+    """The robot client's ActionChunkBroker slices every declared extra along axis 0 once per
+    executed tick, the same way it slices `actions` -- see CriticSelectPolicy, which needs the
+    identical layout for the same reason. Candidate-major [N, H, A] would hand the broker the
+    wrong candidate at every tick past the first, and an IndexError once past N."""
+    policy, _ = _policy()
+    result = policy.infer({"state": np.zeros(42), "num_samples": 5})
+
+    assert result["action_samples"].shape[0] == result["actions"].shape[0]  # both = H, sliceable in lockstep
 
 
 def test_actions_keeps_its_shape():
@@ -133,6 +147,33 @@ def test_an_inner_declaration_reaches_the_handshake():
     never reaches the client, which then records nothing — with no error anywhere."""
     policy = MultiSamplePolicy(_CriticLike(), action_horizon=30, action_dim=32)
     assert policy.extra_features() == {"critic_scores": [16]}
+
+
+def test_declares_nothing_without_a_configured_default():
+    """serve_policy without --num-samples: requests are still served, just not recorded --
+    unchanged from before this wrapper could declare anything of its own."""
+    policy, _ = _policy()
+    assert policy.extra_features() == {}
+
+
+def test_declares_its_own_action_samples_when_configured():
+    """serve_policy --num-samples N wires both of these through at construction."""
+    policy = MultiSamplePolicy(_FlowLike(), action_horizon=30, action_dim=32, robot_action_dim=14, default_samples=5)
+    assert policy.extra_features() == {"action_samples": [5, 14]}
+
+
+def test_an_inner_action_samples_declaration_wins():
+    """Reachable only via the critic_select passthrough, which this wrapper never shapes itself
+    -- so the critic's own declaration (its own N, its own width) is the one that is honest."""
+
+    class _CriticWithSamples(_CriticLike):
+        def extra_features(self, num_samples=None):
+            return {"action_samples": [16, 14], "critic_scores": [16]}
+
+    policy = MultiSamplePolicy(
+        _CriticWithSamples(), action_horizon=30, action_dim=32, robot_action_dim=14, default_samples=5
+    )
+    assert policy.extra_features() == {"action_samples": [16, 14], "critic_scores": [16]}
 
 
 def test_a_policy_that_declares_nothing_forwards_nothing():

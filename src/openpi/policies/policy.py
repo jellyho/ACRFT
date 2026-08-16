@@ -123,16 +123,35 @@ class MultiSamplePolicy(BasePolicy):
     gets today's behaviour and today's latency, byte for byte.
 
     ``actions`` stays the single chunk to execute and keeps its shape. The extra draws ride
-    along under ``action_samples`` as [N, horizon, dim], with the executed chunk as row 0 --
-    reshaping ``actions`` to [N, ...] instead would break every client that reads the chunk
-    length off the response, ActionChunkBroker included.
+    along under ``action_samples``, PER STEP -- leading axis X (chunk step), matching
+    ``actions`` -- with the executed chunk as candidate 0. Candidate-major [N, H, A] would read
+    naturally in-process, but the robot client's ``ActionChunkBroker`` slices every declared
+    extra along axis 0 once per executed tick (see :class:`CriticSelectPolicy`, which faces the
+    same requirement for the same reason): candidate-major would hand it the wrong candidate at
+    every tick past the first, and an IndexError once past N. Reshaping ``actions`` itself to
+    [N, ...] instead would break every client that reads the chunk length off the response,
+    ActionChunkBroker included -- so the extra draws travel beside it, not inside it.
+
+    ``robot_action_dim`` and ``default_samples`` are only needed to declare ``action_samples`` at
+    handshake (see :meth:`extra_features`); the sampling itself works without either.
     """
 
-    def __init__(self, policy: BasePolicy, *, action_horizon: int, action_dim: int, seed: int = 0):
+    def __init__(
+        self,
+        policy: BasePolicy,
+        *,
+        action_horizon: int,
+        action_dim: int,
+        seed: int = 0,
+        robot_action_dim: int | None = None,
+        default_samples: int = 0,
+    ):
         self._policy = policy
         self._action_horizon = int(action_horizon)
         self._action_dim = int(action_dim)
         self._rng = np.random.default_rng(seed)
+        self._robot_action_dim = robot_action_dim
+        self._default_samples = int(default_samples)
 
     @override
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
@@ -158,7 +177,8 @@ class MultiSamplePolicy(BasePolicy):
         for _ in range(num_samples - 1):
             noise = self._rng.standard_normal((self._action_horizon, self._action_dim)).astype(np.float32)
             samples.append(np.asarray(self._policy.infer(obs, noise=noise)["actions"]))
-        result["action_samples"] = np.stack(samples)
+        # [N, H, A] -> [H, N, A]: see the class docstring for why this has to be per-step.
+        result["action_samples"] = np.swapaxes(np.stack(samples), 0, 1)
         return result
 
     @property
@@ -166,14 +186,25 @@ class MultiSamplePolicy(BasePolicy):
         return self._policy.metadata
 
     def extra_features(self, *args, **kwargs) -> dict:
-        """Whatever the wrapped policy declares, if it declares anything.
+        """Whatever the wrapped policy declares, plus this wrapper's own ``action_samples``.
 
         This wrapper is the outermost one serve_policy holds, so a declaration made by an
         inner policy (a critic's, say) only reaches the handshake if it is forwarded. Without
         this it silently did not, and the client recorded nothing.
+
+        Its own draws are declared only when constructed with ``robot_action_dim`` and
+        ``default_samples`` (serve_policy does this when started with ``--num-samples``): the
+        dataset schema is fixed at handshake, so the request has to commit to one N in advance,
+        and a server started without either keeps today's behaviour -- served, but unrecorded.
+        An inner declaration of the same key (a critic already declaring its own
+        ``action_samples``) wins, since that key is only reachable via the ``critic_select``
+        passthrough this wrapper never actually shapes itself.
         """
         declare = getattr(self._policy, "extra_features", None)
-        return declare(*args, **kwargs) if callable(declare) else {}
+        inner = declare(*args, **kwargs) if callable(declare) else {}
+        if self._default_samples and self._robot_action_dim and "action_samples" not in inner:
+            inner = {**inner, "action_samples": [self._default_samples, self._robot_action_dim]}
+        return inner
 
 
 class PolicyRecorder(_base_policy.BasePolicy):
@@ -199,6 +230,24 @@ class PolicyRecorder(_base_policy.BasePolicy):
 
         np.save(output_path, np.asarray(data))
         return results
+
+
+def probe_robot_action_dim(policy: Policy, *, model_action_dim: int, action_horizon: int) -> int:
+    """The output transform's real last-dim width, robot-space rather than the model's padded one.
+
+    Decodes a zero chunk through the policy's own output transform and reads the shape back off
+    it. Both :class:`CriticSelectPolicy` (whose critic is trained on robot-space chunks) and
+    :class:`MultiSamplePolicy` (whose ``action_samples`` handshake declaration has to match what
+    the dataset writer will reshape to) need this same recovery: the model's padded width (32 for
+    pi05) is not what actually arrives on the wire (14 for YAM).
+    """
+    probe = policy._output_transform(
+        {
+            "state": np.zeros((1, model_action_dim), np.float32),
+            "actions": np.zeros((1, action_horizon, model_action_dim), np.float32),
+        }
+    )
+    return int(np.asarray(probe["actions"]).shape[-1])
 
 
 class CriticSelectPolicy(BasePolicy):
@@ -233,14 +282,10 @@ class CriticSelectPolicy(BasePolicy):
         self._extract = nnx_utils.module_jit(model.extract_token_and_base_actions)
         self._model_action_dim = int(model.action_dim)
         # The critic was trained on ROBOT-space chunks; recover that width the same way the
-        # annotation did - decode a zero chunk and read the shape off the output transform.
-        probe = policy._output_transform(
-            {
-                "state": np.zeros((1, self._model_action_dim), np.float32),
-                "actions": np.zeros((1, int(model.action_horizon), self._model_action_dim), np.float32),
-            }
+        # annotation did.
+        raw_dim = probe_robot_action_dim(
+            policy, model_action_dim=self._model_action_dim, action_horizon=int(model.action_horizon)
         )
-        raw_dim = int(np.asarray(probe["actions"]).shape[-1])
         self._robot_action_dim = raw_dim
         score, _, self._macro = _critic.load_trained(
             cdir / "params.msgpack", action_dim=raw_dim, horizon=int(model.action_horizon)
@@ -331,3 +376,12 @@ class CriticSelectPolicy(BasePolicy):
     @property
     def metadata(self) -> dict[str, Any]:
         return self._pol.metadata
+
+    @property
+    def robot_action_dim(self) -> int:
+        """The robot-space action width recovered at construction (see ``probe_robot_action_dim``).
+
+        Exposed so a wrapper built on top (MultiSamplePolicy, when stacked over a critic) can
+        reuse this instead of probing the output transform a second time.
+        """
+        return self._robot_action_dim
