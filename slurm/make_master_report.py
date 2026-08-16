@@ -1732,6 +1732,54 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-16 acrft_ogbench apple-to-apple ablation
+entry(
+    "08-16",
+    "aqc-ablation",
+    "acrft_ogbench apple-to-apple ablation — 한 컴포넌트씩 (objective / alpha / expectile)",
+    "완결",
+    """
+<p class='sub'>사용자 지시(실험은 리포트로 + "이전 run들이랑 컴포넌트 하나씩 바꿔 apple-to-apple 비교")에 따라,
+팀이 정책추출을 얹고 있는 <b>AQC(Q-chunking)의 완료된 OGBench run들</b>을 컴포넌트별로 격리 분석했다. 대상은
+워커C의 <span class='xref' data-eid='wc-ogbench-summary'>acrft_ogbench</span> 실행기록
+(<code>/scratch/gwanwoo13/aqc/exp/aqc-ogbench</code>) <b>183 config · 584 eval.csv</b>. 성공률은 워커C 표준
+(<b>마지막 3평가의 seed 평균</b>)으로 재계산(<code>probes/aqc_ablation.py</code>·<code>plot_aqc_ablation.py</code>).
+run 이름이 컴포넌트를 인코딩(objective·agg·expectile·alpha·env·task)해 <b>나머지 고정·한 축만 변화</b>가 자동 성립한다.</p>
+<p><img src="videos/aqc-ablation/32_aqc_ablation.png" alt="acrft_ogbench apple-to-apple ablation"></p>
+
+<h3>① objective — iql &gt; iqlnt &gt; plain &gt; notgt (타깃넷이 결정적)</h3>
+<table class='num'><tr><th>objective</th><th>성공(cube-double, mean/t09/a300)</th><th>의미</th></tr>
+<tr><td><b>iql</b> (target net)</td><td><b>0.86</b> (n3)</td><td>IQL + target network</td></tr>
+<tr><td>iqlnt (iql, no target)</td><td>0.77 (n6)</td><td>타깃넷 제거</td></tr>
+<tr><td>plain (BoN-free AQC)</td><td>0.55 (n6)</td><td>objective 없음</td></tr>
+<tr><td>notgt</td><td><b>0.24</b> (n3)</td><td>타깃넷 없음 — 급락</td></tr></table>
+<p><b>판독</b>: IQL objective가 plain보다 크게 낫고(0.86 vs 0.55), <b>target network가 안정성의 핵심</b> —
+iql(0.86) vs iqlnt(0.77) vs <b>notgt(0.24)</b>. scene에선 iql·iqlnt 모두 0.94~1.00(천장). 이는 우리
+<span class='xref' data-eid='deas'>DEAS</span> 레시피(IQL + expectile + target/double)와 정합한다.</p>
+
+<h3>② alpha — env별 U자 sweet spot (양극단이 해로움)</h3>
+<table class='num'><tr><th>alpha (cube-double, iqlnt/t09)</th><th>a100</th><th>a170</th><th>a300</th><th>a900</th><th>a2700</th></tr>
+<tr><td>성공</td><td>0.21</td><td>0.54</td><td><b>0.77</b></td><td>0.47</td><td>0.07</td></tr></table>
+<p><b>판독</b>: alpha는 <b>역U자</b> — 너무 작으면(a100) 언더, 너무 크면(a2700) 붕괴. cube-double·scene은 ≈<b>a300</b>,
+puzzle-4x4는 더 큰 ≈<b>a8100</b>이 최적. <b>alpha는 환경별로 튜닝 필수</b>(고정값 이식 금지).</p>
+
+<h3>③ expectile — t08 붕괴, t09 ≈ t095 (양호)</h3>
+<table class='num'><tr><th>expectile (cube-double, iql/mean/a900)</th><th>t08</th><th>t09</th><th>t095</th></tr>
+<tr><td>성공</td><td><b>0.01</b></td><td>0.52</td><td>0.53</td></tr></table>
+<p><b>판독</b>: <b>t08은 버린다</b>(값 붕괴). t09/t095는 대등하나 env 의존(일부 env는 t095가 크게 유리).</p>
+
+<h3>정직한 caveat</h3>
+<p>대부분 <b>n=3 시드</b>(일부 n6~8)라, 작은 델타(±0.05~0.1)는 잠정이다(<span class='xref' data-eid='deas'>n=25는 노이즈</span> 교훈).
+확정적인 것은 <b>큰 델타만</b>: notgt 급락(0.24)·t08 붕괴(0.01)·alpha 양극단(a100 0.21 / a2700 0.07). 성공률은
+워커C 표준(마지막 3평가 seed평균), 재계산 스크립트 커밋.</p>
+
+<h3>함의 (정책추출로 이어짐)</h3>
+<p>정책추출(LPS-AQC 등)이 얹힐 <b>AQC 베이스의 안정 레시피 = IQL + target network + expectile(t09~t095) + 적정 alpha(env별)</b>.
+이 베이스가 흔들리면(notgt·t08·잘못된 alpha) 정책추출 결과도 그 위에서 오염된다 — 그래서 <b>베이스를 먼저 apple-to-apple로 못박고</b>
+그 위에 LPS/AWR을 한 컴포넌트씩 얹는 게 옳다. LPS 정책추출 run(0816, 실행 중)이 끝나면 이 위에 이어 분석한다.</p>
+<p class='sub'>대상 run은 워커C, 분석·재계산은 워커B. <span class='xref' data-eid='wc-aqc-method'>AQC method(워커C)</span> 참조.</p>""",
+)
+
 # ============================================== 08-13 실험 보드 (living)
 entry(
     "08-13",
@@ -2426,6 +2474,15 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "aqc-ablation": {
+        "date": "2026-08-16 20:00",
+        "who": "워커B(분석) ← 워커C runs",
+        "where": "acrft_ogbench (/scratch/gwanwoo13/aqc/exp/aqc-ogbench), 183 config·584 eval",
+        "what": "AQC OGBench run 컴포넌트별 apple-to-apple ablation — objective/alpha/expectile",
+        "how": "run명 파싱→성공률(마지막3평가 seed평균) 재계산, 나머지 고정·한 축만 변화 (probes/aqc_ablation.py)",
+        "why": "사용자 지시 '이전 run들이랑 컴포넌트 하나씩 바꿔 apple-to-apple 비교; 실험은 리포트로'",
+        "links": ["wc-ogbench-summary", "wc-aqc-method", "deas", "conservatism"],
     },
     "exp-board": {
         "date": "2026-08-13 15:45",
@@ -3667,6 +3724,43 @@ with our standing binding-constraint = coverage.</p>
 <p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
 <b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
 td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
+)
+
+en(
+    "aqc-ablation",
+    "acrft_ogbench apple-to-apple ablation — one component at a time (objective / alpha / expectile)",
+    """
+<p class='sub'>Per the user ("experiments as separate reports" + "compare vs previous runs, one component at a time"),
+a component-isolated analysis of the finished <b>AQC (Q-chunking) OGBench runs</b> the team is now stacking policy
+extraction onto. Source: worker C's <span class='xref' data-eid='wc-ogbench-summary'>acrft_ogbench</span> logs
+(<code>/scratch/gwanwoo13/aqc/exp/aqc-ogbench</code>), <b>183 configs · 584 eval.csv</b>. Success recomputed by worker C's
+standard (<b>mean of the last 3 evals, seed-averaged</b>; <code>probes/aqc_ablation.py</code>). Run names encode the
+components, so "hold the rest, vary one axis" falls out automatically.</p>
+<p><img src="videos/aqc-ablation/32_aqc_ablation.png" alt="acrft_ogbench apple-to-apple ablation"></p>
+
+<h3>① objective — iql &gt; iqlnt &gt; plain &gt; notgt (target network is decisive)</h3>
+<p>cube-double (mean/t09/a300): <b>iql 0.86</b> (n3) &gt; iqlnt 0.77 (n6) &gt; plain 0.55 (n6) &gt; <b>notgt 0.24</b> (n3).
+IQL beats plain, and the <b>target network is the stability lever</b> (iql/iqlnt/notgt). On scene both iql/iqlnt hit
+0.94–1.00 (ceiling). Consistent with our <span class='xref' data-eid='deas'>DEAS</span> recipe (IQL + expectile + target/double).</p>
+
+<h3>② alpha — env-dependent U-shaped sweet spot (extremes hurt)</h3>
+<p>cube-double (iqlnt/t09): a100 0.21 → a170 0.54 → <b>a300 0.77</b> → a900 0.47 → a2700 0.07 — an inverted U. cube/scene
+peak ≈<b>a300</b>, puzzle-4x4 needs a bigger ≈<b>a8100</b>. <b>Alpha must be tuned per environment</b> (no fixed transplant).</p>
+
+<h3>③ expectile — t08 collapses, t09 ≈ t095</h3>
+<p>cube-double (iql/mean/a900): <b>t08 0.01</b> vs t09 0.52 vs t095 0.53. Drop t08; t09/t095 comparable but env-dependent.</p>
+
+<h3>Honest caveat</h3>
+<p>Mostly <b>n=3 seeds</b> (some n6–8), so small deltas (±0.05–0.1) are provisional (the
+<span class='xref' data-eid='deas'>n=25-is-noise</span> lesson). Only the large deltas are firm: notgt collapse (0.24),
+t08 collapse (0.01), alpha extremes (a100 0.21 / a2700 0.07). Recompute scripts committed.</p>
+
+<h3>Implication (leads into policy extraction)</h3>
+<p>The stable AQC base that policy extraction (LPS-AQC etc.) will sit on = <b>IQL + target network + expectile (t09–t095)
++ a per-env-tuned alpha</b>. If the base is shaky (notgt / t08 / wrong alpha), extraction results inherit that noise — so
+pin the base apple-to-apple first, then stack LPS/AWR one component at a time. The LPS runs (0816, in flight) get analyzed
+on top of this when they finish.</p>
+<p class='sub'>Runs by worker C; analysis/recompute by worker B. See <span class='xref' data-eid='wc-aqc-method'>AQC method (worker C)</span>.</p>""",
 )
 
 en(

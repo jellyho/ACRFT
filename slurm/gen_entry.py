@@ -9,7 +9,11 @@ import make_master_report as mm
 EID = sys.argv[1]
 STATUS = {"완결": "finding", "진행 중": "ongoing", "살아있음": "living"}
 # extra tag chips (for the tag bar) per eid
-TAGS = {"mb-arq": ["표현", "MB-AC", "설명"], "exp-board": ["실험", "보드"]}
+TAGS = {
+    "mb-arq": ["표현", "MB-AC", "설명"],
+    "exp-board": ["실험", "보드"],
+    "aqc-ablation": ["ablation", "OGBench", "AQC"],
+}
 # mindmap column (worker A's phase taxonomy) per eid — the client-side mindmap groups by this
 PHASE_MAP = {
     "genesis": "기반 탐색",
@@ -55,6 +59,7 @@ PHASE_MAP = {
     "gr1-port": "이식·인프라",
     "horizon-probe": "이식·인프라",
     "exp-board": "이식·인프라",
+    "aqc-ablation": "판정·종합",
 }
 
 
