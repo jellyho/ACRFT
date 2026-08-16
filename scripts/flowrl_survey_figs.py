@@ -16,63 +16,78 @@ import matplotlib.pyplot as plt
 import report_style as rs
 
 
-def _box(ax, x, y, w, h, title, body, *, fc="#f2f1ec", ec=rs.INK, tfs=9, bfs=7.6):
-    ax.add_patch(mpatches.FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.01,rounding_size=0.03", fc=fc, ec=ec, lw=1.2))
-    ax.text(x + 0.12, y + h - 0.16, title, fontsize=tfs, fontweight="bold", color=ec, va="top")
-    ax.text(x + 0.12, y + h - 0.5, body, fontsize=bfs, color=rs.INK, va="top")
+def _panel(ax, x, y, w, h, title, body, meths, ec):
+    """A titled panel: bold title (top), body (middle), italic methods (bottom) — with padding."""
+    ax.add_patch(mpatches.FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02,rounding_size=0.04", fc="#f9f9f7", ec=ec, lw=1.3))
+    pad = 0.26
+    ax.text(x + pad, y + h - pad, title, fontsize=9.5, fontweight="bold", color=ec, va="top", ha="left")
+    ax.text(x + pad, y + h - pad - 0.62, body, fontsize=7.8, color=rs.INK, va="top", ha="left", linespacing=1.5)
+    ax.text(x + pad, y + pad, meths, fontsize=7.2, style="italic", color=ec, va="bottom", ha="left", linespacing=1.45)
 
 
-def _arrow(ax, x0, y0, x1, y1, *, c=rs.GRAY, lw=1.6, ls="-"):
+def _box(ax, x, y, w, h, lines, *, fc="#f2f1ec", ec=rs.INK, fs=9):
+    ax.add_patch(mpatches.FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02,rounding_size=0.04", fc=fc, ec=ec, lw=1.3))
+    ax.text(x + w / 2, y + h / 2, lines, ha="center", va="center", fontsize=fs, color=rs.INK, linespacing=1.5)
+
+
+def _arrow(ax, x0, y0, x1, y1, *, c=rs.GRAY, lw=1.7, ls="-"):
     ax.annotate("", xy=(x1, y1), xytext=(x0, y0), arrowprops={"arrowstyle": "-|>", "color": c, "lw": lw, "ls": ls})
 
 
 def fig_taxonomy(path):
     rs.use()
-    fig, ax = plt.subplots(figsize=(8.6, 5.4))
-    ax.set_xlim(0, 12)
-    ax.set_ylim(0, 7.3)
+    fig, ax = plt.subplots(figsize=(11.0, 7.0))
+    ax.set_xlim(0, 16.2)
+    ax.set_ylim(0, 10.2)
     ax.axis("off")
-    groups = [
-        (0.2, 4.9, "1 · backprop through chain", "differentiate Q back through all T\ndenoising steps — honest but O(T),\nunstable → T tiny", "Diffusion-QL", rs.RED),
-        (4.15, 4.9, "2 · distill to 1-step, then RL", "collapse the sampler to ONE\ndifferentiable map → cheap reparam ∇Q,\nno BPTT, no iterative test-time", "FQL · Consistency-AC · CPQL · OFQL", rs.GREEN),
-        (8.1, 4.9, "3 · score ↔ ∇Q matching", "never sample; set the generator's\nscore/velocity field to (a function of) ∇_a Q", "QSM · SRPO · DAC", rs.ORANGE),
-        (0.2, 1.6, "4 · denoising-as-MDP (PG)", "each step = MDP action (Gaussian);\npolicy-gradient over steps, no ∇ through Q", "DPPO · ReinFlow · Flow-GRPO", rs.PURPLE),
-        (4.15, 1.6, "5 · weighted resample / regress", "critic only reweights/selects samples\n(BoN-flavored) — zero generator ∇Q", "IDQL · QVPO", rs.TEAL),
-        (8.1, 1.6, "6 · latent-noise RL / adjoint", "RL in the FROZEN generator's noise\nspace (critic on noise) — ∇ never enters\nthe denoiser", "DSRL ★ · Adjoint Matching", rs.BLUE),
+    W, H, GX = 4.9, 3.55, 0.55
+    xs = [0.3, 0.3 + W + GX, 0.3 + 2 * (W + GX)]
+    yt, yb = 5.15, 0.7
+    P = [
+        (xs[0], yt, "1 · backprop through chain", "differentiate Q back through\nall T denoising steps — honest\nbut O(T) memory, unstable\n→ keep T tiny", "Diffusion-QL", rs.RED),
+        (xs[1], yt, "2 · distill to 1-step, then RL", "collapse the sampler to ONE\ndifferentiable map → cheap\nreparam ∇Q, no BPTT, no\niterative test-time sampling", "FQL · Consistency-AC\nCPQL · OFQL", rs.GREEN),
+        (xs[2], yt, "3 · score ↔ ∇Q matching", "never sample; set the\ngenerator's score / velocity\nfield to (a function of) ∇_a Q", "QSM · SRPO · DAC", rs.ORANGE),
+        (xs[0], yb, "4 · denoising-as-MDP (PG)", "each denoising step = MDP\naction (Gaussian); policy-\ngradient over steps —\nno ∇ through Q at all", "DPPO · ReinFlow\nFlow-GRPO", rs.PURPLE),
+        (xs[1], yb, "5 · weighted resample / regress", "the critic only reweights or\nselects samples (BoN-flavored)\n— zero generator ∇Q", "IDQL · QVPO", rs.TEAL),
+        (xs[2], yb, "6 · latent-noise RL / adjoint", "RL in the FROZEN generator's\nnoise space (critic on the\nnoise) → ∇ never enters the\ndenoiser", "DSRL ★ · Adjoint Matching", rs.BLUE),
     ]
-    for x, y, t, b, meths, c in groups:
-        _box(ax, x, y, 3.7, 2.0, t, b, ec=c)
-        ax.text(x + 0.12, y + 0.22, meths, fontsize=7.2, style="italic", color=c, va="bottom")
-    ax.text(0.2, 6.95, "How to get the DDPG-style ∇Q into an ITERATIVE flow/diffusion generator — 6 families",
-            fontsize=10.5, color=rs.INK)
-    ax.text(8.1, 1.35, "★ DSRL = our idea's precedent", fontsize=7.5, color=rs.BLUE, va="top")
+    for x, y, t, b, m, c in P:
+        _panel(ax, x, y, W, H, t, b, m, c)
+    ax.text(0.3, 9.75, "Getting the DDPG-style ∇Q into an ITERATIVE flow / diffusion generator — six families",
+            fontsize=11.5, color=rs.INK)
+    ax.text(xs[2], 0.42, "★ DSRL = the precedent for our latent-actor idea", fontsize=7.8, color=rs.BLUE, va="top")
     rs.save(fig, path)
     plt.close(fig)
 
 
 def fig_routes(path):
     rs.use()
-    fig, ax = plt.subplots(figsize=(8.6, 4.4))
-    ax.set_xlim(0, 13)
-    ax.set_ylim(0, 5.6)
+    fig, ax = plt.subplots(figsize=(11.0, 6.0))
+    ax.set_xlim(0, 16.5)
+    ax.set_ylim(0, 7.6)
     ax.axis("off")
-    _box(ax, 0.2, 3.1, 2.4, 1.1, "state s", "", ec=rs.INK)
-    _box(ax, 3.0, 3.0, 2.7, 1.25, "one-step\nlatent actor h_φ", "z = h_φ(s, ε)", ec=rs.ORANGE)
-    _box(ax, 6.1, 3.0, 2.7, 1.25, "frozen decoder D", "action a = D(z)\n(flow, iterative)", ec=rs.GREEN)
-    _box(ax, 9.2, 3.05, 2.5, 1.15, "patch critic", "Q^π(s, a)", ec=rs.PURPLE)
-    _arrow(ax, 2.6, 3.65, 3.0, 3.65)
-    _arrow(ax, 5.7, 3.65, 6.1, 3.65)
-    _arrow(ax, 8.8, 3.65, 9.2, 3.6)
-    ax.text(6.4, 4.55, "∂a/∂z through D's ODE = the wall", fontsize=8, color=rs.RED)
-    # three routes into the actor, none through D's ODE
-    _box(ax, 3.0, 0.4, 3.0, 1.35, "A · latent critic (DSRL)", "learn Q̃(s,z) ≈ Q^π(s,D(z));\nDDPG: max Q̃(s,h_φ) + BC\n→ ∇_z Q̃ direct, no D", ec=rs.BLUE)
-    _box(ax, 6.35, 0.4, 3.0, 1.35, "B · 1-step decoder (FQL)", "distill D → D̂ (1-step);\n∇_z Q(D̂(z)) = ∇_a Q·∂D̂/∂z\n→ one cheap Jacobian", ec=rs.GREEN)
-    _box(ax, 9.7, 0.4, 3.0, 1.35, "C · latent Q-score match", "regress h_φ → z+η∇_z Q̃\n(= cos/tangential, our sphere-loss)\n→ stable, no ascent", ec=rs.ORANGE)
-    _arrow(ax, 4.5, 1.75, 4.4, 3.0, c=rs.BLUE, ls="--")
-    _arrow(ax, 7.85, 1.75, 7.4, 2.99, c=rs.GREEN, ls="--")
-    _arrow(ax, 10.9, 1.75, 4.7, 3.0, c=rs.ORANGE, ls="--")
-    ax.text(0.2, 5.25, "Three ways to run DDPG on the latent actor without ∂D/∂z through the ODE", fontsize=10,
-            color=rs.INK)
+    # top pipeline
+    _box(ax, 0.3, 4.5, 2.7, 1.4, "state\ns", fc="#eef4fb", fs=9.5)
+    _box(ax, 3.7, 4.4, 3.5, 1.55, "one-step\nlatent actor h_φ\n z = h_φ(s, ε)", fc="#fdeee6", ec=rs.ORANGE, fs=8.6)
+    _box(ax, 8.0, 4.4, 3.5, 1.55, "frozen decoder D\n a = D(z)\n (flow, iterative)", fc="#eafaea", ec=rs.GREEN, fs=8.6)
+    _box(ax, 12.3, 4.5, 3.3, 1.4, "patch critic\n Q^π(s, a)", fc="#f9f9f7", ec=rs.PURPLE, fs=8.8)
+    _arrow(ax, 3.0, 5.2, 3.7, 5.2)
+    _arrow(ax, 7.2, 5.2, 8.0, 5.2)
+    _arrow(ax, 11.5, 5.2, 12.3, 5.2)
+    ax.text(8.6, 6.35, "∂a/∂z through D's ODE  =  the wall", fontsize=8.5, color=rs.RED)
+    # three routes (bottom), well separated
+    W, GX = 4.9, 0.6
+    xs = [0.3, 0.3 + W + GX, 0.3 + 2 * (W + GX)]
+    _panel(ax, xs[0], 0.5, W, 2.7, "A · latent critic  (DSRL)",
+           "learn  Q̃(s,z) ≈ Q^π(s, D(z));\nDDPG:  max Q̃(s, h_φ) + BC\n→ ∇_z Q̃ is direct, no D", "most direct", rs.BLUE)
+    _panel(ax, xs[1], 0.5, W, 2.7, "B · 1-step decoder  (FQL)",
+           "distill  D → D̂  (one step);\n∇_z Q(D̂(z)) = ∇_a Q · ∂D̂/∂z\n→ one cheap Jacobian", "exact decoder, distill cost", rs.GREEN)
+    _panel(ax, xs[2], 0.5, W, 2.7, "C · latent Q-score matching",
+           "regress  h_φ → Π(z + η ∇_z Q̃)\n= cos / tangential (sphere-loss)\n→ stable, no ascent", "recommended", rs.ORANGE)
+    _arrow(ax, xs[0] + W / 2, 3.2, 4.9, 4.4, c=rs.BLUE, ls="--")
+    _arrow(ax, xs[1] + W / 2, 3.2, 6.0, 4.4, c=rs.GREEN, ls="--")
+    _arrow(ax, xs[2] + W / 2, 3.2, 5.4, 4.4, c=rs.ORANGE, ls="--")
+    ax.text(0.3, 7.25, "Three ways to run DDPG on the latent actor without ∂D/∂z through the ODE", fontsize=11, color=rs.INK)
     rs.save(fig, path)
     plt.close(fig)
 
