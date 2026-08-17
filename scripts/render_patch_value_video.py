@@ -74,7 +74,9 @@ def main():
     H, gsz, atoms, nc = cc["horizon"], cc["macro_group_size"], cc["num_atoms"], cc["num_critics"]
     vmin, vmax, disc = cc["v_min"], cc["v_max"], cc.get("discount", 0.98)
     scheme = cc.get("reward_scheme", "sparse")
-    net = PatchCriticEnsemble(action_dim=12, horizon=H, num_critics=nc, macro_group_size=gsz, num_atoms=atoms)
+    m = json.loads((a.data / "meta.json").read_text())  # dims come from the data, not hardcoded
+    adim, sdim = m["action_dim"], m["state_dim"]
+    net = PatchCriticEnsemble(action_dim=adim, horizon=H, num_critics=nc, macro_group_size=gsz, num_atoms=atoms)
     params = flax.serialization.msgpack_restore((a.critic / "params.msgpack").read_bytes())
     hl = HLGauss(vmin, vmax, atoms)
     centers = np.asarray(hl.centers)
@@ -101,11 +103,10 @@ def main():
         return dist_full, qpref
 
     # ---- data ----
-    m = json.loads((a.data / "meta.json").read_text())
     n = m["num_steps"]
     images = np.memmap(a.data / "images.dat", np.uint8, "r", shape=(n, 3, 224, 224, 3))
-    state = np.asarray(np.memmap(a.data / "state.dat", np.float32, "r", shape=(n, 16)))
-    action = np.asarray(np.memmap(a.data / "action.dat", np.float32, "r", shape=(n, 12)))
+    state = np.asarray(np.memmap(a.data / "state.dat", np.float32, "r", shape=(n, sdim)))
+    action = np.asarray(np.memmap(a.data / "action.dat", np.float32, "r", shape=(n, adim)))
     reward = np.asarray(np.memmap(a.data / "reward.dat", np.float32, "r", shape=(n,)))
     ep = np.asarray(np.memmap(a.data / "episode_index.dat", np.int32, "r", shape=(n,)))
     sl = episode_slices(ep)
@@ -129,7 +130,7 @@ def main():
         sel = idx[:: a.stride]
         T = len(sel)
         # chunk[t] = action[idx_t : idx_t+H] within the episode (zero-pad past the end)
-        chunks = np.zeros((T, H, 12), np.float32)
+        chunks = np.zeros((T, H, adim), np.float32)
         for i, t in enumerate(sel):
             loc = t - idx[0]
             k = min(H, len(idx) - loc)
