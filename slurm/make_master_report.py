@@ -1807,7 +1807,7 @@ interaction.</p>
 <tr><td>&pi;*<sub>0.6</sub> (RECAP)</td><td>advantage-conditioned VLA post-training (2511.14759)</td></tr>
 <tr><td>ARFM / ARM / ReinboT / NORA-1.5</td><td>가중 flow loss (2509.04063) / AW-BC (2604.03037) / RTG 조건화 (ICML25) / DPO (2511.14659)</td></tr>
 <tr><td>GR-RL</td><td>offline 가치를 데이터 필터로 (2512.01801)</td></tr>
-<tr><td>V-GPS / DEAS</td><td>test-time 재랭킹·BoN 배포 (2406.xxxx / 2510.07730)</td></tr>
+<tr><td>V-GPS / DEAS</td><td>test-time 재랭킹·BoN 배포 (2410.13816 / 2510.07730)</td></tr>
 <tr><td>Q-Transformer / CO-RFT</td><td>대규모 이전 세대 Q / chunked TD 소규모 실기 (2309.10150 / 2508.02219)</td></tr>
 <tr><td>QC / AQC / ACSAC</td><td>chunked TD와 적응 커밋 기계 (2507.07969 / 2605.05544 / 2605.11009)</td></tr>
 <tr><td>CQL / IQL / EMaQ</td><td>offline 가치학습 기초·BoN 연산자 분석 (2006.04779 / 2110.06169 / 2007.11091)</td></tr>
