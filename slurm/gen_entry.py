@@ -60,6 +60,7 @@ PHASE_MAP = {
     "horizon-probe": "이식·인프라",
     "exp-board": "이식·인프라",
     "aqc-ablation": "판정·종합",
+    "paper-intro": "논문·교차",
 }
 
 

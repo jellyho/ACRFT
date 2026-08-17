@@ -1732,6 +1732,93 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-17 논문 인트로 초안 (living)
+entry(
+    "08-17",
+    "paper-intro",
+    "📝 논문 인트로 초안 v4 — 방법이 바뀌어도 성립하는 동기 중심 서사",
+    "살아있음",
+    """
+<p class='sub'>논문(ICLR 본논문, 8–9p) 인트로 작업 문서. <b>설계 원칙</b>: 세부 방법(IQL 여부, BoN 여부,
+critic 형태)이 바뀌어도 그대로 성립해야 한다. 그래서 방법 서술을 전부 <b>"어떤 해법이든 답해야 할
+세 가지 질문"</b>으로 치환했다 — 구현이 바뀌면 본문이 바뀔 뿐 인트로는 불변. 마감 08-19, 피드백 반영 중.</p>
+
+<div style="border:1px solid #d8d8e0;border-radius:10px;padding:22px 26px;background:#fcfcfe;font-family:Georgia,'Times New Roman',serif;line-height:1.75">
+<h3 style="margin-top:0">1&nbsp;&nbsp;Introduction</h3>
+
+<p>Vision-language-action models have turned robot manipulation into a data problem. With a pretrained
+vision-language backbone and supervised finetuning on teleoperated demonstrations, a single policy can follow
+instructions, generalize across objects, and run on real hardware. The recipe is attractive precisely because it
+is so simple: collect demonstrations, imitate them, scale up.</p>
+
+<p>But the fuel of this recipe is unlike the fuel of language models. Internet text is abundant; teleoperated
+robot data is scarce, slow, and expensive, produced by human operators working in real time. And it is not only
+scarce but imperfect. Operators hesitate, take detours, recover from near failures, and differ widely in skill.
+Every large demonstration corpus is a mixture of expert and mediocre behavior. Supervised finetuning cannot tell
+the difference: its objective rewards resembling the data, so the policy converges to the average operator,
+mistakes included. This ceiling is not a capacity problem. Doubling the model or the dataset reproduces the same
+average more faithfully. The bottleneck is the objective itself.</p>
+
+<p>Language models faced exactly this wall, and crossed it. Pretraining and supervised finetuning alone plateaued
+at imitating the training distribution; the decisive step was a post-training stage that optimizes what we
+actually want rather than resemblance to the data. Robotics needs its analogue of that stage. Reinforcement
+learning is the natural candidate, since task success is already recorded with every demonstration, sitting
+unused by the imitation loss. Yet the standard route of running RL against the environment does not transfer to
+robots at this scale. Exploration on hardware is unsafe, resets are expensive, and a large model consumes more
+interaction than any lab can supply. If a post-training stage is to exist for VLAs, it must work offline,
+extracting more from the demonstrations the model already has.</p>
+
+<p>This goal is realistic, not contradictory. A dataset that drags imitation toward its average also contains
+everything needed to do better, because some demonstrations solve the task faster and more reliably than others.
+A value function learned from recorded outcomes can rank these behaviors, prefer the good ones, and compose them,
+without asking the robot to try a single action the data does not contain. In principle, offline reinforcement
+learning should convert the same demonstrations into a stronger policy than imitation ever could. In practice,
+this conversion has not happened. The post-training methods actually applied to VLAs today keep the imitation
+objective at their core and use rewards only to condition or reweight it, which preserves the stability of
+supervised learning and also its ceiling. The few attempts at genuine value learning on VLAs remain partial:
+the value ends up filtering data, or rescoring samples at test time, or it is learned at a scale far below the
+models it is meant to improve. A complete, working path from a VLA's own demonstrations to a measurably better
+VLA is still missing.</p>
+
+<p>We argue this path has been blocked because VLAs are not the agents offline reinforcement learning was
+developed for, and any post-training stage that hopes to work must answer three questions that the standard
+machinery leaves open. First, at what temporal granularity should credit be assigned? A VLA does not emit an
+action; it emits a commitment, a chunk of actions executed open loop until the next replanning point. Credit at
+the level of single steps dissolves over manipulation horizons, credit at the level of whole chunks is blind
+exactly where contact demands reactivity, and the right granularity changes from state to state. Second, how can
+value be learned reliably at this scale? The backbone that makes a VLA general is also too large to train jointly
+with a critic, and the value must remain trustworthy far from the data it was fitted on. Third, once a value
+exists, how should it act on the policy? Rescoring the policy's own samples, deciding how long to commit, and
+retraining the policy are all plausible mechanisms, and, as we show, they are far from equivalent.</p>
+
+<p>In this paper we develop an offline post-training stage for VLAs built around these three questions, and we
+evaluate each answer in controlled isolation, on standard offline RL benchmarks where every component can be
+measured against its alternatives, and on VLA-scale manipulation where the full pipeline must hold together.
+Our aim is not another offline RL algorithm but a working conversion: the same demonstrations, a better VLA,
+and an account of why each piece is there.</p>
+
+<p><b>Contributions.</b>
+(i)&nbsp;We make the case for offline reinforcement learning as the missing post-training stage of VLAs, and
+diagnose why existing attempts fall short of it.
+(ii)&nbsp;We formulate the three questions any such stage must answer, about credit granularity, value learning
+at scale, and the mechanism by which value acts on the policy, and provide a complete instantiation.
+(iii)&nbsp;We give a controlled empirical analysis of the answers, showing which mechanisms genuinely improve a
+VLA and which silently fail.
+(iv)&nbsp;We validate the resulting pipeline end to end, from demonstrations to deployment, without any online
+interaction.</p>
+</div>
+
+<h3>이 인트로가 무엇에 강건한가 (설계 노트)</h3>
+<table class='num'><tr><th>바뀔 수 있는 것</th><th>인트로 영향</th></tr>
+<tr><td>IQL → 다른 가치학습(TD-max, DEAS식, distributional 여부)</td><td>없음 — "질문 2(신뢰 가능한 가치학습)"의 답만 바뀜</td></tr>
+<tr><td>BoN 채택/폐기, adaptive commitment 세부</td><td>없음 — "질문 3(가치가 정책에 닿는 기제)"의 답만 바뀜</td></tr>
+<tr><td>chunk 처리 방식(고정/적응, prefix 구조)</td><td>없음 — "질문 1(credit granularity)"의 답만 바뀜</td></tr>
+<tr><td>백본/과제(pi05, GR00T, RoboCasa, 실기)</td><td>없음 — 스케일 서술은 일반형</td></tr></table>
+<p class='sub'>고정된 것은 "SFT 천장 → offline post-training 필요 → 세 질문"의 논리뿐이다. 성능 수치 없음(지시),
+em-dash 없음(지시), 방법 이름 없음. 베이스라인 한계는 계열 수준(조건/가중 모방·필터·test-time 재랭킹)으로만.
+관련 조사: CO-RFT·GR-RL·DEAS·RECAP·ARFM 등 서베이는 별도 정리했고 related work 절에서 명시 인용 예정.</p>""",
+)
+
 # ============================================== 08-16 acrft_ogbench apple-to-apple ablation
 entry(
     "08-16",
@@ -2474,6 +2561,15 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "paper-intro": {
+        "date": "2026-08-17 21:30",
+        "who": "워커B(논문 담당)",
+        "where": "논문 초안 (ICLR 본논문 목표)",
+        "what": "인트로 v4 — 방법 세부에 불변인 동기 중심 서사(세 가지 질문 구조), 08-19 마감",
+        "how": "SFT 천장→offline post-training 필요→세 질문(credit granularity/가치학습 스케일/가치가 정책에 닿는 기제); 수치·방법명·dash 배제",
+        "why": "사용자 지시 — 논문 작성 담당, 방법이 바뀌어도 성립하는 인트로",
+        "links": ["deas", "aqc-ablation", "wc-policy-extraction", "conservatism"],
     },
     "aqc-ablation": {
         "date": "2026-08-16 20:00",
@@ -3724,6 +3820,21 @@ with our standing binding-constraint = coverage.</p>
 <p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
 <b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
 td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
+)
+
+en(
+    "paper-intro",
+    "📝 Paper introduction draft v4 — a motivation-first narrative invariant to method details",
+    """
+<p class='sub'>Working document for the paper (ICLR full paper target). <b>Design principle</b>: the introduction must
+survive any change in method details (IQL or not, BoN or not, critic form). All method exposition is replaced by
+<b>three questions any solution must answer</b>; if the implementation changes, the body changes but the intro stands.
+Deadline 08-19. The draft itself is in English; open the Korean toggle for the full text with design notes, or read
+the same draft there. Robustness table: value-learning swaps only change the answer to Question&nbsp;2; deployment
+changes (BoN kept or dropped, adaptive commitment details) only change Question&nbsp;3; chunk handling only changes
+Question&nbsp;1; backbone/benchmark swaps do not touch the intro at all. Fixed skeleton: SFT ceiling → offline
+post-training stage → the three questions. No performance numbers, no method names, no em-dashes (per instruction);
+baseline limitations stated at the family level (conditioned/weighted imitation, filtering, test-time rescoring).</p>""",
 )
 
 en(
