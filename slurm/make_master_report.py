@@ -1746,67 +1746,72 @@ critic 형태)이 바뀌어도 그대로 성립해야 한다. 그래서 방법 �
 <div style="border:1px solid #d8d8e0;border-radius:10px;padding:22px 26px;background:#fcfcfe;font-family:Georgia,'Times New Roman',serif;line-height:1.75">
 <h3 style="margin-top:0">1&nbsp;&nbsp;Introduction</h3>
 
-<p>Vision-language-action models have turned robot manipulation into a data problem. With a pretrained
-vision-language backbone and supervised finetuning on teleoperated demonstrations, a single policy can follow
-instructions, generalize across objects, and run on real hardware. The recipe is attractive precisely because it
-is so simple: collect demonstrations, imitate them, scale up.</p>
+<p>Vision-language-action models have turned robot manipulation into a data problem
+[<i>RT-2; OpenVLA; &pi;<sub>0</sub></i>]. With a pretrained vision-language backbone and supervised finetuning on
+teleoperated demonstrations, a single policy can follow instructions, generalize across objects, and run on real
+hardware. The recipe is attractive precisely because it is so simple: collect demonstrations, imitate them, scale up.</p>
 
-<p>But the fuel of this recipe is unlike the fuel of language models. Internet text is abundant; teleoperated
-robot data is scarce, slow, and expensive, produced by human operators working in real time. And it is not only
-scarce but imperfect. Operators hesitate, take detours, recover from near failures, and differ widely in skill.
-Every large demonstration corpus is a mixture of expert and mediocre behavior. Supervised finetuning cannot tell
-the difference: its objective rewards resembling the data, so the policy converges to the average operator,
-mistakes included. This ceiling is not a capacity problem. Doubling the model or the dataset reproduces the same
-average more faithfully. The bottleneck is the objective itself.</p>
+<p>The weakness of the recipe is the data it imitates. Teleoperated demonstrations are produced by human operators
+working in real time, and every large corpus mixes expert trajectories with hesitation, detours, and recovered
+mistakes [<i>GR-RL; &pi;*<sub>0.6</sub></i>]. Supervised finetuning cannot tell these apart: its objective rewards
+resembling the data, so the policy converges to the average operator, mistakes included. This ceiling is not a
+capacity problem, and it does not yield to scale. A larger model trained on more of the same data reproduces the
+same average more faithfully. Meanwhile, the signal that could break the tie is already sitting in the dataset.
+Every demonstration records whether and how quickly the task was accomplished, and this outcome information is
+exactly what the imitation loss ignores. Improving a VLA beyond its data, without the unsafe and prohibitively
+expensive route of running reinforcement learning on hardware, is therefore not a question of whether to use this
+signal but of how.</p>
 
-<p>Language models faced exactly this wall, and crossed it. Pretraining and supervised finetuning alone plateaued
-at imitating the training distribution; the decisive step was a post-training stage that optimizes what we
-actually want rather than resemblance to the data. Robotics needs its analogue of that stage. Reinforcement
-learning is the natural candidate, since task success is already recorded with every demonstration, sitting
-unused by the imitation loss. Yet the standard route of running RL against the environment does not transfer to
-robots at this scale. Exploration on hardware is unsafe, resets are expensive, and a large model consumes more
-interaction than any lab can supply. If a post-training stage is to exist for VLAs, it must work offline,
-extracting more from the demonstrations the model already has.</p>
-
-<p>This goal is realistic, not contradictory. A dataset that drags imitation toward its average also contains
-everything needed to do better, because some demonstrations solve the task faster and more reliably than others.
-A value function learned from recorded outcomes can rank these behaviors, prefer the good ones, and compose them,
-without asking the robot to try a single action the data does not contain. In principle, offline reinforcement
-learning should convert the same demonstrations into a stronger policy than imitation ever could. In practice,
-this conversion has not happened. The post-training methods actually applied to VLAs today keep the imitation
-objective at their core and use rewards only to condition or reweight it, which preserves the stability of
-supervised learning and also its ceiling. The few attempts at genuine value learning on VLAs remain partial:
-the value ends up filtering data, or rescoring samples at test time, or it is learned at a scale far below the
-models it is meant to improve. A complete, working path from a VLA's own demonstrations to a measurably better
-VLA is still missing.</p>
+<p>Today the field uses it timidly. The post-training methods actually applied to VLAs keep the imitation
+objective at their core and let outcomes only condition or reweight it: advantage-conditioned finetuning
+[<i>&pi;*<sub>0.6</sub></i>], weighted imitation [<i>ARFM; ARM</i>], return conditioning [<i>ReinboT</i>],
+preference tuning [<i>NORA-1.5</i>]. These inherit the stability of supervised learning, and also its defining
+limit, since the policy is never trained to do better than the behavior it imitates. The few attempts at genuine
+value learning on VLAs remain partial. The learned value ends up filtering the dataset [<i>GR-RL</i>], or
+rescoring sampled actions at test time [<i>V-GPS; DEAS</i>], or it is trained at a scale far below the models it
+is meant to improve [<i>Q-Transformer; CO-RFT</i>]. A complete, working path from a VLA's own demonstrations to a
+measurably better VLA has not been shown.</p>
 
 <p>We argue this path has been blocked because VLAs are not the agents offline reinforcement learning was
 developed for, and any post-training stage that hopes to work must answer three questions that the standard
 machinery leaves open. First, at what temporal granularity should credit be assigned? A VLA does not emit an
-action; it emits a commitment, a chunk of actions executed open loop until the next replanning point. Credit at
-the level of single steps dissolves over manipulation horizons, credit at the level of whole chunks is blind
-exactly where contact demands reactivity, and the right granularity changes from state to state. Second, how can
-value be learned reliably at this scale? The backbone that makes a VLA general is also too large to train jointly
-with a critic, and the value must remain trustworthy far from the data it was fitted on. Third, once a value
-exists, how should it act on the policy? Rescoring the policy's own samples, deciding how long to commit, and
-retraining the policy are all plausible mechanisms, and, as we show, they are far from equivalent.</p>
+action; it emits a commitment, a chunk of actions executed open loop until the next replanning point
+[<i>ACT; &pi;<sub>0</sub></i>]. Credit at the level of single steps dissolves over manipulation horizons, credit at
+the level of whole chunks is blind exactly where contact demands reactivity [<i>QC</i>], and the right granularity
+changes from state to state [<i>AQC; ACSAC</i>]. Second, how can value be learned reliably at this scale? The
+backbone that makes a VLA general is also too large to train jointly with a critic, and the value must remain
+trustworthy far from the data it was fitted on [<i>CQL; IQL</i>]. Third, once a value exists, how should it act on
+the policy? Rescoring the policy's own samples, deciding how long to commit, and retraining the policy are all
+plausible mechanisms, and, as we show, they are far from equivalent [<i>EMaQ</i>].</p>
 
 <p>In this paper we develop an offline post-training stage for VLAs built around these three questions, and we
 evaluate each answer in controlled isolation, on standard offline RL benchmarks where every component can be
-measured against its alternatives, and on VLA-scale manipulation where the full pipeline must hold together.
-Our aim is not another offline RL algorithm but a working conversion: the same demonstrations, a better VLA,
-and an account of why each piece is there.</p>
+measured against its alternatives [<i>OGBench</i>], and on VLA-scale manipulation where the full pipeline must
+hold together [<i>RoboCasa</i>]. Our aim is not another offline RL algorithm but a working conversion: the same
+demonstrations, a better VLA, and an account of why each piece is there.</p>
 
 <p><b>Contributions.</b>
-(i)&nbsp;We make the case for offline reinforcement learning as the missing post-training stage of VLAs, and
-diagnose why existing attempts fall short of it.
-(ii)&nbsp;We formulate the three questions any such stage must answer, about credit granularity, value learning
-at scale, and the mechanism by which value acts on the policy, and provide a complete instantiation.
+(i)&nbsp;We diagnose why outcome signals recorded in demonstration data have failed to improve VLAs so far,
+despite a decade of offline reinforcement learning machinery built to exploit them.
+(ii)&nbsp;We formulate the three questions any VLA post-training stage must answer, about credit granularity,
+value learning at scale, and the mechanism by which value acts on the policy, and provide a complete instantiation.
 (iii)&nbsp;We give a controlled empirical analysis of the answers, showing which mechanisms genuinely improve a
 VLA and which silently fail.
 (iv)&nbsp;We validate the resulting pipeline end to end, from demonstrations to deployment, without any online
 interaction.</p>
 </div>
+
+<h3>참고문헌 키 (초안용 — bibtex 전환 예정)</h3>
+<table class='num'><tr><th>key</th><th>논문</th></tr>
+<tr><td>RT-2 / OpenVLA / ACT / &pi;<sub>0</sub></td><td>VLA·청크 정책 대표작 (2307.15818 / 2406.09246 / 2304.13705 / 2410.24164)</td></tr>
+<tr><td>&pi;*<sub>0.6</sub> (RECAP)</td><td>advantage-conditioned VLA post-training (2511.14759)</td></tr>
+<tr><td>ARFM / ARM / ReinboT / NORA-1.5</td><td>가중 flow loss (2509.04063) / AW-BC (2604.03037) / RTG 조건화 (ICML25) / DPO (2511.14659)</td></tr>
+<tr><td>GR-RL</td><td>offline 가치를 데이터 필터로 (2512.01801)</td></tr>
+<tr><td>V-GPS / DEAS</td><td>test-time 재랭킹·BoN 배포 (2406.xxxx / 2510.07730)</td></tr>
+<tr><td>Q-Transformer / CO-RFT</td><td>대규모 이전 세대 Q / chunked TD 소규모 실기 (2309.10150 / 2508.02219)</td></tr>
+<tr><td>QC / AQC / ACSAC</td><td>chunked TD와 적응 커밋 기계 (2507.07969 / 2605.05544 / 2605.11009)</td></tr>
+<tr><td>CQL / IQL / EMaQ</td><td>offline 가치학습 기초·BoN 연산자 분석 (2006.04779 / 2110.06169 / 2007.11091)</td></tr>
+<tr><td>OGBench / RoboCasa</td><td>평가 벤치마크 (2410.20092 / 2406.02523)</td></tr></table>
 
 <h3>이 인트로가 무엇에 강건한가 (설계 노트)</h3>
 <table class='num'><tr><th>바뀔 수 있는 것</th><th>인트로 영향</th></tr>
@@ -1814,9 +1819,10 @@ interaction.</p>
 <tr><td>BoN 채택/폐기, adaptive commitment 세부</td><td>없음 — "질문 3(가치가 정책에 닿는 기제)"의 답만 바뀜</td></tr>
 <tr><td>chunk 처리 방식(고정/적응, prefix 구조)</td><td>없음 — "질문 1(credit granularity)"의 답만 바뀜</td></tr>
 <tr><td>백본/과제(pi05, GR00T, RoboCasa, 실기)</td><td>없음 — 스케일 서술은 일반형</td></tr></table>
-<p class='sub'>고정된 것은 "SFT 천장 → offline post-training 필요 → 세 질문"의 논리뿐이다. 성능 수치 없음(지시),
-em-dash 없음(지시), 방법 이름 없음. 베이스라인 한계는 계열 수준(조건/가중 모방·필터·test-time 재랭킹)으로만.
-관련 조사: CO-RFT·GR-RL·DEAS·RECAP·ARFM 등 서베이는 별도 정리했고 related work 절에서 명시 인용 예정.</p>""",
+<p class='sub'>v5 변경(2026-08-17 밤): LLM post-training 유추 문단 삭제(지시), "offline RL이 BC보다 낫다"류 교과서
+논증 삭제(지시) — 대신 "개선 신호는 이미 데이터에 있다; 쓸지가 아니라 <b>어떻게</b> 쓰느냐"로 재프레임. 인라인
+레퍼런스 [key] 추가(지시). 고정된 뼈대: "SFT 천장 → 신호는 있는데 소심하게 쓰인다 → 세 질문". 성능 수치 없음,
+em-dash 없음, 우리 방법명 없음.</p>""",
 )
 
 # ============================================== 08-16 acrft_ogbench apple-to-apple ablation
