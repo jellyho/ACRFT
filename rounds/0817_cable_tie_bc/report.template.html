@@ -1,0 +1,854 @@
+<title>Cable-tie BC finetune — pre-report</title>
+
+<style>
+  :root {
+    --ground: #FAFAFB;
+    --surface: #FFFFFF;
+    --surface-2: #F2F3F6;
+    --ink: #16181D;
+    --ink-soft: #4A5058;
+    --ink-mute: #757C87;
+    --rule: #E1E4EA;
+    --rule-soft: #EDEFF3;
+    --accent: #3D6FD4;
+    --accent-soft: #EBF0FC;
+    --warn: #C77800;
+    --warn-soft: #FBF1DF;
+    --good: #0F8A2C;
+    --sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo",
+            "Malgun Gothic", "Noto Sans KR", Segoe UI, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #121419;
+      --surface: #181B21;
+      --surface-2: #1F232B;
+      --ink: #E7E9ED;
+      --ink-soft: #B4BAC4;
+      --ink-mute: #858C98;
+      --rule: #2B303A;
+      --rule-soft: #23272F;
+      --accent: #7FA5EE;
+      --accent-soft: #1C2534;
+      --warn: #E0A038;
+      --warn-soft: #2C2416;
+      --good: #4CBF6A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #121419;
+    --surface: #181B21;
+    --surface-2: #1F232B;
+    --ink: #E7E9ED;
+    --ink-soft: #B4BAC4;
+    --ink-mute: #858C98;
+    --rule: #2B303A;
+    --rule-soft: #23272F;
+    --accent: #7FA5EE;
+    --accent-soft: #1C2534;
+    --warn: #E0A038;
+    --warn-soft: #2C2416;
+    --good: #4CBF6A;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.75;
+    margin: 0;
+    padding: 0 20px 96px;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+  p, li { color: var(--ink-soft); max-width: 68ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  /* ---- masthead ---- */
+  .top {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
+    justify-content: space-between;
+    padding: 40px 0 0;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-mute);
+  }
+  h1 {
+    font-size: clamp(28px, 4.4vw, 38px); line-height: 1.18; letter-spacing: -.02em;
+    margin: 10px 0 6px; text-wrap: balance; color: var(--ink); font-weight: 660;
+  }
+  .lede { font-size: 18.5px; color: var(--ink-soft); margin: 0 0 22px; }
+
+  .langbtn {
+    font-family: var(--mono); font-size: 12px; cursor: pointer;
+    background: var(--surface); color: var(--ink-soft);
+    border: 1px solid var(--rule); border-radius: 999px; padding: 5px 13px;
+  }
+  .langbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .langbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- status chips ---- */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 34px; }
+  .chip {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.4;
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 7px; padding: 7px 11px; color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  .chip b { color: var(--ink); font-weight: 620; }
+  .chip.live { border-color: var(--accent); background: var(--accent-soft); }
+
+  /* ---- sections ---- */
+  section { border-top: 1px solid var(--rule); padding-top: 30px; margin-top: 38px; }
+  h2 {
+    font-size: 21px; letter-spacing: -.01em; margin: 0 0 4px;
+    color: var(--ink); font-weight: 640; text-wrap: balance;
+  }
+  .h2note { font-family: var(--mono); font-size: 12px; color: var(--ink-mute); margin: 0 0 18px; }
+  h3 { font-size: 16.5px; margin: 30px 0 2px; color: var(--ink); font-weight: 640; }
+
+  /* ---- signal chain ---- */
+  .chain { display: grid; gap: 10px; margin: 8px 0 6px; }
+  @media (min-width: 720px) { .chain { grid-template-columns: repeat(4, 1fr); } }
+  .node {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 10px; padding: 13px 14px;
+  }
+  .node .k {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-mute); display: block; margin-bottom: 6px;
+  }
+  .node .v { font-size: 14px; color: var(--ink); line-height: 1.55; }
+  .node .d { font-family: var(--mono); font-size: 11.5px; color: var(--ink-mute); margin-top: 5px; }
+  .node.hi { border-color: var(--accent); background: var(--accent-soft); }
+
+  /* ---- spec table ---- */
+  .tw { overflow-x: auto; margin: 16px 0 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-mute); font-weight: 500; border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td.n, td code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.n { color: var(--ink); white-space: nowrap; }
+  td { color: var(--ink-soft); }
+  tbody tr:last-child td { border-bottom: none; }
+  code {
+    font-family: var(--mono); font-size: .9em; background: var(--surface-2);
+    padding: 1px 5px; border-radius: 4px; color: var(--ink);
+  }
+  pre {
+    font-family: var(--mono); font-size: 13px; line-height: 1.65;
+    background: var(--surface-2); border: 1px solid var(--rule);
+    border-radius: 9px; padding: 14px 16px; overflow-x: auto; color: var(--ink);
+  }
+  pre code { background: none; padding: 0; }
+
+  /* ---- callout ---- */
+  .note {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-left: 3px solid var(--warn); border-radius: 0 9px 9px 0;
+    padding: 14px 16px; margin: 18px 0;
+  }
+  .note p { margin: 0; max-width: none; }
+  .note .lbl {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--warn); display: block; margin-bottom: 5px;
+  }
+
+  /* ---- figure ---- */
+  figure { margin: 22px 0 0; }
+  figure img {
+    width: 100%; max-width: 100%; display: block; border: 1px solid var(--rule);
+    border-radius: 9px; background: #FCFCFA;
+  }
+  figcaption { font-size: 14px; color: var(--ink-soft); margin-top: 12px; max-width: 68ch; }
+  figcaption .prov {
+    display: block; font-family: var(--mono); font-size: 11.5px; color: var(--ink-mute);
+    margin-top: 9px; line-height: 1.6;
+  }
+
+  /* ---- review ---- */
+  .review { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 22px 24px; }
+  .review h2 { margin-top: 0; }
+  .claims { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 9px; }
+  .claims li { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; max-width: none; }
+  .claims input { margin-top: 6px; flex: none; accent-color: var(--accent); }
+  .same { display: flex; gap: 18px; margin: 18px 0 4px; font-size: 15px; flex-wrap: wrap; }
+  .same label { display: flex; gap: 7px; align-items: center; color: var(--ink-soft); }
+  textarea {
+    width: 100%; min-height: 84px; margin-top: 10px; padding: 11px 13px;
+    font-family: var(--sans); font-size: 15px; color: var(--ink);
+    background: var(--ground); border: 1px solid var(--rule); border-radius: 8px;
+    resize: vertical; box-sizing: border-box;
+  }
+  textarea:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .copybtn {
+    margin-top: 14px; font-family: var(--mono); font-size: 13px; cursor: pointer;
+    background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
+  }
+  .copybtn:hover { filter: brightness(1.07); }
+  .copybtn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  [lang="en"] { display: none; }
+  body[data-lang="en"] [lang="ko"] { display: none; }
+  body[data-lang="en"] [lang="en"] { display: revert; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <div class="top">
+    <div>
+      <div class="eyebrow">rounds / 0817_cable_tie_bc</div>
+      <h1 lang="ko">케이블 타이 BC 파인튜닝 — 사전 보고</h1>
+      <h1 lang="en">Cable-tie BC finetune — pre-report</h1>
+    </div>
+    <button class="langbtn" id="lang" type="button">EN</button>
+  </div>
+
+  <p class="lede" lang="ko">
+    pi0.5를 YAM 양팔 텔레오퍼레이션 데이터로 순수 행동복제 학습 중입니다.
+    아래는 결과가 아니라 <strong>무엇이 어떻게 학습되고 있는지</strong>에 대한
+    사양서입니다.
+  </p>
+  <p class="lede" lang="en">
+    A plain behaviour-cloning finetune of pi0.5 on YAM bimanual teleoperation data.
+    What follows is not results — it is a specification of
+    <strong>what is being learned, and how</strong>.
+  </p>
+
+  <div class="chips">
+    <span class="chip live">finished at step <b>{{STEP}}</b></span>
+    <span class="chip">BC loss <b>{{LOSS}}</b></span>
+    <span class="chip">5 checkpoints · <b>10k…50k</b></span>
+    <span class="chip">100 ep · <b>157,023</b> frames</span>
+    <span class="chip"><a href="https://wandb.ai/RSS-PFT_RLLAB/cable-tie-bc/runs/l1gyxtbg">wandb ↗</a></span>
+  </div>
+
+  <!-- ================= 1. signal chain ================= -->
+  <section>
+    <h2 lang="ko">신호 사슬</h2>
+    <h2 lang="en">The signal chain</h2>
+    <p class="h2note">what goes in, what comes out</p>
+
+    <p lang="ko">
+      정책이 실제로 보는 것과 내놓는 것입니다. 데이터셋에 있지만
+      <strong>정책이 쓰지 않는</strong> 항목도 있습니다 — 엔드이펙터 포즈
+      (<code>observation.eef</code>)와 리더 암 상태(<code>observation.leader</code>)는
+      입력에도 출력에도 들어가지 않습니다.
+    </p>
+    <p lang="en">
+      What the policy actually sees and produces. Some columns in the dataset are
+      <strong>not used at all</strong> — the end-effector pose
+      (<code>observation.eef</code>) and the leader-arm state
+      (<code>observation.leader</code>) enter neither the input nor the output.
+    </p>
+
+    <div class="chain">
+      <div class="node">
+        <span class="k">observation</span>
+        <span class="v" lang="ko">카메라 3대 + 관절 상태 + 지시문</span>
+        <span class="v" lang="en">3 cameras + joint state + instruction</span>
+        <span class="d">3 × 224² RGB · state 42 · 200 tok</span>
+      </div>
+      <div class="node hi">
+        <span class="k">pi0.5</span>
+        <span class="v" lang="ko">VLM 백본 + 액션 전문가, 플로우 매칭</span>
+        <span class="v" lang="en">VLM backbone + action expert, flow matching</span>
+        <span class="d">gemma_2b + gemma_300m · bf16</span>
+      </div>
+      <div class="node hi">
+        <span class="k">raw output</span>
+        <span class="v" lang="ko">관절 <strong>변위</strong> 청크 (그리퍼는 절대값)</span>
+        <span class="v" lang="en">Joint <strong>displacement</strong> chunk (grippers absolute)</span>
+        <span class="d">30 steps × 14 dims = 1.0 s</span>
+      </div>
+      <div class="node">
+        <span class="k">to the robot</span>
+        <span class="v" lang="ko">현재 관절각을 더해 <strong>절대 관절 목표</strong></span>
+        <span class="v" lang="en">Current joint angles added back → <strong>absolute joint targets</strong></span>
+        <span class="d">JointAbsoluteActions → YAMOutputs</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. action space ================= -->
+  <section>
+    <h2 lang="ko">액션 공간 — 델타 관절입니다. 델타 포즈가 아닙니다.</h2>
+    <h2 lang="en">Action space — delta joint, not delta pose</h2>
+    <p class="h2note">src/openpi/policies/yam_policy.py · transforms.JointDeltaActions</p>
+
+    <p lang="ko">
+      학습 타깃은 <strong>관절 공간의 상대 변위</strong>입니다. 팔당 관절 6개는
+      현재 측정된 관절 위치를 뺀 값이고, 그리퍼 2개는 절대값(0~1)으로 그대로
+      둡니다. 엔드이펙터 위치나 자세는 어디에도 관여하지 않습니다.
+    </p>
+    <p lang="en">
+      The training target is a <strong>relative displacement in joint space</strong>.
+      The six joints per arm have the currently measured joint position subtracted;
+      the two grippers are left absolute (0–1). End-effector position and
+      orientation play no part anywhere.
+    </p>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr>
+            <th>action dim</th>
+            <th lang="ko">의미</th><th lang="en">meaning</th>
+            <th lang="ko">기준값 (state 인덱스)</th><th lang="en">reference (state index)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="n">0–5</td>
+            <td lang="ko">왼팔 관절 6개 — 상대</td><td lang="en">left arm, 6 joints — relative</td>
+            <td class="n">state 0–5 <span lang="ko">를 뺌</span><span lang="en">subtracted</span></td></tr>
+          <tr><td class="n">6</td>
+            <td lang="ko">왼쪽 그리퍼 — <strong>절대</strong></td><td lang="en">left gripper — <strong>absolute</strong></td>
+            <td class="n">—</td></tr>
+          <tr><td class="n">7–12</td>
+            <td lang="ko">오른팔 관절 6개 — 상대</td><td lang="en">right arm, 6 joints — relative</td>
+            <td class="n">state 21–26 <span lang="ko">를 뺌</span><span lang="en">subtracted</span></td></tr>
+          <tr><td class="n">13</td>
+            <td lang="ko">오른쪽 그리퍼 — <strong>절대</strong></td><td lang="en">right gripper — <strong>absolute</strong></td>
+            <td class="n">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="lbl" lang="ko">배포 시 주의</span><span class="lbl" lang="en">deployment note</span>
+      <p lang="ko">
+        오른팔 관절이 state의 21번부터 시작하기 때문에 일반적인
+        <code>DeltaActions</code>(액션 i가 state i를 참조)로는 정렬이 맞지 않습니다.
+        전용 변환이 인덱스 매핑을 들고 있습니다. 정책 서버는 이 역변환을 거쳐
+        <strong>절대 관절 목표</strong>를 돌려주므로, 런타임이 다시 더할 필요는
+        없습니다.
+      </p>
+      <p lang="en">
+        The right arm's joints start at state index 21, so the generic
+        <code>DeltaActions</code> (action <em>i</em> references state <em>i</em>)
+        does not line up; a dedicated transform carries the index mapping. The
+        policy server applies the inverse, so it returns <strong>absolute joint
+        targets</strong> — the runtime must not add the state back again.
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= 3. chunk & rate ================= -->
+  <section>
+    <h2 lang="ko">청크 크기와 주기</h2>
+    <h2 lang="en">Chunk size and rate</h2>
+    <p class="h2note">action_horizon = 30 @ 30 fps</p>
+
+    <p lang="ko">
+      한 번의 추론이 <strong>30 스텝짜리 액션 청크</strong>를 내놓고, 데이터가
+      30 fps이므로 이는 정확히 <strong>1.0초</strong>입니다. lego RLT config에서
+      가져온 값인데, 그쪽 근거는 16 스텝(0.53초)이 양팔 조작 한 동작을 담기엔
+      짧다는 것이었습니다. 청크를 얼마나 실행하고 언제 다시 추론할지는 런타임
+      결정이며 정책이 강제하지 않습니다.
+    </p>
+    <p lang="en">
+      One inference produces a <strong>30-step action chunk</strong>, and since the
+      data is 30 fps that is exactly <strong>1.0 second</strong>. The value comes
+      from the lego RLT config, whose reasoning was that 16 steps (0.53 s) is short
+      for one bimanual motion. How much of the chunk to execute before re-planning
+      is a runtime decision, not something the policy fixes.
+    </p>
+
+    <div class="tw">
+      <table>
+        <tbody>
+          <tr><td lang="ko">데이터 주기</td><td lang="en">data rate</td><td class="n">30 fps</td></tr>
+          <tr><td lang="ko">청크 길이</td><td lang="en">chunk length</td><td class="n">30 steps = 1.000 s</td></tr>
+          <tr><td lang="ko">청크당 차원</td><td lang="en">dims per chunk</td><td class="n">30 × 14</td></tr>
+          <tr><td lang="ko">모델 내부 액션 차원</td><td lang="en">model action dim</td><td class="n">32 (14 <span lang="ko">를 패딩</span><span lang="en">padded</span>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= 4. observation ================= -->
+  <section>
+    <h2 lang="ko">관측</h2>
+    <h2 lang="en">Observation</h2>
+    <p class="h2note">3 cameras · 42-d proprioception · language</p>
+
+    <p lang="ko">
+      pi0.5는 3인칭 슬롯 1개와 손목 슬롯 2개를 갖는데, YAM은 세 슬롯을 모두 실제
+      카메라로 채웁니다. 원본 480×640이 224×224로 리사이즈됩니다. 상태는 42차원
+      전체가 들어갑니다 — 팔당 위치 7 + 속도 7 + 토크 7.
+    </p>
+    <p lang="en">
+      pi0.5 exposes one third-person slot and two wrist slots; YAM fills all three
+      with real cameras. The native 480×640 is resized to 224×224. The full 42-d
+      state goes in — per arm, 7 positions, 7 velocities, 7 efforts.
+    </p>
+
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th lang="ko">모델 슬롯</th><th lang="en">model slot</th>
+          <th lang="ko">데이터셋 컬럼</th><th lang="en">dataset column</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><code>base_0_rgb</code></td><td><code>observation.images.agentview</code></td></tr>
+          <tr><td><code>left_wrist_0_rgb</code></td><td><code>observation.images.wrist_left</code></td></tr>
+          <tr><td><code>right_wrist_0_rgb</code></td><td><code>observation.images.wrist_right</code></td></tr>
+          <tr><td><code>state</code></td><td><code>observation.state</code> — 42-d</td></tr>
+          <tr><td><code>prompt</code></td>
+              <td lang="ko">태스크 문자열 → 200 토큰. 전 에피소드 동일: <em>fasten the orange cable tie</em></td>
+              <td lang="en">task string → 200 tokens. Identical for every episode: <em>fasten the orange cable tie</em></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p lang="ko">
+      태스크가 하나뿐이라 언어 지시문은 이 런에서 정보를 거의 주지 않습니다.
+      나중에 태스크를 늘릴 때 비로소 의미가 생깁니다.
+    </p>
+    <p lang="en">
+      With a single task, the language instruction carries almost no information in
+      this run. It only starts to matter once more tasks are added.
+    </p>
+  </section>
+
+  <!-- ================= 5. normalization ================= -->
+  <section>
+    <h2 lang="ko">정규화 — 평균/표준편차가 아니라 분위수</h2>
+    <h2 lang="en">Normalization — quantile, not mean/std</h2>
+    <p class="h2note">use_quantile_norm = True · transforms.py:144</p>
+
+    <p lang="ko">
+      상태와 액션 모두 1퍼센타일과 99퍼센타일을 양 끝으로 삼아 −1에서 +1 구간으로
+      선형 사상됩니다. 이상치에 강하다는 게 장점이고, 실기에서 그 범위를 벗어난
+      관절값이 들어오면 −1/+1 밖으로 나간다는 게 대가입니다.
+    </p>
+    <p lang="en">
+      Both state and actions are mapped linearly onto −1 to +1, with the 1st and
+      99th percentiles as the endpoints. The benefit is robustness to outliers; the
+      cost is that a joint value outside that range at deployment lands outside
+      −1/+1.
+    </p>
+
+    <div class="note">
+      <span class="lbl">important</span>
+      <p lang="ko">
+        액션 통계는 <strong>델타로 변환한 뒤</strong> 계산됩니다. 즉 정규화가
+        걸리는 대상은 절대 관절 목표가 아니라 변위입니다. 통계 파일은
+        <code>assets/pi05_yam_cable_tie/rl_specialist/lerobot_cable_tie_100_clean/norm_stats.json</code>
+        이고, 데이터셋이 바뀌면 반드시 다시 계산해야 합니다.
+      </p>
+      <p lang="en">
+        The action statistics are computed <strong>after</strong> the delta
+        transform — so what gets normalized is the displacement, not the absolute
+        joint target. The file is
+        <code>assets/pi05_yam_cable_tie/rl_specialist/lerobot_cable_tie_100_clean/norm_stats.json</code>,
+        and it must be recomputed if the dataset changes.
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= 6. model & training ================= -->
+  <section>
+    <h2 lang="ko">모델과 학습 설정</h2>
+    <h2 lang="en">Model and training setup</h2>
+    <p class="h2note">config pi05_yam_cable_tie · src/openpi/training/config.py:1380</p>
+
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th lang="ko">항목</th><th lang="en">item</th>
+          <th lang="ko">값</th><th lang="en">value</th>
+          <th lang="ko">비고</th><th lang="en">note</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>backbone</td><td class="n">gemma_2b</td>
+            <td lang="ko">PaliGemma VLM</td><td lang="en">PaliGemma VLM</td></tr>
+          <tr><td>action expert</td><td class="n">gemma_300m</td>
+            <td lang="ko">플로우 매칭 헤드</td><td lang="en">flow-matching head</td></tr>
+          <tr><td>precision</td><td class="n">bfloat16</td><td>—</td></tr>
+          <tr><td>init</td><td class="n">pi05_base</td>
+            <td lang="ko">gs://openpi-assets 체크포인트</td><td lang="en">gs://openpi-assets checkpoint</td></tr>
+          <tr><td>state input</td><td class="n">continuous</td>
+            <td lang="ko"><code>discrete_state_input=False</code> — 토큰화 안 함</td>
+            <td lang="en"><code>discrete_state_input=False</code> — not tokenized</td></tr>
+          <tr><td>batch size</td><td class="n">32</td>
+            <td lang="ko">lego 레시피 그대로</td><td lang="en">inherited from the lego recipe</td></tr>
+          <tr><td>optimizer</td><td class="n">AdamW</td>
+            <td class="n">b1 0.9 · b2 0.95 · wd 1e-10 · clip 1.0</td></tr>
+          <tr><td>lr</td><td class="n">5e-5</td>
+            <td lang="ko">1k 워밍업 후 <strong>상수</strong> (peak = decay)</td>
+            <td lang="en"><strong>constant</strong> after 1k warmup (peak = decay)</td></tr>
+          <tr><td>EMA</td><td class="n">0.99</td>
+            <td lang="ko">기본값. LIBERO 레시피는 0.999를 씀</td>
+            <td lang="en">the default; the LIBERO recipe uses 0.999</td></tr>
+          <tr><td>steps</td><td class="n">50,000</td>
+            <td lang="ko">약 10.2 에폭 — 100k 설정으로 띄운 뒤 50k에서 정지</td>
+            <td lang="en">about 10.2 epochs — launched at 100k, stopped at 50k</td></tr>
+          <tr><td>seed</td><td class="n">42</td><td>—</td></tr>
+          <tr><td>checkpoints</td><td class="n">every 10k</td>
+            <td lang="ko">42 GB씩, 전부 보존</td><td lang="en">42 GB each, all retained</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= 7. data ================= -->
+  <section>
+    <h2 lang="ko">데이터</h2>
+    <h2 lang="en">Data</h2>
+    <p class="h2note">lerobot_cable_tie_100_clean · LeRobot v3.0</p>
+
+    <p lang="ko">
+      원본 105 에피소드에서 성공 100개만 남기고, 각 에피소드는 조작자의 홈잉
+      동작이 시작되는 지점 — 손이 화면에 들어오는 프레임 — 에서 잘렸습니다.
+      전체 <strong>87분</strong> 분량의 시연입니다.
+    </p>
+    <p lang="en">
+      100 success episodes of the source 105, each cut where the operator's homing
+      motion begins — the frame their hand enters the cameras. That is
+      <strong>87 minutes</strong> of demonstration in total.
+    </p>
+
+    <div class="tw">
+      <table>
+        <tbody>
+          <tr><td lang="ko">에피소드</td><td lang="en">episodes</td><td class="n">100</td></tr>
+          <tr><td lang="ko">프레임</td><td lang="en">frames</td><td class="n">157,023 (source 171,378)</td></tr>
+          <tr><td lang="ko">길이</td><td lang="en">duration</td><td class="n">87.2 min</td></tr>
+          <tr><td lang="ko">에피소드 길이 (중앙값)</td><td lang="en">episode length (median)</td><td class="n">1,579 frames = 52.6 s</td></tr>
+          <tr><td lang="ko">에폭 (50k step 기준)</td><td lang="en">epochs at 50k steps</td><td class="n">10.2</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= 8. progress ================= -->
+  <section>
+    <h2 lang="ko">학습 경과</h2>
+    <h2 lang="en">How training went</h2>
+    <p class="h2note">completed training log — no checkpoint reloaded, no policy rolled out</p>
+
+    <p lang="ko">
+      읽는 법은 이렇습니다. 손실은 데이터셋 상태에서 데이터셋 액션을 얼마나 잘
+      맞히는지를 재는 값이고, 낮을수록 좋습니다. 이것은 <strong>정책이 실제로
+      과제를 해내는지에 대해 아무것도 말해주지 않습니다</strong> — 그건 실기
+      롤아웃으로만 알 수 있습니다. 여기서 볼 수 있는 것은 학습이 발산하지 않고
+      정상적으로 수렴했다는 사실뿐입니다.
+    </p>
+    <p lang="en">
+      How to read this. The loss measures how well dataset actions are predicted at
+      dataset states; lower is better. It says <strong>nothing about whether the
+      policy can do the task</strong> — only a rollout on the real arm answers that.
+      What it does show is that training converged rather than diverged.
+    </p>
+
+    <figure>
+      <img src="{{FIGURE_PROGRESS}}" alt="BC loss falling from 0.082 to 0.007 over 16,400 training steps, with gradient norm dropping sharply during the first 1,000 warmup steps and then staying flat">
+      <figcaption>
+        <span lang="ko">
+          플로우 매칭 BC 손실(파랑, 로그 축)과 그래디언트 노름(주황). 점선은
+          워밍업이 끝나는 1,000 step으로, 이후 학습률은 5e-5 상수입니다.
+          그래디언트 노름이 초반에 급락한 뒤 평평한 것이 정상 수렴의 신호입니다.
+          50,000 step에서 정지했습니다. 30k–35k 구간의 정체는 5k 간격 샘플링의 잡음이었고, 이후 0.0040까지 다시 내려갔습니다.
+        </span>
+        <span lang="en">
+          Flow-matching BC loss (blue, log axis) and gradient norm (orange). The
+          dotted line marks the end of warmup at 1,000 steps, after which the
+          learning rate is constant at 5e-5. The gradient norm dropping sharply and
+          then staying flat is the signature of healthy convergence. The run stopped at 50,000 steps. The flat reading between 30k and 35k was noise at 5k sampling; the loss resumed falling to 0.0040.
+        </span>
+        <span class="prov">
+          source: wandb console capture of the completed run l1gyxtbg, parsed by
+          rounds/0817_cable_tie_bc/plot_progress.py. No checkpoint was reloaded and
+          no policy was rolled out; these are training-batch scalars on dataset
+          states and dataset actions. Raw arrays cached at data/progress.npz.
+        </span>
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ================= 8b. deployment ================= -->
+  <section>
+    <h2 lang="ko">배포 — 정책 서버에 무엇을 보내고 무엇을 받는가</h2>
+    <h2 lang="en">Deployment — what to send the policy server, and what comes back</h2>
+    <p class="h2note">verified by loading checkpoint 50000 and running one inference</p>
+
+    <p lang="ko">
+      서버는 LeRobot 컬럼명이 아니라 <strong>repack 이후의 키</strong>를 기대합니다.
+      <code>create_trained_policy</code>가 데이터 config의 repack 변환을 자동으로
+      붙이지 않기 때문입니다. 데이터셋 컬럼명을 그대로 보내면
+      <code>KeyError</code>로 떨어집니다.
+    </p>
+    <p lang="en">
+      The server expects the <strong>repacked key names</strong>, not the LeRobot
+      column names, because <code>create_trained_policy</code> does not attach the
+      data config's repack transform. Sending dataset column names raises a
+      <code>KeyError</code>.
+    </p>
+
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th lang="ko">보낼 키</th><th lang="en">key to send</th>
+          <th lang="ko">내용</th><th lang="en">contents</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><code>observation/image</code></td><td>agentview</td></tr>
+          <tr><td><code>observation/wrist_image</code></td>
+            <td lang="ko">왼쪽 손목</td><td lang="en">left wrist</td></tr>
+          <tr><td><code>observation/image_right</code></td>
+            <td lang="ko">오른쪽 손목</td><td lang="en">right wrist</td></tr>
+          <tr><td><code>observation/state</code></td><td class="n">42-d float32</td></tr>
+          <tr><td><code>prompt</code></td><td><em>fasten the orange cable tie</em></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="lbl" lang="ko">이름이 비대칭입니다</span><span class="lbl" lang="en">the names are asymmetric</span>
+      <p lang="ko">
+        왼손목은 <code>wrist_image</code>인데 오른손목은 <code>image_right</code>입니다.
+        규칙이 다르니 좌우를 바꿔 보내기 쉽고, 바꿔 보내도 에러 없이 조용히
+        잘못된 정책이 돕니다.
+      </p>
+      <p lang="en">
+        The left wrist is <code>wrist_image</code> but the right is
+        <code>image_right</code>. The two follow different conventions, so it is easy
+        to swap them — and a swap produces no error, just a silently wrong policy.
+      </p>
+    </div>
+
+    <h3 lang="ko">돌아오는 값은 절대 관절 목표입니다</h3>
+    <h3 lang="en">What comes back is absolute joint targets</h3>
+    <p lang="ko">
+      학습 타깃은 변위지만, 서버가 역변환을 적용해서 돌려줍니다. 런타임에서 현재
+      관절각을 다시 더하면 안 됩니다. 학습 프레임 하나로 실제 확인한 값입니다.
+    </p>
+    <p lang="en">
+      The training target is a displacement, but the server applies the inverse
+      before returning. The runtime must not add the current joint angles back. The
+      numbers below are from an actual inference on one training frame.
+    </p>
+
+    <div class="tw">
+      <table>
+        <tbody>
+          <tr><td lang="ko">출력 형태</td><td lang="en">output shape</td><td class="n">(30, 14) float32</td></tr>
+          <tr><td lang="ko">예측과 현재 관절각의 최대 차이</td><td lang="en">max |prediction − current joint angle|</td>
+            <td class="n">0.031 rad <span lang="ko">— 작다 ⇒ 절대값</span><span lang="en">— small ⇒ absolute</span></td></tr>
+          <tr><td lang="ko">예측과 시연 액션의 최대 차이</td><td lang="en">max |prediction − demonstrated action|</td>
+            <td class="n">0.011 rad ≈ 0.63°</td></tr>
+          <tr><td lang="ko">그리퍼 (예측 / 시연)</td><td lang="en">grippers (predicted / demonstrated)</td>
+            <td class="n">0.049, −0.002 / 0.051, 0.000</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p lang="ko">
+      다만 이것은 <strong>학습에 쓰인 프레임</strong>이라, 0.011 rad라는 일치도는
+      일반화의 증거가 아닙니다. 배관이 올바르게 연결되어 있다는 것만 말해줍니다.
+    </p>
+    <p lang="en">
+      Note this is a <strong>frame the model was trained on</strong>, so the 0.011 rad
+      agreement is not evidence of generalization. It shows only that the plumbing is
+      wired up correctly.
+    </p>
+
+    <pre><code>export HF_LEROBOT_HOME=/NHNHOME/WORKSPACE/gwanwoo/rl_specialist/cache/huggingface/lerobot
+uv run scripts/serve_policy.py policy:checkpoint \
+    --policy.config=pi05_yam_cable_tie \
+    --policy.dir=checkpoints/pi05_yam_cable_tie/cable_tie_bc/50000</code></pre>
+  </section>
+
+  <!-- ================= 9. caveats ================= -->
+  <section>
+    <h2 lang="ko">알아두셔야 할 네 가지</h2>
+    <h2 lang="en">Four things to know</h2>
+    <p class="h2note">known, quantified, and deliberately left alone</p>
+
+    <h3 lang="ko">에피소드 끝의 1.85%는 패딩된 타깃입니다</h3>
+    <h3 lang="en">1.85% of samples have padded targets</h3>
+    <p lang="ko">
+      홈잉 시작 지점에서 정확히 잘렸기 때문에, 각 에피소드의 마지막 29개 샘플은
+      1초 청크가 에피소드 밖으로 나갑니다. LeRobot이 마지막 액션을 반복해 채우고
+      플래그를 세우지만 openpi는 그 플래그를 참조하지 않습니다. 157,023개 중
+      2,900개이고, 반복되는 타깃이 "완료 자세 유지"라 BC에는 무해합니다.
+    </p>
+    <p lang="en">
+      Because the cut lands exactly at the homing onset, the last 29 samples of each
+      episode have their one-second chunk run past the episode end. LeRobot repeats
+      the final action and sets a flag; openpi never reads that flag. That is 2,900
+      of 157,023 samples, and the repeated target is "hold at the completion pose",
+      which is benign for BC.
+    </p>
+
+    <h3 lang="ko">30k와 50k를 둘 다 굴려보십시오</h3>
+    <h3 lang="en">Roll out both 30k and 50k</h3>
+    <p lang="ko">
+      두 체크포인트의 학습 손실 차이는 0.0007이고, 이 값으로는 어느 쪽이 나은
+      정책인지 구분할 수 없습니다. 검증 분할이 없어서 과적합도 보이지 않습니다.
+      데모 100개를 10 에폭 돈 상황에서 나중 체크포인트가 자동으로 더 좋다고
+      볼 근거는 없습니다. 둘 다 디스크에 있습니다.
+    </p>
+    <p lang="en">
+      The two checkpoints differ by 0.0007 in training loss, which cannot tell you
+      which is the better policy — and with no validation split, overfitting is
+      invisible here. With 100 demos over 10 epochs there is no reason to assume the
+      later checkpoint is better. Both are on disk.
+    </p>
+
+    <h3 lang="ko">50k에서 멈추는 것은 이 스케줄이라 안전합니다</h3>
+    <h3 lang="en">Stopping at 50k is safe with this schedule</h3>
+    <p lang="ko">
+      런은 100,000 step 설정으로 띄웠지만 50,000에서 정지합니다. 학습률이 워밍업
+      이후 5e-5 <strong>상수</strong>이기 때문에(peak = decay) 덜 끝난 감쇠 구간이
+      남지 않고, 50k 시점의 가중치는 애초에 50k로 설정해 돌린 결과와 같습니다.
+      실제로 감쇠하는 스케줄이었다면 성립하지 않는 이야기입니다.
+    </p>
+    <p lang="en">
+      The run was launched configured for 100,000 steps but stops at 50,000. Because
+      the learning rate is <strong>constant</strong> at 5e-5 after warmup
+      (peak equals decay), there is no unfinished decay ramp, and the weights at 50k
+      are what a run configured for 50k would have produced. This would not hold for
+      a genuinely decaying schedule.
+    </p>
+
+    <h3 lang="ko">영상 정렬은 이번에 검증하지 않았습니다</h3>
+    <h3 lang="en">Video alignment was not re-verified</h3>
+    <p lang="ko">
+      이 저장소에는 과거 YAM 익스포트에서 agentview 스트림만 파일 중간에 프레임을
+      잃어 영상이 상태·액션과 조용히 어긋난 사례가 기록되어 있습니다. clean
+      데이터셋 README는 인코더 프레임 손실이 없다고 명시하지만, 저는 그 주장을
+      직접 재확인하지 않았습니다. 정책이 이상하면 여기를 먼저 의심하십시오.
+    </p>
+    <p lang="en">
+      This repo documents a past YAM export in which only the agentview stream lost
+      frames mid-file, silently shifting video against states and actions. The clean
+      dataset's README asserts there was no encoder frame loss, but I did not
+      re-verify that claim myself. If the policy misbehaves, suspect this first.
+    </p>
+
+    <h3 lang="ko">lego 런과는 직접 비교되지 않습니다</h3>
+    <h3 lang="en">Not directly comparable to the lego runs</h3>
+    <p lang="ko">
+      하이퍼파라미터는 lego RLT config와 거의 같지만, lego는 실패 에피소드 19개를
+      포함해 학습하고 홈잉 구간도 자르지 않았습니다. 설정이 아니라 데이터 정제
+      수준이 다릅니다.
+    </p>
+    <p lang="en">
+      The hyperparameters are nearly identical to the lego RLT config, but lego
+      trains on 19 failure episodes as well and its homing segments were never cut.
+      The difference is in data cleanliness, not in the configuration.
+    </p>
+
+    <h3 lang="ko">배치 32는 이 GPU를 다 쓰지 않습니다</h3>
+    <h3 lang="en">Batch 32 does not fill this GPU</h3>
+    <p lang="ko">
+      B200 183 GB에서 배치 32는 여유가 많고, 그래서 step당 약 1.1초가 걸립니다.
+      배치를 올리려면 학습률도 같이 올려야 하고 진행분을 버려야 해서, 이번 런은
+      그대로 두고 50k에서 멈추기로 했습니다. 다음 런에서 조정할 여지입니다.
+    </p>
+    <p lang="en">
+      On a 183 GB B200, batch 32 leaves a lot of headroom, which is why each step
+      costs about 1.1 s. Raising it means also raising the learning rate and
+      discarding progress, so this run was left as is and stopped at 50k instead.
+      Something to revisit on the next run.
+    </p>
+  </section>
+
+  <!-- ================= review ================= -->
+  <section class="review">
+    <h2 lang="ko">확인 요청</h2>
+    <h2 lang="en">Review</h2>
+
+    <h3 lang="ko">제가 이해한 요청</h3>
+    <h3 lang="en">Your ask, as I understood it</h3>
+    <p lang="ko">
+      진행 중인 BC 파인튜닝에 대해, 청크 크기·주기·액션 공간(델타 관절인지 델타
+      포즈인지) 등 알아야 할 세부사항을 담은 사전 보고서를 써 달라는 것으로
+      이해했습니다.
+    </p>
+    <p lang="en">
+      To write a pre-report on the running BC finetune, covering the details you
+      need to know — chunk size, rate, and action space (delta joint versus delta
+      pose, or something else).
+    </p>
+
+    <h3 lang="ko">핵심 주장</h3>
+    <h3 lang="en">Key claims</h3>
+    <ul class="claims">
+      <li><input type="checkbox" id="c1"><label for="c1"><span lang="ko">액션은 관절 공간 상대 변위이고, 그리퍼만 절대값이다</span><span lang="en">Actions are relative joint displacements; only the grippers are absolute</span></label></li>
+      <li><input type="checkbox" id="c2"><label for="c2"><span lang="ko">청크는 30 스텝 = 30 fps에서 정확히 1.0초다</span><span lang="en">The chunk is 30 steps = exactly 1.0 s at 30 fps</span></label></li>
+      <li><input type="checkbox" id="c3"><label for="c3"><span lang="ko">엔드이펙터 포즈와 리더 암 상태는 정책이 쓰지 않는다</span><span lang="en">End-effector pose and leader-arm state are unused by the policy</span></label></li>
+      <li><input type="checkbox" id="c4"><label for="c4"><span lang="ko">정규화는 분위수 기반이고, 액션 통계는 델타 변환 이후에 계산된다</span><span lang="en">Normalization is quantile-based, and action stats are computed after the delta transform</span></label></li>
+      <li><input type="checkbox" id="c5"><label for="c5"><span lang="ko">손실 곡선은 수렴만 말해줄 뿐 과제 성공률과는 무관하다</span><span lang="en">The loss curve speaks only to convergence, not to task success</span></label></li>
+      <li><input type="checkbox" id="c6"><label for="c6"><span lang="ko">에피소드 끝 1.85%가 패딩 타깃이며 그대로 두기로 했다</span><span lang="en">1.85% of samples carry padded targets, deliberately left alone</span></label></li>
+    </ul>
+
+    <div class="same">
+      <label><input type="radio" name="same" value="yes"><span lang="ko">같은 페이지에 있습니다</span><span lang="en">Same page</span></label>
+      <label><input type="radio" name="same" value="notquite"><span lang="ko">조금 다릅니다</span><span lang="en">Not quite</span></label>
+    </div>
+
+    <textarea id="q" placeholder="질문이나 어긋난 부분 / questions or mismatches"></textarea>
+    <button class="copybtn" id="copy" type="button">Copy feedback</button>
+  </section>
+
+</div>
+
+<script>
+  (function () {
+    var body = document.body, KEY = "cabletie-prereport";
+
+    var lang = localStorage.getItem(KEY + ":lang") || "ko";
+    var btn = document.getElementById("lang");
+    function setLang(v) {
+      lang = v; body.setAttribute("data-lang", v);
+      btn.textContent = v === "ko" ? "EN" : "한국어";
+      localStorage.setItem(KEY + ":lang", v);
+    }
+    setLang(lang);
+    btn.addEventListener("click", function () { setLang(lang === "ko" ? "en" : "ko"); });
+
+    var boxes = Array.prototype.slice.call(document.querySelectorAll(".claims input"));
+    var radios = Array.prototype.slice.call(document.querySelectorAll('input[name="same"]'));
+    var q = document.getElementById("q");
+
+    function save() {
+      localStorage.setItem(KEY + ":state", JSON.stringify({
+        checked: boxes.map(function (b) { return b.checked; }),
+        same: (radios.filter(function (r) { return r.checked; })[0] || {}).value || "",
+        q: q.value
+      }));
+    }
+    try {
+      var s = JSON.parse(localStorage.getItem(KEY + ":state") || "{}");
+      if (s.checked) boxes.forEach(function (b, i) { b.checked = !!s.checked[i]; });
+      if (s.same) radios.forEach(function (r) { if (r.value === s.same) r.checked = true; });
+      if (s.q) q.value = s.q;
+    } catch (e) { /* first visit */ }
+    boxes.concat(radios).forEach(function (el) { el.addEventListener("change", save); });
+    q.addEventListener("input", save);
+
+    document.getElementById("copy").addEventListener("click", function () {
+      var agreed = boxes.filter(function (b) { return b.checked; }).length;
+      var same = (radios.filter(function (r) { return r.checked; })[0] || {}).value || "unanswered";
+      var line = "[cable-tie BC pre-report] claims agreed " + agreed + "/" + boxes.length +
+                 "; same page: " + same +
+                 (q.value.trim() ? "; questions: " + q.value.trim().replace(/\s+/g, " ") : "");
+      navigator.clipboard.writeText(line).then(function () {
+        var b = document.getElementById("copy"), t = b.textContent;
+        b.textContent = "Copied"; setTimeout(function () { b.textContent = t; }, 1400);
+      });
+    });
+  })();
+</script>
