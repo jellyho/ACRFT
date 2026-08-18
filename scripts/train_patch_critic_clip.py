@@ -109,6 +109,12 @@ def main():
     ap.add_argument("--wandb-group", default="patch-critic-clip")
     ap.add_argument("--wandb-name", default=None)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/patch_critic_clip"))
+    ap.add_argument(
+        "--init-params",
+        type=pathlib.Path,
+        default=None,
+        help="warm-start from a checkpoint dir (loads Q, and V if v_params.msgpack present)",
+    )
     a = ap.parse_args()
     os.environ.setdefault("LEROBOT_VIDEO_BACKEND", "pyav")
 
@@ -197,6 +203,16 @@ def main():
     p2 = jnp.zeros((2, npatch, emb), jnp.float32)
     params = net.init(rng, p2, jnp.zeros((2, H, ad)), jnp.zeros((2, sd)))
     v_params = v_net.init(rng, p2, jnp.zeros((2, sd)))
+    if a.init_params is not None:
+        import flax.serialization
+
+        params = flax.serialization.msgpack_restore((a.init_params / "params.msgpack").read_bytes())
+        vpf = a.init_params / "v_params.msgpack"
+        if vpf.exists():
+            v_params = flax.serialization.msgpack_restore(vpf.read_bytes())
+            print(f"warm-start: loaded Q + V from {a.init_params}", flush=True)
+        else:
+            print(f"warm-start: loaded Q from {a.init_params} (V re-init: earlier ckpt saved no v_params)", flush=True)
     tgt = params
     tx = optax.adam(a.lr)
     tx_v = optax.adam(a.lr)
@@ -334,19 +350,21 @@ def main():
                     flush=True,
                 )
             if a.save_every and (s + 1) % a.save_every == 0:
-                _save(a, carry[0], npatch, v_min, prefixes, ad)
+                _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad)
             s += 1
-    _save(a, carry[0], npatch, v_min, prefixes, ad)
+    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad)
     if wb is not None:
         wb.finish()
 
 
-def _save(a, params, npatch, v_min, prefixes, ad):
+def _save(a, params, v_params, npatch, v_min, prefixes, ad):
     import flax.serialization
     import jax
 
     a.out.mkdir(parents=True, exist_ok=True)
     (a.out / "params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(params)))
+    # also persist the value net so --init-params can warm-start BOTH Q and V on a later continuation.
+    (a.out / "v_params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(v_params)))
     cfg = {
         "horizon": a.horizon,
         "macro_group_size": a.macro_group_size,
