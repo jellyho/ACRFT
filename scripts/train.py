@@ -158,7 +158,13 @@ def train_step(
     ):
         # Some models (e.g. Pi0RLT) return (per-sample loss, aux-metrics dict); the rest return just the
         # per-sample loss. Normalize to (loss, aux) so extra diagnostics can be logged for free.
-        out = model.compute_loss(rng, observation, actions, train=True)
+        # Curriculum-driven models (e.g. Pi0AlphaFlow, whose alpha schedule is a function of how far
+        # through the run we are) opt in by declaring `wants_progress`; everyone else keeps the old
+        # signature. Progress (not the raw step) so the curriculum rescales with --num-train-steps.
+        step_kwargs = (
+            {"progress": state.step / max(config.num_train_steps, 1)} if getattr(model, "wants_progress", False) else {}
+        )
+        out = model.compute_loss(rng, observation, actions, train=True, **step_kwargs)
         chunked_loss, aux = out if isinstance(out, tuple) else (out, {})
         return jnp.mean(chunked_loss), aux
 

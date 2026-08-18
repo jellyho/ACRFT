@@ -1,0 +1,13 @@
+Step 0: alpha=1.0000, bc_loss=0.9995, delta2=1.9945, fm_frac=0.2500, fm_ratio=0.5000, gap_mean=0.1852, grad_norm=0.9987, loss=0.9995, loss_tfm=1.9945, param_norm=477.8591, t_mean=0.5848
+Step 20: alpha=1.0000, bc_loss=0.9995, delta2=2.0952, fm_frac=0.4750, fm_ratio=0.5000, gap_mean=0.1464, grad_norm=0.6581, loss=0.9995, loss_tfm=2.0952, param_norm=477.8593, t_mean=0.7144
+Step 40: alpha=1.0000, bc_loss=0.9995, delta2=2.0837, fm_frac=0.5125, fm_ratio=0.5000, gap_mean=0.1255, grad_norm=0.6835, loss=0.9995, loss_tfm=2.0837, param_norm=477.8593, t_mean=0.7349
+Step 60: alpha=1.0000, bc_loss=0.9995, delta2=2.1089, fm_frac=0.5750, fm_ratio=0.5000, gap_mean=0.1078, grad_norm=0.6296, loss=0.9995, loss_tfm=2.1089, param_norm=477.8593, t_mean=0.7919
+Step 80: alpha=0.9947, bc_loss=0.9963, delta2=2.0510, fm_frac=0.4000, fm_ratio=0.5000, gap_mean=0.1762, grad_norm=0.6503, loss=0.9963, loss_tfm=2.0639, param_norm=477.8593, t_mean=0.7769
+Step 100: alpha=0.9486, bc_loss=0.9741, delta2=1.9690, fm_frac=0.5250, fm_ratio=0.5000, gap_mean=0.1278, grad_norm=0.6999, loss=0.9741, loss_tfm=2.0692, param_norm=477.8594, t_mean=0.7387
+Step 120: alpha=0.7138, bc_loss=0.8627, delta2=1.6264, fm_frac=0.5500, fm_ratio=0.5000, gap_mean=0.1414, grad_norm=0.6547, loss=0.8627, loss_tfm=2.0795, param_norm=477.8598, t_mean=0.7564
+Step 140: alpha=0.2667, bc_loss=0.6750, delta2=1.2291, fm_frac=0.5625, fm_ratio=0.5000, gap_mean=0.1242, grad_norm=0.6692, loss=0.6750, loss_tfm=2.0628, param_norm=477.8602, t_mean=0.7647
+Step 160: alpha=0.0466, bc_loss=0.4829, delta2=0.9599, fm_frac=0.4625, fm_ratio=0.5000, gap_mean=0.1355, grad_norm=0.6235, loss=0.4829, loss_tfm=2.0764, param_norm=477.8607, t_mean=0.7165
+Step 180: alpha=0.0070, bc_loss=0.5627, delta2=1.1831, fm_frac=0.5625, fm_ratio=0.5000, gap_mean=0.1429, grad_norm=0.4781, loss=0.5627, loss_tfm=2.0746, param_norm=477.8612, t_mean=0.7497
+Step 200: alpha=0.0050, bc_loss=0.5124, delta2=1.0797, fm_frac=0.5125, fm_ratio=0.5000, gap_mean=0.1717, grad_norm=0.4386, loss=0.5124, loss_tfm=2.0836, param_norm=477.8618, t_mean=0.7665
+Step 220: alpha=0.0050, bc_loss=0.5624, delta2=1.1354, fm_frac=0.5625, fm_ratio=0.5000, gap_mean=0.1535, grad_norm=0.4795, loss=0.5624, loss_tfm=2.0396, param_norm=477.8625, t_mean=0.7375
+Step 240: alpha=0.0050, bc_loss=0.4000, delta2=0.8082, fm_frac=0.4000, fm_ratio=0.5000, gap_mean=0.1765, grad_norm=0.3511, loss=0.4000, loss_tfm=2.0445, param_norm=477.8635, t_mean=0.7518
