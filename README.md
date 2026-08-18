@@ -204,7 +204,7 @@ uv run scripts/serve_policy.py \
     --port 8000 \
     policy:checkpoint \
     --policy.config pi05_yam_lego_taxi_rlt \
-    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s200/100000
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000
 
 # same checkpoint family, absolute joint targets
 uv run scripts/serve_policy.py \

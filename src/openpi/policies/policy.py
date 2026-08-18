@@ -232,6 +232,26 @@ class PolicyRecorder(_base_policy.BasePolicy):
         return results
 
 
+def _output_state_dim(output_transform: _transforms.DataTransformFn, fallback: int) -> int:
+    """The width the output transform's ``state`` un-normalization expects.
+
+    The real infer path feeds ``state`` at its NATIVE robot width (e.g. 42 for YAM) -- only the
+    ACTIONS are padded to the model's width (32 for pi05). ``Unnormalize`` on quantile stats can
+    pad/slice when the input is at least as wide as the stats, but not when it is narrower (see
+    ``transforms._unnormalize_quantile``), so a probe that fed a 32-wide state would break on a
+    42-wide state stat. Read the real width off the state norm stats instead of guessing it from
+    the action width."""
+    for t in getattr(output_transform, "transforms", [output_transform]):
+        ns = getattr(t, "norm_stats", None)
+        st = ns.get("state") if isinstance(ns, dict) else None
+        if st is not None:
+            for attr in ("q99", "q01", "mean", "std"):
+                arr = getattr(st, attr, None)
+                if arr is not None:
+                    return int(np.asarray(arr).shape[-1])
+    return fallback
+
+
 def probe_robot_action_dim(policy: Policy, *, model_action_dim: int, action_horizon: int) -> int:
     """The output transform's real last-dim width, robot-space rather than the model's padded one.
 
@@ -240,10 +260,15 @@ def probe_robot_action_dim(policy: Policy, *, model_action_dim: int, action_hori
     :class:`MultiSamplePolicy` (whose ``action_samples`` handshake declaration has to match what
     the dataset writer will reshape to) need this same recovery: the model's padded width (32 for
     pi05) is not what actually arrives on the wire (14 for YAM).
+
+    ``state`` is fed at the width the output transform's own norm stats expect -- NOT the model
+    action width, which differs from the state width on YAM (state 42 vs action 32) and would trip
+    the state un-normalization (see ``_output_state_dim``).
     """
+    state_dim = _output_state_dim(policy._output_transform, fallback=model_action_dim)
     probe = policy._output_transform(
         {
-            "state": np.zeros((1, model_action_dim), np.float32),
+            "state": np.zeros((1, state_dim), np.float32),
             "actions": np.zeros((1, action_horizon, model_action_dim), np.float32),
         }
     )
