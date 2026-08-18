@@ -2346,10 +2346,115 @@ entry(
 """,
 )
 
+
+# ------------------------------------------------------------------ alphaflow-pi05 (2026-08-19)
+def _af_sched_rows():
+    """Recompute the schedule table from the checked-in raw log (repo root alphaflow_sched_cpu.log).
+
+    Numbers are never hand-copied: this parses the actual train.py stdout of the 240-step
+    verification run. Logged alpha is the mean over the 20 steps before each log line, so the
+    theory column is the window-mean of the official clamped sigmoid, not the point value."""
+    import math
+
+    log = pathlib.Path(__file__).parent.parent / "alphaflow_sched_cpu.log"
+    if not log.exists():
+        return "<tr><td colspan='5'>alphaflow_sched_cpu.log missing</td></tr>"
+
+    def theory(k, total):
+        a = 1.0 / (1.0 + math.exp((k / total - 0.5) * 25.0))
+        return 1.0 if a > 1 - 5e-3 else (max(a, 0.005))
+
+    rows = {}
+    for line in log.read_text().splitlines():
+        if not line.startswith("Step "):
+            continue
+        head, rest = line.split(":", 1)
+        rows[int(head.split()[1])] = {k.strip(): float(v) for k, v in (kv.split("=") for kv in rest.split(","))}
+    total = max(rows) or 1
+    out = []
+    for k in sorted(rows):
+        pred = sum(theory(j, total) for j in range(max(k - 19, 0), k + 1)) / min(k + 1, 20)
+        m = rows[k]
+        out.append(
+            f"<tr><td>{k}</td><td>{m['alpha']:.4f}</td><td>{pred:.4f}</td>"
+            f"<td>{m['delta2']:.3f}</td><td>{m['grad_norm']:.3f}</td></tr>"
+        )
+    return "".join(out)
+
+
+entry(
+    "08-19",
+    "alphaflow-pi05",
+    "α-Flow π0.5 — VLA를 few/one-step 생성기로 (구현·커리큘럼 검증)",
+    "진행 중",
+    f"""
+<p><b>왜.</b> 방향 재설정(AQC는 도구, 본 목적은 <b>VLA offline RL</b>) 후 첫 인프라. actor-critic은
+업데이트마다 정책에서 액션을 뽑아야 하는데 π0.5는 10-step ODE라 이 샘플링이 RL 비용의 대부분이다.
+π0.5를 원스텝 생성기로 바꾸면 actor 업데이트가 forward 1회가 되고, α-Flow(Zhang et al., ICLR 2026,
+arXiv:2510.20771)는 distillation과 달리 <b>데이터 위 회귀만으로</b> 거기 도달한다 — 학습 중 VLA가
+샘플링할 일이 없다. 이 위에 FQL/LPS류 추출이나 CO-RFT(청크 Cal-QL) baseline이 올라간다.</p>
+
+<p><b>무엇을.</b> π0.5의 action expert가 순간 속도 v(z_t,t) 대신 구간 <b>평균 속도</b>
+u(z_t,r,t)≈(1/(t−r))∫v 를 예측하도록 확장 — 한 번의 점프 z_r = z_t − (t−r)·u 가 ODE를 대체한다.
+r은 t와 같은 adaRMS 경로로 들어가되 <b>출력층 zero-init</b>: step 0에서 모든 r에 대해
+u(z,r,t) = v_π0.5(z,t) 이므로 이것은 재학습이 아니라 파인튜닝이다. 실기 백본 검증(둘 다 정확히 0):
+max|u(z,t,t)−u(z,0,t)| = 0.0e+00 (r-독립성), max|π0.5_ODE − αFlow_ODE| = 0.0e+00 (10-step 비트 일치).</p>
+
+<p><b>어떻게 (공식 스케줄, progress 비율로).</b> 목적함수는 α-Flow Def.1을 레퍼런스 구현
+(snap-research/alphaflow) 기준으로: s=αr+(1−α)t, u_tgt = α·v_t + (1−α)·u⁻(z_s,r,s),
+adaptive weight sg(α/(‖Δ‖²+ε)). 스케줄은 공식 레시피 그대로 — <b>run 전체에 걸친 sigmoid</b>(γ=25,
+양끝 clamp 5e-3, fm_ratio 상수 0.5)가 3-phase를 스스로 만든다 (progress ~0.29까지 α=1 = BC 워밍업,
+~0.71까지 어닐, 이후 floor). 이를 <b>절대 스텝이 아닌 progress = step/num_train_steps</b>의 함수로
+넣어 (train.py의 wants_progress 훅), --num-train-steps만 바꾸면 커리큘럼 전체가 리스케일된다.
+JVP가 필요한 α=0 꼬리는 기본 OFF(floor 5e-3 discrete — reference의 discrete_training과 동일)이고,
+meanflow_jvp=True면 lax.cond로 run 중 discrete→JVP 전환까지 지원한다.</p>
+
+<p><b>검증 1 — 240-step 실학습에서 스케줄이 스스로 흐른다.</b> 실제 scripts/train.py 루프(실데이터
+로더, dummy 백본, wandb off)에 num_train_steps=240만 주고 model 필드는 일절 안 건드렸다.
+아래 표·그림은 체크인된 원본 로그(alphaflow_sched_cpu.log)에서 게시 때마다 재계산된다.</p>
+
+{img(P / "30_af_sched.png", "in-run alpha schedule vs official sigmoid; delta2 under the anneal")}
+
+<table class='num'><tr><th>step</th><th>α 실측(20-step 평균)</th><th>α 이론(같은 창 평균)</th><th>delta²</th><th>grad_norm</th></tr>
+{_af_sched_rows()}</table>
+
+<p>실측 α가 창-평균 이론 곡선과 4자리에서 일치 — 커리큘럼이 max step에 동적으로 붙는다는 것,
+그리고 clamp가 3-phase(1.0 고정 → 어닐 → 0.005 floor)를 만들어낸다는 것의 실증. delta²는 어닐을
+지나며 2.09→0.81로 감소(학습 정상), grad_norm 0.35–1.0 안정. 주의: <b>보고 loss는 진척 신호가
+아니다</b> — adaptive weight 때문에 ‖Δ‖²≫ε 동안 loss≈1에 고정되는 것이 설계이고, 진척은 delta²로
+본다 (표의 근거가 이 함정의 문서화이기도 하다).</p>
+
+<p><b>검증 2 — CPU 단위테스트 13건 + GPU 스모크.</b> α 스케줄·클램핑 기하(sigmoid가 5e-3을 지나는
+progress = 0.5+ln199/25 ≈ 0.712 해석해 포함), α=1에서 타깃이 정확히 π0.5 BC, α→0 자기일관성 극한,
+run-길이 불변성, JVP 전환 시 floor가 정확히 0. GPU에서 3개 regime(tfm/anneal/meanflow-JVP) 모두
+유한한 loss.</p>
+
+<p><b>평가 대기 — JVP 폭발 스트레스 (bf16 vs f32).</b> 과거 JVP 전환에서 loss 폭발이 관측된 바
+있어(원인 미상: bf16 수치 vs 목적함수 자체), 실제 Adam 업데이트로 floor/jvp/transition 3개 regime을
+bf16·f32 각각 돌리는 스트레스(scripts/alphaflow_jvp_stress.py)를 큐에 넣어둔 상태다 — 클러스터
+혼잡으로 PENDING. 감시 지표(dudt_absmax·u_tgt_absmax·grad_norm·jvp_active)는 aux로 wandb에 항상
+로깅되도록 넣어 본 학습에서도 폭발 전조가 보인다. 결과는 후속 리포트로.</p>
+
+<p><b>다음.</b> ① JVP 스트레스 판정 → ② YAM 본 run(pi05_yam_lego_taxi_alphaflow, 60k, B200)으로
+1-step 정책의 BC 품질을 현행 π0.5(10-step)와 비교 → ③ 그 위에 추출(FQL one-step 공유) +
+CO-RFT(청크 Cal-QL) baseline. 코드: pi0_alphaflow.py(+테스트)·alphaflow_smoke.py·
+alphaflow_jvp_stress.py·config pi05_yam_lego_taxi_alphaflow, 커밋 76acb3b.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "alphaflow-pi05": {
+        "date": "2026-08-19 08:40",
+        "who": "워커B(구현) + 사용자(방향·스케줄/JVP 결정)",
+        "where": "openpi fql-one-step-actor@76acb3b · L40S/B200 스모크 + login CPU 검증",
+        "what": "π0.5를 α-Flow로 few/one-step화 — 평균속도 expert, 공식 커리큘럼의 in-run 동적 스케줄, JVP 전환",
+        "how": "zero-init r-adaRMS 확장 + progress-비율 스케줄(wants_progress 훅) + 240-step 실학습 검증 + JVP 스트레스(대기)",
+        "why": "VLA offline RL의 actor 업데이트 비용(10-step ODE)을 forward 1회로 — 추출(FQL/LPS)·CO-RFT baseline의 토대",
+        "links": ["aqc-ablation", "floq", "deas", "conservatism"],
+    },
     "v14": {
         "date": "2026-08-08 08:40",
         "who": "워커B · iql/td_max/calql × mixed_v14",
@@ -2818,6 +2923,70 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "alphaflow-pi05",
+    "α-Flow π0.5 — turning the VLA into a few/one-step generator (implementation + curriculum verification)",
+    f"""
+<p><b>Why.</b> First infrastructure after the project refocus (AQC is a tool; the goal is <b>offline RL
+on a VLA</b>). Actor-critic updates must draw an action from the policy every step, and π0.5's
+10-step ODE makes that sampling the dominant cost of RL. A one-step generator turns the actor update
+into ONE forward, and α-Flow (Zhang et al., ICLR 2026, arXiv:2510.20771) reaches it by pure
+regression on the data — unlike distillation, the VLA never samples during training. Extraction
+(FQL/LPS-style) and the CO-RFT (chunked Cal-QL) baseline build on top of this.</p>
+
+<p><b>What.</b> π0.5's action expert is extended to predict the interval <b>mean velocity</b>
+u(z_t,r,t) ≈ (1/(t−r))∫v instead of the instantaneous v(z_t,t), so one jump z_r = z_t − (t−r)·u
+replaces the ODE. r enters through the same adaRMS path as t with a <b>zero-init output layer</b>:
+at step 0, u(z,r,t) = v_π0.5(z,t) for every r — a finetune, not a retrain. Verified on the real
+backbone (both exactly zero): max|u(z,t,t)−u(z,0,t)| = 0.0e+00 (r-independence),
+max|π0.5_ODE − αFlow_ODE| = 0.0e+00 (bit-identical 10-step sampling).</p>
+
+<p><b>How (the official schedule, in progress fractions).</b> The objective follows α-Flow Def. 1 as
+implemented in the reference repo (snap-research/alphaflow): s = αr+(1−α)t,
+u_tgt = α·v_t + (1−α)·u⁻(z_s,r,s), adaptive weight sg(α/(‖Δ‖²+ε)). The schedule is the official
+recipe verbatim — a <b>whole-run sigmoid</b> (γ=25, clamps 5e-3 at both ends, fm_ratio constant 0.5)
+that carves the three phases by itself (α=1 to ~29% progress = BC warm-up, anneal to ~71%, floor
+after). It is a function of <b>progress = step/num_train_steps</b> (train.py's wants_progress hook),
+not absolute steps, so overriding --num-train-steps rescales the whole curriculum. The α=0 tail that
+needs a JVP is OFF by default (discrete floor 5e-3, the reference's discrete_training); with
+meanflow_jvp=True a lax.cond switches discrete → JVP mid-run.</p>
+
+<p><b>Verification 1 — the schedule flows by itself in a real 240-step train run.</b> The actual
+scripts/train.py loop (real data loader, dummy backbone, wandb off) given only num_train_steps=240,
+no model-field overrides. The table and figure are recomputed from the checked-in raw log
+(alphaflow_sched_cpu.log) on every publish.</p>
+
+{img(P / "30_af_sched.png", "in-run alpha schedule vs official sigmoid; delta2 under the anneal")}
+
+<table class='num'><tr><th>step</th><th>α measured (20-step mean)</th><th>α theory (same-window mean)</th><th>delta²</th><th>grad_norm</th></tr>
+{_af_sched_rows()}</table>
+
+<p>Measured α matches the window-mean theory curve to 4 decimals — the curriculum rescales
+dynamically with max steps, and the clamps produce the three phases (pinned 1.0 → anneal → 0.005
+floor). delta² falls 2.09 → 0.81 through the anneal (healthy learning), grad_norm stable at
+0.35–1.0. Caution: <b>the reported loss is NOT the progress signal</b> — the adaptive weight pins
+loss ≈ 1 while ‖Δ‖² ≫ ε by design; read delta² instead (this table doubles as documentation of that
+trap).</p>
+
+<p><b>Verification 2 — 13 CPU unit tests + GPU smoke.</b> Schedule/clamp geometry (including the
+analytic crossing progress = 0.5+ln199/25 ≈ 0.712), target exactly the π0.5 BC loss at α=1, the
+self-consistency limit as α→0, run-length invariance, floor landing exactly on 0 under the JVP
+transition. On GPU, all three regimes (tfm/anneal/meanflow-JVP) produce finite losses.</p>
+
+<p><b>Pending — JVP explosion stress (bf16 vs f32).</b> A loss explosion was previously observed
+when switching onto the JVP target (cause never isolated: bf16 numerics vs the objective itself). A
+stress test with REAL Adam updates across floor/jvp/transition regimes in both dtypes
+(scripts/alphaflow_jvp_stress.py) is queued — PENDING due to cluster congestion. The watchdogs
+(dudt_absmax · u_tgt_absmax · grad_norm · jvp_active) are always logged to wandb as aux, so the
+production run will show explosion precursors too. Results in a follow-up report.</p>
+
+<p><b>Next.</b> ① JVP stress verdict → ② the real YAM run (pi05_yam_lego_taxi_alphaflow, 60k, B200)
+comparing the 1-step policy's BC quality against current π0.5 (10-step) → ③ extraction on top
+(shared FQL one-step) + the CO-RFT (chunked Cal-QL) baseline. Code: pi0_alphaflow.py (+tests),
+alphaflow_smoke.py, alphaflow_jvp_stress.py, config pi05_yam_lego_taxi_alphaflow, commit 76acb3b.</p>
+""",
+)
+
 en(
     "flow",
     "Timeline · Takeaways",
