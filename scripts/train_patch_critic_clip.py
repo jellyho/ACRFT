@@ -78,6 +78,12 @@ def main():
     ap.add_argument("--outcomes", required=True)
     ap.add_argument("--img-size", type=int, default=224)
     ap.add_argument("--backbone", default="small")
+    ap.add_argument(
+        "--dino-dtype",
+        choices=["float32", "bfloat16"],
+        default="bfloat16",
+        help="frozen DINOv2 compute dtype (bf16 ~2x on L40S)",
+    )
     ap.add_argument("--horizon", type=int, default=30)
     ap.add_argument("--num-atoms", type=int, default=101)
     ap.add_argument("--macro-group-size", type=int, default=2)
@@ -153,7 +159,7 @@ def main():
         prefetch_factor=2 if a.num_workers > 0 else None,
     )
 
-    bb = DinoV2Backbone(a.backbone)
+    bb = DinoV2Backbone(a.backbone, dtype=getattr(jnp, a.dino_dtype))
     grid = int(bb.num_patches(224) ** 0.5)
     pooled = grid // 2
     npatch = 3 * pooled * pooled
