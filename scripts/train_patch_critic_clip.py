@@ -27,7 +27,7 @@ import numpy as np
 CAMS = ["observation.images.agentview", "observation.images.wrist_left", "observation.images.wrist_right"]
 
 
-def analytic_targets(pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h_goal, v_min, scheme):
+def analytic_targets(pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h_goal, v_min, scheme, failure_reward):
     """Per-transition cost_to_goal target pieces, computed from episode geometry (no next-state decode).
 
     pos: [T] episode-frame index of each transition's current frame. ep_len,succ: [T]. jloc: [T] the
@@ -60,6 +60,14 @@ def analytic_targets(pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h
     valid = (in_ep & in_clip & not_pad).astype(np.float32)
     reward_nxt = rew(np.clip(nxt, 0, ep_len[:, None] - 1), ep_len[:, None], succ[:, None])
     done_nxt = (succ[:, None] & (nxt >= (ep_len[:, None] - h_goal)) & in_ep).astype(np.float32)
+    # FAILURE terminal: the last frame of a failure is an ABSORBING terminal with a large-negative
+    # failure_reward (done=1). Keeps the -1/step cost, but anchors the failure deep so a short failure
+    # cannot bootstrap to a shallow value and get preferred over a long success. Valid even when the
+    # successor lands past the (truncated) episode end -- it is the absorbing terminal, not a real frame.
+    fail_term = (~succ[:, None]) & (nxt >= ep_len[:, None] - 1) & in_clip & not_pad
+    reward_nxt = np.where(fail_term, failure_reward, reward_nxt).astype(np.float32)
+    done_nxt = np.where(fail_term, 1.0, done_nxt).astype(np.float32)
+    valid = np.where(fail_term, 1.0, valid).astype(np.float32)
     # MC return-to-go from the current frame (exact for cost_to_goal deterministic outcomes)
     if scheme == "cost_to_goal":
         goal_start = ep_len - h_goal
@@ -121,13 +129,21 @@ def main():
         default=None,
         help="json from compute_homing_onsets.py; truncates the homing tail of FAILURE episodes",
     )
+    ap.add_argument(
+        "--failure-reward",
+        type=float,
+        default=None,
+        help="large-negative terminal reward at a FAILURE's last frame (done=1); default v_min (the floor)",
+    )
     a = ap.parse_args()
     os.environ.setdefault("LEROBOT_VIDEO_BACKEND", "pyav")
 
     v_min = a.v_min if a.v_min is not None else -1.0 / (1.0 - a.discount)
+    failure_reward = a.failure_reward if a.failure_reward is not None else v_min  # floor by default
     H = a.horizon
     print(
-        f"discount={a.discount:.5f} v=[{v_min:.1f},{a.v_max:.1f}] mc_floor={a.mc_floor} clip_len={a.clip_len}",
+        f"discount={a.discount:.5f} v=[{v_min:.1f},{a.v_max:.1f}] mc_floor={a.mc_floor} "
+        f"failure_reward={failure_reward:.1f} clip_len={a.clip_len}",
         flush=True,
     )
 
@@ -240,6 +256,8 @@ def main():
         z = cum[..., None] + gam[None, :, None] * centers[None, None, :]
         phi = hl.to_probs(jnp.clip(z, v_min, a.v_max))
         tgt = jnp.einsum("bpj,bpja->bpa", vprob, phi)
+        # terminal successor -> deterministic mass at its own reward (success goal = 0; failure end =
+        # a large negative failure_reward, both set in analytic_targets).
         tgt = jnp.where((done_nxt > 0)[..., None], hl.to_probs(reward_nxt), tgt)
         if a.mc_floor:
             tmean = jnp.sum(tgt * centers, -1)
@@ -326,7 +344,7 @@ def main():
             epl = np.concatenate(epl).astype(np.int64)
             sc = np.concatenate(sc).astype(bool)
             cum, reward_nxt, done_nxt, valid, mc, jnxt = analytic_targets(
-                pos, epl, sc, ji, img_pad[bi], prefixes, a.discount, a.h_goal, v_min, a.reward_scheme
+                pos, epl, sc, ji, img_pad[bi], prefixes, a.discount, a.h_goal, v_min, a.reward_scheme, failure_reward
             )
             jnxt = np.clip(jnxt, 0, cl - 1)
             # gather patches / state (device)
