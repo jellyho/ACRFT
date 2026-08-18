@@ -11,7 +11,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-CONFIG="${CONFIG:-pi05_yam_lego_taxi_rlt}"
+CONFIG="${CONFIG:-pi05_yam_lego_taxi}"
 EXP="${EXP:-${CONFIG#pi05_}}"
 PROJECT="${PROJECT:-yam-rlt}"
 ENTITY="${ENTITY:-RSS-PFT_RLLAB}"

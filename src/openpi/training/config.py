@@ -1528,6 +1528,41 @@ def _yam_rlt_config(delta_mode: str = "joint", horizon: int = 30) -> TrainConfig
 _CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none"))
 _CONFIGS.append(_yam_rlt_config("joint", horizon=60))  # 2-second chunk ablation
 
+
+def _yam_bc_config(delta_mode: str = "joint", horizon: int = 30, fsdp_devices: int = 1) -> TrainConfig:
+    """Plain pi05 BC finetune on the YAM bimanual dataset -- NO RLT bottleneck.
+
+    The RLT token only existed to feed a sim probe / adaptive-chunk critic; we now train a SEPARATE
+    patch critic, so the base policy is just a pi05 BC finetune. This is the default going forward.
+    delta_mode joint (relative) or none (absolute); fsdp_devices>1 shards the model for multi-GPU.
+    """
+    tag = "" if delta_mode == "joint" else f"_{delta_mode}"
+    hsuf = "" if horizon == 30 else f"_h{horizon}"
+    return TrainConfig(
+        name=f"pi05_yam_lego_taxi{tag}{hsuf}",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=horizon, discrete_state_input=False),
+        data=LeRobotYAMDataConfig(
+            repo_id="jellyho/yam_lego_taxi",
+            delta_mode=delta_mode,
+            include_progress=False,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        fsdp_devices=fsdp_devices,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=0,
+    )
+
+
+_CONFIGS.extend(_yam_bc_config(_m) for _m in ("joint", "none"))
+
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
 
