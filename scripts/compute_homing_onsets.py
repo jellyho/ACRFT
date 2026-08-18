@@ -1,12 +1,11 @@
-"""Per-episode homing onset for the yam dataset (where the arms start returning to home).
+"""Per-episode homing onset for the yam dataset, from the dataset's own control_mode field.
 
-Every teleop episode starts near a common home pose, goes out to do the task (proprio far from home),
-then RETURNS to home at the end (the operator's reset motion). Those trailing "homing" frames are not
-task behaviour. For FAILURE episodes we want to drop them (a failure's homing = "arms back near home,
-lego not placed", which visually collides with SUCCESS starts and would mislabel the critic).
+Every teleop episode is [teleop task frames][homing return-to-home frames]. The dataset marks this
+directly: observation.control_mode == 0.0 during teleop, == 4.0 during the homing reset. Those trailing
+homing frames are not task behaviour; for FAILURE episodes we drop them (a failure's homing = "arms back
+near home, task not done", which visually collides with SUCCESS starts and would mislabel the critic).
 
-homing_onset(e) = 1 + (last frame index, within the episode, whose proprio is still FAR from home,
-i.e. dist_to_home > tau). Frames at/after that index are the homing return and get truncated. Writes
+homing_onset(e) = 1 + (last teleop frame index) = start of the trailing homing run. Writes
 {episode: {"len": L, "homing_onset": k, "task_frac": k/L}} to --out (JSON). No video is decoded.
 
     uv run python scripts/compute_homing_onsets.py --out .scratch/yam_homing_onsets.json
@@ -23,35 +22,28 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi")
     ap.add_argument("--root", default="/data5/jellyho/yam_v2/lerobot")
-    ap.add_argument(
-        "--tau", type=float, default=3.0, help="dist-to-home threshold separating task (~20) from home (~0.7)"
-    )
-    ap.add_argument("--margin", type=int, default=0, help="keep this many frames past the last task frame")
+    ap.add_argument("--teleop-value", type=float, default=0.0, help="control_mode value during teleop (task)")
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/yam_homing_onsets.json"))
     a = ap.parse_args()
 
     import lerobot.datasets.lerobot_dataset as lrd
 
     ds = lrd.LeRobotDataset(a.repo_id, root=a.root, tolerance_s=0.05)
-    # low-dim state + episode boundaries straight from the parquet (no video decode)
-    state = np.asarray(ds.hf_dataset["observation.state"], np.float32)  # [N, state_dim]
+    # low-dim fields straight from the parquet (no video decode)
+    cm = np.asarray(ds.hf_dataset["observation.control_mode"], np.float32).reshape(-1)  # [N]
     epds = ds.meta.episodes
     starts = {int(e): int(f) for e, f in zip(epds["episode_index"], epds["dataset_from_index"], strict=True)}
     ends = {int(e): int(t) for e, t in zip(epds["episode_index"], epds["dataset_to_index"], strict=True)}
-
-    # home pose ~= mean of every episode's FIRST frame
-    home = np.mean([state[starts[e]] for e in starts], 0)
 
     out = {}
     fracs = []
     for e in sorted(starts):
         s, t = starts[e], ends[e]
-        seq = state[s:t]
+        seq = cm[s:t]
         L = t - s
-        dist = np.linalg.norm(seq - home[None], axis=1)  # [L]
-        far = np.flatnonzero(dist > a.tau)  # task frames (away from home)
-        # never leaves home (degenerate) -> keep all; else cut just past the last task frame
-        onset = L if len(far) == 0 else min(L, int(far[-1]) + 1 + a.margin)
+        # onset = 1 + last teleop frame (start of the trailing homing run); no teleop -> keep all
+        teleop = np.flatnonzero(seq == a.teleop_value)
+        onset = int(teleop[-1]) + 1 if len(teleop) else L
         out[str(e)] = {"len": int(L), "homing_onset": int(onset), "task_frac": round(onset / L, 3)}
         fracs.append(onset / L)
 
