@@ -61,6 +61,7 @@ PHASE_MAP = {
     "exp-board": "이식·인프라",
     "aqc-ablation": "판정·종합",
     "paper-intro": "논문·교차",
+    "papers-tier1": "논문·교차",
 }
 
 
