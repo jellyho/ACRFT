@@ -2,7 +2,6 @@ from collections.abc import Iterator, Sequence
 import logging
 import multiprocessing
 import os
-import pathlib
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -182,9 +181,6 @@ def create_torch_dataset(
     Set ``skip_videos`` when only the low-dimensional fields are needed (norm stats): camera frames
     are then not decoded, which is a large speedup. Never set it for training.
     """
-    if data_config.repo_ids is not None:
-        return _create_multi_torch_dataset(data_config, action_horizon, skip_videos=skip_videos)
-
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
@@ -209,36 +205,6 @@ def create_torch_dataset(
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])
 
-    return dataset
-
-
-def _create_multi_torch_dataset(data_config: _config.DataConfig, action_horizon: int, *, skip_videos: bool) -> Dataset:
-    """MultiLeRobotDataset over ``data_config.repo_ids`` (e.g. RoboCasa365's 300 pretrain tasks).
-
-    Each frame carries its own ``task`` string, so the prompt comes from that (PromptFromTaskString)
-    rather than a shared task_index map. fps/tolerance are taken from the first repo (uniform corpus).
-    """
-    repo_ids = list(data_config.repo_ids)
-    # fps/tolerance from the first task. LeRobotDatasetMetadata's `root` IS the dataset dir (unlike
-    # MultiLeRobotDataset, whose `root` is the PARENT it resolves each repo_id under), so point it at
-    # local_root/<task> to read the local meta and avoid a Hub lookup.
-    meta0 = lerobot_dataset.LeRobotDatasetMetadata(
-        repo_ids[0], root=str(pathlib.Path(data_config.local_root) / repo_ids[0]) if data_config.local_root else None
-    )
-    fps = meta0.fps
-    tol = _float32_safe_tolerance(fps, _max_video_timestamp(meta0))
-    dataset = lerobot_dataset.MultiLeRobotDataset(
-        repo_ids,
-        root=data_config.local_root,
-        delta_timestamps={key: [t / fps for t in range(action_horizon)] for key in data_config.action_sequence_keys},
-        tolerances_s=dict.fromkeys(repo_ids, tol),
-        video_backend=os.environ.get("LEROBOT_VIDEO_BACKEND"),
-    )
-    if skip_videos:
-        for d in dataset._datasets:
-            d._query_videos = _StubVideoQuery()
-    if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromTaskString()])
     return dataset
 
 

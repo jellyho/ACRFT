@@ -70,12 +70,6 @@ class AssetsConfig:
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
-    # Multi-dataset (e.g. RoboCasa365 pretrain: 300 tasks). When set, the loader builds a LeRobot
-    # MultiLeRobotDataset over these repo_ids (resolved under `local_root` if given) instead of a single
-    # repo. repo_id above is then used only for assets/norm-stats naming.
-    repo_ids: tuple[str, ...] | None = None
-    # Local root the repo_ids live under (for locally-converted datasets, e.g. the pretrain v3 dir).
-    local_root: str | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -398,11 +392,6 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
     # objective (make z_rl un-decodable into "which demo"); train-only, dropped at inference.
     include_episode_index: bool = False
 
-    # Multi-dataset (RoboCasa365 pretrain: 300 tasks). When set, the loader builds a MultiLeRobotDataset
-    # over these task dirs under `local_root`; repo_id is then just the assets/norm-stats name.
-    repo_ids: tuple[str, ...] | None = None
-    local_root: str | None = None
-
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         # Remap the LeRobot dataset keys onto the ``observation/*`` keys read by RoboCasaInputs.
@@ -451,8 +440,6 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             # RoboCasa's action column is named "action" (singular), unlike the default "actions".
             action_sequence_keys=("action",),
-            repo_ids=self.repo_ids,
-            local_root=self.local_root,
         )
 
 
@@ -1575,42 +1562,6 @@ def _yam_bc_config(delta_mode: str = "joint", horizon: int = 30, fsdp_devices: i
 
 
 _CONFIGS.extend(_yam_bc_config(_m) for _m in ("joint", "none"))
-
-
-def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:
-    """Official-style RoboCasa 365 pi05 MULTITASK PRETRAINING on the Human300 split (300 tasks).
-
-    Loads all locally-converted v3 pretrain tasks via MultiLeRobotDataset (each frame carries its task
-    string -> prompt). Official recipe: batch 128, 120k steps. fsdp_devices for multi-GPU. Norm stats
-    live under assets/<name>/robocasa365_pretrain_human300 (compute with compute_norm_stats).
-    """
-    v3 = pathlib.Path("/data5/jellyho/robocasa365_pretrain_v3")
-    # task dirs (skip the converter's transient <Task>_v30 scratch dirs)
-    tasks = (
-        tuple(sorted(p.name for p in v3.iterdir() if p.is_dir() and not p.name.endswith("_v30"))) if v3.is_dir() else ()
-    )
-    return TrainConfig(
-        name="pi05_robocasa_pretrain",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
-        data=LeRobotRoboCasaDataConfig(
-            repo_id="robocasa365_pretrain_human300",  # assets / norm-stats name only
-            repo_ids=tasks,
-            local_root=str(v3),
-            base_config=DataConfig(prompt_from_task=True),
-        ),
-        batch_size=128,
-        fsdp_devices=fsdp_devices,
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000, peak_lr=5e-5, decay_steps=120_000, decay_lr=5e-5
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=120_000,
-        save_interval=10_000,
-        action_dist_interval=0,
-    )
-
-
-_CONFIGS.append(_robocasa365_pretrain_config())
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 

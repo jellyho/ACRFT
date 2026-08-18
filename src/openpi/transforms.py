@@ -368,20 +368,6 @@ class PromptFromLeRobotTask(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-class PromptFromTaskString(DataTransformFn):
-    """Prompt = the sample's ``task`` string. Used for MultiLeRobotDataset (many repos), which carries
-    a per-frame ``task`` string directly, so no shared task_index -> prompt map exists."""
-
-    def __call__(self, data: DataDict) -> DataDict:
-        if "task" not in data:
-            raise ValueError('Cannot extract prompt without a "task" field')
-        return {
-            **data,
-            "prompt": str(np.asarray(data["task"]).item() if hasattr(data["task"], "item") else data["task"]),
-        }
-
-
-@dataclasses.dataclass(frozen=True)
 class PadStatesAndActions(DataTransformFn):
     """Zero-pads states and actions to the model action dimension."""
 
