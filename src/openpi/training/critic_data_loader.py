@@ -50,7 +50,13 @@ class CriticClipDataset(torch.utils.data.Dataset):
         outcomes: dict[int, str] | None = None,
         tolerance_s: float | None = None,
         img_size: int = 224,
+        homing_onsets: dict | None = None,
     ):
+        # FAILURE episodes: truncate the trailing "homing" return-to-home frames so they are not
+        # sampled as currents and not used as bootstrap successors (a failure's homing = arms back near
+        # home / task-not-done, which collides with SUCCESS starts and would mislabel the critic).
+        # homing_onsets maps str(episode) -> {"homing_onset": k}; SUCCESS episodes are left untouched.
+        self.homing_onsets = homing_onsets or {}
         self.img_size = img_size
         self.image_keys = list(image_keys)
         self.state_key = state_key
@@ -83,13 +89,18 @@ class CriticClipDataset(torch.utils.data.Dataset):
         starts = {int(e): int(f) for e, f in zip(epds["episode_index"], epds["dataset_from_index"], strict=True)}
         ends = {int(e): int(t) for e, t in zip(epds["episode_index"], epds["dataset_to_index"], strict=True)}
         keep = episodes if episodes is not None else list(starts)
-        self.clip_starts: list[tuple[int, int, int]] = []  # (global_start, ep_id, ep_len)
+        self.clip_starts: list[tuple[int, int, int]] = []  # (global_start, ep_id, effective_len)
         for e in keep:
             s, t = starts[int(e)], ends[int(e)]
-            ep_len = t - s
-            # start every `stride` frames; the tail clip is short but is_pad masks its missing futures.
-            for c in range(s, t, self.stride):
-                self.clip_starts.append((c, int(e), ep_len))
+            full_len = t - s
+            # FAILURE: cut the homing tail -> effective length = homing_onset. SUCCESS: keep full length.
+            eff_len = full_len
+            if self.outcomes.get(int(e)) != "success" and str(int(e)) in self.homing_onsets:
+                eff_len = int(self.homing_onsets[str(int(e))]["homing_onset"])
+            # clip starts (=current frames) only within the task span; the tail clip's missing futures
+            # are masked by is_pad, and futures past eff_len are masked by the trainer via eff_len.
+            for c in range(s, s + eff_len, self.stride):
+                self.clip_starts.append((c, int(e), eff_len))
 
     def _resize_clip(self, sample):
         import cv2

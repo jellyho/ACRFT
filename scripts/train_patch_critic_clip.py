@@ -115,6 +115,12 @@ def main():
         default=None,
         help="warm-start from a checkpoint dir (loads Q, and V if v_params.msgpack present)",
     )
+    ap.add_argument(
+        "--homing-onsets",
+        type=pathlib.Path,
+        default=None,
+        help="json from compute_homing_onsets.py; truncates the homing tail of FAILURE episodes",
+    )
     a = ap.parse_args()
     os.environ.setdefault("LEROBOT_VIDEO_BACKEND", "pyav")
 
@@ -142,6 +148,7 @@ def main():
             r = json.loads(line)
             outc[int(r["episode"])] = r["outcome"]
 
+    homing = json.loads(a.homing_onsets.read_text()) if a.homing_onsets is not None else None
     ds = CriticClipDataset(
         a.repo_id,
         root=a.root,
@@ -152,8 +159,9 @@ def main():
         stride=a.stride,
         outcomes=outc,
         img_size=a.img_size,
+        homing_onsets=homing,
     )
-    print(f"{len(ds)} clips from {len(outc)} episodes", flush=True)
+    print(f"{len(ds)} clips from {len(outc)} episodes" f"{' (failure homing truncated)' if homing else ''}", flush=True)
     dl = torch.utils.data.DataLoader(
         ds,
         batch_size=a.clip_batch,
@@ -298,7 +306,9 @@ def main():
             # sample transitions: valid current positions (not pad) per clip
             bi, ji, pos, epl, sc = [], [], [], [], []
             for b in range(B):
-                valid_j = np.flatnonzero(~img_pad[b])
+                # current frames: real (not pad) AND within the episode's EFFECTIVE length (for FAILURE
+                # clips this drops the homing tail; ep_len already carries the truncation from the loader).
+                valid_j = np.flatnonzero((~img_pad[b]) & (pos0[b] + np.arange(cl) < ep_len[b]))
                 if len(valid_j) == 0:
                     continue
                 pick = rng_np.integers(0, len(valid_j), size=a.trans_per_clip)
