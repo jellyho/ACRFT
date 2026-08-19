@@ -41,11 +41,13 @@ candidates~\citep{emaq}.
 A more direct line of work lets the value train the policy itself, yet still stops short.
 Actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
 the chunk as a fixed, indivisible action, even though a critic scoring whole chunks of closed-loop
-demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
-developed in state-based RL~\citep{qc, aqc, acsac}, where chunk-level TD makes long horizons
-tractable and prefix values let the commitment vary; but there the commitment is picked by scoring
-candidates at deployment rather than optimized jointly with the actions, and these constructions have
-not been brought to a pretrained VLA with its frozen backbone. What is missing is a method that
+demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has matured
+within RL, from state-based to pixel-based control and including initial trials on pretrained
+generalist policies~\citep{qc, aqc, acsac}; chunk-level TD makes long horizons tractable and prefix
+values let the commitment vary. Yet the commitment is still selected by scoring candidates at
+deployment rather than optimized jointly with the actions, and no such construction has been
+developed into a purely offline post-training stage that leaves a VLA better than its supervised
+starting point. What is missing is a method that
 optimizes both dimensions at once, directly on the policy, at VLA scale.
 
 We present such a method, an offline reinforcement fine-tuning stage that improves the policy over
