@@ -60,6 +60,7 @@ def main():
             outc[int(r["episode"])] = r["outcome"]
     homing = json.loads(a.homing_onsets.read_text()) if a.homing_onsets else None
 
+    print(f"cache N={N} frames, {len(meta['episodes'])} episodes; scoring stride={a.stride}", flush=True)
     net = PatchCriticEnsemble(
         action_dim=ad, horizon=H, num_critics=cc["num_critics"], macro_group_size=gsz, num_atoms=atoms
     )
@@ -76,6 +77,10 @@ def main():
 
     succ_stats, fail_stats = [], []
     ar = np.arange(H)
+    import time as _t
+
+    _t0 = _t.time()
+    _done = 0
     for e_str, info in meta["episodes"].items():
         e = int(e_str)
         if e not in outc:
@@ -86,15 +91,18 @@ def main():
         if not is_succ and homing is not None and str(e) in homing:
             eff = int(homing[str(e)]["homing_onset"])
         pos = np.arange(0, max(1, eff), a.stride)
+        # An episode is CONTIGUOUS in the cache, so read its block once (sequential) and subsample in
+        # memory. Scattered memmap indexing issues one NFS read per frame and is ~50x slower.
+        ep_feats = np.asarray(feats[off : off + full])
+        ep_states = np.asarray(states[off : off + full])
+        ep_actions = np.asarray(actions[off : off + full])
         vs, ds = [], []
         for i in range(0, len(pos), a.batch):
             p = pos[i : i + a.batch]
-            g = off + p
             hp = p[:, None] + ar[None]
-            gch = off + np.clip(hp, 0, full - 1)
-            ch = np.asarray(actions[gch.reshape(-1)]).reshape(len(p), H, ad)
+            ch = ep_actions[np.clip(hp, 0, full - 1).reshape(-1)].reshape(len(p), H, ad)
             ch[hp >= full] = 0.0
-            v, d = value(jnp.asarray(np.asarray(feats[g])), jnp.asarray(ch), jnp.asarray(np.asarray(states[g])))
+            v, d = value(jnp.asarray(ep_feats[p]), jnp.asarray(ch), jnp.asarray(ep_states[p]))
             vs.append(np.asarray(v))
             ds.append(np.asarray(d))
         vs = np.concatenate(vs)
@@ -110,6 +118,9 @@ def main():
             "n": len(vs),
         }
         (succ_stats if is_succ else fail_stats).append(rec)
+        _done += 1
+        if _done % 10 == 0:
+            print(f"  scored {_done} episodes  ({_t.time() - _t0:.0f}s)", flush=True)
 
     def col(rs, k):
         return np.array([r[k] for r in rs])

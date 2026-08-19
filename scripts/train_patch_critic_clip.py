@@ -385,7 +385,23 @@ def main():
         wb.finish()
 
 
-def _save(a, params, v_params, npatch, v_min, prefixes, ad):
+def _git_stamp():
+    """branch@hash(+dirty) so a checkpoint can be traced back to the code that produced it."""
+    import subprocess
+
+    root = str(pathlib.Path(__file__).resolve().parents[1])
+
+    def _run(*cmd):
+        return subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+
+    try:
+        stamp = f"{_run('git', 'rev-parse', '--abbrev-ref', 'HEAD')}@{_run('git', 'rev-parse', '--short', 'HEAD')}"
+        return stamp + ("+dirty" if _run("git", "status", "--porcelain") else "")
+    except Exception:  # a checkpoint is still worth saving if git is unavailable
+        return "unknown"
+
+
+def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=None):
     import flax.serialization
     import jax
 
@@ -413,8 +429,16 @@ def _save(a, params, v_params, npatch, v_min, prefixes, ad):
         "clip_len": a.clip_len,
         "source": a.repo_id,
         "loader": "critic_clip",
+        "git": _git_stamp(),
     }
+    # The INPUT CONTRACT. Without this the only record of "what scale does this critic eat" lives in two
+    # unrelated files (the dataset loader and the serving wrapper), which agree only by convention -- a
+    # critic trained on normalized inputs would be served raw and fail SILENTLY. Serving validates it.
+    if spec is not None:
+        cfg["input_spec"] = spec
     (a.out / "config.json").write_text(json.dumps(cfg, indent=2))
+    if stats is not None:
+        (a.out / "norm_stats.json").write_text(json.dumps(stats, indent=2))
     print(f"saved -> {a.out}", flush=True)
 
 

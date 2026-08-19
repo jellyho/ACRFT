@@ -14,7 +14,7 @@ The critic dir must hold ``config.json`` + ``params.msgpack`` (written by train_
 camera keys default to YAM's (agentview, wrist_left, wrist_right) in the order the critic was trained.
 """
 
-import json
+import logging
 import pathlib
 
 import jax
@@ -33,14 +33,17 @@ YAM_STATE_KEY = "observation/state"
 
 
 def _parse_image(image, size):
-    from PIL import Image
+    # INTER_AREA, not bilinear: the feature cache the critic trained on downsamples 480x640 -> 224 with
+    # cv2.INTER_AREA, and bilinear downsampling aliases. Measured drift between the two was 5.5% mean /
+    # 21% max relative L2 per patch token -- small, but free to remove.
+    import cv2
 
     x = np.asarray(image)
     if np.issubdtype(x.dtype, np.floating):
         x = (np.clip(x, 0, 1) * 255).astype(np.uint8)
     if x.ndim == 3 and x.shape[0] == 3 and x.shape[-1] != 3:
         x = np.transpose(x, (1, 2, 0))  # CHW -> HWC
-    return np.asarray(Image.fromarray(x).resize((size, size), Image.BILINEAR))
+    return cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA)
 
 
 class PatchCriticSelectPolicy(BasePolicy):
@@ -77,7 +80,43 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
 
-        cc = json.loads((pathlib.Path(critic_dir) / "config.json").read_text())
+        from openpi.patch_critic import spec as critic_spec
+
+        cc, self._norm_stats = critic_spec.load(critic_dir)
+        # A critic's inputs are RAW dataset units (see openpi.patch_critic.spec). The wrapper honours that by
+        # reading state before the input transform and un-normalizing candidates through the output
+        # transform -- but only this check makes a mismatched critic fail loudly instead of returning
+        # confident nonsense. Older checkpoints carry no spec; they are the raw-units generation.
+        self._spec = cc.get("input_spec")
+        if self._spec is not None:
+            problems = critic_spec.check(
+                self._spec,
+                state_dim=int(self._spec["state_dim"]),  # checked against the live obs in infer()
+                action_dim=self._model_action_dim,
+                num_cameras=len(camera_keys),
+                img_size=self._img_size,
+            )
+            if problems:
+                raise ValueError("critic/server contract mismatch:\n  - " + "\n  - ".join(problems))
+        else:
+            logging.warning(
+                "critic %s has no input_spec (pre-contract checkpoint); assuming raw dataset units. "
+                "Re-save it with scripts/backfill_critic_spec.py to enable validation.",
+                critic_dir,
+            )
+        self._warned_state = False
+        self._critic_action_dim = int(cc.get("action_dim", 14))
+        # A pi05-space critic eats the sampler's output as-is; a raw-space one needs the decode path.
+        self._pre = None
+        if (self._spec or {}).get("normalization") == "pi05":
+            from openpi.patch_critic import preproc as critic_preproc
+
+            self._pre = critic_preproc.Pi05Preproc(
+                ref=np.asarray(self._spec["joint_delta_reference"], np.int64),
+                stats=critic_preproc.load_norm_stats(self._spec["norm_stats"]),
+                use_quantiles=bool(self._spec["use_quantiles"]),
+                delta=self._spec["delta_mode"] == "joint",
+            )
         self._macro = int(cc["macro_group_size"])
         atoms = int(cc["num_atoms"])
         import flax.serialization
@@ -136,6 +175,17 @@ class PatchCriticSelectPolicy(BasePolicy):
             return self._pol.infer(obs, noise=noise)
 
         state = np.asarray(obs[self._state_key], np.float32).reshape(-1)
+        if self._norm_stats is not None and self._pre is None and not self._warned_state:
+            from openpi.patch_critic import spec as critic_spec
+
+            bad = critic_spec.out_of_range(self._norm_stats, state)
+            if bad:
+                self._warned_state = True  # once per server; this is a diagnostic, not a rate-limiter
+                logging.warning(
+                    "state channels %s are far outside the critic's training range -- the critic "
+                    "expects RAW dataset units; its values are not trustworthy here.",
+                    bad[:12],
+                )
         patches = self._patches_of(obs)
 
         # N candidate chunks from ONE backbone pass (the token is unused by the patch-critic).
@@ -145,17 +195,30 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._rng, sample_rng = jax.random.split(self._rng)
         _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
         chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
-        decoded = np.asarray(
-            self._pol._output_transform(
-                {
-                    "state": np.zeros((chunks_model.shape[0], self._model_action_dim), np.float32),
-                    "actions": chunks_model,
-                }
-            )["actions"],
-            np.float32,
-        )  # [N, H, A]
+        if self._pre is not None:
+            # Shared preprocessing: the sampler already emits normalized joint deltas, which is
+            # precisely what the critic was trained on. No conversion, so nothing to get wrong.
+            scored_actions = chunks_model[..., : self._critic_action_dim]
+            scored_state = self._pre.state(state)
+        else:
+            # Legacy raw-units critic. The output transform un-normalizes AND undoes the joint-delta
+            # parameterisation, and the latter needs the REAL state (JointAbsoluteActions does
+            # actions[..., i] += state[..., ref[i]]). This passed zeros, which silently left the
+            # chunks as DELTAS while the critic was trained on ABSOLUTE joint targets -- no error,
+            # just meaningless values. Broadcast the live state over the N candidates.
+            scored_actions = np.asarray(
+                self._pol._output_transform(
+                    {
+                        "state": np.broadcast_to(state, (chunks_model.shape[0], state.shape[0])).copy(),
+                        "actions": chunks_model,
+                    }
+                )["actions"],
+                np.float32,
+            )
+            scored_state = state
+        decoded = np.asarray(scored_actions, np.float32)  # [N, H, A] in the critic's own space
 
-        pv = np.asarray(self._score(patches, jnp.asarray(state), jnp.asarray(decoded)))  # [N, mh]
+        pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(decoded)))  # [N, mh]
         best = int(np.argmax(pv[:, -1]))  # argmax full-chunk value
         if self._mode == "adaptive":
             kbest = int(np.argmax(pv[best]))  # highest-value commitment prefix (macro-group index)
