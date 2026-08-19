@@ -1470,6 +1470,46 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
 _CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
 
 
+_CONFIGS.append(
+    # Plain BC finetune of pi05 on the cable-tie YAM teleop set - no RLT bottleneck, so this is the
+    # baseline the RLT runs are compared against and the policy to deploy on the real arm.
+    #
+    # The dataset is already cleaned (rl_specialist/build_cable_tie_clean.py): 100 success episodes
+    # of the source 105, and each episode cut at the first `observation.control_mode == 4` frame,
+    # which is where the operator's homing motion (and their hand) enters the cameras. So
+    # success_only is left off here - there is nothing left to filter.
+    #
+    # repo_id resolves under HF_LEROBOT_HOME; point that at
+    # /NHNHOME/WORKSPACE/gwanwoo/rl_specialist/cache/huggingface/lerobot to use the local copy, or
+    # override with --data.repo-id Gwanwoo/lerobot_cable_tie_100_clean to pull from the Hub.
+    TrainConfig(
+        name="pi05_yam_cable_tie",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            # 30 frames at 30 fps = a one-second chunk, matching the YAM RLT configs.
+            action_horizon=30,
+            discrete_state_input=False,
+        ),
+        data=LeRobotYAMDataConfig(
+            repo_id="rl_specialist/lerobot_cable_tie_100_clean",
+            delta_mode="joint",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
+        # There is no launcher script for this config, so the lab entity is set here rather than
+        # passed on the command line the way run_train_yam.sh does it.
+        wandb_entity="RSS-PFT_RLLAB",
+    )
+)
+
+
 def _yam_rlt_config(delta_mode: str = "joint", horizon: int = 30) -> TrainConfig:
     """Pi0RLT on the YAM bimanual dataset (real teleop data).
 
