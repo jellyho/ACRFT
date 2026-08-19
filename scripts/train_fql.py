@@ -17,6 +17,17 @@ Critic and actor params are DISJOINT, so we take two filtered grads (separate op
 critic params (the actor's a' is stop-gradient), L_actor -> actor params (the critic Q is read but not
 updated by the actor step). Qbar is an EMA target critic.
 
+Staged recipe (QC-FQL):
+  stage 0  pi05 BC pretraining -- the frozen base loaded via --init-base.
+  stage 1  --critic-warmup-steps N: the critic regresses the PURE MC return (y = MC, no bootstrap,
+           no actor involved) so it is calibrated before anything depends on it; the actor meanwhile
+           trains on distillation ONLY (no Q term) -- the two are fully decoupled in this stage.
+  stage 2  actor-critic proper: critic TD (with the MC floor), actor distill + Q-max.
+--critic-backbone {never,warmup,always} decides whether the CRITIC's gradient also flows into the
+VLM backbone (prefix KV not stop-gradient'd, backbone params join the critic optimizer). never keeps
+the backbone a frozen feature extractor; warmup lets the value signal shape it only while the target
+is the trustworthy MC return; always is full value backprop (B200-sized memory).
+
 Data: --synthetic runs a shape/consistency smoke on random transitions (no data needed). The RoboCasa
 DEAS-protocol transition loader is wired once the merged pretrain dataset + reward labels are ready.
 """
@@ -47,6 +58,18 @@ def main():
         default=True,
         action=argparse.BooleanOptionalAction,
         help="floor the TD target with the transition's MC return (house patch-critic recipe)",
+    )
+    ap.add_argument(
+        "--critic-warmup-steps",
+        type=int,
+        default=0,
+        help="stage-1 length: critic regresses pure MC returns, actor trains distill-only",
+    )
+    ap.add_argument(
+        "--critic-backbone",
+        choices=["never", "warmup", "always"],
+        default="never",
+        help="when the critic gradient may flow into the VLM backbone",
     )
     ap.add_argument("--flow-ode-steps", type=int, default=10)
     # expert variants: real by default; 'dummy' everywhere gives a CPU-runnable trainer smoke
@@ -94,6 +117,11 @@ def main():
     # trainable = actor expert (gemma "_2") + critic expert (gemma "_3") + their in/out projections.
     actor_filter = nnx.Any(nnx_utils.PathRegex(".*llm.*_2.*"), nnx_utils.PathRegex(".*actor_(in|out)_proj.*"))
     critic_filter = nnx.Any(nnx_utils.PathRegex(".*llm.*_3.*"), nnx_utils.PathRegex(".*critic_(in|out)_proj.*"))
+    # the VLM backbone (paligemma + siglip), excluding every expert suffix -- what the critic ALSO
+    # updates when --critic-backbone allows it. The EMA target tracks only critic_filter either way:
+    # the target's job is a slow-moving Q head, not a slow-moving backbone.
+    backbone_filter = nnx.All(nnx_utils.PathRegex(".*PaliGemma.*"), nnx.Not(nnx_utils.PathRegex(".*_[123].*")))
+    critic_bb_filter = nnx.Any(critic_filter, backbone_filter)
 
     print("building Pi0FQL...", flush=True)
     model = cfg.create(jax.random.key(0))
@@ -114,18 +142,29 @@ def main():
     target_critic = jax.tree.map(jnp.copy, params.filter(critic_filter))
     tx_c = optax.adam(a.lr)
     tx_a = optax.adam(a.lr)
-    opt_c = tx_c.init(params.filter(critic_filter))
+    critic_train_filter = critic_bb_filter if a.critic_backbone != "never" else critic_filter
+    opt_c = tx_c.init(params.filter(critic_train_filter))
     opt_a = tx_a.init(params.filter(actor_filter))
 
     # The VLM prefix (SigLIP x3 cams + 2b attention) is by far the most expensive forward, and it is
     # FROZEN -- so each loss computes it ONCE per observation (stop-gradient) and every expert call
     # reuses the KV. The first smoke recomputed it six times per training step and OOM'd an L40S.
-    def _kv(model, obs):
-        return jax.tree.map(jax.lax.stop_gradient, model._prefix_kv(obs))
+    def _kv(model, obs, *, grad=False):
+        kv = model._prefix_kv(obs)
+        return kv if grad else jax.tree.map(jax.lax.stop_gradient, kv)
 
-    def critic_loss_fn(model, target_model, batch, rng):
+    def warmup_critic_loss_fn(model, batch, bb_grad):
+        """Stage 1: pure MC regression -- no bootstrap, no actor, no target network."""
+        obs, act, _rew, _nobs, _done, mc = batch
+        kv, pm = _kv(model, obs, grad=bb_grad)
+        tgt = jax.lax.stop_gradient(hl.to_probs(jnp.clip(mc, a.v_min, a.v_max)))
+        q_logits = model.critic_logits(obs, act, kv, pm)
+        loss = jnp.mean(-jnp.sum(tgt * jax.nn.log_softmax(q_logits, -1), -1))
+        return loss, {"q_mean": jnp.mean(hl.from_logits(q_logits)), "td_target": jnp.mean(mc)}
+
+    def critic_loss_fn(model, target_model, batch, rng, *, bb_grad=False):
         obs, act, rew, nobs, done, mc = batch
-        kv, pm = _kv(model, obs)
+        kv, pm = _kv(model, obs, grad=bb_grad)
         kv_n, pm_n = _kv(model, nobs)
         zr = jax.random.normal(rng, act.shape)
         a_next = jax.lax.stop_gradient(model.actor(nobs, zr, kv_n, pm_n))  # a' ~ mu_omega(s', z')
@@ -157,32 +196,65 @@ def main():
         l_q = -jnp.mean(qpi)
         return l_q + a.alpha * l_distill, {"l_distill": l_distill, "q_pi": -l_q}
 
+    def warmup_actor_loss_fn(model, batch, rng):
+        """Stage 1 actor: distillation ONLY (the critic is not trustworthy yet, so no Q term)."""
+        obs = batch[0]
+        kv, pm = _kv(model, obs)
+        z = jax.random.normal(rng, (obs.state.shape[0], a.action_horizon, a.action_dim))
+        a_theta = jax.lax.stop_gradient(model.flow_ode(obs, z, kv_cache=kv, prefix_mask=pm))
+        a_omega = model.actor(obs, z, kv, pm)
+        l_distill = jnp.mean(jnp.square(a_omega - a_theta))
+        return a.alpha * l_distill, {"l_distill": l_distill, "q_pi": jnp.zeros(())}
+
     # donate params/targets/opt states: without donation the jit holds input AND output copies of
     # the 3.15B-param state (~25GB just in weights), which is what OOM'd the L40S even after the
     # prefix-KV sharing fix. Donation makes the update in-place.
-    @functools.partial(jax.jit, donate_argnums=(0, 1, 2, 3))
-    def step(params, target_critic, opt_c, opt_a, batch, rng):
-        rc, ra = jax.random.split(rng)
-        model = nnx.merge(graphdef, params)
-        target_model = nnx.merge(graphdef, params)
-        nnx.update(target_model, target_critic)  # online everywhere, EMA critic
-        (lc, ci), gc = nnx.value_and_grad(critic_loss_fn, argnums=nnx.DiffState(0, critic_filter), has_aux=True)(
-            model, target_model, batch, rc
-        )
-        (la, ai), ga = nnx.value_and_grad(actor_loss_fn, argnums=nnx.DiffState(0, actor_filter), has_aux=True)(
-            model, batch, ra
-        )
-        pc = params.filter(critic_filter)
-        uc, opt_c = tx_c.update(gc, opt_c, pc)
-        nnx.update(model, optax.apply_updates(pc, uc))
-        pa = params.filter(actor_filter)
-        ua, opt_a = tx_a.update(ga, opt_a, pa)
-        nnx.update(model, optax.apply_updates(pa, ua))
-        params = nnx.state(model)
-        target_critic_new = jax.tree.map(
-            lambda t, p: a.target_tau * p + (1 - a.target_tau) * t, target_critic, params.filter(critic_filter)
-        )
-        return params, target_critic_new, opt_c, opt_a, {"l_critic": lc, "l_actor": la, **ci, **ai}
+    #
+    # Both phases differentiate over critic_train_filter so the gradient tree always matches the
+    # critic optimizer state; whether the backbone part of that gradient is nonzero is decided by
+    # bb_grad (stop-gradient on the prefix KV), not by reshaping trees between phases.
+    def _make_step(*, warmup: bool, bb_grad: bool):
+        @functools.partial(jax.jit, donate_argnums=(0, 1, 2, 3))
+        def step(params, target_critic, opt_c, opt_a, batch, rng):
+            rc, ra = jax.random.split(rng)
+            model = nnx.merge(graphdef, params)
+            if warmup:
+                (lc, ci), gc = nnx.value_and_grad(
+                    warmup_critic_loss_fn, argnums=nnx.DiffState(0, critic_train_filter), has_aux=True
+                )(model, batch, bb_grad)
+                (la, ai), ga = nnx.value_and_grad(
+                    warmup_actor_loss_fn, argnums=nnx.DiffState(0, actor_filter), has_aux=True
+                )(model, batch, ra)
+                ci = {**ci, "mc_floor_frac": jnp.ones(())}  # stage 1 IS the MC target
+            else:
+                target_model = nnx.merge(graphdef, params)
+                nnx.update(target_model, target_critic)  # online everywhere, EMA critic
+                (lc, ci), gc = nnx.value_and_grad(
+                    critic_loss_fn, argnums=nnx.DiffState(0, critic_train_filter), has_aux=True
+                )(model, target_model, batch, rc, bb_grad=bb_grad)
+                (la, ai), ga = nnx.value_and_grad(actor_loss_fn, argnums=nnx.DiffState(0, actor_filter), has_aux=True)(
+                    model, batch, ra
+                )
+            pc = params.filter(critic_train_filter)
+            uc, opt_c_new = tx_c.update(gc, opt_c, pc)
+            nnx.update(model, optax.apply_updates(pc, uc))
+            pa = params.filter(actor_filter)
+            ua, opt_a_new = tx_a.update(ga, opt_a, pa)
+            nnx.update(model, optax.apply_updates(pa, ua))
+            params_new = nnx.state(model)
+            target_critic_new = jax.tree.map(
+                lambda t, p: a.target_tau * p + (1 - a.target_tau) * t,
+                target_critic,
+                params_new.filter(critic_filter),
+            )
+            return params_new, target_critic_new, opt_c_new, opt_a_new, {"l_critic": lc, "l_actor": la, **ci, **ai}
+
+        return step
+
+    bb_warm = a.critic_backbone in ("warmup", "always")
+    bb_ac = a.critic_backbone == "always"
+    step_warmup = _make_step(warmup=True, bb_grad=bb_warm) if a.critic_warmup_steps > 0 else None
+    step_ac = _make_step(warmup=False, bb_grad=bb_ac)
 
     # ---- data ----
     def synthetic_batch(rng):
@@ -217,6 +289,7 @@ def main():
     for s in range(a.steps):
         rng, kb, ks = jax.random.split(rng, 3)
         batch = synthetic_batch(kb)
+        step = step_warmup if (step_warmup is not None and s < a.critic_warmup_steps) else step_ac
         params, target_critic, opt_c, opt_a, info = step(params, target_critic, opt_c, opt_a, batch, ks)
         if s % 10 == 0 or s == a.steps - 1:
             i = {k: float(v) for k, v in info.items()}
