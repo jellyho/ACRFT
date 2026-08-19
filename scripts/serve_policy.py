@@ -1,6 +1,8 @@
 import dataclasses
 import enum
+import json
 import logging
+import pathlib
 import socket
 
 import tyro
@@ -60,10 +62,19 @@ class Args:
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
-    # Directory of a trained RLT critic (params.msgpack + config.json + proprio_stats.json, see
-    # scripts/export_critic_serving.py). When set, a request carrying `critic_select` gets
-    # best-of-N chosen by the critic server-side; requests without the key are untouched.
+    # Directory of a trained critic. Serving it here selects on EVERY request: a server started
+    # with a critic is a value-guided policy, and the client sends nothing about it.
+    #
+    # Either kind is accepted and the kind is read off the artifact, not passed in -- a directory
+    # whose config.json has `num_patches` is a standalone patch critic (frozen DINOv2 over the
+    # cameras, config.json + params.msgpack), anything else is an RLT-token critic (which also
+    # wants proprio_stats.json, see scripts/export_critic_serving.py). One flag, because two
+    # serving entry points was two things to keep in step and the difference is in the checkpoint.
     critic: str | None = None
+
+    # Patch critics only: "bon" executes the whole winning chunk, "adaptive" executes just its
+    # highest-value commitment prefix and replans -- so the chunk length varies per reply.
+    critic_mode: str = "bon"
 
     # How many action chunks to draw per observation. This is what the server DOES, not what a
     # client may ask for: it is both what gets sampled and what the handshake declares the
@@ -157,6 +168,28 @@ def spec_metadata(train_config: _config.TrainConfig) -> dict:
     }
 
 
+def _build_critic_policy(policy, args: Args):
+    """Wrap the base policy in whichever critic `args.critic` holds.
+
+    The kind is read off the critic's own config.json rather than selected by the caller: a
+    directory carrying `num_patches` was trained as a standalone patch critic, anything else is an
+    RLT-token critic. Getting that from the artifact is what lets one server serve both.
+
+    N is taken from --num-samples when given, so the count the critic samples and the count its
+    handshake declares are one number instead of two that can disagree.
+    """
+    critic_dir = pathlib.Path(args.critic).expanduser()
+    cfg = json.loads((critic_dir / "config.json").read_text())
+    samples = {"default_samples": args.num_samples} if args.num_samples > 1 else {}
+    if "num_patches" in cfg:
+        from openpi.policies import patch_critic_policy as _pcp
+
+        logging.info("critic: patch-critic (%s), mode=%s", critic_dir.name, args.critic_mode)
+        return _pcp.PatchCriticSelectPolicy(policy, str(critic_dir), mode=args.critic_mode, **samples)
+    logging.info("critic: RLT-token critic (%s)", critic_dir.name)
+    return _policy.CriticSelectPolicy(policy, str(critic_dir), **samples)
+
+
 def main(args: Args) -> None:
     policy, train_config = create_policy(args)
     # Wrapped unconditionally: it is inert unless a request carries `num_samples`, so a plain
@@ -165,25 +198,19 @@ def main(args: Args) -> None:
     if args.critic is not None:
         # Selection must wrap the BARE policy: it drives the model's own shared-backbone
         # sampler, and stacking it over MultiSamplePolicy would pay N full forwards instead.
-        # N comes from the server flag when given, so the count the critic samples and the count
-        # its handshake declares are one number rather than two that can disagree.
-        policy = (
-            _policy.CriticSelectPolicy(policy, args.critic, default_samples=args.num_samples)
-            if args.num_samples > 1
-            else _policy.CriticSelectPolicy(policy, args.critic)
-        )
+        policy = _build_critic_policy(policy, args)
     robot_action_dim = None
     if args.num_samples > 1:
         # A critic already probed this at its own construction; reuse it rather than decode a
         # second zero chunk through the same output transform.
-        robot_action_dim = (
-            policy.robot_action_dim
-            if isinstance(policy, _policy.CriticSelectPolicy)
-            else _policy.probe_robot_action_dim(
-                policy,
-                model_action_dim=int(train_config.model.action_dim),
-                action_horizon=int(train_config.model.action_horizon),
-            )
+        # Ask the policy first: a critic wrapper already recovered this at construction, and has no
+        # output transform of its own to probe through. Duck-typed, so it holds for either critic.
+        declared = getattr(policy, "robot_action_dim", None)
+        logging.info("robot action width: %s", f"{declared} (from the policy)" if declared else "probing")
+        robot_action_dim = declared or _policy.probe_robot_action_dim(
+            policy,
+            model_action_dim=int(train_config.model.action_dim),
+            action_horizon=int(train_config.model.action_horizon),
         )
     policy = _policy.MultiSamplePolicy(
         policy,

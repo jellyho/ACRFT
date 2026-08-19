@@ -11,7 +11,7 @@ Everything here is CPU/GPU work on the cluster — **submit through SLURM** (`sr
 ## 1. What the stack is
 
 ```
-robot client ──websocket──► serve_patch_critic.py
+robot client ──websocket──► serve_policy.py --critic
                               ├─ base VLA (pi05)            sample N chunks in ONE backbone pass
                               └─ patch-critic (frozen DINOv2 + ARQ heads)   score them
                                    └─ mode=bon       → return the argmax-Q chunk (full H)
@@ -49,7 +49,7 @@ Each folder holds `params.msgpack` (Q ensemble), `v_params.msgpack` (state-value
 srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
   bash -lc 'cd /data5/jellyho/ACRFT/openpi && \
     XLA_PYTHON_CLIENT_PREALLOCATE=false MUJOCO_GL=egl \
-    uv run --no-sync python scripts/serve_patch_critic.py \
+    uv run --no-sync python scripts/serve_policy.py --critic \
       --config pi05_yam_lego_taxi \
       --checkpoint checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000 \
       --critic /data5/jellyho/critics/yam/g5_s347 \

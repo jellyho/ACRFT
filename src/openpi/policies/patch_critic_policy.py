@@ -25,6 +25,7 @@ import numpy as np
 from typing_extensions import override
 
 from openpi.models import model as _model
+from openpi.policies import policy as _policy_mod
 from openpi.policies.policy import BasePolicy
 from openpi.policies.policy import Policy
 from openpi.shared import nnx_utils
@@ -102,6 +103,11 @@ class PatchCriticSelectPolicy(BasePolicy):
         )
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
+        # The width that actually arrives on the wire (14 for YAM), not the model's padded one
+        # (32 for pi05) -- what the declared candidate columns have to match.
+        self._robot_action_dim = _policy_mod.probe_robot_action_dim(
+            policy, model_action_dim=self._model_action_dim, action_horizon=self._action_horizon
+        )
 
         from openpi.patch_critic import spec as critic_spec
 
@@ -297,7 +303,11 @@ class PatchCriticSelectPolicy(BasePolicy):
 
         out = {
             "actions": chosen,
-            "action_samples": np.swapaxes(decoded, 0, 1),  # (H, N, A)
+            # (X, N, A), not (H, N, A): the broker slices an extra by the reply's OWN chunk length,
+            # and in adaptive mode only X of the H steps are being executed. A full-horizon array
+            # would have a leading axis nothing matches, so it would be passed through whole and
+            # then dropped by the recorder as the wrong shape -- silently, every frame.
+            "action_samples": np.swapaxes(decoded, 0, 1)[:x],
             "critic_scores": np.broadcast_to(pv[:, -1], (x, pv.shape[0])).copy(),  # (X, N)
             "critic_choice": np.full((x, 1), best, np.float32),  # (X, 1)
         }
@@ -306,6 +316,30 @@ class PatchCriticSelectPolicy(BasePolicy):
             out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
             out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         return out
+
+    def extra_features(self, num_samples: int | None = None) -> dict:
+        """The per-step arrays this policy sends, for the handshake.
+
+        Nothing is recorded that is not declared here: the client turns exactly these into dataset
+        columns and drops anything else. Without it a value-guided rollout looks completely
+        ordinary on disk -- no candidates, no scores, no record of what the critic chose -- which
+        is what happened to the first `bon8` runs.
+
+        Shapes are PER STEP; the chunk axis is deliberately absent, because the chunk length is
+        adaptive and is read off each reply (see the note on `action_samples` in `infer`).
+        """
+        n = int(num_samples or self._default_samples)
+        return {
+            "action_samples": [n, self._robot_action_dim],
+            "critic_scores": [n],
+            "critic_choice": [1],
+        }
+
+    @property
+    def robot_action_dim(self) -> int:
+        """The robot-space width recovered at construction, so a caller need not re-probe it
+        (this wrapper has no output transform of its own to probe through)."""
+        return self._robot_action_dim
 
     #: Picks among its own candidates -- see CriticSelectPolicy.selects_candidates.
     selects_candidates = True
