@@ -2948,10 +2948,64 @@ copycat/causal confusion(arXiv:1905.11979; Fighting Copycat, NeurIPS'20)은 부�
 """,
 )
 
+
+entry(
+    "08-20",
+    "event-triggered-bridge",
+    "제어이론의 다리 — event-triggered control은 adaptive chunking의 40년 선배다",
+    "완결",
+    """
+<p><b>왜.</b> "언제 다시 계획하나"는 로봇 학습이 처음 만난 질문이 아니다 — 제어이론이
+<b>event-triggered / self-triggered control</b>(ETC/STC)이라는 이름으로 수십 년 다뤄온 질문이다
+(Heemels–Johansson–Tabuada 튜토리얼). 이 노트는 그 사전을 우리 문제에 개방한다: 개념 대응표,
+가져올 수 있는 보장, 그리고 무엇이 옮겨지지 <b>않는지</b>. 밤샘 이론 프로그램 5/6.</p>
+
+<table class='num'><tr><th>제어이론 (ETC/STC)</th><th>adaptive chunking (우리)</th></tr>
+<tr><td>제어 업데이트(측정→새 제어 계산)</td><td>재계획(관측→새 청크 질의)</td></tr>
+<tr><td>inter-event time (이벤트 간격)</td><td>커밋 길이 k</td></tr>
+<tr><td>트리거 조건 \\(\\lVert e(t)\\rVert>\\sigma\\lVert x(t)\\rVert\\) (오차가 임계 초과 시 업데이트)</td><td>가치 트리거: per-prefix \\(Q_k\\)가 꺾이는 지점에서 재질의 (κ*의 원형)</td></tr>
+<tr><td>STC: 현재 상태로 <b>다음 업데이트 시각을 미리 계산</b></td><td>상태의존 커밋 맵 κ(s) — 문자 그대로 동일한 객체</td></tr>
+<tr><td><b>MIET</b>(최소 이벤트 간격) 보장, Zeno 배제</td><td>커밋 길이의 보장 하계, "매 스텝 재계획" 병리의 배제 (ExRL의 k=0 루프가 Zeno의 학습판)</td></tr>
+<tr><td>외란 크기 ↔ 이벤트 빈도 (외란 클수록 자주)</td><td>aleatoric \\(u_{\\mathrm{alea}}\\) ↔ 짧은 k (<span class='xref' data-eid='uncertainty-split'>분해 노트</span> 예측 ①)</td></tr>
+<tr><td>모델 불일치 ↔ 보수적 트리거</td><td>epistemic \\(u_{\\mathrm{epis}}\\) ↔ 학습이 흡수 (예측 ②)</td></tr>
+<tr><td>통신·연산 절약 vs 성능 트레이드오프</td><td>추론 비용 vs return 트레이드오프 (사전식 규칙의 동기)</td></tr></table>
+
+<p><b>가져올 것 둘.</b> ① <b>MIET 정리의 형태</b>: Lipschitz 동역학 + 잘 설계된 트리거면 이벤트 간격이
+양의 하계를 가진다(예: designable MIET, arXiv:2002.00058) — Zhang의 실행길이 하계
+(<span class='xref' data-eid='nonmarkov-longer'>두 개의 방</span>)와 같은 방향의, 더 오래된 정량 보장이다.
+"짧은 커밋의 병리"는 학습계가 재발견하기 전에 제어계가 Zeno라는 이름으로 배제해 뒀다.
+② <b>트리거의 문법</b>: ETC의 트리거는 Lyapunov 함수의 감소가 위협받을 때 발화한다 — 우리 크리틱의
+per-prefix \\(Q_k(s)\\)는 정확히 그 자리에 서는 <b>학습된 가치 증명서</b>다. "\\(Q_{k+g}-Q_k\\)가 임계 이하로
+꺾이면 거기서 끊어라"는 배포 규칙은 Lyapunov 트리거의 return-극대화 일반화로 읽힌다.</p>
+
+<p><b>옮겨지지 않는 것 (정직한 경계).</b> ETC의 보장은 (i) 안정화(regulation) 목적, (ii) 알려진/부분
+알려진 동역학, (iii) 설계된(학습 아닌) 트리거에 대한 것이다. return 극대화·미지 동역학·학습된
+트리거로의 이식은 <b>프로그램이지 정리가 아니며</b>, 그 간극이 정확히 우리 이론 시리즈가 채우는
+자리다. 또한 ETC↔RL 다리 자체는 신규가 아니다 — cyber-physical 문맥의 event-triggered RL이 있고
+(예: Learning When to Act via Run-Time Assurance, arXiv:2605.12561; ET-MPC+DRL, arXiv:2208.10302),
+우리가 새로 놓는 것은 <b>VLA action-chunking 문맥으로의 수입</b>과 가치-트리거·불확실성 사상이다.</p>
+
+<p><b>얻는 관점.</b> adaptive chunking 계열(<span class='xref' data-eid='adaptive-exec-map'>지도</span>)의
+휴리스틱 신호들(엔트로피·일관성·attention)은 ETC 렌즈로 보면 전부 <b>대리 트리거</b>들이다 — 참
+트리거(가치 감소의 위협)를 각자 다른 프록시로 근사한 것. 학습된 per-prefix 가치로 트리거를 직접
+세우는 것이 원리적으로 우월한 이유가 여기서 한 줄로 정리된다: <b>트리거가 최적화 목표와 같은 통화로
+말한다.</b></p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "event-triggered-bridge": {
+        "date": "2026-08-20 05:40",
+        "who": "워커B (밤샘 이론 프로그램 5/6)",
+        "where": "이론 노트 (ETC/STC 문헌: Heemels 튜토리얼·MIET 2002.00058·ET-RL 2605.12561 등)",
+        "what": "event/self-triggered control ↔ adaptive chunking 개념 대응표 — MIET=커밋 하계, Zeno=병적 재계획, 가치 트리거=κ*의 원형, 외란/모델오차=aleatoric/epistemic",
+        "how": "대응표 + 가져올 보장 2건(MIET 형태, 트리거 문법) + 옮겨지지 않는 경계 명시 (ET-RL 선행 존재 인정, VLA 문맥 수입만 신규 주장)",
+        "why": "사용자 지시 — adaptive chunking 유도의 이론적 뒷받침에 제어이론의 기성 정리군을 동원",
+        "links": ["nonmarkov-longer", "uncertainty-split", "tie-knife-edge", "adaptive-exec-map"],
+    },
     "nonmarkov-longer": {
         "date": "2026-08-20 05:00",
         "who": "워커B (밤샘 이론 프로그램 4/6)",
@@ -3474,6 +3528,52 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "event-triggered-bridge",
+    "The bridge from control theory — event-triggered control is adaptive chunking's 40-year-old ancestor",
+    """
+<p><b>Why.</b> "When to replan" is not a question robot learning met first — control theory has
+worked it for decades as <b>event-triggered / self-triggered control</b> (ETC/STC;
+Heemels–Johansson–Tabuada tutorial). This note opens that dictionary for our problem: the
+correspondence table, the guarantees we can import, and what does <b>not</b> transfer. Overnight
+theory program 5/6.</p>
+
+<table class='num'><tr><th>control theory (ETC/STC)</th><th>adaptive chunking (ours)</th></tr>
+<tr><td>control update (measure → recompute control)</td><td>replan (observe → query a new chunk)</td></tr>
+<tr><td>inter-event time</td><td>commitment length k</td></tr>
+<tr><td>trigger \\(\\lVert e(t)\\rVert>\\sigma\\lVert x(t)\\rVert\\) (update when error crosses a threshold)</td><td>value trigger: requery where per-prefix \\(Q_k\\) bends (the prototype of κ*)</td></tr>
+<tr><td>STC: from the current state, <b>precompute the next update time</b></td><td>the state-dependent commitment map κ(s) — literally the same object</td></tr>
+<tr><td><b>MIET</b> (minimum inter-event time) guarantees; Zeno exclusion</td><td>guaranteed lower bounds on commitment; excluding the replan-every-step pathology (ExRL's k=0 loop is Zeno's learned incarnation)</td></tr>
+<tr><td>disturbance magnitude ↔ event frequency</td><td>aleatoric \\(u_{\\mathrm{alea}}\\) ↔ short k (<span class='xref' data-eid='uncertainty-split'>the split</span>, prediction ①)</td></tr>
+<tr><td>model mismatch ↔ conservative triggering</td><td>epistemic \\(u_{\\mathrm{epis}}\\) ↔ absorbed by training (prediction ②)</td></tr>
+<tr><td>communication/compute savings vs performance</td><td>inference cost vs return (the motivation for the lexicographic rule)</td></tr></table>
+
+<p><b>Two things to import.</b> ① <b>The shape of MIET theorems</b>: with Lipschitz dynamics and a
+well-designed trigger, inter-event times have a positive lower bound (e.g., designable MIET,
+arXiv:2002.00058) — the same direction as Zhang's executed-length lower bound
+(<span class='xref' data-eid='nonmarkov-longer'>two rooms</span>), only decades older. The pathology of
+too-short commitment was excluded by control theory under the name Zeno before learning
+rediscovered it. ② <b>The grammar of triggers</b>: an ETC trigger fires when the Lyapunov decrease is
+threatened — our critic's per-prefix \\(Q_k(s)\\) is a <b>learned value certificate</b> standing in
+exactly that slot. The deployment rule "cut where \\(Q_{k+g}-Q_k\\) bends below threshold" reads as
+the return-maximizing generalization of a Lyapunov trigger.</p>
+
+<p><b>What does not transfer (honest boundary).</b> ETC guarantees concern (i) stabilization
+objectives, (ii) known or partially known dynamics, (iii) designed (not learned) triggers.
+Porting them to return maximization, unknown dynamics, and learned triggers is <b>a program, not a
+theorem</b> — and that gap is precisely what this theory series fills. Nor is the ETC↔RL bridge
+itself new — event-triggered RL exists in cyber-physical contexts (e.g., Learning When to Act via
+Run-Time Assurance, arXiv:2605.12561; ET-MPC+DRL, arXiv:2208.10302); what we newly lay is the
+<b>import into the VLA action-chunking context</b> with the value-trigger and uncertainty mappings.</p>
+
+<p><b>The view gained.</b> Through the ETC lens, the heuristic signals of the adaptive-execution
+family (<span class='xref' data-eid='adaptive-exec-map'>the map</span>) — entropy, consistency,
+attention — are all <b>surrogate triggers</b>: different proxies for the true trigger (threatened value
+decrease). Why a trigger built directly on learned per-prefix value is in-principle superior now
+fits in one line: <b>the trigger speaks the same currency as the objective.</b></p>
+""",
+)
+
 en(
     "nonmarkov-longer",
     "Two rooms where long commitment wins — stability (Zhang) and information (Blackwell/copycat), plus a sign correction to K3",
