@@ -68,10 +68,10 @@ In summary, our main contributions are threefold:
     critic over frozen VLA representations drives direct policy improvement over both actions and
     commitment lengths; isolating its ingredients shows that in-sample targets and target networks
     are decisive, while low expectiles and unbounded value supports fail silently.
-    \item Through experiments on VLA-scale manipulation~\citep{robocasa}, with every design choice
-    isolated against its alternatives in controlled ablations, we show that the resulting policies
-    surpass supervised fine-tuning using only the demonstrations it already had, without a single
-    additional rollout.
+    \item Through experiments on challenging manipulation tasks in both simulation~\citep{robocasa}
+    and the real world, with every design choice isolated against its alternatives in controlled
+    ablations, we show that the resulting policies surpass supervised fine-tuning using only the
+    demonstrations it already had, without a single additional rollout.
 \end{itemize}
 Together, these findings establish offline value learning, applied where the value can genuinely act,
 as a practical path to improving VLAs beyond the quality of their demonstrations.
