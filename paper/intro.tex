@@ -9,7 +9,7 @@
 \label{sec:intro}
 
 Vision-language-action models (VLAs) have made large-scale pretraining the dominant recipe for robot
-manipulation~\citep{rt2, openvla, pi0}: a pretrained backbone is adapted to a target task by
+manipulation~\citep{rt2, openvla, pi0}. A pretrained backbone is adapted to a target task by
 supervised fine-tuning on teleoperated demonstrations. The weakness of this recipe is the data it
 imitates. Demonstrations interleave expert behavior with hesitation, detours, and failure, and their
 quality varies even within a single trajectory~\citep{grrl, reinbot}; because an imitation objective
@@ -19,12 +19,12 @@ experience the recipe depends on, and refining the policy through online interac
 and unsafe at this scale.
 
 Can the policy instead learn more from the data it already has? Offline reinforcement learning (RL)
-is designed for precisely this setting: temporal-difference (TD) learning propagates recorded
+is designed for precisely this setting. Temporal-difference (TD) learning propagates recorded
 outcomes through the dataset, stitching high-value segments of mediocre trajectories into behavior
 that no single demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. A VLA, however, is not
 the policy for which this machinery was developed. Its backbone cannot be trained jointly with a
 critic at practical cost, and its long action chunks~\citep{act, pi0} pose a dilemma for value
-learning: one-step TD degrades over the long horizons these tasks involve, while chunk-level TD
+learning. One-step TD degrades over the long horizons these tasks involve, while chunk-level TD
 (Q-chunking), which restores tractability by backing up over the whole chunk at once, inherits the
 chunk's fixed open-loop commitment and becomes suboptimal exactly where reactivity
 matters~\citep{qc}.
@@ -36,7 +36,7 @@ dataset~\citep{grrl} or selecting among sampled chunks at test time~\citep{vgps,
 value only chooses among options that already exist, and sampling-based selection in particular is
 bounded by what the sampler proposes and biased toward overestimated candidates~\citep{emaq}. The
 most direct attempts run actor-critic RL over chunks~\citep{corft}, but treat the chunk as a fixed,
-indivisible action: the policy commits to its full length in every state, even though a critic
+indivisible action whose full length is executed in every state, even though a critic
 scoring whole chunks of closed-loop demonstrations conflates skill with fortunate
 outcomes~\citep{dqc}, and even though the appropriate commitment plainly differs between free space
 and contact. The chunk, the very feature that makes VLAs practical, is what current offline RL
@@ -46,20 +46,20 @@ We propose an offline reinforcement fine-tuning method that treats the commitmen
 decision the value controls. Chunking is what makes the long horizon tractable, since backing up over
 $h$ steps at once is the reason chunked TD remains effective in sparse, long-horizon
 manipulation~\citep{qc}; valuing every prefix of the chunk preserves this benefit while restoring the
-reactivity that a fixed commitment forfeits. Human motor control offers a natural precedent: skilled
+reactivity that a fixed commitment forfeits. Human motor control offers a natural precedent. Skilled
 movement alternates between non-Markovian segments, executed ballistically from an internal plan
 without consulting the current state, and reactive phases under feedback whose delays render even the
 corrections intermittent~\citep{woodworth1899, todorov2002, gawthrop2011}. Concretely, a
 causal-transformer critic is learned entirely offline on the VLA's frozen representations with
 conservative in-sample targets~\citep{iql, deas}, and acts through two channels that remain within
-the data: determining, state by state, how much of each predicted chunk to execute, and distilling
-its preferences back into the policy. This positions our method against each line of prior work:
-prefix-valued critics have appeared as RL algorithms in state-based settings~\citep{acsac, aqc},
+the data. It determines, state by state, how much of each predicted chunk to execute, and distills
+its preferences back into the policy. This positions our method against each line of prior work.
+Prefix-valued critics have appeared as RL algorithms in state-based settings~\citep{acsac, aqc},
 whereas we turn the construction into a post-training instrument for a pretrained VLA; unlike
 fixed-chunk actor-critic fine-tuning~\citep{corft}, the commitment is state-dependent; and unlike
 test-time selection~\citep{vgps, deas}, the value updates the policy rather than ranking its samples.
-Freezing the backbone constrains where knowledge resides, not the quality of the resulting behavior:
-the support of the demonstrations contains better behavior than their average, which imitation blurs
+Freezing the backbone constrains where knowledge resides, not the quality of the resulting behavior.
+The support of the demonstrations contains better behavior than their average, which imitation blurs
 and extraction recovers.
 
 In summary, our main contributions are threefold:
