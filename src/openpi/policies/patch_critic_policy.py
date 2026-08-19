@@ -48,6 +48,23 @@ def _parse_image(image, size):
     return cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA)
 
 
+def _policy_norm_stats(policy):
+    """The norm stats the served policy actually uses, dug out of its input transform chain."""
+    t = getattr(policy, "_input_transform", None)
+    for sub in getattr(t, "transforms", [t] if t is not None else []):
+        ns = getattr(sub, "norm_stats", None)
+        if isinstance(ns, dict) and ns:
+            return {
+                k: {
+                    a: np.asarray(getattr(v, a))
+                    for a in ("mean", "std", "q01", "q99")
+                    if getattr(v, a, None) is not None
+                }
+                for k, v in ns.items()
+            }
+    return None
+
+
 class PatchCriticSelectPolicy(BasePolicy):
     def __init__(
         self,
@@ -113,12 +130,42 @@ class PatchCriticSelectPolicy(BasePolicy):
         if (self._spec or {}).get("normalization") == "pi05":
             from openpi.patch_critic import preproc as critic_preproc
 
+            # Prefer the copy INSIDE the checkpoint: the recorded path is provenance, and relying on
+            # it means the critic silently picks up whatever norm_stats.json happens to sit there.
+            embedded = pathlib.Path(critic_dir) / self._spec.get("norm_stats_file", "pi05_norm_stats.json")
+            if embedded.exists():
+                stats = critic_preproc.load_norm_stats(embedded)
+            elif pathlib.Path(self._spec["norm_stats"]).exists():
+                stats = critic_preproc.load_norm_stats(self._spec["norm_stats"])
+                logging.warning(
+                    "critic %s has no embedded %s; falling back to the recorded path %s. Re-save it so "
+                    "the checkpoint is self-contained.",
+                    critic_dir,
+                    embedded.name,
+                    self._spec["norm_stats"],
+                )
+            else:
+                raise FileNotFoundError(
+                    f"critic {critic_dir} declares pi05 preprocessing but neither its embedded "
+                    f"{embedded.name} nor the recorded path {self._spec['norm_stats']} exists -- the "
+                    "critic cannot be served without the stats it was trained against"
+                )
             self._pre = critic_preproc.Pi05Preproc(
                 ref=np.asarray(self._spec["joint_delta_reference"], np.int64),
-                stats=critic_preproc.load_norm_stats(self._spec["norm_stats"]),
+                stats=stats,
                 use_quantiles=bool(self._spec["use_quantiles"]),
                 delta=self._spec["delta_mode"] == "joint",
             )
+            # "I am using the same norm stats as pi05" is a claim worth checking, not assuming: read
+            # the stats off the policy being served and compare the numbers, not the paths.
+            served = _policy_norm_stats(policy)
+            if served is not None:
+                mismatch = critic_preproc.compare(stats, served)
+                if mismatch:
+                    raise ValueError(
+                        "critic/policy norm-stats mismatch -- the critic was trained against different "
+                        "statistics than the policy being served:\n  - " + "\n  - ".join(mismatch)
+                    )
         self._macro = int(cc["macro_group_size"])
         atoms = int(cc["num_atoms"])
         import flax.serialization
@@ -192,6 +239,10 @@ class PatchCriticSelectPolicy(BasePolicy):
 
         # N candidate chunks from ONE backbone pass (the token is unused by the patch-critic).
         inputs = self._pol._input_transform(dict(obs))
+        # A pi05-space critic takes the policy's own state, as-is. Read it off the transform rather
+        # than recomputing it: one source of truth, and the load-time digest check is what guarantees
+        # it matches the stats the critic trained against.
+        norm_state = np.asarray(inputs["state"], np.float32).reshape(-1)
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
         observation = _model.Observation.from_dict(inputs)
         self._rng, sample_rng = jax.random.split(self._rng)
@@ -201,7 +252,7 @@ class PatchCriticSelectPolicy(BasePolicy):
             # Shared preprocessing: the sampler already emits normalized joint deltas, which is
             # precisely what the critic was trained on. No conversion, so nothing to get wrong.
             scored_actions = chunks_model[..., : self._critic_action_dim]
-            scored_state = self._pre.state(state)
+            scored_state = norm_state
         else:
             # Legacy raw-units critic. The output transform un-normalizes AND undoes the joint-delta
             # parameterisation, and the latter needs the REAL state (JointAbsoluteActions does

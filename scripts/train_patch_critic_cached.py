@@ -84,6 +84,7 @@ def main():
     spec["n_episodes"] = len(meta["episodes"])
     stats = critic_spec.norm_stats(a.cache, meta)
     pre = None
+    embedded = None
     if a.input_mode == "pi05":
         if a.norm_stats is None:
             raise SystemExit("--input-mode pi05 needs --norm-stats (the base checkpoint's norm_stats.json)")
@@ -91,6 +92,7 @@ def main():
 
         pre = critic_preproc.Pi05Preproc.build(a.norm_stats, yam_policy.joint_delta_reference())
         spec.update(pre.spec(a.norm_stats))
+        embedded = pre.embedded()
         print(f"input mode: pi05 preprocessing (joint delta + quantile norm) from {a.norm_stats}", flush=True)
     feats = np.memmap(a.cache / "features.dat", np.float16, "r", shape=(N, npatch, emb))
     states = np.memmap(a.cache / "state.dat", np.float32, "r", shape=(N, sd))
@@ -296,8 +298,8 @@ def main():
                 flush=True,
             )
         if a.save_every and (s + 1) % a.save_every == 0:
-            _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats)
-    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats)
+            _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
+    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
     if wb is not None:
         wb.finish()
 

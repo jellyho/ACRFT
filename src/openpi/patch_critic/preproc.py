@@ -28,6 +28,23 @@ import numpy as np
 MODES = ("raw", "pi05")
 
 
+def compare(a: dict, b: dict, *, tol: float = 1e-5) -> list[str]:
+    """How two sets of norm stats disagree (empty list = same numbers).
+
+    Only the keys and statistics present in BOTH are compared: the critic stores what it uses, the
+    served policy may carry more, and a key one side simply does not have is not a disagreement.
+    """
+    out = []
+    for key in sorted(set(a) & set(b)):
+        for stat in sorted(set(a[key]) & set(b[key])):
+            x, y = np.asarray(a[key][stat], np.float64), np.asarray(b[key][stat], np.float64)
+            n = min(x.shape[-1], y.shape[-1])  # the policy pads; compare the shared prefix
+            d = float(np.abs(x[..., :n] - y[..., :n]).max())
+            if d > tol:
+                out.append(f"{key}.{stat}: max abs difference {d:.3g} over {n} dims")
+    return out
+
+
 def load_norm_stats(path) -> dict:
     """openpi norm_stats.json -> {'state': {...}, 'actions': {...}} of float64 arrays."""
     d = json.loads(pathlib.Path(path).read_text())
@@ -73,11 +90,34 @@ class Pi05Preproc:
                     a[..., i] -= s[..., None, r]
         return self._norm(a, "actions").astype(np.float32)
 
+    def digest(self) -> str:
+        """Short content hash of the stats, so a server can tell "same numbers" from "same path"."""
+        import hashlib
+
+        h = hashlib.sha256()
+        for key in sorted(self.stats):
+            for stat in sorted(self.stats[key]):
+                h.update(key.encode())
+                h.update(stat.encode())
+                h.update(np.asarray(self.stats[key][stat], np.float64).tobytes())
+        return h.hexdigest()[:16]
+
+    def embedded(self) -> dict:
+        """The stats themselves, for writing INTO the checkpoint.
+
+        The spec also records the path they came from, but a path is not portable: move the checkpoint
+        or run from another cwd and it either fails or -- worse -- resolves to a different pi05
+        checkpoint's stats. The embedded copy is what serving actually uses.
+        """
+        return {k: {kk: np.asarray(vv, np.float64).tolist() for kk, vv in v.items()} for k, v in self.stats.items()}
+
     def spec(self, norm_stats_path) -> dict:
         """The part of the input contract this preprocessing determines."""
         return {
             "normalization": "pi05",
-            "norm_stats": str(norm_stats_path),
+            "norm_stats": str(norm_stats_path),  # provenance only -- serving reads the embedded copy
+            "norm_stats_file": "pi05_norm_stats.json",
+            "norm_stats_digest": self.digest(),
             "use_quantiles": bool(self.use_quantiles),
             "delta_mode": "joint" if self.delta else "none",
             "joint_delta_reference": self.ref.tolist(),

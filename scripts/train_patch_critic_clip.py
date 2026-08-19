@@ -177,7 +177,7 @@ def main():
         img_size=a.img_size,
         homing_onsets=homing,
     )
-    print(f"{len(ds)} clips from {len(outc)} episodes" f"{' (failure homing truncated)' if homing else ''}", flush=True)
+    print(f"{len(ds)} clips from {len(outc)} episodes{' (failure homing truncated)' if homing else ''}", flush=True)
     dl = torch.utils.data.DataLoader(
         ds,
         batch_size=a.clip_batch,
@@ -401,7 +401,7 @@ def _git_stamp():
         return "unknown"
 
 
-def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=None):
+def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=None, embedded=None):
     import flax.serialization
     import jax
 
@@ -439,6 +439,9 @@ def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=
     (a.out / "config.json").write_text(json.dumps(cfg, indent=2))
     if stats is not None:
         (a.out / "norm_stats.json").write_text(json.dumps(stats, indent=2))
+    if embedded is not None:
+        # the base VLA's stats, copied IN so the checkpoint is portable (a path is not)
+        (a.out / "pi05_norm_stats.json").write_text(json.dumps(embedded))
     print(f"saved -> {a.out}", flush=True)
 
 
