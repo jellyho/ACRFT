@@ -22,9 +22,12 @@ Can the policy instead learn more from the data it already has? Offline reinforc
 is designed for precisely this setting: temporal-difference (TD) learning propagates recorded
 outcomes through the dataset, stitching high-value segments of mediocre trajectories into behavior
 that no single demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. A VLA, however, is not
-the policy for which this machinery was developed: it predicts a fixed, long action
-chunk~\citep{act, pi0}, it operates over long horizons where one-step TD degrades~\citep{qc}, and its
-backbone cannot be trained jointly with a critic at practical cost.
+the policy for which this machinery was developed. Its backbone cannot be trained jointly with a
+critic at practical cost, and its long action chunks~\citep{act, pi0} pose a dilemma for value
+learning: one-step TD degrades over the long horizons these tasks involve, while chunk-level TD
+(Q-chunking), which restores tractability by backing up over the whole chunk at once, inherits the
+chunk's fixed open-loop commitment and becomes suboptimal exactly where reactivity
+matters~\citep{qc}.
 
 Existing adaptations of RL to VLAs stop at different points. Most retain the supervised objective and
 let outcome signals reshape it~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting its ceiling.
