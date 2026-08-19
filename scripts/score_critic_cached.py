@@ -47,10 +47,32 @@ def main():
     import jax
     import jax.numpy as jnp
 
+    from openpi.patch_critic import preproc as critic_preproc
+    from openpi.patch_critic import spec as critic_spec
     from openpi.patch_critic.critic import HLGauss
     from openpi.patch_critic.critic import PatchCriticEnsemble
 
-    cc = json.loads((a.critic / "config.json").read_text())
+    cc, _ = critic_spec.load(a.critic)
+    # Scoring MUST reproduce the critic's training inputs. Reading them off its own input_spec is the
+    # only way that stays true as the preprocessing changes: feeding a pi05-space critic raw absolute
+    # actions produces confident, meaningless numbers rather than an error.
+    isp = cc.get("input_spec", {})
+    pre = None
+    if isp.get("normalization") == "pi05":
+        ns = a.critic / isp.get("norm_stats_file", "pi05_norm_stats.json")
+        pre = critic_preproc.Pi05Preproc(
+            ref=np.asarray(isp["joint_delta_reference"], np.int64),
+            stats=critic_preproc.load_norm_stats(ns if ns.exists() else isp["norm_stats"]),
+            use_quantiles=bool(isp["use_quantiles"]),
+            delta=isp["delta_mode"] == "joint",
+        )
+    pidx = isp.get("proprio_indices")
+    pidx = None if pidx is None else np.asarray(pidx, np.int64)
+    print(
+        f"input space: {isp.get('normalization', 'raw')}  proprio={isp.get('proprio_dims', 'all')}"
+        f"  homing={isp.get('truncate_homing', a.truncate_homing)}",
+        flush=True,
+    )
     meta = json.loads((a.cache / "meta.json").read_text())
     N, npatch, emb, sd, ad = meta["N"], meta["npatch"], meta["emb"], meta["sd"], meta["ad"]
     H, gsz, atoms = cc["horizon"], cc["macro_group_size"], cc["num_atoms"]
@@ -110,9 +132,16 @@ def main():
         for i in range(0, len(pos), a.batch):
             p = pos[i : i + a.batch]
             hp = p[:, None] + ar[None]
-            ch = ep_actions[np.clip(hp, 0, full - 1).reshape(-1)].reshape(len(p), H, ad)
-            ch[hp >= full] = 0.0
-            v, d = value(jnp.asarray(ep_feats[p]), jnp.asarray(ch), jnp.asarray(ep_states[p]))
+            # Clamp to eff (not full) and HOLD the last valid action -- the training convention. No
+            # zero-fill: in the normalized space the zero vector is not a "no motion" action.
+            ch = ep_actions[np.clip(hp, 0, eff - 1).reshape(-1)].reshape(len(p), H, ad)
+            st = ep_states[p]
+            if pre is not None:
+                ch = pre.actions(ch, st)
+                st = pre.state(st)
+            if pidx is not None:
+                st = st[..., pidx]
+            v, d = value(jnp.asarray(ep_feats[p]), jnp.asarray(ch), jnp.asarray(st))
             vs.append(np.asarray(v))
             ds.append(np.asarray(d))
         vs = np.concatenate(vs)
