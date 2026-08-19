@@ -1732,6 +1732,52 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-19 Tier1 인트로 비교분석
+entry(
+    "08-19",
+    "tier1-intros",
+    "📄 Tier 1 여섯 편은 인트로를 어떻게 쓰는가 — 동기 서사 비교분석과 우리 인트로의 자리",
+    "완결",
+    """
+<p class='sub'>우리와 가장 가까운 VLA-RL 논문 6편(<span class='xref' data-eid='papers-tier1'>Tier 1 정독</span>)의
+<b>introduction만</b> 따로 정독해, 각자 어떤 논리 사슬로 동기화하고 어떤 공백을 주장하는지 지도를 그린다.
+목적: 우리 <span class='xref' data-eid='paper-intro'>인트로 초안</span>이 이 6개 서사와 어디서 겹치고
+어디서 갈라서는지 확정. 인용은 원문 그대로.</p>
+
+<h3>① 여섯 인트로의 논리 사슬 (한 줄 요약)</h3>
+<table class='num'><tr><th>논문</th><th>인트로 서사</th><th>주장하는 공백 (원문)</th></tr>
+<tr><td><b>CO-RFT</b></td><td>VLA 유망하나 SFT는 데이터 품질 의존·OOD 취약 → RL로 극복(LLM 성공 인용) → online은 인프라·test-time은 미미 → offline이 답 → 그런데 chunking이 간과됨</td><td>"action chunking ... has been <b>overlooked</b> in recent research"</td></tr>
+<tr><td><b>DEAS</b></td><td>offline RL이 장지평에서 붕괴 → 지평 단축이 핵심인데 GCRL은 goal 필요 → n-step은 편향 → action sequence가 유망하나 <b>과대평가</b> → QC는 과대평가·CQN-AS는 이산화 → 갭</td><td>"actors maximizing over potentially erroneous critic estimates" / "exacerbated in offline RL where distribution shift creates extrapolation errors"</td></tr>
+<tr><td><b>GR-RL</b></td><td>VLA가 정밀·장지평에서 불신뢰 → 구두끈 예시로 구체화 → 병목 둘: <b>사람 데모의 열화</b>(주저·감속) + train-inference 불일치 → 3단 파이프라인</td><td>"human demonstrators would slow down, hesitate, and introduce noisy suboptimal demonstrations"</td></tr>
+<tr><td><b>BORA</b></td><td>dexterous에서 VLA 고전 → 기술 실패 둘: denoising 체인 credit 붕괴 + critic의 배경 시각 과적합 → 실기 배포 불일치 → offline critic + online residual</td><td>"critics ... overfitting to background visual artifacts ... provide erroneous guidance"</td></tr>
+<tr><td><b>GigaBrain-0.5M*</b></td><td>VLA는 근시안적 관측 의존(반응적) → world model이 미래 예측 → RAMP 4단 → RECAP은 sparse advantage뿐이라 부족</td><td>"architectural bias toward <b>reactive control rather than prospective planning</b>"</td></tr>
+<tr><td><b>MoRE</b></td><td>MLLM 발전 → VLA로 결합 → 문제 둘: 아키텍처 부적합 + <b>IL은 suboptimal 데이터 활용 불가</b> → MoE+offline RL</td><td>"unable to leverage more easily gathered <b>sub-optimal data</b>"</td></tr></table>
+
+<h3>② 공통 패턴 — 그리고 아무도 안 하는 말</h3>
+<p><b>공통 수법</b>: 전원 P1은 "VLA 유망, 그러나"로 열고, 절반(GR-RL·MoRE·CO-RFT)이 <b>suboptimal 데모</b>를 동기의
+축으로 쓴다(우리 P2와 동일 — 이 축은 이미 표준 서사다). CO-RFT는 우리처럼 "online 불가→offline" 소거법과
+<b>LLM RL 성공 유추</b>까지 쓴다 — 우리가 LLM 유추를 뺀 것이 차별화로 작동한다.</p>
+<p><b>아무도 안 하는 말 세 가지</b> (우리 인트로의 자리):</p>
+<ul>
+<li><b>기제를 문제로 세우지 않는다</b> — 여섯 편 전부 자기 배포 방식(고정 실행·BoN·필터·residual)을 <b>가정</b>하고
+시작한다. "학습된 가치가 정책에 닿는 통로 자체가 미해결"이라는 질문(우리 질문 3)은 어느 인트로에도 없다.</li>
+<li><b>커밋 길이를 결정으로 보지 않는다</b> — CO-RFT·DEAS가 chunk를 다루지만 "얼마나 실행할지"는 전원 고정
+(우리 질문 1). DQC의 nominal-actual 간극을 동기에 쓰는 논문도 없다.</li>
+<li><b>"같은 데이터, 더 나은 VLA"의 완결 경로를 약속하지 않는다</b> — GR-RL·BORA·GigaBrain은 online/개입/월드모델
+스택이 끼고, CO-RFT만 순수 offline인데 소규모 실기에 그친다. "SFT가 이미 쓰는 그 데모만으로"라는 우리 마지막
+문장의 자리가 비어 있다.</li></ul>
+
+<h3>③ 겹침 경보와 우리 인트로 손질 포인트</h3>
+<p>① <b>CO-RFT와의 유사 경보</b>: P1~P3 골격(SFT 한계→RL→online 소거→offline→chunk)이 우리와 가장 가깝다.
+차별화는 명확히: 그들은 "chunking을 <b>넣었다</b>(incorporate)"에서 끝나고, 우리는 "chunk가 <b>세 질문을
+강제한다</b>(granularity가 상태의존·frozen backbone 위 가치·기제 비교)"로 간다 — 인트로에서 이 대비를 한 문장
+명시할 것. ② <b>DEAS의 과대평가 서사</b>는 우리 질문 2와 겹치므로, 우리는 과대평가를 "가치학습 문제"가 아니라
+"기제에 따라 달라지는 문제"(선택은 착취·커밋은 상관 억제)로 승격해 갈라선다. ③ GR-RL의 구두끈처럼 <b>구체
+태스크 예시 하나</b>로 P2의 suboptimality를 못박는 것은 배울 점 — 우리 실기 태스크가 정해지면 반영.</p>
+<p class='sub'>이 분석으로 인트로 v5의 위치는 검증됐다: 표준 서사(P1–P2)에 올라타되, 공백 주장(세 질문·기제·완결 경로)은
+여섯 편 누구와도 충돌하지 않는 빈 칸이다. 원문 인용 출처: 각 논문 arXiv HTML 인트로 절.</p>""",
+)
+
 # ============================================== 08-19 Tier1 선행연구 정독
 entry(
     "08-19",
@@ -3040,6 +3086,15 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "tier1-intros": {
+        "date": "2026-08-19 21:30",
+        "who": "워커B(논문 담당, 리뷰)",
+        "where": "arXiv HTML 인트로 절 (6편)",
+        "what": "Tier 1 여섯 편의 introduction 논리사슬·공백주장 비교분석 + 우리 인트로의 빈 칸 확정",
+        "how": "각 논문 인트로만 정독(문단별 논리·원문 인용) → 공통 패턴/아무도 안 하는 말/겹침 경보 정리",
+        "why": "사용자 지시 'Tier 1 논문들의 introduction/motivation 정리해 새 포스트' — 인트로 차별화 검증",
+        "links": ["papers-tier1", "paper-intro", "deas", "chunking-theory"],
     },
     "papers-tier1": {
         "date": "2026-08-19 14:30",
@@ -4372,6 +4427,42 @@ with our standing binding-constraint = coverage.</p>
 <p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
 <b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
 td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
+)
+
+en(
+    "tier1-intros",
+    "📄 How the six Tier-1 papers write their introductions — a comparative map, and where ours stands",
+    """
+<p class='sub'>A close read of the <b>introduction sections only</b> of the six closest VLA-RL papers
+(<span class='xref' data-eid='papers-tier1'>Tier 1 deep dive</span>): what narrative chain each uses, what gap each
+claims (verbatim), and how our <span class='xref' data-eid='paper-intro'>introduction draft</span> overlaps or
+diverges.</p>
+
+<p><b>Narrative chains in one line each.</b> CO-RFT: SFT is data-quality-bound and OOD-fragile → RL (citing LLM
+successes) → online impractical, test-time marginal → offline → "action chunking ... has been <b>overlooked</b>".
+DEAS: offline RL collapses on long horizons → sequences promising but "actors maximizing over potentially erroneous
+critic estimates" → detached value. GR-RL: precision tasks make "human demonstrators slow down, hesitate, and
+introduce noisy suboptimal demonstrations" (shoe-lacing example) + train-inference mismatch. BORA: denoising-chain
+credit collapse + critics "overfitting to background visual artifacts". GigaBrain: VLAs have an "architectural bias
+toward reactive control rather than prospective planning" → world models. MoRE: architectures untailored + IL
+"unable to leverage more easily gathered sub-optimal data".</p>
+
+<p><b>Common moves</b>: every paper opens with "VLAs are promising, but"; half (GR-RL, MoRE, CO-RFT) build on
+suboptimal demonstrations (our P2 is the standard narrative, safely). CO-RFT even uses the same elimination
+(online impossible → offline) and the LLM-RL analogy — dropping that analogy in our draft turned out to be a
+differentiator.</p>
+
+<p><b>What nobody says (our empty cells)</b>: (1) no introduction poses the <b>mechanism</b> as a problem — all six
+presuppose their deployment (fixed execution, BoN, filtering, residual); our Question 3 has no competitor.
+(2) none treats <b>commitment length as a decision</b> (CO-RFT and DEAS handle chunks but execute fixed-length);
+none uses the nominal-vs-actual gap as motivation. (3) none promises the complete "same demonstrations, better VLA"
+path: GR-RL/BORA/GigaBrain need online or world-model stacks, and CO-RFT stays purely offline but small-scale.</p>
+
+<p><b>Overlap alarms for our draft</b>: CO-RFT's P1–P3 skeleton is closest to ours — our contrast must be explicit:
+they <i>incorporate</i> chunking, we argue the chunk <i>forces three questions</i>. DEAS owns the overestimation
+narrative — we elevate it from a value-learning problem to a mechanism-dependent one (selection exploits error,
+commitment suppresses it via correlation). And GR-RL's concrete shoe-lacing example is worth imitating once our
+real-world task is fixed.</p>""",
 )
 
 en(

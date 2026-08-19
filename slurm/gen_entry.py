@@ -62,6 +62,7 @@ PHASE_MAP = {
     "aqc-ablation": "판정·종합",
     "paper-intro": "논문·교차",
     "papers-tier1": "논문·교차",
+    "tier1-intros": "논문·교차",
 }
 
 
