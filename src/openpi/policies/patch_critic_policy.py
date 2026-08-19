@@ -95,7 +95,11 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._to_nchw = to_nchw
 
         model = policy._model
-        self._extract = nnx_utils.module_jit(model.extract_token_and_base_actions)
+        # num_samples/num_steps size the sampler's noise array, so they must be compile-time constants;
+        # left traced, jax.random.normal rejects the shape. (This path had never actually been run.)
+        self._extract = nnx_utils.module_jit(
+            model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
+        )
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
 
@@ -110,8 +114,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         if self._spec is not None:
             problems = critic_spec.check(
                 self._spec,
-                state_dim=int(self._spec["state_dim"]),  # checked against the live obs in infer()
-                action_dim=self._model_action_dim,
+                model_action_dim=self._model_action_dim,
                 num_cameras=len(camera_keys),
                 img_size=self._img_size,
             )
@@ -124,6 +127,11 @@ class PatchCriticSelectPolicy(BasePolicy):
                 critic_dir,
             )
         self._warned_state = False
+        # The critic may have been trained on a SUBSET of proprio channels (positions only, matching
+        # what ALOHA/Libero/DROID feed). Slice the served state the same way or the network sees
+        # different quantities in different slots.
+        pidx = (self._spec or {}).get("proprio_indices")
+        self._proprio_idx = None if pidx is None else np.asarray(pidx, np.int64)
         self._critic_action_dim = int(cc.get("action_dim", 14))
         # A pi05-space critic eats the sampler's output as-is; a raw-space one needs the decode path.
         self._pre = None
@@ -224,6 +232,12 @@ class PatchCriticSelectPolicy(BasePolicy):
         num_samples = int(obs.pop("num_samples", 0) or self._default_samples)
 
         state = np.asarray(obs[self._state_key], np.float32).reshape(-1)
+        want_sd = (self._spec or {}).get("state_dim")
+        if want_sd is not None and state.shape[0] != want_sd:
+            raise ValueError(
+                f"state width {state.shape[0]} but the critic was trained on {want_sd} "
+                f"({self._state_key}); the proprio channels would land in the wrong slots"
+            )
         if self._norm_stats is not None and self._pre is None and not self._warned_state:
             from openpi.patch_critic import spec as critic_spec
 
@@ -252,7 +266,7 @@ class PatchCriticSelectPolicy(BasePolicy):
             # Shared preprocessing: the sampler already emits normalized joint deltas, which is
             # precisely what the critic was trained on. No conversion, so nothing to get wrong.
             scored_actions = chunks_model[..., : self._critic_action_dim]
-            scored_state = norm_state
+            scored_state = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
         else:
             # Legacy raw-units critic. The output transform un-normalizes AND undoes the joint-delta
             # parameterisation, and the latter needs the REAL state (JointAbsoluteActions does
@@ -268,7 +282,7 @@ class PatchCriticSelectPolicy(BasePolicy):
                 )["actions"],
                 np.float32,
             )
-            scored_state = state
+            scored_state = state if self._proprio_idx is None else state[self._proprio_idx]
         decoded = np.asarray(scored_actions, np.float32)  # [N, H, A] in the critic's own space
 
         pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(decoded)))  # [N, mh]

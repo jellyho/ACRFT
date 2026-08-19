@@ -428,7 +428,7 @@ def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=
         "num_patches": int(npatch),
         "clip_len": a.clip_len,
         "source": a.repo_id,
-        "loader": "critic_clip",
+        "loader": getattr(a, "loader", "critic_clip"),
         "git": _git_stamp(),
     }
     # The INPUT CONTRACT. Without this the only record of "what scale does this critic eat" lives in two

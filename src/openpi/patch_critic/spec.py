@@ -66,17 +66,23 @@ def norm_stats(cache: pathlib.Path, meta: dict, *, stride: int = 997) -> dict:
     return out
 
 
-def check(spec: dict, *, state_dim: int, action_dim: int, num_cameras: int, img_size: int) -> list[str]:
-    """Return the ways a runtime disagrees with a critic's contract (empty list = compatible)."""
+def check(spec: dict, *, model_action_dim: int, num_cameras: int, img_size: int) -> list[str]:
+    """The ways a runtime cannot serve a critic (empty list = servable).
+
+    Only genuine incompatibilities belong here. In particular the critic's action_dim is the ROBOT
+    width (14 for YAM) while the server's is the model's PADDED width (32 for pi05); the wrapper
+    slices, so those differing is normal and only the padded width being too narrow is a fault.
+    """
+    from openpi.patch_critic import preproc
+
     problems = []
-    if spec.get("normalization", NORMALIZATION) != NORMALIZATION:
-        problems.append(
-            f"critic expects normalization={spec['normalization']!r} but the server feeds "
-            f"{NORMALIZATION!r} (raw units); this critic cannot be served by this wrapper"
-        )
+    norm = spec.get("normalization", "raw")
+    if norm not in ("raw", *preproc.MODES):
+        problems.append(f"critic declares normalization={norm!r}, which this server does not implement")
+    a_dim = spec.get("action_dim")
+    if a_dim is not None and model_action_dim < a_dim:
+        problems.append(f"model action width {model_action_dim} is narrower than the critic's {a_dim}")
     for what, got, want in (
-        ("state_dim", state_dim, spec.get("state_dim")),
-        ("action_dim", action_dim, spec.get("action_dim")),
         ("num_cameras", num_cameras, spec.get("num_cameras")),
         ("img_size", img_size, spec.get("img_size")),
     ):
