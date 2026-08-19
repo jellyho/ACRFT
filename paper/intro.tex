@@ -38,8 +38,8 @@ time~\citep{vgps, deas}; the value then only chooses among options that already 
 sampling-based selection is bounded by what the sampler proposes and biased toward overestimated
 candidates~\citep{emaq}.
 
-On the RL side, the machinery for chunked value learning is further along, yet it has not reached
-VLAs either. Direct actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
+A more direct line of work lets the value train the policy itself, yet still stops short.
+Actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
 the chunk as a fixed, indivisible action, even though a critic scoring whole chunks of closed-loop
 demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
 developed in state-based RL~\citep{qc, aqc, acsac}, where chunk-level TD makes long horizons
