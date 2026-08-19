@@ -41,9 +41,8 @@ candidates~\citep{emaq}.
 A more direct line of work lets the value train the policy itself, yet still stops short.
 Actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
 the chunk as a fixed, indivisible action, even though a critic scoring whole chunks of closed-loop
-demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has matured
-within RL, from state-based to pixel-based control and including initial trials on pretrained
-generalist policies~\citep{qc, aqc, acsac}; chunk-level TD makes long horizons tractable and prefix
+demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
+developed within RL~\citep{qc, aqc, acsac}; chunk-level TD makes long horizons tractable and prefix
 values let the commitment vary. Yet the commitment is still selected by scoring candidates at
 deployment rather than optimized jointly with the actions, and no such construction has been
 developed into a purely offline post-training stage that leaves a VLA better than its supervised
