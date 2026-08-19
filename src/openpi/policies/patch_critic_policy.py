@@ -268,37 +268,41 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._rng, sample_rng = jax.random.split(self._rng)
         _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
         chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
+        # ROBOT-space chunks: what gets executed, and what the client records. Always through the
+        # policy's own output transform, fed the NORMALIZED state -- Unnormalize runs first in that
+        # transform and converts it to real units before JointAbsoluteActions adds it
+        # (actions[..., i] += state[..., ref[i]]). Handing it the raw state un-normalizes an
+        # already-physical value a second time and displaces every candidate identically, which is
+        # how a critic run ended up commanding 1.6 rad from the arm while a plain rollout of the
+        # same checkpoint tracked it within 0.17.
+        robot_actions = np.asarray(
+            self._pol._output_transform(
+                {
+                    "state": np.broadcast_to(norm_state, (chunks_model.shape[0], norm_state.shape[0])).copy(),
+                    "actions": chunks_model,
+                }
+            )["actions"],
+            np.float32,
+        )
+
+        # What the CRITIC is scored on is a separate question from what the robot executes: the two
+        # coincide only for a critic trained in robot units. Conflating them returned the critic's
+        # own input as the action -- for a pi05-space critic that is a normalized joint DELTA, which
+        # lands in a plausible numeric range and is meaningless as a joint target.
         if self._pre is not None:
             # Shared preprocessing: the sampler already emits normalized joint deltas, which is
             # precisely what the critic was trained on. No conversion, so nothing to get wrong.
             scored_actions = chunks_model[..., : self._critic_action_dim]
             scored_state = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
         else:
-            # Legacy raw-units critic. The output transform un-normalizes AND undoes the joint-delta
-            # parameterisation, and the latter needs the state (JointAbsoluteActions does
-            # actions[..., i] += state[..., ref[i]]). It must be handed the NORMALIZED state, which
-            # is what Policy.infer passes (`inputs["state"]`): Unnormalize runs FIRST in this
-            # transform and converts it to real units before JointAbsoluteActions ever sees it.
-            #
-            # Passing the raw state instead un-normalizes an already-physical value a second time,
-            # so every candidate chunk is displaced by a garbage offset -- identically, which is why
-            # the candidates still agreed with each other and nothing looked wrong until the arm
-            # moved. Measured on a real rollout: the command sat 1.58 rad from the robot (a plain
-            # rollout of the same checkpoint tracks it within 0.17) and snapped ~1.5 rad at every
-            # replan. Before that it passed zeros, which left the chunks as DELTAS entirely.
-            scored_actions = np.asarray(
-                self._pol._output_transform(
-                    {
-                        "state": np.broadcast_to(norm_state, (chunks_model.shape[0], norm_state.shape[0])).copy(),
-                        "actions": chunks_model,
-                    }
-                )["actions"],
-                np.float32,
-            )
+            # Legacy raw-units critic: it was trained on absolute joint targets, so it scores the
+            # same array the robot will execute, against the raw state those units live in.
+            scored_actions = robot_actions
             scored_state = state if self._proprio_idx is None else state[self._proprio_idx]
-        decoded = np.asarray(scored_actions, np.float32)  # [N, H, A] in the critic's own space
+        scored = np.asarray(scored_actions, np.float32)  # [N, H, *] in the CRITIC's space
+        decoded = robot_actions  # [N, H, A] in ROBOT space -- executed and recorded
 
-        pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(decoded)))  # [N, mh]
+        pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(scored)))  # [N, mh]
         best = int(np.argmax(pv[:, -1]))  # argmax full-chunk value
         if self._mode == "adaptive":
             kbest = int(np.argmax(pv[best]))  # highest-value commitment prefix (macro-group index)
