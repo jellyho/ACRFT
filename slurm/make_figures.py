@@ -12,6 +12,7 @@ can never drift from the raw data:
 """
 
 import json
+import os
 import pathlib
 import sys
 
@@ -25,7 +26,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from plot_style import PALETTE
 from plot_style import apply
 
-C = pathlib.Path("/scratch/jellyho/acrft")
+C = pathlib.Path(os.environ.get("CACHE_DIR", "/scratch/jellyho/acrft"))  # same override as make_master_report
 P = C / "plots"
 TCRIT = {2: 12.706, 3: 4.303, 4: 3.182, 8: 2.365, 16: 2.131}
 
@@ -211,12 +212,75 @@ def fig_15_autopsy():
     print("15_autopsy.png")
 
 
+REPO = pathlib.Path(__file__).parent.parent
+
+
+def parse_af_sched(path=None):
+    """Parse the checked-in alpha-Flow schedule log (repo root alphaflow_sched_cpu.log) into
+    {step: {metric: value}} -- the report's numbers are recomputed from this raw log on every build,
+    never hand-copied."""
+    path = path or REPO / "alphaflow_sched_cpu.log"
+    rows = {}
+    for line in pathlib.Path(path).read_text().splitlines():
+        if not line.startswith("Step "):
+            continue
+        head, rest = line.split(":", 1)
+        step = int(head.split()[1])
+        rows[step] = {k.strip(): float(v) for k, v in (kv.split("=") for kv in rest.split(","))}
+    return rows
+
+
+def fig_30_af_sched():
+    """Measured alpha per log window vs the official whole-run sigmoid it should follow.
+
+    Logged alpha is the mean over the 20 steps before each log line, so the theory curve is
+    evaluated at the window CENTER (step - 9.5); plotting it at the log step would fake a lag."""
+    rows = parse_af_sched()
+    if not rows:
+        return
+    total = max(rows) or 1
+    steps = sorted(rows)
+    meas = [rows[k]["alpha"] for k in steps]
+    d2 = [rows[k]["delta2"] for k in steps]
+    grid = np.linspace(0, total, 400)
+    eta = 5e-3
+
+    def theory(k):
+        a = 1.0 / (1.0 + np.exp((k / total - 0.5) * 25.0))
+        return np.where(a > 1 - eta, 1.0, np.where(a < eta, eta, a))
+
+    # window-centred prediction for each log point (mean of theory over the 20-step window)
+    pred = [float(np.mean(theory(np.arange(max(k - 19, 0), k + 1)))) for k in steps]
+
+    apply()
+    fig, axes = plt.subplots(1, 2, figsize=(9.6, 3.4))
+    ax = axes[0]
+    ax.plot(grid, theory(grid), color=PALETTE[7], lw=1.4, label="official sigmoid (γ=25, clamp 5e-3)")
+    ax.plot(steps, pred, "--", color=PALETTE[1], lw=1.2, label="theory, log-window mean")
+    ax.plot(steps, meas, "o", ms=4.5, color=PALETTE[0], label="measured (train.py, 240 steps)")
+    ax.set_yscale("log")
+    ax.set_ylim(3e-3, 1.3)
+    ax.set_xlabel("training step (num_train_steps=240)")
+    ax.set_ylabel(r"$\alpha$")
+    ax.set_title("in-run α schedule")
+    ax.legend(fontsize=7.5)
+    ax = axes[1]
+    ax.plot(steps, d2, "-o", ms=4, color=PALETTE[2])
+    ax.set_xlabel("training step")
+    ax.set_ylabel(r"delta$^2$ (raw error)")
+    ax.set_title("delta2 under the anneal")
+    fig.tight_layout()
+    fig.savefig(P / "30_af_sched.png", dpi=160)
+    plt.close(fig)
+
+
 def main():
     P.mkdir(exist_ok=True)
     fig_16_v11()
     fig_18_band()
     fig_15_autopsy()
     fig_20_final()
+    fig_30_af_sched()
 
 
 if __name__ == "__main__":
