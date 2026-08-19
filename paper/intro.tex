@@ -28,10 +28,11 @@ jointly with a critic at practical cost.
 Recent attempts stop short of this promise. Most reshape imitation with outcome
 signals~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting both the stability and the ceiling of
 supervised learning. The few that learn a value keep it away from the policy: it filters
-data~\citep{grrl}, rescores the policy's own samples~\citep{vgps, deas}, or scores
-commitments fixed in advance~\citep{corft}. We argue that these limitations are structural rather
-than incidental, arising from two distinct sources. Rescoring a fixed sampler is bounded by the
-support of its proposals, and its argmax preferentially selects critic error~\citep{emaq}; a critic
+data~\citep{grrl}, performs best-of-$N$ selection over samples drawn from the policy
+itself~\citep{vgps, deas}, or scores commitments fixed in advance~\citep{corft}. We argue that these limitations are structural rather
+than incidental, arising from two distinct sources. Sampling-based selection is bounded by the
+support of what the sampler proposes, and its argmax preferentially selects critic
+error~\citep{emaq}; a critic
 over fixed whole chunks cannot tell skill from luck in closed-loop demonstrations, and overvalues
 commitments that merely happened to work~\citep{dqc}. What matters is not only how well the value is
 learned, but \emph{where it is allowed to act}.
@@ -51,7 +52,7 @@ in-data channels: deciding, state by state, how much of each predicted chunk to 
 distilling its preferences back into the policy. Freezing the backbone constrains where knowledge
 lives, not how good behavior can get: the demonstrations' support contains better behavior than their
 average, which imitation blurs and extraction recovers, and commitment reshapes what gets executed
-rather than rescoring a fixed sampler's proposals.
+rather than selecting among a sampler's proposals.
 
 In summary, our main contributions are threefold:
 \begin{itemize}
