@@ -1606,7 +1606,7 @@ def _yam_alphaflow_config(
     """
     tag = "" if delta_mode == "joint" else f"_{delta_mode}"
     hsuf = "" if horizon == 30 else f"_h{horizon}"
-    steps = 60_000
+    steps = 200_000  # schedule is in progress fractions, so the curriculum stretches with this
     return TrainConfig(
         name=f"pi05_yam_lego_taxi{tag}{hsuf}_alphaflow",
         # Schedule defaults ARE the official alpha-Flow recipe (sigmoid over the whole run, gamma
