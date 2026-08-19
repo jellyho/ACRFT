@@ -289,7 +289,9 @@ def main():
         nxt_pos = np.clip(pos[:, None] + pref[None], 0, full[:, None] - 1)
         gnxt = g0[:, None] + nxt_pos  # [T, P]
         hpos = pos[:, None] + ar_h[None]  # [T, H]
-        gch = g0[:, None] + np.clip(hpos, 0, full[:, None] - 1)
+        # Clamp to the TRUNCATED end, not the raw one: past eff lie the homing frames, and reading them
+        # would put the return-to-home motion back into the chunk we just removed from the frame pool.
+        gch = g0[:, None] + np.clip(hpos, 0, eff[:, None] - 1)
         chunk = np.asarray(actions[gch.reshape(-1)]).reshape(a.batch, H, ad)
         s_cur_raw = np.asarray(states[gcur])
         s_nxt_raw = np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd_raw)
@@ -299,7 +301,12 @@ def main():
             s_cur_raw, s_nxt_raw = pre.state(s_cur_raw), pre.state(s_nxt_raw)
         if pidx is not None:
             s_cur_raw, s_nxt_raw = s_cur_raw[..., pidx], s_nxt_raw[..., pidx]
-        chunk[hpos >= full[:, None]] = 0.0  # pad AFTER preprocessing so padding stays exactly zero
+        # No zero-fill. The clamp above already HOLDS the last valid action, which is exactly what
+        # LeRobot's delta_timestamps does (`max(ep_start, min(ep_end - 1, idx + delta))`) and therefore
+        # what pi05 itself trains on. Writing 0.0 was wrong in the normalized space: a true "no motion"
+        # action is not the zero vector there -- the gripper is absolute, so holding it normalizes to
+        # -1.0 -- which made the pad a constant, recognisable pattern on exactly the frames carrying
+        # the failure v_min anchor.
         # transfer features as float16 (half the PCIe traffic); the model upcasts to f32 on-device.
         pcur = jnp.asarray(np.asarray(feats[gcur]))
         pnxt = jnp.asarray(np.asarray(feats[gnxt.reshape(-1)]).reshape(a.batch, P_, npatch, emb))
