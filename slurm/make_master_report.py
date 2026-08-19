@@ -2442,10 +2442,296 @@ alphaflow_jvp_stress.py·config pi05_yam_lego_taxi_alphaflow, 커밋 76acb3b.</p
 """,
 )
 
+entry(
+    "08-19",
+    "chunking-theory",
+    "action chunking의 수학 — DQC의 open-loop consistency, AQC의 AOLC, 그리고 우리가 비운 자리",
+    "완결",
+    """
+<p><b>왜 이 글을 쓰는가.</b> 우리는 "상태마다 최적 chunk 길이가 다르다"는 직관 위에서 adaptive
+chunking을 해 왔다. 직관은 맞지만 그것만으로는 논문이 되지 않는다 — <b>왜</b> 짧은 게 좋은 상태가
+있고, <b>왜</b> 긴 게 좋은 상태가 있으며, 그 이득이 <b>어디까지</b> 회수 가능한지를 말해주는 수학이
+필요하다. 그 수학이 2025–26에 실제로 나왔다: QC가 chunk critic을 세웠고(이득만 증명), <b>DQC</b>가
+그 비용을 처음으로 정량화했으며, <b>AQC</b>가 그것을 상태 의존 재질의로 일반화했다. 이 글은 그 세
+논문의 수학을 처음 보는 사람이 따라올 수 있게 풀고, 그 위에서 <b>우리 기여가 정확히 어느 칸을
+비워두고 있는지</b>를 확정한다. 이 글은 새 실험 결과가 아니라 <b>문헌의 정확한 독해</b>이며,
+아래 모든 정의·정리는 원문 PDF를 받아 직접 확인한 것이다(추론은 그렇게 표시했다).</p>
+
+<p><b>등장 논문.</b> QC/QC-FQL = Li·Zhou·Levine, <i>RL with Action Chunking</i>, arXiv:2507.07969
+(NeurIPS'25). DQC = Li·Park·Levine, <i>Decoupled Q-Chunking</i>, arXiv:2512.10926. AQC =
+Gireesh·Ju·Wang, <i>Adaptive Q-Chunking for Offline-to-Online RL</i>, arXiv:2605.05544. 기호는
+H = 1/(1−γ) (1-step 유효지평), H̄ = 1/(1−γ<sup>h</sup>) (h-step 유효지평).</p>
+
+<h3>0. 출발점 — QC는 이득만 증명했다</h3>
+
+<p>QC는 MDP를 새로 정의하지 않는다. 정책과 critic의 <b>서명</b>만 바꾼다: π(a[t:t+h] | s[t]),
+Q(s[t], a[t:t+h]). 즉 Q가 <b>chunk 전체</b>에 대한 함수가 된다. 백업은 중간 부트스트랩 없이
+h-step 한 번:</p>
+
+<p><code>Q(s[t], a[t:t+h]) ← Σ<sub>j=0..h−1</sub> γ<sup>j</sup> r[t+j] + γ<sup>h</sup> Q(s[t+h], a[t+h:t+2h])</code></p>
+
+<p>QC가 증명한 것은 <b>Proposition A.1</b> 하나 — 이 백업이 <b>비편향</b>이라는 것이다. 증명은
+tower property 세 줄인데, 핵심은 <b>추정 대상을 chunk-조건부 Q로 재정의했기 때문에 off-policy
+편향이 정의상 사라진다</b>는 점이다(교정한 게 아니라 없앤 것). 그래서 h배 빠른 value 전파를 공짜로
+얻는다.</p>
+
+<p>그런데 <b>비용에 대한 정리는 QC에 없다.</b> chunk가 길어질수록 성능이 무너지는 현상(h=50에서
+성공률 0)을 관측하고는 §5.4에서 "reactivity를 해치거나 정책 학습이 어려워지는 것으로 <i>추측한다</i>"
+고 적었을 뿐이다. 두 원인이 분리되지 않은 채로 남았고, <b>그 분리가 DQC의 출발점</b>이다.</p>
+
+<h3>1. DQC의 뿌리 — nominal value ≠ actual value</h3>
+
+<p>DQC가 도입한 단 하나의 구분이 전체를 굴린다.</p>
+<table class='num'>
+<tr><th>기호</th><th>이름</th><th>뜻</th></tr>
+<tr><td>V̂<sub>ac</sub></td><td><b>nominal</b> value</td><td>데이터로 chunked TD를 돌려 수렴한 값 — <b>우리가 학습하는 것</b></td></tr>
+<tr><td>V<sub>ac</sub></td><td><b>actual</b> value</td><td>그 chunk 정책을 환경에서 <b>실제 open-loop로 굴렸을 때</b>의 값</td></tr>
+</table>
+<p>기존 연구는 이 둘을 암묵적으로 같다고 봤다. <b>다르다</b>는 것, 그리고 그 차이가 chunking의 진짜
+비용이라는 것이 DQC의 명제다.</p>
+
+<p><b>왜 다른가 (Definition 1).</b> 데이터에서 chunk를 뽑아 open-loop로 재생한 분포를 P°<sub>D</sub>라
+하자:</p>
+<p><code>P°<sub>D</sub>(s[t+1:t+h], a[t:t+h] | s[t]) = π°<sub>D</sub>(a[t:t+h] | s[t]) · Π<sub>k</sub> T(s[t+k+1] | s[t+k], a[t+k])</code></p>
+<p>이것이 데이터 분포 P<sub>D</sub>와 <b>일반적으로 다르다</b>. 이유가 핵심인데 — <b>데이터를 만든
+정책이 closed-loop이기 때문</b>이다. 사람이든 스크립트든 a[t+1]을 s[t+1]을 <b>보고 나서</b> 골랐다.
+그래서 chunk 전체를 조건으로 걸면 <b>미래의 확률적 결과가 조건부에 새어 들어온다</b>.</p>
+
+<h3>2. Open-Loop Consistency (Definition 2) — 그 누출을 TV로 계량</h3>
+
+<p><b>weak ε<sub>h</sub>-OLC</b>: supp 안의 모든 s[t]에 대해</p>
+<p><code>TV( P°<sub>D</sub>(s[t+h'], a[t+h'] | s[t]) ‖ P<sub>D</sub>(s[t+h'], a[t+h'] | s[t]) ) ≤ ε<sub>h</sub>,  h' = 1..h−1</code><br>
+<code>TV( P°<sub>D</sub>(s[t+h] | s[t]) ‖ P<sub>D</sub>(s[t+h] | s[t]) ) ≤ ε<sub>h</sub></code></p>
+<p><b>strong ε<sub>h</sub>-OLC</b>: 여기에 더해 support 안의 <b>모든 개별 chunk</b> a[t:t+h]에 대해
+균일하게</p>
+<p><code>TV( T(s[t+h'] | s[t], a[t:t+h']) ‖ P<sub>D</sub>(s[t+h'] | s[t], a[t:t+h]) ) ≤ ε<sub>h</sub>,  h' = 1..h</code></p>
+<p>weak는 <b>chunk에 대해 평균적으로</b>, strong은 <b>chunk마다 균일하게</b>. 이 차이가 3절과 5절에서
+결정적으로 갈린다.</p>
+
+<h3>3. Theorem 1 (AC Value Bias) — 왜 하필 ε·H·H̄ 인가</h3>
+
+<p>weak OLC만으로 nominal과 actual의 차이가 바운드된다:</p>
+<p><code>| V<sub>ac</sub>(s) − V̂<sub>ac</sub>(s) |  ≤  γ ε<sub>h</sub> / [ (1−γ)(1 − (1−ε<sub>h</sub>) γ<sup>h</sup>) ]  ≤  ε<sub>h</sub> · H · H̄</code></p>
+
+<p><b>증명의 기계 (직접 확인함).</b> 한 번의 백업에서 생기는 오차를 재귀시킨다. 두 항이 나온다.
+① <b>보상 항</b>: 각 시점 보상 기대값이 TV만큼 어긋나므로 Σ<sub>h'</sub> γ<sup>h'</sup> ε<sub>h</sub>.
+② <b>부트스트랩 항</b>: γ<sup>h</sup> × [ ε<sub>h</sub>·(1/(1−γ)) + (1−ε<sub>h</sub>)·sup|V̂−V| ].
+여기가 이 증명의 심장이다 — 분포가 어긋난 <b>ε<sub>h</sub>만큼의 질량은 최대 오차 1/(1−γ)로 튀고</b>,
+나머지 (1−ε<sub>h</sub>)만 재귀된다. 따라서 수축계수가 γ<sup>h</sup>가 아니라
+<b>(1−ε<sub>h</sub>)γ<sup>h</sup></b>이고, 재귀를 풀면</p>
+<p><code>|V̂−V| ≤ [ 1/(1 − (1−ε<sub>h</sub>)γ<sup>h</sup>) ] · ( Σ<sub>h'</sub> γ<sup>h'</sup>ε<sub>h</sub> + γ<sup>h</sup>ε<sub>h</sub>/(1−γ) )  =  γε<sub>h</sub> / [(1−γ)(1−(1−ε<sub>h</sub>)γ<sup>h</sup>)]</code></p>
+<p>즉 <b>H̄ = 1/(1−γ<sup>h</sup>)는 chunk 단위 백업 횟수</b>에서, <b>H = 1/(1−γ)는 오차가 튈 때의
+최대 크기</b>에서 나온다. <b>Theorem 2</b>는 이 상한을 정확히 달성하는 2h-state MDP를 구성해
+<b>tight</b>임을 (양방향으로) 보인다.</p>
+
+<h3>4. Corollary 1 — bias 바운드가 곧 suboptimality 바운드가 되는 트릭</h3>
+
+<p>데이터를 <b>최적 정책</b> π*가 만들었다고 하자. 그러면 그 데이터로 돌린 value iteration은
+V̂<sub>ac</sub> = V*를 복원한다(nominal이 곧 최적값이 된다). 그래서 Theorem 1이 <b>새 증명 없이</b>
+최적성 gap 바운드로 바뀐다:</p>
+<p><code>V*(s) − V*<sub>ac</sub>(s)  ≤  γ ε<sub>h</sub> / [ (1−γ)(1 − (1−ε<sub>h</sub>)γ<sup>h</sup>) ]  ≤  ε<sub>h</sub> H H̄</code></p>
+<p>여기서 V*는 closed-loop 1-step 최적값, V*<sub>ac</sub>는 <b>최적 chunk 정책의 실제 값</b>이다.
+<b>Corollary 2</b>가 tight성까지 증명한다. 이것이 이 문헌 전체에서 유일한
+"open-loop commitment의 대가" 정량식이다.</p>
+
+<p><b>그 ε<sub>h</sub>는 무엇인가 (Definition 5 + Proposition 4).</b> T가 ε-deterministic
+(T = (1−ε)·δ<sub>f(s,a)</sub> + ε·T̃) 이면, 그 MDP에서 나온 <b>어떤</b> 데이터든 weak
+ε<sub>h</sub>-OLC이며</p>
+<p><code>ε<sub>h</sub> = 3 ( 1 − (1−ε)<sup>h−1</sup> )</code></p>
+<p>직관: h−1번 연속으로 결정론 분기가 '당첨'되면(확률 (1−ε)<sup>h−1</sup>) 재생 분포와 원본이
+정확히 일치하므로 편향이 0이다. 편향은 그 사건이 깨질 확률에 비례한다.</p>
+
+<p class='sub'><b>[우리의 조합, 원문에 한 줄로 적혀 있지는 않음]</b> Cor.1과 Prop.4를 합치면
+<code>V*<sub>1</sub> − V*<sub>H</sub> ≲ 3(H−1)ε · H · H̄</code> (ε 작을 때). 즉 <b>결정론적
+dynamics에서는 open-loop commitment의 대가가 정확히 0이다.</b> 이 한 줄이 우리 프레임의 축이 된다
+(11절).</p>
+
+<h3>5. Proposition 1 — 이 논문의 진짜 통찰 (그리고 우리 데이터의 급소)</h3>
+
+<p>weak OLC만으로는 <b>Q-learning</b>이 임의로 나빠질 수 있다: 어떤 MDP와 weak ε<sub>h</sub>-OLC
+데이터에서 <code>V*(s) − V<sup>+</sup><sub>ac</sub>(s) = γc/(1−γ) = Ω(H)</code>.</p>
+
+<p><b>6-state 반례의 기계 (직접 확인함).</b> 상태 {A,B,C,D,E,Z}, 행동 {0,1}. 행동 정책이
+<b>closed-loop</b>이다: π<sub>D</sub>(B)=0, π<sub>D</sub>(C)=1. 즉 <b>두 번째 액션이 첫 전이의
+결과를 드러낸다</b>. 그래서 데이터에서 chunk (0,0)을 조건으로 걸면 "s[1]=B였다"는 뜻이 되고,
+<code>P<sub>D</sub>(s[2] | A, (0,0)) = D</code> (보상 1)가 <b>확률 1</b>로 나온다. 그런데 실제로
+(0,0)을 <b>open-loop로 실행</b>하면 D에 도달할 확률은 δ뿐이다.</p>
+
+<p>원문 표현대로: <b>"chunked critic은 저확률의 '운 좋은' 성공과 closed-loop의 고확률 성공을
+구별할 방법이 없다."</b> 이것이 chunk critic 낙관 편향의 정체다. <b>Theorem 3</b>은 <b>strong</b>
+OLC(모든 chunk에 균일)가 이 누출을 막아 <code>V* − V<sup>+</sup><sub>ac</sub> ≤ 3ε<sub>h</sub>H H̄</code>
+를 회복함을 보인다 — 그리고 이 바운드는 <b>데이터가 얼마나 suboptimal한지와 무관</b>하다.</p>
+
+<p class='sub'><b>[우리에게 직결]</b> yam·RoboCasa의 teleop 데이터는 <b>사람이 보고 반응한
+완전한 closed-loop</b>이다. 즉 Prop.1의 병리가 우리 데이터에 <b>구조적으로 존재한다</b>. 그리고
+chunk가 길수록 조건부에 더 많은 미래가 새므로 <b>낙관 편향이 k에 대해 증가</b>한다. 이는 adaptive
+selector가 "long이 실제로 좋아서"가 아니라 "long critic이 더 낙관적이라서" long을 고를 수 있다는
+뜻이다 — ExRL·ACSAC·ACH·AQC 어느 쪽도 이 k-의존 낙관을 측정하지 않았다.</p>
+
+<h3>6. closed-loop 실행은 공짜가 아니다 (Prop 3 vs Thm 5/6) — 그리고 정직한 독해</h3>
+
+<p>chunk 정책의 첫 액션만 실행하고 매 스텝 재질의하면(π<sup>•</sup>), strong OLC 아래</p>
+<p><code>V* − V<sup>•</sup>  ≤  3 ε<sub>h</sub> H<sup>2</sup> H̄</code>  (open-loop 실행은 <code>3 ε<sub>h</sub> H H̄</code>)</p>
+<p>즉 <b>최악의 경우 H배를 더 문다.</b> 그러나 이것을 "짧게 끊으면 손해"로 읽으면 틀린다.
+DQC 자신이 바로 다음 줄에서 "더 잘할 수 있는가?"를 묻고 <b>Definition 4 (bounded optimality
+variability, BOV)</b>라는 데이터 구조 가정을 도입해 <b>Theorem 5</b>로 훨씬 좋은 바운드
+(<code>ϑ<sup>L</sup>H + 2ϑ<sup>G</sup>H H̄</code>)를 얻는다. 게다가 <b>Theorem 6</b>은 <b>반대
+방향</b>도 보인다: closed-loop 실행은 거의 최적인데 <b>같은 정책의 chunk 실행은 Ω(H) suboptimal</b>인
+MDP가 존재한다.</p>
+
+<p><b>따라서 정직한 결론은 이것이다 — open-loop과 closed-loop 어느 쪽도 일반적으로 우월하지 않고,
+MDP·데이터 구조(OLC/BOV)에 달렸다.</b> 그리고 바로 그 사실이 <b>상태별 적응 k를 원리적으로
+정당화한다</b>: 고정 k로는 어느 구조에서든 한쪽을 반드시 잃는다. (부기: <b>Lemma 7</b>은 stochastic
+shortcut이 없으면 과대평가가 ϑ<sub>h</sub>/(1−γ<sup>h</sup>)로 바운드됨을 보인다 — 낙관의 크기를
+'구별 불가능한 확률적 지름길의 가치'로 정확히 지목한다.)</p>
+
+<h3>7. DQC 알고리즘 — 그래서 무엇을 하는가</h3>
+
+<p>critic의 chunk 길이 h(빠른 백업 유지)와 <b>정책의 chunk 길이 h<sub>a</sub> ≪ h</b>를 분리한다.
+이상적 목적은 "앞 h<sub>a</sub>는 정책이, 뒤는 최적으로 채운다"이고, 그것이 다루기 어려우므로
+<b>부분 critic</b>을 <b>낙관적(expectile) distillation</b>으로 학습한다:</p>
+<p><code>L(ψ) = f<sup>κ</sup><sub>expectile</sub>( Q̄<sub>φ</sub>(s, a[t:t+h]) − Q<sup>P</sup><sub>ψ</sub>(s, a[t:t+h<sub>a</sub>]) )</code>,
+그리고 <code>L(π) = − E[ Q<sup>P</sup><sub>ψ</sub>(s, a[t:t+h<sub>a</sub>]) ]</code></p>
+<p>즉 Q<sup>P</sup> ≈ max<sub>tail</sub> Q. <b>구조적으로 낙관적</b>이며, "뒤쪽 절반은 실행 시점에
+다시 최적화될 수 있다"는 가정(=OLC/BOV) 아래서만 건전하다. 대가: 배포 시 <b>짧은 chunk로 실행</b>하게
+되어 6절의 H배 항과 QC의 시간적 일관 탐색 이득을 (worst case에서) 지불한다.</p>
+
+<h3>8. AQC의 일반화 ① — AOLC (Definition H.2)</h3>
+
+<p>DQC의 OLC는 <b>고정 길이 h</b> 재생을 전제한다. AQC는 선택함수 κ: S → K를 도입해 이를
+<b>상태 의존 재질의</b>로 확장한다:</p>
+<p><code>TV( P<sub>D</sub>(s[t+κ(s)], a[t+κ(s)] | s[t]) ‖ P°<sub>D,κ</sub>(s[t+κ(s)], a[t+κ(s)] | s[t]) ) ≤ ε<sub>K</sub></code></p>
+<p>(상태 marginal에 대해서도 동일한 조건.) <b>차이의 본질</b>: 재질의 지점이 상태마다 달라
+<b>무작위 간격</b>이 되므로, TV 바운드가 κ가 만드는 <b>재질의 시각 분포 전체에 대해 균일하게</b>
+성립해야 한다. <b>Proposition H.3</b>: κ가 상수 k이면 DQC의 OLC로 정확히 환원된다 — 즉 AOLC는
+<b>엄밀한 일반화</b>이고, κ가 변하면 <b>더 강한</b> 조건이다.</p>
+
+<h3>9. AQC의 일반화 ② — selector 기준: 왜 V<sup>k</sup>를 빼고 γ<sup>k</sup>로 나누는가</h3>
+
+<p>순진한 규칙 <code>argmax<sub>k,a</sub> Q<sup>k</sup>(s, a[t:t+k])</code>는 두 가지로 무너진다
+(원문 §4.2).</p>
+<p><b>① discount-scale mismatch.</b> sparse reward에서 중간 보상이 거의 0이므로
+<code>Q<sup>k</sup> ≈ γ<sup>k</sup> V<sup>h</sup>(s[t+k])</code>. γ &lt; 1이라 γ<sup>k</sup>가 k에
+대해 감소하므로 <code>Q<sup>k1</sup> &gt; Q<sup>k2</sup> &gt; ...</code> — <b>거의 모든 상태에서
+가장 짧은 k로 붕괴</b>한다. 즉 γ<sup>k</sup> 나눗셈은 long-bias를 만드는 게 아니라
+<b>short-bias를 제거</b>하려는 것이다.</p>
+<p><b>② state-dependent baseline mismatch.</b> γ<sup>k</sup>만 나누면
+<code>argmax<sub>k</sub> V<sup>h</sup>(s[t+k])</code>가 되는데, 보상에서 먼 대다수 상태에서는
+V<sup>h</sup>가 모두 작아 <b>k 간 차이가 함수근사 노이즈에 지배</b>된다. 그래서 scale마다의 기준값
+V<sup>k</sup>(s)를 빼서 비교한다:</p>
+<p><code>score(k, a[t:t+k])  =  ( Q<sup>k</sup>(s, a[t:t+k]) − V<sup>k</sup>(s) ) / γ<sup>k</sup></code></p>
+<p><b>Proposition 5.1 (noise immunity)</b>: 신호가 없는 영역에서는 |δ<sub>k</sub>| ≤ ε + 2σ가 되어
+모든 k가 0 근처로 몰린다 — 즉 <b>편향된 오답이 무편향 난수 선택으로 바뀐다</b>. 비교정 selector는
+"가장 큰 양의 노이즈"를 결정론적·체계적으로 고르므로 더 나쁘다는 논지다.</p>
+
+<p class='sub'><b>[주의 — 우리 세팅에 그대로 옮기면 안 된다]</b> ①의 논증은 <b>V<sup>h</sup> &gt; 0인
+sparse positive reward</b>를 전제한다. 목표도달이 잘 되는 국면에서는
+V<sup>h</sup>(s[t+k]) ≈ V<sup>h</sup>(s[t])/γ<sup>k</sup>라 γ<sup>k</sup>가 상쇄되어 원래 tie에
+가깝고, 그때 "/γ<sup>k</sup>"는 "시간 비용을 무시하고 가장 멀리 전진하는 k"를 고르는 규칙이 된다.
+게다가 <b>우리 cost_to_goal(r = −1, Q &lt; 0) 규약에서는 부호가 뒤집혀 오히려 short를 선호</b>한다.
+이 정규화는 <b>보상 규약 의존적</b>이다.</p>
+
+<h3>10. AQC의 일반화 ③ — soundness와 dominance</h3>
+
+<p><b>Definition H.4 (advantage separability)</b>: 최적 scale이 나머지보다 Δ(s)만큼 앞선다.
+<b>Theorem H.5 (soundness)</b>: critic 오차 ε̄가
+<code>ε̄ &lt; Δ · γ<sup>k<sub>min</sub></sup> / 2</code>이면 경험적 selector가 oracle과 일치한다.
+증명은 삼각부등식이다: <code>|f̂<sub>k</sub> − f<sub>k</sub>| ≤ (ε<sub>k</sub>+δ<sub>k</sub>)/γ<sup>k</sup>
+≤ ε̄/γ<sup>k<sub>min</sub></sup></code>이고 separability가 Δ 간격을 주므로, 오차가 Δ/2 미만이면 순위가
+보존된다.</p>
+
+<p><b>Theorem H.8 (AQC는 임의의 고정 chunk를 지배한다)</b> — 이 논문의 중심 주장:</p>
+<p><code>V<sup>AQC</sup>(s) − V<sup>k</sup>(s) ≥ [ γ<sup>k<sub>min</sub></sup>(1 − 2ε̄/(γ<sup>k<sub>min</sub></sup>Δ)) / (1−γ) ] · E<sub>s'~d<sup>AQC</sup></sub>[ Ā<sup>k†</sup>(s') − Ā<sup>k</sup>(s') ]</code></p>
+<p>증명 구조가 기여의 핵심이다: <b>행동을 쌍 (k, a[t:t+k])로, 전이를 "k스텝 open-loop 실행"으로
+두는 meta-MDP를 구성</b>하면 Kakade–Langford <b>performance difference lemma</b>를 그대로 쓸 수
+있다. 이후 selector 정확성 → γ<sup>k*</sup> ≥ γ<sup>k<sub>min</sub></sup> 하한 → 오선택 확률
+2ε̄/(γ<sup>k<sub>min</sub></sup>Δ) 감가. 해석은 깔끔하다: <b>우월성 = (선택 정확도) × (유효지평) ×
+(oracle과 고정-k의 평균 advantage 격차)</b>. <b>Theorem H.14</b>는 DQC Prop.3의 adaptive 버전으로,
+h 자리에 k<sub>min</sub>이 들어간다 — 짧은 k<sub>min</sub>은 반응성을 주지만 재질의 지점이 늘어 TV
+오차가 쌓인다는 trade-off를 명시한다.</p>
+
+<p class='sub'><b>[검증이 필요한 두 곳]</b> ① <b>순환성</b>: k†가 <b>같은 정규화 advantage의
+argmax로 정의</b>된다(Def H.4). 즉 Thm H.5는 "우리 기준의 argmax를 잘 복원한다"이지 "그 기준이
+return을 최대화한다"가 아니다. ② Thm H.8 증명 스케치의 <b>step 3</b>
+(<code>γ<sup>k*</sup>Ā<sup>k†</sup> − γ<sup>k</sup>Ā<sup>k</sup> ≥ γ<sup>k<sub>min</sub></sup>(Ā<sup>k†</sup> − Ā<sup>k</sup>)</code>)
+은 Ā의 부호 조건이 필요해 보인다 — 이 위에 무언가를 세우려면 Appendix I.4를 정독해야 한다.</p>
+
+<h3>11. 그래서 우리가 비운 자리 — 분해와 recompose</h3>
+
+<p><b>결정적 관찰.</b> DQC Cor.1이 재는 것은 <b>최적</b> chunk 정책의 gap이다. 최적에서는 정책의
+미숙함이 이미 제거돼 있으므로, 그 잔여는 <b>순수하게 dynamics 확률성(ε)</b>이다 — 결정론이면 0.
+그런데 우리가 실전에서 마주하는 gap은 <b>현재의 미숙한 정책</b> π에 대한 것이다. 둘은 다르고,
+정확히 이렇게 쪼개진다:</p>
+
+<table class='num'>
+<tr><th>항</th><th>정체</th><th>어떻게 지불/회수하나</th></tr>
+<tr><td>V*<sub>1</sub> − V*<sub>H</sub></td><td><b>aleatoric</b> — DQC Cor.1 + Prop.4, 결정론이면 0</td><td><b>회수 불가</b>. 실행 horizon으로만 지불(=꼭 필요한 곳에서만 짧게)</td></tr>
+<tr><td>V*<sub>H</sub> − V<sup>π,H</sup></td><td><b>epistemic</b> — chunk 정책류 내부의 미숙함</td><td><b>정책 개선으로 흡수 가능</b> — 우리 기여</td></tr>
+</table>
+
+<p>이 분해가 왜 중요한가. 기존 계보는 <b>평가 horizon = 실행 horizon = 개선 horizon</b>을 하나로
+묶어놨기 때문에 trade-off를 피할 수 없었다. QC는 gap 전체를 떠안았고, DQC/CGQ는 <b>배포 horizon을
+줄여</b>(정책 chunk h<sub>a</sub>) 지불했으며, AQC/ExRL/ACSAC는 <b>선택만</b> 해서 base action의
+품질에 상한이 걸렸다(ExRL은 이 상한을 명시적으로 인정하고 Residual RL을 얹어 우회한다).</p>
+
+<p><b>우리의 정식화 — 세 horizon의 분리.</b></p>
+<table class='num'>
+<tr><th>역할</th><th>무엇을 쓰나</th><th>왜</th></tr>
+<tr><td><b>평가</b> k<sub>eval</sub></td><td>per-prefix Q(s, a, k), k = 1..H</td><td>h-step 백업의 낮은 편향·빠른 전파를 유지하면서, 짧은 k의 교정 가치를 <b>표현 가능</b>하게</td></tr>
+<tr><td><b>실행</b> k<sub>exec</sub></td><td>상태 적응 k*(s)</td><td>6절의 결론(어느 쪽도 일반 우월 아님) 때문에 원리적으로 정당</td></tr>
+<tr><td><b>개선</b> k<sub>improve</sub></td><td><b>k = H 고정</b> (full chunk)</td><td>full chunk <b>자체</b>를 좋게 만들어 epistemic을 흡수 — 여기가 비어 있던 칸</td></tr>
+</table>
+
+<p>actor 목적은 full horizon에서 건다: <code>L(actor) = − Q(s, μ(s), k=H) + α·L<sub>distill</sub></code>
+(α-Flow/FQL의 one-step actor가 이 μ를 싸게 만들어준다 — <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span>).
+만약 개선을 <b>선택된 짧은 k에서만</b> 걸면 prefix만 좋아지고 full chunk는 영영 개선되지 않는다.
+<b>k=H에서 거는 것이 recompose의 심장이다.</b></p>
+
+<p><b>decompose → recompose.</b> adaptive 실행이 chunk를 끊어 <b>closed-loop</b>으로 교정 이득을
+<i>발견</i>하고(decompose), full-chunk 개선이 그 이득을 <b>하나의 open-loop chunk로 컴파일</b>한다
+(recompose). 제어 관점에서 컴파일 가능한 것은 <b>필요한 정보가 이미 s[t]에 있는(epistemic)</b>
+성분뿐이고, <b>미래 관측이 반드시 있어야 하는(aleatoric)</b> 성분은 어떤 open-loop chunk로도 담을 수
+없다. 그래서 종점은 "모든 곳에서 full chunk"가 아니라 <b>"epistemic replan을 0으로 몰아 aleatoric
+reactivity floor만 남긴다"</b>이다 — 이것이 반증 가능한 형태의 주장이다.</p>
+
+<p><b>부산물: chunk-length curriculum.</b> 정책이 좋아질수록 "짧게 끊는 것이 <b>엄격히</b> 나은"
+상태 집합이 줄어들고, 따라서 <b>평균 실행 길이가 aleatoric floor까지 단조 증가</b>한다. 중요한 것은
+이것이 <b>추가 보상(replan cost) 없이</b> 나온다는 점이다 — 우리는 return을 건드리지 않는다.
+수렴 근처에 남는 무차별 구간은 필요하면 <b>lexicographic 규칙</b>(return-최적 ±ε 집합 안에서 가장
+긴 k)으로 처리한다. 이 규칙의 유일한 자유 파라미터는 <b>비교 허용오차 ε</b>이지 비용의 크기가
+아니므로, 정의도 정당화도 쉽다.</p>
+
+<h3>12. 그래서 무엇을 측정해야 하는가 (사전등록)</h3>
+<table class='num'>
+<tr><th>검증</th><th>왜</th><th>실패 시 의미</th></tr>
+<tr><td><b>k-의존 낙관 편향</b>: per-prefix Q의 과대평가가 k에 따라 어떻게 커지는지, V<sup>k</sup> 차감이 그것을 실제로 상쇄하는지</td><td>5절 — teleop 데이터의 hindsight leakage는 구조적. 아무도 측정하지 않았다</td><td>selector가 "long critic이 더 낙관적이라서" long을 고르는 것 → 모든 adaptive 결론이 artifact</td></tr>
+<tr><td><b>OOD 후보 calibration</b>: 실행된 궤적뿐 아니라 argmax가 랭킹하는 <b>비선택</b> 후보의 Q̂ vs 할인 MC-return</td><td>ACSAC의 calibration은 on-policy만 검증했다. offline 과대평가는 비선택 후보에서 터진다</td><td>argmax의 정당성 자체가 미검증</td></tr>
+<tr><td><b>curriculum의 인과성</b>: 정책 개선을 끄면(선택만) 평균 길이가 자라지 않아야 함</td><td>길이 증가가 정책 개선 때문임을 보이는 유일한 방법. 끄면 AQC/ExRL 재현이 된다</td><td>curriculum이 우리 기여가 아니라 부수 현상</td></tr>
+<tr><td><b>aleatoric floor의 존재</b>: 잔여 short-chunk 사용량이 skill별로 수렴하는가</td><td>11절의 종점 주장이 반증 가능해지는 지점. 그 값 자체가 "그 skill의 내재적 reactivity 수요"라는 새 측정량</td><td>floor 아래로 내려가면 과대평가 의심, 안 줄면 epistemic 흡수 실패</td></tr>
+</table>
+
+<p><b>정리.</b> QC는 chunk critic의 <b>이득</b>을 증명했고(비편향 h-step 백업), DQC는 그 <b>비용</b>을
+처음으로 정량화했으며(OLC, Thm 1, Cor 1 — 그리고 그 비용이 dynamics 확률성임을 밝혔다), AQC는
+그것을 <b>상태 의존 재질의</b>로 일반화했다(AOLC, meta-MDP dominance). 세 논문 모두에서
+<b>비어 있는 칸은 하나다 — 적응적 실행이 발견한 이득을 정책이 흡수하게 만드는 것.</b> 우리는
+평가는 per-prefix로 나누되 <b>개선은 full chunk에 걸어</b> 그 칸을 채우고, 그 진행을 chunk-length
+evolution으로 측정한다.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "chunking-theory": {
+        "date": "2026-08-19 02:30",
+        "who": "워커B(문헌 정독·정리) + 사용자(스토리라인·반론 제기)",
+        "where": "원문 PDF 정독 — QC arXiv:2507.07969 / DQC arXiv:2512.10926 / AQC arXiv:2605.05544",
+        "what": "action chunking RL의 수학적 토대 — open-loop consistency, value bias 정리, AOLC 일반화, 그리고 우리 기여의 정확한 위치",
+        "how": "정의·정리·증명 기계를 원문에서 직접 확인(추론은 표시) + aleatoric/epistemic 분해로 우리 자리 확정 + 사전등록 4건",
+        "why": "adaptive chunking을 직관이 아니라 정리 위에 세우기 위해 — 그리고 무엇이 이미 선점됐고 무엇이 비었는지 정직하게 긋기 위해",
+        "links": ["alphaflow-pi05", "wc-aqc-method", "wc-critic-architecture", "aqc-ablation", "deas"],
+    },
     "alphaflow-pi05": {
         "date": "2026-08-19 08:40",
         "who": "워커B(구현) + 사용자(방향·스케줄/JVP 결정)",
@@ -4379,6 +4665,235 @@ quantile span on gripper dims 12/34 widened to the dataset's true min/max, see i
 the 5 tasks) — needs copying to node200-accessible storage; ⑤ point checkpoints at /scratch-like free disk
 (incident ⑩: /home ENOSPC). <b>Then:</b> train on node200 → at completion, phase-1 via the committed eval harness
 (serve_bon_policy + rollout_client, E2E-verified on A6000 with PREALLOCATE=false).</p>
+""",
+)
+
+en(
+    "chunking-theory",
+    "The mathematics of action chunking — DQC's open-loop consistency, AQC's AOLC, and the slot we fill",
+    """
+<p><b>Why this piece.</b> We have been doing adaptive chunking on the intuition that the best chunk length
+differs by state. The intuition is right, but it is not a paper. We need mathematics that says <b>why</b> some
+states want short commitments, <b>why</b> others want long ones, and <b>how much</b> of the gain is recoverable
+at all. That mathematics actually landed in 2025–26: QC established chunked critics (proving only the benefit),
+<b>DQC</b> was the first to quantify the cost, and <b>AQC</b> generalised it to state-dependent re-querying.
+This entry unpacks all three for a reader with no prior context, and then fixes <b>exactly which slot our
+contribution occupies</b>. It reports no new experiment — it is a careful reading of the literature; every
+definition and theorem below was checked against the source PDFs (inferences are marked as such).</p>
+
+<p><b>The papers.</b> QC/QC-FQL = Li, Zhou, Levine, <i>RL with Action Chunking</i>, arXiv:2507.07969
+(NeurIPS'25). DQC = Li, Park, Levine, <i>Decoupled Q-Chunking</i>, arXiv:2512.10926. AQC = Gireesh, Ju, Wang,
+<i>Adaptive Q-Chunking for Offline-to-Online RL</i>, arXiv:2605.05544. Notation: H = 1/(1−γ), H̄ = 1/(1−γ<sup>h</sup>).</p>
+
+<h3>0. Starting point — QC proved only the benefit</h3>
+<p>QC does not redefine the MDP; it changes only the <b>signatures</b>: π(a[t:t+h] | s[t]) and Q(s[t], a[t:t+h]),
+so Q is a function of the <b>whole chunk</b>. The backup is a single h-step return with no intermediate
+bootstrapping:</p>
+<p><code>Q(s[t], a[t:t+h]) ← Σ<sub>j=0..h−1</sub> γ<sup>j</sup> r[t+j] + γ<sup>h</sup> Q(s[t+h], a[t+h:t+2h])</code></p>
+<p>QC's single formal result (<b>Proposition A.1</b>) is that this backup is <b>unbiased</b>. The three-line proof
+is the tower property; the mechanism is that <b>the estimand is redefined to be the chunk-conditional Q, so the
+off-policy bias is definitionally absent</b> rather than corrected. That buys h× faster value propagation for free.</p>
+<p>But <b>QC contains no theorem about the cost</b>. It observes that long chunks collapse (0% success at h=50)
+and writes in §5.4 that it "<i>suspects</i>" this hurts reactivity or makes policy learning harder — two confounds
+left unseparated. <b>Separating them is where DQC begins.</b></p>
+
+<h3>1. DQC's root — nominal value ≠ actual value</h3>
+<table class='num'>
+<tr><th>Symbol</th><th>Name</th><th>Meaning</th></tr>
+<tr><td>V̂<sub>ac</sub></td><td><b>nominal</b> value</td><td>the fixed point of chunked TD on the data — <b>what we train</b></td></tr>
+<tr><td>V<sub>ac</sub></td><td><b>actual</b> value</td><td>the value of that chunk policy when actually rolled out <b>open-loop</b></td></tr>
+</table>
+<p>Prior work implicitly identified the two. That they <b>differ</b> — and that the difference is the true cost of
+chunking — is DQC's thesis.</p>
+<p><b>Why they differ (Definition 1).</b> Let P°<sub>D</sub> be the distribution obtained by replaying data chunks
+open-loop:</p>
+<p><code>P°<sub>D</sub>(s[t+1:t+h], a[t:t+h] | s[t]) = π°<sub>D</sub>(a[t:t+h] | s[t]) · Π<sub>k</sub> T(s[t+k+1] | s[t+k], a[t+k])</code></p>
+<p>This generally differs from the data distribution P<sub>D</sub>, and the reason is decisive: <b>the policy that
+produced the data was closed-loop</b>. A human or a script chose a[t+1] <b>after seeing</b> s[t+1]. Conditioning on
+a whole chunk therefore <b>leaks the stochastic outcome</b> into the conditional.</p>
+
+<h3>2. Open-Loop Consistency (Definition 2)</h3>
+<p><b>weak ε<sub>h</sub>-OLC</b>, for every s[t] in support:</p>
+<p><code>TV( P°<sub>D</sub>(s[t+h'], a[t+h'] | s[t]) ‖ P<sub>D</sub>(s[t+h'], a[t+h'] | s[t]) ) ≤ ε<sub>h</sub>,  h' = 1..h−1</code><br>
+<code>TV( P°<sub>D</sub>(s[t+h] | s[t]) ‖ P<sub>D</sub>(s[t+h] | s[t]) ) ≤ ε<sub>h</sub></code></p>
+<p><b>strong ε<sub>h</sub>-OLC</b> additionally requires, uniformly over <b>every individual chunk</b> in support:</p>
+<p><code>TV( T(s[t+h'] | s[t], a[t:t+h']) ‖ P<sub>D</sub>(s[t+h'] | s[t], a[t:t+h]) ) ≤ ε<sub>h</sub>,  h' = 1..h</code></p>
+<p>Weak holds <b>in expectation over chunks</b>; strong holds <b>chunk by chunk</b>. Sections 3 and 5 turn on
+exactly this difference.</p>
+
+<h3>3. Theorem 1 (AC Value Bias) — where ε·H·H̄ comes from</h3>
+<p>Weak OLC alone bounds nominal-vs-actual:</p>
+<p><code>| V<sub>ac</sub>(s) − V̂<sub>ac</sub>(s) | ≤ γ ε<sub>h</sub> / [ (1−γ)(1 − (1−ε<sub>h</sub>) γ<sup>h</sup>) ] ≤ ε<sub>h</sub> · H · H̄</code></p>
+<p><b>The proof machinery (checked directly).</b> One backup produces two error terms. ① a <b>reward term</b>:
+per-step reward expectations differ by at most TV, giving Σ<sub>h'</sub> γ<sup>h'</sup> ε<sub>h</sub>. ② a
+<b>bootstrap term</b>: γ<sup>h</sup> × [ ε<sub>h</sub>·(1/(1−γ)) + (1−ε<sub>h</sub>)·sup|V̂−V| ]. This is the heart:
+the ε<sub>h</sub> mass on which the distributions disagree <b>escapes to the maximal error 1/(1−γ)</b>, and only the
+remaining (1−ε<sub>h</sub>) recurses. So the contraction factor is <b>(1−ε<sub>h</sub>)γ<sup>h</sup></b>, not
+γ<sup>h</sup>, and unrolling gives the bound. In short: <b>H̄ counts chunk-level backups; H is how far an error
+jumps when it escapes.</b> <b>Theorem 2</b> exhibits a 2h-state MDP attaining the bound exactly (both directions),
+so it is <b>tight</b>.</p>
+
+<h3>4. Corollary 1 — turning a bias bound into a suboptimality bound</h3>
+<p>Let the data come from an <b>optimal</b> policy. Then value iteration on it recovers V̂<sub>ac</sub> = V*, so
+Theorem 1 becomes, <b>with no new proof</b>, a bound on the optimality gap:</p>
+<p><code>V*(s) − V*<sub>ac</sub>(s) ≤ γ ε<sub>h</sub> / [ (1−γ)(1 − (1−ε<sub>h</sub>)γ<sup>h</sup>) ] ≤ ε<sub>h</sub> H H̄</code></p>
+<p>where V* is the closed-loop 1-step optimum and V*<sub>ac</sub> is the <b>true</b> value of the optimal chunk
+policy. <b>Corollary 2</b> proves tightness. This is the only quantification of "the price of open-loop commitment"
+in this literature.</p>
+<p><b>What is that ε<sub>h</sub> (Definition 5 + Proposition 4)?</b> If T is ε-deterministic
+(T = (1−ε)·δ<sub>f(s,a)</sub> + ε·T̃), then <b>any</b> data from it is weakly ε<sub>h</sub>-OLC with</p>
+<p><code>ε<sub>h</sub> = 3 ( 1 − (1−ε)<sup>h−1</sup> )</code></p>
+<p>Intuition: if the deterministic branch fires h−1 times in a row (probability (1−ε)<sup>h−1</sup>), the replayed
+and original distributions coincide exactly and the bias is zero; the bias scales with the probability that this
+event breaks.</p>
+<p class='sub'><b>[our composition; not written as one display in the paper]</b> Combining Cor. 1 and Prop. 4:
+<code>V*<sub>1</sub> − V*<sub>H</sub> ≲ 3(H−1)ε · H · H̄</code> for small ε. That is: <b>under deterministic
+dynamics the price of open-loop commitment is exactly zero.</b> This single line becomes the axis of our framing
+(§11).</p>
+
+<h3>5. Proposition 1 — the real insight (and the sore spot in our data)</h3>
+<p>Under weak OLC alone, <b>Q-learning</b> can be arbitrarily bad: there exist an MDP and weakly ε<sub>h</sub>-OLC
+data with <code>V*(s) − V<sup>+</sup><sub>ac</sub>(s) = γc/(1−γ) = Ω(H)</code>.</p>
+<p><b>The mechanism of the 6-state counterexample (checked directly).</b> The behaviour policy is <b>closed-loop</b>:
+π<sub>D</sub>(B)=0, π<sub>D</sub>(C)=1 — so <b>the second action reveals the outcome of the first transition</b>.
+Conditioning on the chunk (0,0) therefore means "s[1] was B", and <code>P<sub>D</sub>(s[2] | A, (0,0)) = D</code>
+(reward 1) <b>with probability 1</b>. Yet executing (0,0) <b>open-loop</b> reaches D only with probability δ.</p>
+<p>In the paper's words: <b>"the chunked critic has no way of differentiating a low-probability 'lucky' success from
+a closed-loop, high-probability success."</b> That is the identity of chunked-critic optimism. <b>Theorem 3</b>
+shows <b>strong</b> OLC blocks the leak and restores
+<code>V* − V<sup>+</sup><sub>ac</sub> ≤ 3ε<sub>h</sub>H H̄</code> — a bound <b>independent of how suboptimal the
+data is</b>.</p>
+<p class='sub'><b>[directly relevant to us]</b> Our yam and RoboCasa data are human teleoperation — <b>fully
+closed-loop</b>. So Prop. 1's pathology is <b>structurally present</b> in our data, and since longer chunks leak
+more future into the conditional, <b>the optimism grows with k</b>. An adaptive selector could then prefer long
+chunks not because long is better but because the long-horizon critic is more optimistic. Neither ExRL, ACSAC, ACH
+nor AQC measures this k-dependent optimism.</p>
+
+<h3>6. Closed-loop execution is not free (Prop 3 vs Thm 5/6) — read honestly</h3>
+<p>Executing only the first action and re-querying every step (π<sup>•</sup>) gives, under strong OLC,
+<code>V* − V<sup>•</sup> ≤ 3 ε<sub>h</sub> H<sup>2</sup> H̄</code> versus <code>3 ε<sub>h</sub> H H̄</code> for
+open-loop — <b>a factor H worse in the worst case</b>. But reading this as "short commitments are harmful" would be
+wrong. DQC itself immediately asks "can we do better?" and introduces <b>Definition 4 (bounded optimality
+variability, BOV)</b>, under which <b>Theorem 5</b> gives a far better bound. And <b>Theorem 6</b> establishes the
+<b>opposite</b> direction too: there are MDPs where closed-loop execution is near-optimal while the same policy
+executed in chunks is Ω(H) suboptimal.</p>
+<p><b>So the honest conclusion is: neither open-loop nor closed-loop dominates in general — it depends on the
+MDP/data structure (OLC/BOV).</b> And that is precisely what makes <b>state-adaptive k principled</b>: any fixed k
+necessarily forfeits one side. (Aside: <b>Lemma 7</b> bounds the overestimation by ϑ<sub>h</sub>/(1−γ<sup>h</sup>)
+in the absence of stochastic shortcuts — naming the optimism exactly as "the value of stochastic shortcuts the
+critic cannot distinguish from control".)</p>
+
+<h3>7. The DQC algorithm</h3>
+<p>Decouple the critic's chunk length h (keeping fast backups) from the <b>policy's</b> chunk length
+h<sub>a</sub> ≪ h, and learn a <b>partial critic</b> by <b>optimistic (expectile) distillation</b>:</p>
+<p><code>L(ψ) = f<sup>κ</sup><sub>expectile</sub>( Q̄<sub>φ</sub>(s, a[t:t+h]) − Q<sup>P</sup><sub>ψ</sub>(s, a[t:t+h<sub>a</sub>]) )</code>,
+then <code>L(π) = − E[ Q<sup>P</sup><sub>ψ</sub>(s, a[t:t+h<sub>a</sub>]) ]</code></p>
+<p>So Q<sup>P</sup> ≈ max<sub>tail</sub> Q: <b>optimistic by construction</b>, sound only under the OLC/BOV
+assumptions. The price is that deployment now runs <b>short chunks</b>, paying (in the worst case) §6's extra factor
+H and giving up QC's temporally coherent exploration.</p>
+
+<h3>8. AQC's generalisation ① — AOLC (Definition H.2)</h3>
+<p>DQC's OLC presumes replay at a <b>fixed</b> length h. AQC introduces a selection function κ: S → K:</p>
+<p><code>TV( P<sub>D</sub>(s[t+κ(s)], a[t+κ(s)] | s[t]) ‖ P°<sub>D,κ</sub>(s[t+κ(s)], a[t+κ(s)] | s[t]) ) ≤ ε<sub>K</sub></code></p>
+<p>(plus the same for the state marginal.) <b>The essential difference</b>: re-query points are state-dependent, hence
+<b>randomly spaced</b>, so the TV bound must hold <b>uniformly over the distribution of re-query times induced by
+κ</b>. <b>Proposition H.3</b>: for constant κ ≡ k this reduces exactly to DQC's OLC — AOLC is a <b>strict
+generalisation</b>, and a strictly stronger condition when κ varies.</p>
+
+<h3>9. AQC's generalisation ② — the selector: why subtract V<sup>k</sup> and divide by γ<sup>k</sup></h3>
+<p>The naive rule <code>argmax<sub>k,a</sub> Q<sup>k</sup></code> fails two ways (§4.2).</p>
+<p><b>① Discount-scale mismatch.</b> With sparse rewards the intermediate terms vanish, so
+<code>Q<sup>k</sup> ≈ γ<sup>k</sup> V<sup>h</sup>(s[t+k])</code>. Since γ &lt; 1, γ<sup>k</sup> decreases in k, hence
+<code>Q<sup>k1</sup> &gt; Q<sup>k2</sup> &gt; ...</code> — <b>the selector collapses to the shortest k almost
+everywhere</b>. Dividing by γ<sup>k</sup> is therefore intended as <b>removing a short-bias</b>, not manufacturing a
+long-bias.</p>
+<p><b>② State-dependent baseline mismatch.</b> After dividing, the rule becomes
+<code>argmax<sub>k</sub> V<sup>h</sup>(s[t+k])</code>, and in the majority of states far from reward all
+V<sup>h</sup> are small, so <b>differences across k are dominated by approximation noise</b>. Hence a per-scale
+baseline:</p>
+<p><code>score(k, a[t:t+k]) = ( Q<sup>k</sup>(s, a[t:t+k]) − V<sup>k</sup>(s) ) / γ<sup>k</sup></code></p>
+<p><b>Proposition 5.1 (noise immunity)</b>: where there is no signal, |δ<sub>k</sub>| ≤ ε + 2σ, so every k scores
+near zero — <b>a biased wrong answer becomes an unbiased near-random one</b>, whereas the uncorrected selector
+deterministically picks whichever scale carries the largest positive noise.</p>
+<p class='sub'><b>[caution — do not port this to our setting]</b> Argument ① presumes <b>sparse positive rewards
+with V<sup>h</sup> &gt; 0</b>. When goal-reaching is working, V<sup>h</sup>(s[t+k]) ≈ V<sup>h</sup>(s[t])/γ<sup>k</sup>,
+so γ<sup>k</sup> cancels and the values are near-tied; then "/γ<sup>k</sup>" selects "whichever k advances furthest,
+ignoring time cost". Worse, under <b>our cost_to_goal convention (r = −1, Q &lt; 0) the sign flips and
+"/γ<sup>k</sup>" prefers short</b>. The normalisation is <b>reward-convention dependent</b>.</p>
+
+<h3>10. AQC's generalisation ③ — soundness and dominance</h3>
+<p><b>Definition H.4 (advantage separability)</b>: the best scale leads the rest by Δ(s). <b>Theorem H.5</b>: if the
+critic error satisfies <code>ε̄ &lt; Δ · γ<sup>k<sub>min</sub></sup> / 2</code>, the empirical selector matches the
+oracle. The proof is a triangle inequality:
+<code>|f̂<sub>k</sub> − f<sub>k</sub>| ≤ (ε<sub>k</sub>+δ<sub>k</sub>)/γ<sup>k</sup> ≤ ε̄/γ<sup>k<sub>min</sub></sup></code>,
+and separability supplies the Δ margin, so an error below Δ/2 preserves the ranking.</p>
+<p><b>Theorem H.8 (AQC dominates any fixed chunk)</b>:</p>
+<p><code>V<sup>AQC</sup>(s) − V<sup>k</sup>(s) ≥ [ γ<sup>k<sub>min</sub></sup>(1 − 2ε̄/(γ<sup>k<sub>min</sub></sup>Δ)) / (1−γ) ] · E<sub>s'~d<sup>AQC</sup></sub>[ Ā<sup>k†</sup>(s') − Ā<sup>k</sup>(s') ]</code></p>
+<p>The proof structure is the contribution: <b>construct a meta-MDP whose actions are pairs (k, a[t:t+k]) and whose
+transitions are "execute k steps open-loop"</b>, which makes the Kakade–Langford <b>performance difference lemma</b>
+directly applicable; then selector correctness, the lower bound γ<sup>k*</sup> ≥ γ<sup>k<sub>min</sub></sup>, and a
+discount for the mis-selection probability. The reading is clean: <b>dominance = (selector accuracy) × (effective
+horizon) × (average advantage gap between oracle and fixed-k)</b>. <b>Theorem H.14</b> is DQC's Prop. 3 in adaptive
+form, with k<sub>min</sub> in place of h — making explicit that a small k<sub>min</sub> buys reactivity but adds
+re-query points where TV error accumulates.</p>
+<p class='sub'><b>[two things to verify]</b> ① <b>Circularity</b>: k† is <b>defined</b> as the argmax of the same
+normalised advantage (Def. H.4), so Thm H.5 says "we recover our own criterion's argmax", not "our criterion
+maximises return". ② Step 3 of the H.8 sketch
+(<code>γ<sup>k*</sup>Ā<sup>k†</sup> − γ<sup>k</sup>Ā<sup>k</sup> ≥ γ<sup>k<sub>min</sub></sup>(Ā<sup>k†</sup> − Ā<sup>k</sup>)</code>)
+appears to need a sign condition on Ā; building on it requires reading Appendix I.4 closely.</p>
+
+<h3>11. The slot we fill — decomposition and recompose</h3>
+<p><b>The decisive observation.</b> DQC's Cor. 1 measures the gap of the <b>optimal</b> chunk policy. At the optimum
+the policy's immaturity is already gone, so the residual is <b>purely dynamics stochasticity (ε)</b> — zero under
+deterministic dynamics. But the gap we face in practice is that of a <b>currently imperfect</b> policy π. They are
+different, and split exactly:</p>
+<table class='num'>
+<tr><th>Term</th><th>What it is</th><th>How it is paid / recovered</th></tr>
+<tr><td>V*<sub>1</sub> − V*<sub>H</sub></td><td><b>aleatoric</b> — DQC Cor. 1 + Prop. 4; zero if deterministic</td><td><b>Not recoverable.</b> Paid only in execution horizon (short exactly where needed)</td></tr>
+<tr><td>V*<sub>H</sub> − V<sup>π,H</sup></td><td><b>epistemic</b> — immaturity within the chunk policy class</td><td><b>Absorbable by policy improvement</b> — our contribution</td></tr>
+</table>
+<p>Why this matters: the existing line ties <b>evaluation horizon = execution horizon = improvement horizon</b>
+together, so the trade-off is unavoidable. QC swallows the whole gap; DQC/CGQ pay by <b>shrinking the deployed
+horizon</b>; AQC/ExRL/ACSAC only <b>select</b>, so they are capped by the base action quality (ExRL admits this cap
+explicitly and bolts on Residual RL to escape it).</p>
+<p><b>Our formulation — decouple three horizons.</b></p>
+<table class='num'>
+<tr><th>Role</th><th>What we use</th><th>Why</th></tr>
+<tr><td><b>Evaluate</b></td><td>per-prefix Q(s, a, k), k = 1..H</td><td>keep the h-step backup's low bias and fast propagation while making short-k corrective value <b>representable</b></td></tr>
+<tr><td><b>Execute</b></td><td>state-adaptive k*(s)</td><td>principled precisely because §6 shows neither regime dominates in general</td></tr>
+<tr><td><b>Improve</b></td><td><b>fixed k = H</b> (full chunk)</td><td>make the full chunk <b>itself</b> good, absorbing the epistemic term — the empty slot</td></tr>
+</table>
+<p>The actor objective is taken at the full horizon:
+<code>L(actor) = − Q(s, μ(s), k=H) + α·L<sub>distill</sub></code>, with the one-step actor of α-Flow/FQL making μ
+cheap (see <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span>). If improvement were applied only at the
+<b>selected short k</b>, only the prefix would improve and the full chunk never would. <b>Taking it at k = H is the
+heart of recompose.</b></p>
+<p><b>Decompose → recompose.</b> Adaptive execution <i>discovers</i> corrective gain by breaking the chunk and
+running <b>closed-loop</b> (decompose); full-chunk improvement then <b>compiles that gain into a single open-loop
+chunk</b> (recompose). Only the <b>epistemic</b> component — where the needed information is already in s[t] — is
+compilable; the <b>aleatoric</b> component, which genuinely requires future observations, cannot be carried by any
+open-loop chunk. So the endpoint is not "full chunks everywhere" but <b>"drive epistemic replanning to zero and
+leave only the aleatoric reactivity floor"</b> — a falsifiable claim.</p>
+<p><b>By-product: a chunk-length curriculum.</b> As the policy improves, the set of states where short is
+<b>strictly</b> better shrinks, so <b>mean execution length rises monotonically toward the aleatoric floor</b>.
+Crucially this needs <b>no added reward</b> (no replan cost) — we never touch the return. Residual indifference near
+convergence, if we want it resolved, is handled by a <b>lexicographic rule</b> (longest k within the return-optimal
+±ε set), whose only free parameter is a <b>comparison tolerance</b>, not the size of a cost.</p>
+
+<h3>12. What must be measured (pre-registered)</h3>
+<table class='num'>
+<tr><th>Test</th><th>Why</th><th>What failure means</th></tr>
+<tr><td><b>k-dependent optimism</b>: how per-prefix Q's overestimation grows with k, and whether subtracting V<sup>k</sup> actually cancels it</td><td>§5 — hindsight leakage is structural in teleop data, and nobody has measured it</td><td>the selector prefers long because long critics are more optimistic → every adaptive conclusion is an artifact</td></tr>
+<tr><td><b>OOD-candidate calibration</b>: Q̂ vs discounted MC return for the <b>non-selected</b> candidates the argmax ranks, not just executed trajectories</td><td>ACSAC's calibration checks on-policy only; offline overestimation blows up on the unselected ones</td><td>the legitimacy of the argmax itself is unverified</td></tr>
+<tr><td><b>Causality of the curriculum</b>: with policy improvement off (selection only), mean length must NOT grow</td><td>the only way to show length growth is caused by policy improvement; switching it off reproduces AQC/ExRL</td><td>the curriculum is an epiphenomenon, not our contribution</td></tr>
+<tr><td><b>Existence of the aleatoric floor</b>: does residual short-chunk usage converge per skill?</td><td>where §11's endpoint becomes falsifiable; the converged value is itself a new measurement — that skill's intrinsic reactivity demand</td><td>below the floor suggests overestimation; no shrinkage means epistemic absorption failed</td></tr>
+</table>
+
+<p><b>Summary.</b> QC proved the <b>benefit</b> of chunked critics (unbiased h-step backups); DQC first quantified the
+<b>cost</b> (OLC, Thm 1, Cor 1 — and identified that cost as dynamics stochasticity); AQC generalised it to
+<b>state-dependent re-querying</b> (AOLC, meta-MDP dominance). Across all three, <b>one slot stays empty: making the
+policy absorb the gain that adaptive execution discovers.</b> We fill it by splitting evaluation per prefix while
+taking <b>improvement at the full chunk</b>, and we measure the progress as chunk-length evolution.</p>
 """,
 )
 
