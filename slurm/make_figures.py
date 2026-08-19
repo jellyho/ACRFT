@@ -274,6 +274,55 @@ def fig_30_af_sched():
     plt.close(fig)
 
 
+def fig_31_three_forces():
+    """Conceptual phase diagram of the preferred commitment k* (overnight theory synthesis).
+
+    Left: the (aleatoric pressure, long-pressure) plane. The ideal tie sits at the origin (knife
+    edge); aleatoric branching pulls k* down, stability (Zhang's executed-length lower bound) and
+    aliasing pull it up; the diagonal is the contested band where kappa*(s) is genuinely
+    state-dependent. Right: the curriculum — epistemic error is absorbed by training, so mean k*
+    rises to the aleatoric floor; the floor itself never moves (irrecoverable)."""
+    apply()
+    fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.7))
+
+    ax = axes[0]
+    n = 300
+    x = np.linspace(0, 1, n)  # aleatoric branching pressure (down)
+    y = np.linspace(0, 1, n)  # long pressure: contraction 1/log(1/rho) + aliasing (up)
+    X, Y = np.meshgrid(x, y)
+    kstar = np.clip(0.5 + 0.5 * (Y - X) / np.maximum(X + Y, 1e-3), 0, 1)  # 0=replan every step, 1=full chunk
+    im = ax.pcolormesh(X, Y, kstar, cmap="RdYlGn", shading="auto", vmin=0, vmax=1, rasterized=True)
+    ax.plot([0.01], [0.01], marker="*", ms=16, color="k", zorder=5)
+    ax.annotate("knife-edge tie\n(deterministic, consistent,\nfully observed)", (0.015, 0.03), fontsize=7.5)
+    ax.plot(x, x, ls=":", lw=1.2, color="0.3")
+    ax.annotate("contested band:\nstate-dependent κ*(s)", (0.52, 0.44), fontsize=7.5, rotation=38)
+    ax.annotate("short commit\n(branching, VoI)", (0.68, 0.10), fontsize=8)
+    ax.annotate("long commit\n(stability + aliasing)", (0.08, 0.86), fontsize=8)
+    ax.set_xlabel("aleatoric pressure  (branching · u_alea)")
+    ax.set_ylabel("long pressure  (contraction 1/log(1/ρ) + aliasing)")
+    ax.set_title("preferred commitment k*")
+    cb = fig.colorbar(im, ax=ax, fraction=0.046)
+    cb.set_label("k* / H", fontsize=8)
+
+    ax = axes[1]
+    t = np.linspace(0, 1, 200)
+    floor = 0.62
+    for eps0, c, lab in [(0.5, PALETTE[0], "high initial ε_π"), (0.3, PALETTE[1], "medium"), (0.15, PALETTE[2], "low")]:
+        k = floor - (floor - (floor - eps0)) * np.exp(-4 * t)
+        k = floor - eps0 * np.exp(-4 * t)
+        ax.plot(t, k, lw=2, color=c, label=lab)
+    ax.axhline(floor, color="0.25", ls="--", lw=1.4)
+    ax.annotate("aleatoric floor (irrecoverable)", (0.02, floor + 0.015), fontsize=8)
+    ax.set_xlabel("training progress (epistemic absorbed)")
+    ax.set_ylabel("mean k* / H")
+    ax.set_ylim(0, 0.8)
+    ax.set_title("the curriculum the theory predicts")
+    ax.legend(fontsize=7.5, loc="lower right")
+    fig.tight_layout()
+    fig.savefig(P / "31_three_forces.png", dpi=160)
+    plt.close(fig)
+
+
 def main():
     P.mkdir(exist_ok=True)
     fig_16_v11()
@@ -281,6 +330,7 @@ def main():
     fig_15_autopsy()
     fig_20_final()
     fig_30_af_sched()
+    fig_31_three_forces()
 
 
 if __name__ == "__main__":

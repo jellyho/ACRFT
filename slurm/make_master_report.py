@@ -2993,10 +2993,74 @@ per-prefix \\(Q_k(s)\\)는 정확히 그 자리에 서는 <b>학습된 가치 �
 """,
 )
 
+
+entry(
+    "08-20",
+    "three-forces",
+    "네 힘의 균형 — adaptive chunking 이론 종합과 검증 가능한 예측 (밤샘 프로그램 결산)",
+    "완결",
+    """
+<p><b>왜.</b> 밤샘 이론 프로그램의 결산이다. 출발 질문(사용자): 이론적 완벽에서 생기는 k-동률이
+실제로는 왜 안 일어나는가, 불확실성의 분해가 어떻게 adaptive chunking을 유도하고 정책 개선과
+non-Markov 긴-청크 선호까지 설명하는가. 다섯 개의 노트(<span class='xref' data-eid='adaptive-exec-map'>지도</span> ·
+<span class='xref' data-eid='tie-knife-edge'>칼날</span> · <span class='xref' data-eid='uncertainty-split'>분해</span> ·
+<span class='xref' data-eid='nonmarkov-longer'>두 개의 방</span> · <span class='xref' data-eid='event-triggered-bridge'>제어 다리</span>)를
+하나의 그림으로 접는다. 시작은 세 힘이었으나 Zhang 정독이 <b>네 번째 힘</b>을 추가했다.</p>
+
+<p><b>네 힘.</b> 커밋 길이 k에 작용하는 압력은:</p>
+<table class='num'><tr><th>힘</th><th>방향</th><th>원천</th><th>운명</th></tr>
+<tr><td>① 분기 (aleatoric)</td><td>k ↓</td><td>환경 확률성 — 재질의 = 회수(VoI)</td><td><b>회수 불가</b> — floor</td></tr>
+<tr><td>② 정책 오차 (epistemic)</td><td>레짐 의존 (수정이면 ↓, 재주입이면 ↑)</td><td>학습 미완 — Metelli σ_p</td><td><b>개선이 흡수</b> → curriculum</td></tr>
+<tr><td>③ 안정성 (Zhang)</td><td>k ↑ (하계!)</td><td>수축 환경 + 잦은 replan의 오차 재주입</td><td>ε_π→0이면 완화되나 하계 형태는 유지</td></tr>
+<tr><td>④ 정보 (non-Markov)</td><td>k ↑</td><td>앨리어싱 — replan은 가블링 위 재추론(Blackwell/copycat)</td><td>관측이 좋아지지 않는 한 잔존</td></tr></table>
+
+{img(P / "31_three_forces.png", "preferred commitment phase diagram + curriculum (schematic)")}
+<p class='sub'>왼쪽: (aleatoric 압력, 긴-커밋 압력) 평면의 선호 k* — <b>개념도(schematic)이지 측정이 아니다</b>.
+원점의 별이 칼날 동률; 대각선 근방이 κ*(s)가 진짜로 상태의존적인 경합 대역. 오른쪽: 이론이 예측하는
+curriculum — 학습이 epistemic만 흡수하므로 평균 k*는 aleatoric floor로 단조 수렴, floor 자체는 불변.</p>
+
+<p><b>한 문단 종합.</b> 이상 극한의 동률은 세 소거(분기·수정·정보손실)의 합작인 칼날이다(K1). 실제
+환경은 네 힘이 그 칼날을 밀어낸다: 분기는 짧게(①), 앨리어싱과 수축-환경의 오차 재주입은 길게(③④),
+정책 오차는 레짐에 따라 양쪽으로(②) — 그리고 ②만이 학습으로 사라진다. 따라서 (i) κ*(s)는 일반적으로
+비상수이고(adaptive chunking의 유도), (ii) 학습이 진행되면 평균 커밋은 aleatoric floor까지 자라며
+(curriculum = 정책 개선의 서명), (iii) floor 위에 남는 짧은-커밋 구간은 환경의 분기 구조 그 자체다.
+"선택만 하는" 계열(<span class='xref' data-eid='adaptive-exec-map'>지도</span>의 전원)은 ②를 흡수할 수단이 없어
+①~④의 초기 배치에 갇힌다 — 선택과 개선을 함께 해야 하는 이유가 네 힘 그림에서 직접 나온다.</p>
+
+<p><b>검증 가능한 예측 (사전 등록 후보).</b></p>
+<table class='num'><tr><th>#</th><th>예측</th><th>측정</th><th>기각 조건</th></tr>
+<tr><td>P1</td><td>κ*가 \\(u_{\\mathrm{alea}}\\)와 국소 반상관</td><td>g5_pi05 크리틱의 per-prefix argmax vs 앙상블 분해, 6 에피소드</td><td>상관 부호가 양이거나 0</td></tr>
+<tr><td>P2</td><td>20k→120k에서 \\(u_{\\mathrm{epis}}\\)만 감소</td><td>같은 프레임에서 두 체크포인트 분해 비교 (cont 완료 후)</td><td>\\(u_{\\mathrm{alea}}\\)도 같은 비율로 줄면 분해 무의미</td></tr>
+<tr><td>P3</td><td>정책 개선 arm에서만 평균 k* 증가</td><td>chunking-theory III.7의 인과 실험(개선 on/off arm)과 동일</td><td>off arm에서도 증가</td></tr>
+<tr><td>P4</td><td>receding-horizon(k=1)이 긴 커밋보다 나쁜 구간 존재 (Zhang 재현)</td><td>YAM/RoboCasa에서 고정-k 스윕의 비단조성</td><td>k=1이 전역 최적</td></tr>
+<tr><td>P5</td><td>재계획 dithering(연속 청크 발산)이 앨리어싱 지표와 동행</td><td>연속 질의 청크 간 거리 vs 가림/접촉 이벤트</td><td>무상관</td></tr></table>
+
+<p><b>계보 한 줄.</b> Metelli(persistence 상계)와 ETC(MIET·Zeno)가 고전적 반쪽, Zhang(실행길이 하계)이
+현대적 반쪽, ExRL/DEHP(온라인 선택 학습)가 경험적 반쪽 — 우리 시리즈는 이 셋을 <b>오프라인·가치기반·
+개선 결합</b>의 한 틀로 접합하는 시도이며, 남은 것은 P1~P5의 측정과 칼날 v2의 증명 완결이다.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "three-forces": {
+        "date": "2026-08-20 06:30",
+        "who": "워커B (밤샘 이론 프로그램 6/6 — 결산)",
+        "where": "이론 종합 (다섯 노트 + Zhang/Metelli/ETC 원문)",
+        "what": "커밋 길이에 작용하는 네 힘(분기↓·정책오차 레짐의존·안정성↑·정보↑)의 종합, 위상도(개념도)와 사전 등록 후보 예측 P1~P5",
+        "how": "다섯 엔트리의 정리·명제를 한 표로 접합, schematic figure(스크립트 재생성 가능), 예측마다 기각 조건 명기",
+        "why": "사용자 지시의 결산 — tie 비발생·불확실성 유도·정책 개선·non-Markov 긴-청크를 하나의 검증 가능한 프로그램으로",
+        "links": [
+            "adaptive-exec-map",
+            "tie-knife-edge",
+            "uncertainty-split",
+            "nonmarkov-longer",
+            "event-triggered-bridge",
+            "chunking-theory",
+        ],
+    },
     "event-triggered-bridge": {
         "date": "2026-08-20 05:40",
         "who": "워커B (밤샘 이론 프로그램 5/6)",
@@ -3528,6 +3592,58 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "three-forces",
+    "The balance of four forces — synthesis of the adaptive-chunking theory, with testable predictions",
+    """
+<p><b>Why.</b> The close of the overnight theory program. The opening question (from the user): why
+does the k-tie of theoretical perfection fail to occur in practice, and how does the uncertainty
+split induce adaptive chunking, policy improvement, and the non-Markov preference for longer
+chunks? Five notes (<span class='xref' data-eid='adaptive-exec-map'>map</span> ·
+<span class='xref' data-eid='tie-knife-edge'>knife-edge</span> · <span class='xref' data-eid='uncertainty-split'>split</span> ·
+<span class='xref' data-eid='nonmarkov-longer'>two rooms</span> · <span class='xref' data-eid='event-triggered-bridge'>control bridge</span>)
+fold into one picture. We began with three forces; reading Zhang added a <b>fourth</b>.</p>
+
+<p><b>The four forces</b> acting on the commitment length k:</p>
+<table class='num'><tr><th>force</th><th>direction</th><th>origin</th><th>fate</th></tr>
+<tr><td>① branching (aleatoric)</td><td>k ↓</td><td>environment stochasticity — a requery is recourse (VoI)</td><td><b>irrecoverable</b> — the floor</td></tr>
+<tr><td>② policy error (epistemic)</td><td>regime-dependent (↓ if correction, ↑ if re-injection)</td><td>unfinished learning — Metelli's σ_p</td><td><b>absorbed by improvement</b> → the curriculum</td></tr>
+<tr><td>③ stability (Zhang)</td><td>k ↑ (a lower bound!)</td><td>contracting dynamics + error re-injection by frequent replans</td><td>relieved as ε_π→0, but the bound's form remains</td></tr>
+<tr><td>④ information (non-Markov)</td><td>k ↑</td><td>aliasing — replanning is re-inference on a garbled channel (Blackwell/copycat)</td><td>persists unless observability improves</td></tr></table>
+
+{img(P / "31_three_forces.png", "preferred commitment phase diagram + curriculum (schematic)")}
+<p class='sub'>Left: preferred k* on the (aleatoric pressure, long pressure) plane — <b>a schematic, not a
+measurement</b>. The star at the origin is the knife-edge tie; the band near the diagonal is where
+κ*(s) is genuinely state-dependent. Right: the predicted curriculum — training absorbs only the
+epistemic part, so mean k* converges monotonically to the aleatoric floor, which itself never moves.</p>
+
+<p><b>One-paragraph synthesis.</b> The ideal-limit tie is a knife edge made by three erasures
+(branching, correction, information loss — K1). Real environments push it off with four forces:
+branching pushes short (①), aliasing and contracting-dynamics re-injection push long (③④), and
+policy error pushes either way by regime (②) — and only ② vanishes with learning. Hence (i) κ*(s)
+is generically nonconstant (adaptive chunking is induced), (ii) as training proceeds the mean
+commitment grows to the aleatoric floor (the curriculum = the signature of policy improvement), and
+(iii) the short-commit regions remaining above the floor are the environment's branching structure
+itself. Selection-only methods (everyone on <span class='xref' data-eid='adaptive-exec-map'>the map</span>)
+have no means of absorbing ② and stay pinned to the initial configuration of ①–④ — why selection
+and improvement must be done together falls straight out of the four-force picture.</p>
+
+<p><b>Testable predictions (preregistration candidates).</b></p>
+<table class='num'><tr><th>#</th><th>prediction</th><th>measurement</th><th>refuted if</th></tr>
+<tr><td>P1</td><td>κ* locally anti-correlates with \\(u_{\\mathrm{alea}}\\)</td><td>per-prefix argmax vs ensemble split on the g5_pi05 critic, 6 episodes</td><td>correlation positive or zero</td></tr>
+<tr><td>P2</td><td>only \\(u_{\\mathrm{epis}}\\) drops from 20k→120k</td><td>the two checkpoints decomposed on the same frames (after cont finishes)</td><td>\\(u_{\\mathrm{alea}}\\) drops at the same rate</td></tr>
+<tr><td>P3</td><td>mean k* grows only in the improvement arm</td><td>the on/off causal experiment of chunking-theory III.7</td><td>growth in the off arm too</td></tr>
+<tr><td>P4</td><td>regions exist where receding horizon (k=1) underperforms long commitment (Zhang replication)</td><td>non-monotonicity of the fixed-k sweep on YAM/RoboCasa</td><td>k=1 globally optimal</td></tr>
+<tr><td>P5</td><td>replanning dithering (divergence of consecutive chunks) co-occurs with aliasing markers</td><td>distance between consecutively queried chunks vs occlusion/contact events</td><td>no correlation</td></tr></table>
+
+<p><b>The lineage in one line.</b> Metelli (persistence upper bounds) and ETC (MIET, Zeno) are the
+classical half; Zhang (executed-length lower bound) the modern half; ExRL/DEHP (online selection
+learning) the empirical half — this series attempts to join them into one <b>offline, value-based,
+improvement-coupled</b> frame. What remains: measuring P1–P5 and completing the knife-edge v2
+proofs.</p>
+""",
+)
+
 en(
     "event-triggered-bridge",
     "The bridge from control theory — event-triggered control is adaptive chunking's 40-year-old ancestor",
