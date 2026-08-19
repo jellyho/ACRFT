@@ -14,13 +14,13 @@ demonstrations of the target task.
 
 The limitation of this recipe lies in the data it imitates. Teleoperated demonstrations interleave
 expert behavior with hesitation, detours, and failure, and their quality varies even within a single
-trajectory~\citep{grrl, pistar06}. An imitation objective treats every transition as an equally valid
+trajectory~\citep{grrl, reinbot}. An imitation objective treats every transition as an equally valid
 target, so collecting more data reproduces the same average; filtering discards the scarce experience
 the recipe depends on, and online refinement is costly and unsafe at this scale.
 
 Can an optimal policy be extracted from suboptimal human data with a VLA-scale model?
 Temporal-difference (TD) learning promises precisely this, stitching high-value segments of mediocre
-trajectories into behavior no single demonstration exhibits~\citep{cql, iql}. But a VLA is not the
+trajectories into behavior no single demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. But a VLA is not the
 policy this machinery was designed for: it predicts a fixed, long action chunk~\citep{act, pi0}, it
 faces long horizons where one-step TD struggles~\citep{qc}, and its backbone cannot be trained
 jointly with a critic at practical cost.
@@ -28,7 +28,7 @@ jointly with a critic at practical cost.
 Recent attempts stop short of this promise. Most reshape imitation with outcome
 signals~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting both the stability and the ceiling of
 supervised learning. The few that learn a value keep it away from the policy: it filters
-data~\citep{grrl}, rescores the policy's own samples~\citep{vgps, deas, robomonkey}, or scores
+data~\citep{grrl}, rescores the policy's own samples~\citep{vgps, deas}, or scores
 commitments fixed in advance~\citep{corft}. We argue these are structural limits rather than
 implementation accidents, with two distinct sources. Rescoring a fixed sampler is bounded by the
 support of its proposals, and its argmax preferentially selects critic error~\citep{emaq}; a critic
@@ -40,8 +40,9 @@ Our answer is to let the value act on the commitment itself. The chunk is what t
 horizon: backing up over $h$ steps at once is precisely why chunked TD survives sparse, long-horizon
 manipulation~\citep{qc}, and valuing every prefix of the chunk preserves this benefit while restoring
 the reactivity that a fixed commitment forfeits. Skilled motor control offers a familiar picture of
-the resulting behavior, where movement alternates between ballistic, open-loop stretches and
-feedback-guided phases assembled through intermittent replanning~\citep{woodworth1899, todorov2002,
+the resulting behavior: human movement alternates between non-Markovian stretches, executed
+ballistically from an internal plan while ignoring the current state, and reactive phases under
+feedback whose delays make even the corrections intermittent~\citep{woodworth1899, todorov2002,
 gawthrop2011}. Prefix-valued critics have appeared as RL algorithms in state-based
 settings~\citep{acsac, aqc}; our contribution is to turn this construction into a post-training
 instrument for a pretrained VLA. A causal-transformer critic is learned purely offline on the VLA's
@@ -62,10 +63,10 @@ In summary, our main contributions are threefold:
     critic over frozen VLA representations decides state-dependent commitment and drives policy
     extraction; isolating its ingredients shows that in-sample targets and target networks are
     decisive, while low expectiles and unbounded value supports fail silently.
-    \item We validate each claim on the ground that can bear it: controlled offline RL
-    benchmarks~\citep{ogbench} isolate every design choice against its alternatives, and VLA-scale
-    manipulation~\citep{robocasa} shows the full pipeline surpassing supervised fine-tuning using
-    only the demonstrations it already had, without a single additional rollout.
+    \item Through experiments on VLA-scale manipulation~\citep{robocasa}, with every design
+    choice isolated against its alternatives in controlled ablations, we show the full pipeline
+    surpassing supervised fine-tuning using only the demonstrations it already had, without a single
+    additional rollout.
 \end{itemize}
 Together, these findings establish offline value learning, applied where the value can genuinely act,
 as a practical path to improving VLAs beyond the quality of their demonstrations.
