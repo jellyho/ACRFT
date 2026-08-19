@@ -257,6 +257,65 @@ Only the checkpoint step you serve has to be on disk (~13 GB), not the whole run
 
 ---
 
+## Serving a policy behind the patch-critic
+
+The **patch-critic** is a value function that is independent of the VLA: it scores candidate action
+chunks from a grid of frozen DINOv2 patch tokens, so it can be trained and evaluated offline without
+ever running the policy. Put it in front of a checkpoint and the server samples N chunks in one
+backbone pass and returns the one the critic likes best (`bon`), or that chunk truncated to its
+highest-value commitment prefix (`adaptive`).
+
+Checkpoints live in **`jellyho/patch_critic_yam_lego_taxi`**. Bring the critic folder and the base
+checkpoint it was trained against — the critic embeds its own copy of the base norm stats, and the
+server compares them against the policy it is actually serving, so a mismatched base raises at load
+instead of silently degrading.
+
+```bash
+cd /path/to/ACRFT
+
+uv run --no-sync python - <<'PY'
+from huggingface_hub import snapshot_download
+snapshot_download("jellyho/patch_critic_yam_lego_taxi", repo_type="model",
+                  allow_patterns="fixed_pi05_s347/*", local_dir="/data5/jellyho/critics/yam")
+PY
+
+srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
+  bash -lc 'cd /path/to/ACRFT && XLA_PYTHON_CLIENT_PREALLOCATE=false \
+    uv run --no-sync python scripts/serve_patch_critic.py \
+      --config pi05_yam_lego_taxi_rlt \
+      --checkpoint checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000 \
+      --critic /data5/jellyho/critics/yam/fixed_pi05_s347 \
+      --mode bon --num-samples 8 --port 8000'
+```
+
+Or build the wrapper in-process, which is the fastest way to check a new critic loads and infers:
+
+```python
+from openpi.policies import policy_config
+from openpi.policies.patch_critic_policy import PatchCriticSelectPolicy
+from openpi.training import config as _config
+
+policy = policy_config.create_trained_policy(
+    _config.get_config("pi05_yam_lego_taxi_rlt"), "<base checkpoint>")
+wrapped = PatchCriticSelectPolicy(
+    policy, "/data5/jellyho/critics/yam/fixed_pi05_s347", mode="bon", default_samples=8)
+
+out = wrapped.infer(obs)   # 3 camera images + observation/state + prompt
+out["actions"]             # (30, 14)  selected chunk
+out["critic_scores"]       # (30, N)   value of each candidate
+```
+
+`--mode adaptive` needs a critic with **more than one commitment prefix**, so it does not work with a
+`macro_group_size = 30` checkpoint such as `fixed_pi05_s347`.
+
+**Before trusting any number from this path**, read
+[`docs/deploy_yam_patch_critic.md`](docs/deploy_yam_patch_critic.md) — it lists what has and has not
+been validated. In particular the published critics have not yet been evaluated on the robot, and the
+`*_s347` (raw-units) folders were served through a path that scored the wrong action space, so numbers
+from those are void.
+
+---
+
 ## Results so far (PrepareCoffee, 50 trials/checkpoint)
 
 | Variant | best success | takeaway |
@@ -276,6 +335,14 @@ backbone-gradient is a clear negative. Critic and deployment results are in prog
 src/openpi/models/pi0_rlt.py             Pi0RLT: RL-token bottleneck, progress head, latent BC probe
 src/openpi/training/progress.py per-episode time-to-success progress labels
 src/openpi/rlt_critic/critic.py          QC / ARQ critics (scalar + HL-Gauss), ensemble
+src/openpi/patch_critic/critic.py        VLA-independent patch critic (frozen DINOv2 + per-prefix ARQ)
+src/openpi/patch_critic/preproc.py       shares the base VLA's state/action preprocessing
+src/openpi/patch_critic/spec.py          the critic's input contract, validated at serve time
+src/openpi/policies/patch_critic_policy.py  best-of-N / adaptive-chunk serving wrapper
+scripts/cache_patch_features.py          precompute frozen DINOv2 features once (~4x faster training)
+scripts/train_patch_critic_cached.py     patch-critic training from that cache
+scripts/score_critic_cached.py           success-vs-failure AUC + deep-atom diagnostics
+docs/deploy_yam_patch_critic.md          deploying the critic: contract, verification, limitations
 scripts/train_rlt_critic.py              Stage 3 critic training (GPU-resident, lax.scan)
 scripts/train.py                         Stage 1 training loop (+ RLT monitors, probe sim eval)
 examples/robocasa/run_train_rlt.sh       Stage 1 launcher with ablation flags
