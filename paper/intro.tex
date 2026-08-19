@@ -26,8 +26,8 @@ designed: it predicts a fixed, long action chunk~\citep{act, pi0}, it typically 
 tasks where standard one-step TD struggles~\citep{qc}, and its heavy backbone cannot be trained jointly
 with a critic at practical cost.
 
-These three frictions map onto the three stages of any offline RL pipeline, and each stage has to be
-rethought. The fixed chunk raises a question of granularity: what should the critic score, and for how
+These three mismatches, the fixed chunk, the long horizon, and the frozen backbone, map onto the
+three stages of any offline RL pipeline, and each stage has to be rethought. The fixed chunk raises a question of granularity: what should the critic score, and for how
 long should the robot commit? Critics that value every prefix of an action sequence
 exist~\citep{acsac, aqc}, but at VLA scale the commitment has so far been fixed in
 advance~\citep{corft, deas}. The long horizon and the frozen backbone raise a question of stability:
