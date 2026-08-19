@@ -2719,10 +2719,74 @@ evolution으로 측정한다.</p>
 """,
 )
 
+
+entry(
+    "08-20",
+    "adaptive-exec-map",
+    "적응 실행(execution-length) 계열 전수 지도 — 신호×레짐×적응대상, 그리고 빈칸",
+    "완결",
+    """
+<p><b>왜.</b> ExRL(RSS RL4VLA 워크샵)·DEHP(arXiv:2606.11408) 정독으로 "언제 replan할 것인가"가
+2026년 상반기에 논문이 몰린 계열임이 드러났다. 밤샘 이론 프로그램(다음 엔트리들: tie의 구조적
+불안정성 → 불확실성 분해 → non-Markov 긴-청크 구간 → event-triggered 다리 → 세 힘 종합)의 첫
+단계로, 이 계열을 <b>전수 지도</b>로 그려 우리 자리(오프라인 학습 신호 + 정책 개선 동시)가 정말
+비어 있는지 확정한다.</p>
+
+<p><b>분류축.</b> ① <b>무엇을 적응</b>하나 — 실행 길이 k / 액션 자체 / latent·연산예산.
+② <b>신호</b> — 학습된 가치(Q/V) / 휴리스틱(엔트로피·일관성·attention). ③ <b>레짐</b> — 온라인 상호작용
+필요 여부. ④ <b>정책 개선</b> — base policy가 좋아지는가(동결이면 ✕).</p>
+
+<table class='num'><tr><th>방법</th><th>적응 대상</th><th>신호</th><th>레짐</th><th>정책 개선</th><th>출처 신뢰도</th></tr>
+<tr><td><b>ExRL</b> (RSS'26 RL4VLA WS)</td><td>k∈{0..H}</td><td>학습 Q(s,a₁:H,k), off-policy(replay)</td><td>온라인 ~10⁶</td><td>✕ (동결, 자인: "bounded by the action distribution of the frozen base policy")</td><td>전문 정독(PDF)</td></tr>
+<tr><td><b>DEHP</b> (2606.11408)</td><td>h∈{1..H}</td><td>학습 π_len + V(s), on-policy PPO</td><td>온라인 5×10⁸</td><td>✕ (동결)</td><td>전문 정독</td></tr>
+<tr><td><b>AQC</b> (2605.05544)</td><td>커밋 K∈{1,4,8,16}</td><td>학습 Q (offline TD)</td><td>오프라인</td><td>✕ (선택만)</td><td>전문 정독(선행 리포트)</td></tr>
+<tr><td><b>ACSAC</b> (2605.11009)</td><td>커밋 길이</td><td>학습 Q (per-prefix)</td><td>오프라인</td><td>✕</td><td>PDF 보유·부분 정독</td></tr>
+<tr><td><b>ACH</b> (2605.10044)</td><td>청크 길이 (학습 중에도)</td><td>병렬 다중-길이 Q</td><td>offline→online</td><td><b>△ 정책도 학습</b></td><td>abstract 기준</td></tr>
+<tr><td><b>EQRL</b> (2606.14375)</td><td>latent+denoise 스텝+청크길이 C</td><td><b>critic 앙상블 불일치(=epistemic!)</b> + macro-action RL, γ^L 할인</td><td>온라인 추정</td><td>✕ (동결+어댑터)</td><td>abstract 기준</td></tr>
+<tr><td><b>AutoHorizon</b> (2602.21445)</td><td>실행 지평선</td><td>action self-attention (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>PACE</b> (2606.00537)</td><td>실행 지평선</td><td>궤적의 위상-운동학 구조 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>AAC</b> (CVPR'26, 2604.04161)</td><td>청크 크기</td><td>액션 엔트로피 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>A³</b> (2605.11567)</td><td>커밋 prefix</td><td>self-speculative 검증 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>초록+HTML 확인</td></tr>
+<tr><td><b>DVAC</b> (2606.03847)</td><td>replan 시점</td><td>denoising 분산 (휴리스틱)</td><td>무학습</td><td>✕</td><td>제목/초록 기준</td></tr>
+<tr><td>BID·SGAC·TAS·MoH·HiPolicy</td><td>청크 선택/융합</td><td>일관성·유사도·엔트로피·캐시</td><td>무학습~경량</td><td>✕</td><td>DEHP related-work 경유</td></tr>
+<tr><td><b>TempoRL</b> (ICML'21)</td><td>행동 반복 길이(skip)</td><td>학습 skip-Q (액션 조건!)</td><td>온라인</td><td>△(정책 동시 학습)</td><td>초록+블로그 정독</td></tr>
+<tr><td><b>Metelli PFQI</b> (ICML'20)</td><td>persistence k (고정 선택)</td><td>학습 Q_k + <b>이론 상계</b></td><td>배치(오프라인)</td><td>✕</td><td>초록 정독·이론 확인 예정</td></tr>
+<tr><td>FiGAR·AP-PI·SDAR</td><td>반복 길이</td><td>학습(액션 비조건 등)</td><td>온라인</td><td>△</td><td>인용 경유</td></tr></table>
+
+<p><b>관찰 셋.</b> ① VLA 청크 계열에서 <b>학습된 신호는 전부 온라인</b>(ExRL·DEHP·EQRL·ACH)이고,
+<b>오프라인/test-time은 전부 휴리스틱</b>(AutoHorizon·PACE·AAC·A³·DVAC·BID…) — "학습 신호 ×
+오프라인" 칸에 서 있는 것은 AQC/ACSAC와 우리 per-prefix ARQ critic뿐이다. ② VLA 계열은 (ACH 제외)
+<b>전원이 선택-only</b> — base policy는 동결이고, ExRL은 그 천장을 스스로 명시한다. 선택과 <b>정책
+개선의 동시 수행</b>은 계열 전체의 공백이며, 이것이 <span class='xref' data-eid='chunking-theory'>chunking-theory</span>
+Lemma B("선택만으로는 커밋 길이가 자라지 않는다")가 겨냥하는 자리다. ③ 유일하게 이론 상계를 가진
+것은 10년 전 계열(Metelli PFQI: persistence의 성능손실을 동역학 정칙성으로 상계) — VLA 세대는 이론
+없이 경험으로 재발견 중이다. 우리 이론 엔트리들이 이 둘을 잇는다.</p>
+
+<p><b>주장 강도 경계 (자기 교정).</b> "k-의존 편향을 아무도 안 짚었다"고 쓰면 안 된다 — 할인 부기의
+k-편향은 ExRL이 식별하고 SMDP 백업으로 해결했다 ("a standard one-step backup ... can bias the
+critic toward shortcut choices"). 우리 고유 축은 <b>closed-loop teleop의 hindsight leakage</b>
+(DQC arXiv:2512.10926)로, 부기를 올바로 해도 남고 오프라인에서 k가 길수록 커지는 낙관 편향이다 —
+두 편향을 항상 구분해 쓴다.</p>
+
+<p><b>다음.</b> 이 지도가 확정한 두 공백(오프라인 학습 신호, 선택+개선 동시)을 이론으로 채우는
+엔트리들이 이어진다: tie의 구조적 불안정성 → aleatoric/epistemic 분해 → non-Markov 긴-청크 구간 →
+event-triggered 제어 다리 → 세 힘 종합.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "adaptive-exec-map": {
+        "date": "2026-08-20 02:40",
+        "who": "워커B (밤샘 이론 프로그램 1/6)",
+        "where": "arXiv + 업로드 PDF(ExRL) + DEHP·ExRL 전문 정독",
+        "what": "'언제 replan하나' 계열 17+편 전수 지도 — 적응대상×신호×레짐×정책개선 4축 분류와 빈칸 확정",
+        "how": "정독(ExRL·DEHP·AQC·ACSAC)+초록 검증(ACH·EQRL·AutoHorizon·PACE·AAC·A³)+인용 경유(BID·SGAC 등), 출처 신뢰도 명기",
+        "why": "사용자 지시 — tie 비발생·불확실성 분해·non-Markov 이론화의 전제로 계열 지형과 우리 슬롯 확정",
+        "links": ["papers-tier1", "chunking-theory", "chunking-easy", "aqc-ablation", "alphaflow-pi05"],
+    },
     "chunking-theory": {
         "date": "2026-08-19 02:30",
         "who": "워커B(문헌 정독·정리) + 사용자(스토리라인·반론 제기)",
@@ -3209,6 +3273,61 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "adaptive-exec-map",
+    "A complete map of the adaptive-execution family — signal × regime × what-adapts, and the empty cells",
+    """
+<p><b>Why.</b> Reading ExRL (RSS RL4VLA workshop) and DEHP (arXiv:2606.11408) in full revealed that
+"when to replan" became a crowded family in early 2026. As step 1/6 of tonight's theory program
+(structural instability of the tie → uncertainty decomposition → non-Markov long-chunk regions →
+the event-triggered-control bridge → three-forces synthesis), this entry draws the complete map and
+confirms whether our slot (offline learned signal + simultaneous policy improvement) is truly empty.</p>
+
+<p><b>Axes.</b> ① <b>what adapts</b> — execution length k / the actions themselves / latents &
+compute budget. ② <b>signal</b> — learned value (Q/V) vs heuristic (entropy, consistency,
+attention). ③ <b>regime</b> — does it need online interaction. ④ <b>policy improvement</b> — does
+the base policy get better (frozen = ✕).</p>
+
+<table class='num'><tr><th>method</th><th>adapts</th><th>signal</th><th>regime</th><th>improves policy</th><th>source confidence</th></tr>
+<tr><td><b>ExRL</b> (RSS'26 RL4VLA WS)</td><td>k∈{0..H}</td><td>learned Q(s,a₁:H,k), off-policy (replay)</td><td>online ~10⁶</td><td>✕ (frozen; self-admitted: "bounded by the action distribution of the frozen base policy")</td><td>full read (PDF)</td></tr>
+<tr><td><b>DEHP</b> (2606.11408)</td><td>h∈{1..H}</td><td>learned π_len + V(s), on-policy PPO</td><td>online 5×10⁸</td><td>✕ (frozen)</td><td>full read</td></tr>
+<tr><td><b>AQC</b> (2605.05544)</td><td>commit K∈{1,4,8,16}</td><td>learned Q (offline TD)</td><td>offline</td><td>✕ (selection only)</td><td>full read (earlier report)</td></tr>
+<tr><td><b>ACSAC</b> (2605.11009)</td><td>commitment length</td><td>learned per-prefix Q</td><td>offline</td><td>✕</td><td>PDF held, partial read</td></tr>
+<tr><td><b>ACH</b> (2605.10044)</td><td>chunk length (during training too)</td><td>parallel multi-length Q</td><td>offline→online</td><td><b>△ trains the policy</b></td><td>abstract</td></tr>
+<tr><td><b>EQRL</b> (2606.14375)</td><td>latent + denoise steps + chunk length C</td><td><b>critic-ensemble disagreement (= epistemic!)</b> + macro-action RL, γ^L</td><td>online (likely)</td><td>✕ (frozen + adaptor)</td><td>abstract</td></tr>
+<tr><td><b>AutoHorizon</b> (2602.21445)</td><td>execution horizon</td><td>action self-attention (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>PACE</b> (2606.00537)</td><td>execution horizon</td><td>phase-kinematic trajectory structure (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>AAC</b> (CVPR'26, 2604.04161)</td><td>chunk size</td><td>action entropy (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>A³</b> (2605.11567)</td><td>committed prefix</td><td>self-speculative verification (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract + HTML</td></tr>
+<tr><td><b>DVAC</b> (2606.03847)</td><td>replan timing</td><td>denoising variance (heuristic)</td><td>training-free</td><td>✕</td><td>title/abstract</td></tr>
+<tr><td>BID · SGAC · TAS · MoH · HiPolicy</td><td>chunk selection/fusion</td><td>consistency, similarity, entropy, caching</td><td>training-free to light</td><td>✕</td><td>via DEHP related work</td></tr>
+<tr><td><b>TempoRL</b> (ICML'21)</td><td>action-repeat length (skip)</td><td>learned skip-Q (action-conditioned!)</td><td>online</td><td>△ (policy co-trained)</td><td>abstract + blog</td></tr>
+<tr><td><b>Metelli PFQI</b> (ICML'20)</td><td>persistence k (fixed pick)</td><td>learned Q_k + <b>theoretical bounds</b></td><td>batch (offline)</td><td>✕</td><td>abstract; theory check pending</td></tr>
+<tr><td>FiGAR · AP-PI · SDAR</td><td>repeat length</td><td>learned (action-unconditioned etc.)</td><td>online</td><td>△</td><td>via citation</td></tr></table>
+
+<p><b>Three observations.</b> ① Within the VLA-chunk family, <b>every learned signal is online</b>
+(ExRL, DEHP, EQRL, ACH) and <b>every offline/test-time method is heuristic</b> (AutoHorizon, PACE,
+AAC, A³, DVAC, BID…) — the "learned signal × offline" cell holds only AQC/ACSAC and our per-prefix
+ARQ critic. ② The VLA family is (ACH aside) <b>selection-only across the board</b> — the base policy
+stays frozen, and ExRL states that ceiling itself. Doing selection <b>and</b> policy improvement at
+once is a family-wide gap — exactly what <span class='xref' data-eid='chunking-theory'>chunking-theory</span>'s
+Lemma B ("selection alone cannot grow the commitment length") targets. ③ The only member with
+theoretical bounds is the decade-old lineage (Metelli's PFQI: persistence loss bounded via dynamics
+regularity) — the VLA generation is rediscovering it empirically, without theory. Tonight's theory
+entries connect the two.</p>
+
+<p><b>Claim-strength guard (self-correction).</b> We must not write "nobody addressed k-dependent
+bias" — the discount-bookkeeping bias in k was identified and fixed by ExRL's SMDP backup ("a
+standard one-step backup ... can bias the critic toward shortcut choices"). Our distinct axis is the
+<b>hindsight leakage of closed-loop teleop data</b> (DQC arXiv:2512.10926): an optimism bias that
+survives correct bookkeeping and grows with k offline. The two must always be kept separate.</p>
+
+<p><b>Next.</b> The theory entries that fill the two confirmed gaps (offline learned signal;
+selection + improvement together): structural instability of the tie → aleatoric/epistemic
+decomposition → non-Markov long-chunk regions → the event-triggered bridge → three-forces synthesis.</p>
+""",
+)
+
 en(
     "alphaflow-pi05",
     "α-Flow π0.5 — turning the VLA into a few/one-step generator (implementation + curriculum verification)",
