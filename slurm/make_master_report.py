@@ -2774,10 +2774,86 @@ event-triggered 제어 다리 → 세 힘 종합.</p>
 """,
 )
 
+
+entry(
+    "08-20",
+    "tie-knife-edge",
+    "완벽의 칼날 — 이론적 동률(tie)은 구조적으로 불안정하다 (정식화 v1)",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='chunking-theory'>chunking-theory</span>의 Theorem 2는 결정론·완전관측의
+극한에서 \\(\\Delta_{\\mathrm{react}}=0\\) — 즉 <b>모든 커밋 길이 k가 동률(tie)</b>이 됨을 보였다. 그렇다면
+adaptive chunking은 왜 실제로 이득을 내는가? 이 노트는 그 동률이 <b>칼날 위의 특이점</b>임을 정식화한다:
+세 종류의 ε-섭동(환경 확률성 · 정책 비일관성 · 관측 앨리어싱) 각각이 동률을 <b>서로 다른 방향으로</b>
+깨뜨리고, 따라서 일반적(generic) 환경에서 상태의존 커밋 맵 \\(\\kappa^*(s)\\)는 비자명해진다. 밤샘 이론
+프로그램 2/6.</p>
+
+<p><b>설정.</b> 기저 MDP \\(M=(\\mathcal S,\\mathcal A,T,r,\\gamma)\\), 청크 정책 \\(\\pi\\)(길이 H), 선택자
+\\(\\kappa:\\mathcal S\\to\\{1..H\\}\\). \\(Q^\\pi_k(s)\\) = s에서 청크의 첫 k스텝을 open-loop 실행 후 재질의했을 때의
+가치, \\(\\varphi_k(s):=Q^\\pi_k(s)-Q^\\pi_H(s)\\) = "k에서 재계획하는 것의 상대 이득".</p>
+
+<p><b>명제 K1 (동률의 기제 — 재계획이 무를 것이 없다).</b> (i) T 결정론, (ii) 정책이 <b>재계획-일관</b>
+(재질의가 이전 청크의 꼬리를 재생산: \\(\\mu_\\pi(s_{t+k})_{1:H-k}=\\) 이전 청크의 \\(k{+}1..H\\)), (iii) 관측이
+상태를 분리하면, 모든 s,k에서 \\(\\varphi_k(s)=0\\). <i>증명 스케치.</i> 재계획이 만들어내는 유일한 것은
+"새 정보에 따른 경로 수정"인데, (i)이 새 정보를, (ii)가 수정을, (iii)이 정보 손실을 각각 제거한다 —
+실행 경로가 k와 무관하게 동일해진다. ∎ (chunking-theory Thm 2의 재서술; tie는 우연이 아니라 세 가지
+소거의 합작이다.)</p>
+
+<p><b>명제 K2 (확률성은 짧은 k로 깬다 — 회수의 가치).</b> 도달 가능한 분기 상태 \\(s_b\\)가 있어 다음-상태
+실현에 따라 최적 연속이 확률 p로 달라지고 그 가치 격차가 g라면, 분기 직후 재계획은
+\\(\\gamma^{t_b}\\,p\\,g>0\\) 만큼 엄격 이득 — \\(\\varphi_k\\)는 분기를 청크 안에 가두는 k에서 엄격 음수가 된다.
+<i>기제는 정보의 가치(VoI)</i>: 관측이 결정을 바꿀 때에만, 그리고 그때마다 재질의는 엄격히 이득이다.
+이 항은 <b>회수 불가</b>(정책 개선으로 소거 안 됨) — aleatoric floor의 정체다. 고전적 정량화:
+Metelli et al. (ICML'20, arXiv:2002.06836) Thm 4.1은 persistence 비용을
+\\(\\tfrac{\\gamma(1-\\gamma^{k-1})}{(1-\\gamma)(1-\\gamma^k)}\\,\\lVert d^\\pi\\rVert\\) 로 상계한다 — d는 "정책이 할 일"과
+"지속이 하는 일"의 불일치이고, 우리 분기항은 그 하계 짝이다.</p>
+
+<p><b>명제 K3 (정책 오차도 짧은 k로 깨나, 흡수 가능).</b> 재계획 분포와 청크 연속의 스텝당 TV-괴리를
+\\(\\varepsilon_\\pi\\)라 하면 compounding(Ross–Bagnell)으로 \\(\\varphi\\)의 이 성분은 k에 대해 증가하며 짧은 k를
+민다. 그러나 \\(\\pi\\to\\pi^*\\)에서 \\(\\varepsilon_\\pi\\to0\\): <b>정책 개선이 이 항을 흡수</b>하고, 남는 것은 K2뿐 —
+평균 커밋 길이가 aleatoric floor까지 단조 증가하는 curriculum(chunking-theory III.7)의 다른 얼굴이다.
+주목: Metelli Thm 4.2의 상계에는 정책 자체의 액션 분산
+\\(\\sigma_p^p=\\sup_s\\int\\!\\!\\int d_{\\mathcal A}(a,a')^p\\,\\pi(da|s)\\pi(da'|s)\\) 가 <b>명시적으로</b> 들어 있다 —
+"정책 불확실성이 지속(커밋) 비용을 키운다"는 우리 주장의 2020년형 선례.</p>
+
+<p><b>명제 K4 (앨리어싱은 긴 k로 깬다 — 유일하게 부호가 반대).</b> 관측 채널 \\(O\\)가 상태를 뭉개면
+재계획은 <b>가블링된(garbled) 정보 위에서의 재추론</b>이다. Blackwell의 정리에 의해 가블링된 채널 위의
+결정은 약하게 나쁘고, 뭉개진 두 상태의 올바른 연속이 다르면 엄격히 나쁘다 — 반면 이전의 분리
+가능한 상태에서 발사된 청크는 그 정보를 open-loop로 <b>운반</b>한다. 따라서 재계획이 모드를 오가며
+평균내는(dithering) 상태에서는 \\(\\varphi_k>0\\) — <b>긴 커밋이 엄격 우위인 구간이 존재</b>한다. (2-상태
+구성과 imitation의 copycat 문헌 접속은 다음 엔트리에서 완결.)</p>
+
+<p><b>정리 K5 (칼날, 잠정 서술).</b> 동률 \\(\\varphi\\equiv0\\) ⟺ (도달 가능한 분기 없음) ∧ (재계획-일관) ∧
+(실행 구간 앨리어싱 없음). 세 조건 중 하나라도 ε만큼 깨지면 해당 상태 근방에서 \\(\\varphi\\)의 부호가
+결정되며(K2·K3은 −, K4는 +), 방향이 <b>상태별로 다르므로</b> 일반적 환경의 \\(\\kappa^*(s)\\)는 비상수다.
+즉: <b>adaptive chunking은 동률의 예외가 아니라, 동률이 adaptive의 measure-zero 특이점이다.</b>
+잠정 표기 이유: "generic"의 정확한 위상(어떤 섭동 공간에서 open-dense인가)은 다음 버전에서 조인다.</p>
+
+<p><b>따름 (배포 규칙의 정당화).</b> 이상점 근방에서는 모든 k가 ε-동률이므로, return-최적 ±ε 집합
+안에서 <b>가장 긴 k</b>를 고르는 사전식(lexicographic) 규칙이 자연스럽다 — 추가 보상 조작 없이 연산
+효율을 회수하고, 이상점에서 멀어지면 어차피 부호가 결정을 대신한다. (chunking-theory III.7의 규칙이
+이 정리의 따름이 된다.)</p>
+
+<p><b>선행과의 관계.</b> 이 노트의 주장은 전부 <b>참값(true value)</b>에 관한 것이다 — 추정(estimation)의
+k-편향은 별개 축이다: 할인 부기의 편향은 ExRL이 SMDP 백업으로 해결했고, closed-loop teleop의
+hindsight leakage(DQC)는 부기를 올바로 해도 남는 우리 미해결 축이다
+(<span class='xref' data-eid='adaptive-exec-map'>계열 지도</span>의 주장 강도 경계 참조).</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "tie-knife-edge": {
+        "date": "2026-08-20 03:30",
+        "who": "워커B (밤샘 이론 프로그램 2/6)",
+        "where": "이론 노트 (chunking-theory Thm 2 위에서; Metelli ICML'20 원문 정리 4.1/4.2 확인)",
+        "what": "이상 극한의 k-동률이 칼날임을 정식화 — 확률성(−)·정책오차(−, 흡수 가능)·앨리어싱(+)의 세 섭동이 부호를 결정",
+        "how": "명제 K1–K4 + 정리 K5(잠정) 스케치: VoI 논증, Ross–Bagnell compounding, Blackwell 가블링, Metelli 상계 접속",
+        "why": "사용자 지시 — 'tie가 실제로 안 일어나는' 이유의 이론적 뒷받침 (adaptive chunking 유도의 근거)",
+        "links": ["chunking-theory", "chunking-easy", "adaptive-exec-map", "aqc-ablation"],
+    },
     "adaptive-exec-map": {
         "date": "2026-08-20 02:40",
         "who": "워커B (밤샘 이론 프로그램 1/6)",
@@ -3273,6 +3349,81 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "tie-knife-edge",
+    "The knife-edge of perfection — the theoretical tie is structurally unstable (formalization v1)",
+    """
+<p><b>Why.</b> <span class='xref' data-eid='chunking-theory'>chunking-theory</span>'s Theorem 2 shows that in
+the deterministic, fully observed limit \\(\\Delta_{\\mathrm{react}}=0\\): <b>every commitment length k
+ties</b>. So why does adaptive chunking help in practice? This note formalizes that tie as a
+<b>knife-edge singularity</b>: three kinds of ε-perturbation (environment stochasticity, policy
+inconsistency, observation aliasing) each break the tie <b>in different directions</b>, so a generic
+environment has a nontrivial state-dependent commitment map \\(\\kappa^*(s)\\). Overnight theory
+program 2/6.</p>
+
+<p><b>Setup.</b> Base MDP \\(M=(\\mathcal S,\\mathcal A,T,r,\\gamma)\\), chunk policy \\(\\pi\\) (length H),
+selector \\(\\kappa:\\mathcal S\\to\\{1..H\\}\\). \\(Q^\\pi_k(s)\\) = value of executing the chunk's first k steps
+open-loop from s, then requerying; \\(\\varphi_k(s):=Q^\\pi_k(s)-Q^\\pi_H(s)\\) = the relative gain of
+replanning at k.</p>
+
+<p><b>Proposition K1 (the tie's mechanism — replanning has nothing to undo).</b> If (i) T is
+deterministic, (ii) the policy is <b>replan-consistent</b> (a requery reproduces the previous chunk's
+tail), and (iii) observations separate states, then \\(\\varphi_k(s)=0\\) for all s, k. <i>Sketch.</i> The
+only thing replanning can produce is a correction based on new information; (i) removes the new
+information, (ii) removes the correction, (iii) removes the information loss — the executed path
+becomes k-independent. ∎ (A restatement of chunking-theory Thm 2: the tie is not an accident but
+the conjunction of three erasures.)</p>
+
+<p><b>Proposition K2 (stochasticity breaks the tie toward short k — the value of recourse).</b> If a
+reachable branch state \\(s_b\\) exists where the optimal continuation differs across next-state
+realizations with probability p and value gap g, replanning right after the branch strictly gains
+\\(\\gamma^{t_b}\\,p\\,g>0\\) — \\(\\varphi_k\\) is strictly negative for any k that buries the branch inside the
+chunk. The mechanism is the <i>value of information</i>: a requery strictly helps exactly when the
+observation changes the decision. This term is <b>irrecoverable</b> (no policy improvement removes
+it) — it is the aleatoric floor. The classical quantitative side: Metelli et al. (ICML'20,
+arXiv:2002.06836) Thm 4.1 bounds the persistence cost by
+\\(\\tfrac{\\gamma(1-\\gamma^{k-1})}{(1-\\gamma)(1-\\gamma^k)}\\,\\lVert d^\\pi\\rVert\\), where d is the discrepancy
+between what the policy would do and what persistence does; our branching term is its lower-bound
+counterpart.</p>
+
+<p><b>Proposition K3 (policy error also breaks toward short k — but absorbably).</b> Let
+\\(\\varepsilon_\\pi\\) be the per-step TV gap between the replan distribution and the chunk's
+continuation. By Ross–Bagnell compounding this component of \\(\\varphi\\) grows with k and pushes
+toward short commitment; but \\(\\varepsilon_\\pi\\to0\\) as \\(\\pi\\to\\pi^*\\): <b>policy improvement absorbs
+this term</b>, leaving only K2 — the other face of the curriculum (mean commitment length rising to
+the aleatoric floor, chunking-theory III.7). Notably, Metelli Thm 4.2's bound contains the policy's
+own action dispersion \\(\\sigma_p^p=\\sup_s\\int\\!\\!\\int d_{\\mathcal A}(a,a')^p\\,\\pi(da|s)\\pi(da'|s)\\)
+<b>explicitly</b> — a 2020 precedent for "policy uncertainty raises the cost of committing".</p>
+
+<p><b>Proposition K4 (aliasing breaks the tie toward LONG k — the only sign flip).</b> If the
+observation channel \\(O\\) merges states, replanning is <b>re-inference on garbled information</b>. By
+Blackwell's theorem decisions on a garbled channel are weakly worse — strictly worse when the
+merged states demand different continuations — whereas a chunk launched from an earlier,
+separable state <b>carries</b> that information open-loop. In states where replanning dithers between
+modes, \\(\\varphi_k>0\\): <b>regions exist where longer commitment strictly wins</b>. (The two-state
+construction and the copycat-literature connection are completed in the next entry.)</p>
+
+<p><b>Theorem K5 (the knife-edge; provisional statement).</b> The tie \\(\\varphi\\equiv0\\) ⟺ (no
+reachable branching) ∧ (replan-consistency) ∧ (no aliasing along executed segments). If any
+condition fails by ε, the sign of \\(\\varphi\\) near the affected states is determined (K2, K3: −;
+K4: +), and since the direction varies by state, the generic \\(\\kappa^*(s)\\) is nonconstant. That is:
+<b>adaptive chunking is not an exception to the tie; the tie is adaptive chunking's measure-zero
+singularity.</b> Provisional because the precise topology of "generic" (open-dense in which
+perturbation space) is tightened in the next version.</p>
+
+<p><b>Corollary (justifying the deployment rule).</b> Near the ideal point all k are ε-tied, so the
+lexicographic rule — the longest k within the return-optimal ±ε set — is the natural tie-break: it
+recovers compute without touching return, and away from the ideal point the sign decides anyway.
+(chunking-theory III.7's rule becomes a corollary of this theorem.)</p>
+
+<p><b>Relation to prior work.</b> Everything here concerns <b>true values</b> — estimation-side
+k-biases are a separate axis: the discount-bookkeeping bias was solved by ExRL's SMDP backup, and
+the hindsight leakage of closed-loop teleop (DQC) survives correct bookkeeping and remains our
+open, unmeasured axis (see the claim-strength guard in
+<span class='xref' data-eid='adaptive-exec-map'>the family map</span>).</p>
+""",
+)
+
 en(
     "adaptive-exec-map",
     "A complete map of the adaptive-execution family — signal × regime × what-adapts, and the empty cells",
