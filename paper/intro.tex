@@ -1,72 +1,54 @@
-% Introduction (v8, 2026-08-19). Compile with natbib (\citep/\citet) + paper/references.bib.
-% Structure: P1 recipe / P2 data ceiling / P3 question + machinery mismatch / P4 prior attempts +
-% structural diagnosis (why they stall) / P5 human motor analogy + thesis (where value acts) + method
-% / contributions. No em-dashes, no performance numbers, no LLM analogy.
+% Introduction (v9, 2026-08-19). natbib + paper/references.bib. No em-dashes, no numbers.
+% v9 = v8 trimmed ~35%: every paragraph tightened, redundant clauses merged.
 
 \section{Introduction}
 \label{sec:intro}
 
 Vision-language-action models (VLAs) have made large-scale pretraining the dominant recipe for robot
-manipulation~\citep{rt2, openvla, pi0}. Trained on large, diverse robot datasets, the vision-language
-backbone provides priors strong enough that a new task rarely has to be learned from scratch, and in
-practice a VLA is deployed by fine-tuning it on demonstrations of the target task.
+manipulation~\citep{rt2, openvla, pi0}. The pretrained backbone provides priors strong enough that a
+new task rarely starts from scratch; in practice, a VLA is deployed by fine-tuning it on
+demonstrations of the target task.
 
-The limitation of this recipe lies in the data it imitates. Teleoperated demonstrations are inherently
-suboptimal, interleaving expert behavior with hesitation, detours, and outright failure, and their
-quality varies even within a single trajectory~\citep{grrl, pistar06}. Collecting more of them does not
-change this, since an imitation objective treats every transition as an equally valid target. Filtering
-the data away discards exactly the scarce experience the recipe depends on, and refining the policy
-through online rollouts is costly and unsafe at this scale.
+The limitation of this recipe lies in the data it imitates. Teleoperated demonstrations interleave
+expert behavior with hesitation, detours, and failure, and their quality varies even within a single
+trajectory~\citep{grrl, pistar06}. An imitation objective treats every transition as an equally valid
+target, so collecting more data reproduces the same average; filtering discards the scarce experience
+the recipe depends on, and online refinement is costly and unsafe at this scale.
 
 Can an optimal policy be extracted from suboptimal human data with a VLA-scale model?
-Temporal-difference (TD) learning and offline reinforcement learning (RL) promise precisely this,
-stitching high-value segments of otherwise mediocre trajectories into behavior that no single
-demonstration exhibits~\citep{cql, iql}. A VLA, however, is not the policy for which this machinery was
-designed: it predicts a fixed, long action chunk~\citep{act, pi0}, it typically tackles long-horizon
-tasks where standard one-step TD struggles~\citep{qc}, and its heavy backbone cannot be trained jointly
-with a critic at practical cost.
+Temporal-difference (TD) learning promises precisely this, stitching high-value segments of mediocre
+trajectories into behavior no single demonstration exhibits~\citep{cql, iql}. But a VLA is not the
+policy this machinery was designed for: it predicts a fixed, long action chunk~\citep{act, pi0}, it
+faces long horizons where one-step TD struggles~\citep{qc}, and its backbone cannot be trained
+jointly with a critic at practical cost.
 
-Recent work has begun to bring value learning to VLAs, and its trajectory is telling. Most
-post-training methods sidestep the value function altogether, letting outcome signals only condition
-or reweight the imitation objective~\citep{pistar06, arfm, arm, reinbot, nora15}; they inherit the
-stability of supervised learning together with its ceiling, since the policy is never trained to
-exceed what it imitates. The few methods that do learn a value stop it short of the policy. GR-RL
-uses its value only to filter the dataset~\citep{grrl}. V-GPS and DEAS let the value act only at test
-time, rescoring chunks the policy itself proposes~\citep{vgps, deas, robomonkey}. CO-RFT trains a
-chunked critic yet executes fixed-length commitments chosen in advance~\citep{corft}. We argue that
-these are structural dead ends rather than accidents of engineering. A value that rescores the
-policy's own proposals can never exceed what those proposals contain, and its argmax preferentially
-harvests the critic's own errors~\citep{emaq}. A value over fixed whole chunks is miscalibrated by
-construction: demonstrations are collected closed loop, so a chunked critic cannot distinguish skill
-from luck and systematically overvalues commitments that merely happened to work~\citep{dqc}. What
-decides whether offline RL helps a VLA is therefore not only how well the value is learned, but
-\emph{where the value is allowed to act}.
+Recent attempts stop short of this promise. Most reshape imitation with outcome
+signals~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting both the stability and the ceiling of
+supervised learning. The few that learn a value keep it away from the policy: it filters
+data~\citep{grrl}, rescores the policy's own samples~\citep{vgps, deas, robomonkey}, or scores
+commitments fixed in advance~\citep{corft}. These are structural dead ends. Rescoring cannot exceed
+its proposals and its argmax harvests critic error~\citep{emaq}; a fixed-chunk critic cannot tell
+skill from luck in closed-loop demonstrations and overvalues commitments that merely happened to
+work~\citep{dqc}. What matters is not only how well the value is learned, but \emph{where it is
+allowed to act}.
 
-This paper answers that question, and skilled motor behavior offers the blueprint. A human reaching
-for a cup sweeps through free space ballistically, committing to a long pre-planned motion without
-consulting feedback, then tightens into closed-loop control the moment contact matters; the same hand
-that ignores its senses mid-swing is guided by them at the grasp~\citep{woodworth1899, todorov2002}.
-Even the corrections are not continuous: sensory delays force behavior to be assembled from short
-open-loop segments punctuated by intermittent replanning~\citep{gawthrop2011}. Acting well, in other
-words, is not a choice between committed and reactive control but the judgment of which one each
-moment demands. A VLA executing a fixed-length chunk is denied exactly this judgment, and a learned
-value is exactly what can supply it. We therefore let the value act on the policy through the two
-channels that stay inside the data: deciding, state by state, how much of each predicted chunk the
-robot executes, and retraining the policy toward the behavior the value prefers. We instantiate this
-principle as an offline reinforcement fine-tuning method for VLAs: a prefix-valued causal-transformer
-critic~\citep{acsac, aqc} over the VLA's frozen representations, trained with conservative in-sample
-chunk-level targets~\citep{iql, deas}, deployed for state-dependent commitment, and distilled back
-into the policy. The result surpasses supervised fine-tuning from the very same demonstrations,
-without a single additional rollout.
+Skilled motor behavior shows where. A human hand crosses free space ballistically and tightens into
+feedback control only when contact matters~\citep{woodworth1899, todorov2002}; even corrections
+arrive as short open-loop segments with intermittent replanning~\citep{gawthrop2011}. Acting well is
+the judgment of how long to commit, and a fixed chunk denies a VLA exactly that. We let the value
+supply it through the two channels that stay inside the data: deciding, state by state, how much of
+each predicted chunk to execute, and retraining the policy toward what the value prefers. Concretely,
+a prefix-valued transformer critic~\citep{acsac, aqc} over frozen VLA representations, trained with
+conservative in-sample targets~\citep{iql, deas}, drives state-dependent commitment and policy
+extraction. The result surpasses supervised fine-tuning from the very same demonstrations, without a
+single additional rollout.
 
 \paragraph{Contributions.}
-(i)~We give a structural analysis of why the prevailing ways of using a learned value on a VLA,
-filtering data, rescoring samples at test time, and executing fixed commitments, cannot surpass the
-policy they start from, and confirm each failure mode in controlled experiments~\citep{emaq, dqc,
-park2024bottleneck}. (ii)~We propose the principle that follows: the value must act through in-data
-channels, state-dependent commitment and policy extraction, and we instantiate it as a complete
-offline reinforcement fine-tuning pipeline on frozen VLA representations, requiring no online
-interaction. (iii)~We provide a component-isolated stability recipe for chunk-space TD at VLA scale,
-identifying what is decisive and what silently fails. (iv)~We validate the pipeline end to end on
-standard offline RL benchmarks~\citep{ogbench} and VLA-scale manipulation~\citep{robocasa}, using only
-the demonstrations that supervised fine-tuning already uses.
+(i)~A structural analysis of why filtering, test-time rescoring, and fixed commitments cannot surpass
+the policy they start from, each failure mode confirmed in controlled
+experiments~\citep{emaq, dqc, park2024bottleneck}. (ii)~The principle that follows and its
+instantiation: a value acting through in-data channels, state-dependent commitment and policy
+extraction, as a complete offline pipeline on frozen VLA representations. (iii)~A component-isolated
+stability recipe for chunk-space TD at VLA scale. (iv)~End-to-end validation on offline RL
+benchmarks~\citep{ogbench} and VLA-scale manipulation~\citep{robocasa}, using only the demonstrations
+supervised fine-tuning already uses.
