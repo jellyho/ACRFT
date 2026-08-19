@@ -16,7 +16,7 @@ The critic dir must hold ``config.json`` + ``params.msgpack`` (written by train_
 camera keys default to YAM's (agentview, wrist_left, wrist_right) in the order the critic was trained.
 """
 
-import json
+import logging
 import pathlib
 
 import jax
@@ -35,14 +35,34 @@ YAM_STATE_KEY = "observation/state"
 
 
 def _parse_image(image, size):
-    from PIL import Image
+    # INTER_AREA, not bilinear: the feature cache the critic trained on downsamples 480x640 -> 224 with
+    # cv2.INTER_AREA, and bilinear downsampling aliases. Measured drift between the two was 5.5% mean /
+    # 21% max relative L2 per patch token -- small, but free to remove.
+    import cv2
 
     x = np.asarray(image)
     if np.issubdtype(x.dtype, np.floating):
         x = (np.clip(x, 0, 1) * 255).astype(np.uint8)
     if x.ndim == 3 and x.shape[0] == 3 and x.shape[-1] != 3:
         x = np.transpose(x, (1, 2, 0))  # CHW -> HWC
-    return np.asarray(Image.fromarray(x).resize((size, size), Image.BILINEAR))
+    return cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA)
+
+
+def _policy_norm_stats(policy):
+    """The norm stats the served policy actually uses, dug out of its input transform chain."""
+    t = getattr(policy, "_input_transform", None)
+    for sub in getattr(t, "transforms", [t] if t is not None else []):
+        ns = getattr(sub, "norm_stats", None)
+        if isinstance(ns, dict) and ns:
+            return {
+                k: {
+                    a: np.asarray(getattr(v, a))
+                    for a in ("mean", "std", "q01", "q99")
+                    if getattr(v, a, None) is not None
+                }
+                for k, v in ns.items()
+            }
+    return None
 
 
 class PatchCriticSelectPolicy(BasePolicy):
@@ -75,11 +95,85 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._to_nchw = to_nchw
 
         model = policy._model
-        self._extract = nnx_utils.module_jit(model.extract_token_and_base_actions)
+        # num_samples/num_steps size the sampler's noise array, so they must be compile-time constants;
+        # left traced, jax.random.normal rejects the shape. (This path had never actually been run.)
+        self._extract = nnx_utils.module_jit(
+            model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
+        )
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
 
-        cc = json.loads((pathlib.Path(critic_dir) / "config.json").read_text())
+        from openpi.patch_critic import spec as critic_spec
+
+        cc, self._norm_stats = critic_spec.load(critic_dir)
+        # A critic's inputs are RAW dataset units (see openpi.patch_critic.spec). The wrapper honours that by
+        # reading state before the input transform and un-normalizing candidates through the output
+        # transform -- but only this check makes a mismatched critic fail loudly instead of returning
+        # confident nonsense. Older checkpoints carry no spec; they are the raw-units generation.
+        self._spec = cc.get("input_spec")
+        if self._spec is not None:
+            problems = critic_spec.check(
+                self._spec,
+                model_action_dim=self._model_action_dim,
+                num_cameras=len(camera_keys),
+                img_size=self._img_size,
+            )
+            if problems:
+                raise ValueError("critic/server contract mismatch:\n  - " + "\n  - ".join(problems))
+        else:
+            logging.warning(
+                "critic %s has no input_spec (pre-contract checkpoint); assuming raw dataset units. "
+                "Re-save it with scripts/backfill_critic_spec.py to enable validation.",
+                critic_dir,
+            )
+        self._warned_state = False
+        # The critic may have been trained on a SUBSET of proprio channels (positions only, matching
+        # what ALOHA/Libero/DROID feed). Slice the served state the same way or the network sees
+        # different quantities in different slots.
+        pidx = (self._spec or {}).get("proprio_indices")
+        self._proprio_idx = None if pidx is None else np.asarray(pidx, np.int64)
+        self._critic_action_dim = int(cc.get("action_dim", 14))
+        # A pi05-space critic eats the sampler's output as-is; a raw-space one needs the decode path.
+        self._pre = None
+        if (self._spec or {}).get("normalization") == "pi05":
+            from openpi.patch_critic import preproc as critic_preproc
+
+            # Prefer the copy INSIDE the checkpoint: the recorded path is provenance, and relying on
+            # it means the critic silently picks up whatever norm_stats.json happens to sit there.
+            embedded = pathlib.Path(critic_dir) / self._spec.get("norm_stats_file", "pi05_norm_stats.json")
+            if embedded.exists():
+                stats = critic_preproc.load_norm_stats(embedded)
+            elif pathlib.Path(self._spec["norm_stats"]).exists():
+                stats = critic_preproc.load_norm_stats(self._spec["norm_stats"])
+                logging.warning(
+                    "critic %s has no embedded %s; falling back to the recorded path %s. Re-save it so "
+                    "the checkpoint is self-contained.",
+                    critic_dir,
+                    embedded.name,
+                    self._spec["norm_stats"],
+                )
+            else:
+                raise FileNotFoundError(
+                    f"critic {critic_dir} declares pi05 preprocessing but neither its embedded "
+                    f"{embedded.name} nor the recorded path {self._spec['norm_stats']} exists -- the "
+                    "critic cannot be served without the stats it was trained against"
+                )
+            self._pre = critic_preproc.Pi05Preproc(
+                ref=np.asarray(self._spec["joint_delta_reference"], np.int64),
+                stats=stats,
+                use_quantiles=bool(self._spec["use_quantiles"]),
+                delta=self._spec["delta_mode"] == "joint",
+            )
+            # "I am using the same norm stats as pi05" is a claim worth checking, not assuming: read
+            # the stats off the policy being served and compare the numbers, not the paths.
+            served = _policy_norm_stats(policy)
+            if served is not None:
+                mismatch = critic_preproc.compare(stats, served)
+                if mismatch:
+                    raise ValueError(
+                        "critic/policy norm-stats mismatch -- the critic was trained against different "
+                        "statistics than the policy being served:\n  - " + "\n  - ".join(mismatch)
+                    )
         self._macro = int(cc["macro_group_size"])
         atoms = int(cc["num_atoms"])
         import flax.serialization
@@ -138,26 +232,60 @@ class PatchCriticSelectPolicy(BasePolicy):
         num_samples = int(obs.pop("num_samples", 0) or self._default_samples)
 
         state = np.asarray(obs[self._state_key], np.float32).reshape(-1)
+        want_sd = (self._spec or {}).get("state_dim")
+        if want_sd is not None and state.shape[0] != want_sd:
+            raise ValueError(
+                f"state width {state.shape[0]} but the critic was trained on {want_sd} "
+                f"({self._state_key}); the proprio channels would land in the wrong slots"
+            )
+        if self._norm_stats is not None and self._pre is None and not self._warned_state:
+            from openpi.patch_critic import spec as critic_spec
+
+            bad = critic_spec.out_of_range(self._norm_stats, state)
+            if bad:
+                self._warned_state = True  # once per server; this is a diagnostic, not a rate-limiter
+                logging.warning(
+                    "state channels %s are far outside the critic's training range -- the critic "
+                    "expects RAW dataset units; its values are not trustworthy here.",
+                    bad[:12],
+                )
         patches = self._patches_of(obs)
 
         # N candidate chunks from ONE backbone pass (the token is unused by the patch-critic).
         inputs = self._pol._input_transform(dict(obs))
+        # A pi05-space critic takes the policy's own state, as-is. Read it off the transform rather
+        # than recomputing it: one source of truth, and the load-time digest check is what guarantees
+        # it matches the stats the critic trained against.
+        norm_state = np.asarray(inputs["state"], np.float32).reshape(-1)
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
         observation = _model.Observation.from_dict(inputs)
         self._rng, sample_rng = jax.random.split(self._rng)
         _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
         chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
-        decoded = np.asarray(
-            self._pol._output_transform(
-                {
-                    "state": np.zeros((chunks_model.shape[0], self._model_action_dim), np.float32),
-                    "actions": chunks_model,
-                }
-            )["actions"],
-            np.float32,
-        )  # [N, H, A]
+        if self._pre is not None:
+            # Shared preprocessing: the sampler already emits normalized joint deltas, which is
+            # precisely what the critic was trained on. No conversion, so nothing to get wrong.
+            scored_actions = chunks_model[..., : self._critic_action_dim]
+            scored_state = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
+        else:
+            # Legacy raw-units critic. The output transform un-normalizes AND undoes the joint-delta
+            # parameterisation, and the latter needs the REAL state (JointAbsoluteActions does
+            # actions[..., i] += state[..., ref[i]]). This passed zeros, which silently left the
+            # chunks as DELTAS while the critic was trained on ABSOLUTE joint targets -- no error,
+            # just meaningless values. Broadcast the live state over the N candidates.
+            scored_actions = np.asarray(
+                self._pol._output_transform(
+                    {
+                        "state": np.broadcast_to(state, (chunks_model.shape[0], state.shape[0])).copy(),
+                        "actions": chunks_model,
+                    }
+                )["actions"],
+                np.float32,
+            )
+            scored_state = state if self._proprio_idx is None else state[self._proprio_idx]
+        decoded = np.asarray(scored_actions, np.float32)  # [N, H, A] in the critic's own space
 
-        pv = np.asarray(self._score(patches, jnp.asarray(state), jnp.asarray(decoded)))  # [N, mh]
+        pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(decoded)))  # [N, mh]
         best = int(np.argmax(pv[:, -1]))  # argmax full-chunk value
         if self._mode == "adaptive":
             kbest = int(np.argmax(pv[best]))  # highest-value commitment prefix (macro-group index)
