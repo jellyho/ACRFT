@@ -2841,10 +2841,72 @@ hindsight leakage(DQC)는 부기를 올바로 해도 남는 우리 미해결 축
 """,
 )
 
+
+entry(
+    "08-20",
+    "uncertainty-split",
+    "불확실성의 두 얼굴 — aleatoric/epistemic 분해가 adaptive chunking을 유도한다 (측정 계획 포함)",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='tie-knife-edge'>칼날 정식화</span>는 동률을 깨는 세 힘 중 둘이
+불확실성임을 보였다: 환경 확률성(K2, 회수 불가)과 정책 오차(K3, 개선이 흡수). 이 노트는 그 둘이
+바로 <b>aleatoric / epistemic</b> 분해(Depeweg et al., ICML'18, arXiv:1710.07283; Clements et al.,
+arXiv:1905.09638)이고, 우리 분포형 앙상블 크리틱이 <b>추가 학습 없이 두 량을 상태×커밋길이 격자로
+측정할 수 있음</b>을 보인다. 밤샘 이론 프로그램 3/6.</p>
+
+<p><b>분해 (총분산 법칙).</b> 앙상블 멤버 \\(m=1..K\\)가 각각 return 분포 \\(Z_m(s,a_{1:k})\\)을 내면
+\\[ \\underbrace{\\mathrm{Var}[Z]}_{\\text{총}} \\;=\\;
+\\underbrace{\\tfrac1K\\textstyle\\sum_m \\mathrm{Var}[Z_m]}_{u_{\\mathrm{alea}}\\;(\\text{멤버 내})} \\;+\\;
+\\underbrace{\\mathrm{Var}_m\\big[\\mathbb E[Z_m]\\big]}_{u_{\\mathrm{epis}}\\;(\\text{멤버 간})} \\]
+— 멤버 내 분산은 데이터가 아무리 많아도 남는 환경/return의 산포(aleatoric), 멤버 간 불일치는
+데이터·학습이 줄이는 무지(epistemic). 우리 <code>PatchCriticEnsemble</code>은 <b>이미 이 구조다</b>:
+K개의 HL-Gauss 분포 헤드가 per-prefix로 있으니, 체크포인트에서 forward만 하면
+\\(u_{\\mathrm{alea}}(s,k)\\), \\(u_{\\mathrm{epis}}(s,k)\\) 두 장(field)이 공짜로 나온다.</p>
+
+<p><b>이론 접속 — 세 예측.</b>
+① <b>κ*는 aleatoric을 따라간다</b>: K2의 분기항은 \\(u_{\\mathrm{alea}}\\)가 큰 상태에서 발동하므로, 참값
+기준 최적 커밋은 \\(u_{\\mathrm{alea}}(s,\\cdot)\\) 높은 곳에서 짧아야 한다 — DEHP·ExRL이 정성적으로 관측한
+"정밀 구간=짧게"의 정체가 이것이라는 가설.
+② <b>학습이 진행되면 epistemic만 줄어든다</b>: K3의 흡수는 \\(u_{\\mathrm{epis}}\\downarrow\\)로 나타나고
+\\(u_{\\mathrm{alea}}\\)는 불변 — curriculum(평균 커밋 길이의 단조 증가)의 <b>측정 가능한 서명</b>이다.
+③ <b>라우팅은 둘을 구분해야 한다</b>: EQRL(arXiv:2606.14375)은 앙상블 불일치(=epistemic만)로 연산을
+라우팅하는데, 분해 관점에선 절반이다 — 짧은 커밋(재계획)은 aleatoric이, 추가 연산·데이터 수집은
+epistemic이 각각 정당화한다. 둘을 합산 신호로 쓰면 "고칠 수 있는 무지"에 재계획을 낭비하고
+"고칠 수 없는 산포"에 연산을 낭비한다.</p>
+
+<p><b>정직한 주의 둘.</b> (a) 학습된 return 분포의 멤버 내 분산은 순수 env 확률성 외에 <b>행동 정책의
+산포와 return 다봉성</b>을 포함한다(teleop 데모의 스타일 변이가 aleatoric으로 잡힘) — Metelli Thm 4.2의
+\\(\\sigma_p\\)(정책 산포)가 지속 비용에 들어가는 것과 정합적이지만, "env 확률성"과의 동일시는 과잉이다.
+(b) 우리 배포 앙상블은 K=2라 \\(u_{\\mathrm{epis}}\\) 추정이 약하다 — <code>ARQCritic.head_ensemble</code>
+(공유 trunk + K개 독립 헤드)로 K≥8을 거의 공짜로 얻는 경로가 이미 코드에 있다.</p>
+
+<p><b>측정 계획 (바로 실행 가능).</b> 마침 같은 크리틱의 <b>20k 체크포인트(g5_pi05)와 120k 이어-학습
+(cont, 진행 중)</b>이 있다: 동일한 6개 에피소드(가치 비디오로 렌더한 ep320/79/23/214/5/141)를 따라
+두 량을 계산해 ①②를 직접 검증한다 — 예측이 맞다면 20k→120k에서 \\(u_{\\mathrm{epis}}\\) 곡선만 내려앉고
+\\(u_{\\mathrm{alea}}\\)는 유지되며, 실패 에피소드의 \\(u_{\\mathrm{alea}}\\) 프로파일이 성공과 다른 위상(접촉·정렬
+구간 피크)을 보여야 한다. 렌더러(<code>render_yam_value_video.py</code>)에 불확실성 패널 하나를 더하면
+비디오로도 보인다. 이 측정은 후속 엔트리로 게시한다.</p>
+
+<p><b>선행과의 관계.</b> 분해 자체는 표준(Depeweg; Clements; arXiv:2206.01558)이고, 우리의 기여 후보는
+그것을 <b>커밋 길이 축에 편 것</b> — \\(u(s,k)\\) 격자와 κ*의 연결, 그리고 "재계획은 aleatoric에,
+개선·연산은 epistemic에"라는 라우팅 원리다. 흡수 가능성(②)은
+<span class='xref' data-eid='chunking-theory'>chunking-theory</span> III.7 curriculum의 측정판이다.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "uncertainty-split": {
+        "date": "2026-08-20 04:10",
+        "who": "워커B (밤샘 이론 프로그램 3/6)",
+        "where": "이론 노트 + PatchCriticEnsemble 구조 (측정은 g5_pi05 20k vs cont 120k 체크포인트 예정)",
+        "what": "총분산 법칙으로 aleatoric(멤버 내)/epistemic(멤버 간)을 상태×커밋길이 격자로 정의, 세 예측(κ*-정렬·서명·라우팅 분리) 도출",
+        "how": "Depeweg/Clements 분해를 K개 HL-Gauss per-prefix 앙상블에 사상 + K2/K3 접속 + 정직한 한계 2건 명기",
+        "why": "사용자 지시 — env/policy 불확실성 분리가 adaptive chunking을 유도하고 정책 개선이 epistemic을 흡수함의 이론화",
+        "links": ["tie-knife-edge", "adaptive-exec-map", "chunking-theory", "critic-heads"],
+    },
     "tie-knife-edge": {
         "date": "2026-08-20 03:30",
         "who": "워커B (밤샘 이론 프로그램 2/6)",
@@ -3349,6 +3411,62 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "uncertainty-split",
+    "Two faces of uncertainty — the aleatoric/epistemic split induces adaptive chunking (with a measurement plan)",
+    """
+<p><b>Why.</b> The <span class='xref' data-eid='tie-knife-edge'>knife-edge formalization</span> showed two of
+the three tie-breaking forces are uncertainties: environment stochasticity (K2, irrecoverable) and
+policy error (K3, absorbed by improvement). This note identifies them with the standard
+<b>aleatoric / epistemic</b> decomposition (Depeweg et al., ICML'18, arXiv:1710.07283; Clements et
+al., arXiv:1905.09638) and shows our distributional ensemble critic can <b>measure both, on a
+state × commitment-length grid, with no extra training</b>. Overnight theory program 3/6.</p>
+
+<p><b>The decomposition (law of total variance).</b> With ensemble members \\(m=1..K\\) each predicting
+a return distribution \\(Z_m(s,a_{1:k})\\):
+\\[ \\underbrace{\\mathrm{Var}[Z]}_{\\text{total}} \\;=\\;
+\\underbrace{\\tfrac1K\\textstyle\\sum_m \\mathrm{Var}[Z_m]}_{u_{\\mathrm{alea}}\\;(\\text{within-member})} \\;+\\;
+\\underbrace{\\mathrm{Var}_m\\big[\\mathbb E[Z_m]\\big]}_{u_{\\mathrm{epis}}\\;(\\text{across-member})} \\]
+Within-member spread survives infinite data (aleatoric); across-member disagreement is the
+ignorance that data and training remove (epistemic). Our <code>PatchCriticEnsemble</code>
+<b>already has this shape</b>: K HL-Gauss distributional heads, per prefix — a forward pass over a
+checkpoint yields the two fields \\(u_{\\mathrm{alea}}(s,k)\\), \\(u_{\\mathrm{epis}}(s,k)\\) for free.</p>
+
+<p><b>Theory hooks — three predictions.</b>
+① <b>κ* tracks the aleatoric field</b>: K2's branching term fires where \\(u_{\\mathrm{alea}}\\) is high, so
+the true-value-optimal commitment shortens there — our hypothesis for what DEHP/ExRL observed
+qualitatively as "fine-grained phases → short".
+② <b>Training shrinks only the epistemic part</b>: K3's absorption appears as \\(u_{\\mathrm{epis}}\\downarrow\\)
+with \\(u_{\\mathrm{alea}}\\) unchanged — a <b>measurable signature</b> of the curriculum (mean commitment
+length rising monotonically).
+③ <b>Routing must separate the two</b>: EQRL (arXiv:2606.14375) routes computation by ensemble
+disagreement (= epistemic only) — half the story, in decomposition terms. Short commitment
+(replanning) is justified by aleatoric uncertainty; extra compute and data collection by epistemic.
+A merged signal wastes replanning on fixable ignorance and compute on unfixable spread.</p>
+
+<p><b>Two honest caveats.</b> (a) A learned return distribution's within-member variance includes the
+<b>behavior policy's dispersion and return multimodality</b>, not just env stochasticity (teleop style
+variation shows up as aleatoric) — consistent with Metelli Thm 4.2's \\(\\sigma_p\\) (policy dispersion)
+entering the persistence cost, but identifying it with pure env noise would overclaim. (b) Our
+deployed ensemble is K=2, a weak epistemic estimate — <code>ARQCritic.head_ensemble</code> (shared
+trunk + K independent heads) already provides a nearly-free path to K≥8.</p>
+
+<p><b>Measurement plan (immediately runnable).</b> We happen to hold the same critic at <b>20k
+(g5_pi05) and a 120k continuation (in progress)</b>: compute both fields along the six episodes
+already rendered as value videos (ep320/79/23/214/5/141) and test ①② directly — if right, only the
+\\(u_{\\mathrm{epis}}\\) curve drops from 20k→120k while \\(u_{\\mathrm{alea}}\\) persists, and failure episodes
+show a distinct \\(u_{\\mathrm{alea}}\\) phase profile (contact/alignment peaks). One extra panel in
+<code>render_yam_value_video.py</code> makes it visible in video. The measurement will be posted as a
+follow-up entry.</p>
+
+<p><b>Relation to prior work.</b> The decomposition itself is standard (Depeweg; Clements;
+arXiv:2206.01558); our candidate contribution is <b>unrolling it along the commitment axis</b> — the
+\\(u(s,k)\\) grid, its link to κ*, and the routing principle "replanning for aleatoric, improvement and
+compute for epistemic". Prediction ② is the measurable version of
+<span class='xref' data-eid='chunking-theory'>chunking-theory</span> III.7's curriculum.</p>
+""",
+)
+
 en(
     "tie-knife-edge",
     "The knife-edge of perfection — the theoretical tie is structurally unstable (formalization v1)",
