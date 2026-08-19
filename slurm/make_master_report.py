@@ -2894,10 +2894,73 @@ epistemic이 각각 정당화한다. 둘을 합산 신호로 쓰면 "고칠 수 
 """,
 )
 
+
+entry(
+    "08-20",
+    "nonmarkov-longer",
+    "긴 커밋이 이기는 두 개의 방— 안정성(Zhang)과 정보(Blackwell/copycat), 그리고 K3의 부호 정정",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='tie-knife-edge'>칼날 정식화</span>의 K4는 "긴 커밋이 엄격 우위인
+구간의 존재"를 앨리어싱으로 예고했다. 이 노트는 그 존재를 <b>두 개의 독립 기제</b>로 세운다 — 하나는
+방금 원문으로 확인한 Zhang et al.(arXiv:2507.09061)의 <b>안정성 기제</b>(Markovian 전문가에서도 성립!),
+다른 하나는 부분관측의 <b>정보 기제</b>(Blackwell 가블링 + copycat 문헌). 그 과정에서 K3(정책 오차 →
+짧은 k)의 부호가 <b>레짐 의존</b>임을 정직하게 정정한다. 밤샘 이론 프로그램 4/6.</p>
+
+<p><b>방 A — 안정성: 잦은 재계획이 지수 폭발을 만든다 (Zhang et al., 원문 확인).</b>
+그들의 Prop 3.1: 동역학이 open-loop \\((C_{\\mathrm{ISS}},\\rho)\\)-EISS(수축)이고 정책·모의동역학 쌍이
+EISS라면, 청크화된 정책이 참 동역학 위에서도 안정성을 상속하는데 — 조건이 <b>실행 청크 길이의
+하계</b>다: \\[ \\ell \\;>\\; \\frac{\\log\\mathrm{poly}(L_\\pi, C_{\\mathrm{ISS}})}{\\log(1/\\rho)}. \\]
+핵심 반전(원문): "<i>even on synthetic globally stable dynamics, frequent feedback can cause
+exponential compounding error, which action-chunking mitigates</i>" — 그리고 이 요구는 예측 길이가
+아니라 <b>executed</b> 길이에 걸린다(같은 정책을 receding-horizon으로 돌리면 불안정할 수 있음).
+기제: 재계획은 매 스텝 <b>학습 오차를 피드백 루프에 재주입</b>하고, 커밋은 환경의 수축(ρ)이 그 오차를
+흡수하게 둔다. 이것은 앨리어싱 없이, unimodal·Markov 전문가에서도 성립한다.</p>
+
+<p><b>K3의 부호 정정 (v1의 자기 교정).</b> 칼날 노트의 K3은 "정책 오차 → 재계획 유리(짧은 k)"로
+썼으나, 방 A는 반대 부호의 레짐을 보인다. 정확한 서술: 정책 오차 \\(\\varepsilon_\\pi\\)의 미는 방향은
+<b>재계획이 수정인가 재주입인가</b>에 달려 있다 — (i) 재계획 분포가 on-support 근처의 신뢰할 만한
+수정일 때(전문가 근방, 오차가 상태 추정이 아니라 실행에서 옴) 짧은 k가 유리(K3 원형);
+(ii) 환경이 수축적이고 오차가 정책의 출력 자체에 있을 때, 재계획은 오차의 재여기(re-excitation)이며
+Zhang 하계만큼 긴 k가 유리. 어느 레짐인지는 \\(\\rho\\)(환경 수축률)와 오차의 원천이 정하고, 두 경우 모두
+\\(\\varepsilon_\\pi\\to0\\)이면 효과가 소멸한다 — <b>흡수 가능성은 유지</b>되나, 흡수 전 curriculum의 방향이
+상태·레짐별로 다를 수 있다는 것이 정정의 내용이다.</p>
+
+<p><b>방 B — 정보: 재계획은 가블링된 채널 위의 재추론이다.</b> 2-상태 구성: 상태 \\(x_A,x_B\\)가 같은
+관측 o로 뭉개지고 올바른 연속이 서로 다르다고 하자(예: 가려진 물체의 좌/우). 이전의 분리 가능한
+상태 \\(s_0\\)에서 발사된 청크는 올바른 가지를 open-loop로 운반하지만, o에서 재계획하는 정책은
+Blackwell의 정리에 의해 약하게(가지가 다르면 엄격히) 나쁘다 — 매 재계획마다 두 모드를 오가며
+평균내는 <b>dithering</b>이 최악 사례다. imitation 문헌이 같은 병리의 다른 얼굴을 이미 안다:
+copycat/causal confusion(arXiv:1905.11979; Fighting Copycat, NeurIPS'20)은 부분관측에서 per-step
+재추론이 지름길(직전 행동 복사)로 붕괴함을 보였고, 청크 커밋은 그 재추론 자체를 제거한다. Zhang도
+챙겨 적는다: 청크의 통념적 근거 1번이 "robustness to non-Markovian / partial observability quirks" —
+우리는 그것을 가블링 논증으로 정식화하는 중이다.</p>
+
+<p><b>종합 — 긴-커밋 우위 구간의 존재 (서술).</b> (A) \\(\\rho<1\\)이고 정책 오차가 유한하며 분기가 없는
+구간, 또는 (B) 실행 구간에 앨리어싱이 있고 launch 상태가 분리 가능한 구간에서는 \\(\\varphi_k(s)>0\\)
+(긴 커밋 엄격 우위)이다. (A)는 Zhang Prop 3.1의 하계로 정량, (B)는 2-상태 구성으로 존재 증명.
+반대편 압력(aleatoric 분기)은 <span class='xref' data-eid='uncertainty-split'>불확실성 분해</span>의
+\\(u_{\\mathrm{alea}}\\) 격자가 잰다 — κ*(s)는 이 두 압력의 국소 균형점이다.</p>
+
+<p><b>남는 일.</b> ① 2-상태 구성의 수치 검증(장난감 POMDP, 완결 증명 포함) — 후속 엔트리.
+② 방 A/B의 상대 크기를 YAM에서 재는 프록시(재계획 dithering = 연속 청크 간 발산 vs 커밋 후 오차).
+③ 칼날 노트 v2에 K3 정정 반영.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "nonmarkov-longer": {
+        "date": "2026-08-20 05:00",
+        "who": "워커B (밤샘 이론 프로그램 4/6)",
+        "where": "이론 노트 (Zhang arXiv:2507.09061 v3 원문 정독 — Prop 3.1 실행길이 하계 확보)",
+        "what": "긴 커밋이 엄격 우위인 구간의 두 독립 기제 — 안정성(잦은 replan=오차 재주입, Markov에서도)과 정보(Blackwell 가블링/copycat) — 및 K3 부호의 레짐 의존성 정정",
+        "how": "Zhang Prop 3.1(EISS·executed-length 하계) 인용 + 2-상태 가블링 구성 스케치 + copycat 문헌 접속 + 자기 교정 명기",
+        "why": "사용자 지시 — non-Markovianity로 longer chunk가 선호되는 구간의 이론적 존재 증명 (+예상 밖의 Markov 기제 추가)",
+        "links": ["tie-knife-edge", "uncertainty-split", "adaptive-exec-map", "chunking-theory"],
+    },
     "uncertainty-split": {
         "date": "2026-08-20 04:10",
         "who": "워커B (밤샘 이론 프로그램 3/6)",
@@ -3411,6 +3474,68 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "nonmarkov-longer",
+    "Two rooms where long commitment wins — stability (Zhang) and information (Blackwell/copycat), plus a sign correction to K3",
+    """
+<p><b>Why.</b> K4 of the <span class='xref' data-eid='tie-knife-edge'>knife-edge note</span> promised regions
+where longer commitment strictly wins, via aliasing. This note establishes that existence through
+<b>two independent mechanisms</b> — the <b>stability mechanism</b> of Zhang et al.
+(arXiv:2507.09061), just verified against the original (and holding even with Markovian experts!),
+and the <b>information mechanism</b> of partial observability (Blackwell garbling + the copycat
+literature). Along the way we honestly correct K3's sign (policy error → short k) as
+<b>regime-dependent</b>. Overnight theory program 4/6.</p>
+
+<p><b>Room A — stability: frequent replanning creates exponential blow-up (Zhang, verified).</b>
+Their Prop 3.1: if the dynamics are open-loop \\((C_{\\mathrm{ISS}},\\rho)\\)-EISS (contracting) and the
+policy–model pair is EISS, the chunked policy inherits stability on the true dynamics — with the
+condition being a <b>lower bound on the executed chunk length</b>:
+\\[ \\ell \\;>\\; \\frac{\\log\\mathrm{poly}(L_\\pi, C_{\\mathrm{ISS}})}{\\log(1/\\rho)}. \\]
+The key reversal, in their words: "<i>even on synthetic globally stable dynamics, frequent feedback
+can cause exponential compounding error, which action-chunking mitigates</i>" — and the requirement
+binds the <b>executed</b> length, not the predicted one (the same policy run receding-horizon can be
+unstable). Mechanism: replanning re-injects the learned error into the feedback loop every step;
+committing lets the environment's contraction (ρ) absorb it. No aliasing needed — this holds with
+unimodal, Markovian experts.</p>
+
+<p><b>The K3 sign correction (self-correction of v1).</b> The knife-edge note's K3 said "policy error
+→ replanning helps (short k)"; Room A exhibits the opposite-sign regime. The precise statement:
+which way \\(\\varepsilon_\\pi\\) pushes depends on whether <b>replanning is a correction or a
+re-injection</b> — (i) when the replan distribution is a trustworthy on-support correction (near the
+expert; the error lies in execution, not state estimation), short k wins (original K3); (ii) when
+the environment contracts and the error lives in the policy's own output, replanning re-excites the
+error and k at least Zhang's bound wins. Which regime holds is set by ρ and the error's origin; in
+both, the effect vanishes as \\(\\varepsilon_\\pi\\to0\\) — <b>absorbability survives</b>, but the direction
+of the pre-absorption curriculum can differ by state and regime. That is the content of the
+correction.</p>
+
+<p><b>Room B — information: replanning is re-inference on a garbled channel.</b> Two-state
+construction: states \\(x_A,x_B\\) merge into one observation o while demanding different
+continuations (e.g., an occluded object left vs right). A chunk launched from an earlier separable
+state \\(s_0\\) carries the correct branch open-loop; a policy replanning at o is weakly worse by
+Blackwell's theorem — strictly worse when the branches differ — with the worst case being
+<b>dithering</b>, averaging between modes at every requery. The imitation literature knows another
+face of the same pathology: copycat / causal confusion (arXiv:1905.11979; Fighting Copycat,
+NeurIPS'20) shows per-step re-inference under partial observability collapses onto a shortcut
+(copying the previous action); chunk commitment removes the re-inference altogether. Zhang lists it
+too — the folk rationale #1 for chunking is "robustness to non-Markovian / partial observability
+quirks"; we are formalizing it as the garbling argument.</p>
+
+<p><b>Synthesis — existence of long-commitment regions (statement).</b> In regions where (A) ρ&lt;1,
+the policy error is finite, and there is no branching, or (B) the executed segment is aliased while
+the launch state is separable, \\(\\varphi_k(s)>0\\): longer commitment strictly wins. (A) is
+quantitative via Zhang's lower bound; (B) is an existence proof via the two-state construction. The
+opposing pressure (aleatoric branching) is measured by the \\(u_{\\mathrm{alea}}\\) grid of
+<span class='xref' data-eid='uncertainty-split'>the uncertainty split</span> — κ*(s) is the local
+balance point of these two pressures.</p>
+
+<p><b>Remaining.</b> ① Numerical validation of the two-state construction (toy POMDP with a complete
+proof) — follow-up entry. ② A YAM proxy for the relative size of rooms A/B (replanning dithering =
+divergence between consecutive chunks vs post-commit error). ③ Fold the K3 correction into
+knife-edge v2.</p>
+""",
+)
+
 en(
     "uncertainty-split",
     "Two faces of uncertainty — the aleatoric/epistemic split induces adaptive chunking (with a measurement plan)",
