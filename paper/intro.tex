@@ -26,7 +26,12 @@ emit a Markovian stream of state-conditioned actions. Skilled human control alte
 committed, non-Markovian stretches executed from an internal plan without consulting the scene, and
 reactive phases in which delayed feedback drives intermittent
 corrections~\citep{woodworth1899, todorov2002, gawthrop2011}. How long to commit is therefore itself
-part of the behavior the data records, and it varies from state to state. Offline RL for VLAs should
+part of the behavior the data records, and it varies from state to state. Nor is this an artifact
+of imperfect learning. In the idealized limit of deterministic dynamics and full observability every
+execution length performs identically, and that tie is broken precisely by what real tasks contain,
+with stochastic branching rewarding frequent replanning on one side, and error re-injection under
+frequent feedback together with partial observability rewarding longer commitment on the
+other~\citep{zhang2025chunking, metelli2020persistence}. Offline RL for VLAs should
 accordingly optimize not only which actions to take but also this second dimension, the commitment,
 and adaptive action chunking is exactly the machinery for it.
 
@@ -44,9 +49,12 @@ the chunk as a fixed, indivisible action, even though a critic scoring whole chu
 demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
 developed within RL~\citep{qc, aqc, acsac}; chunk-level TD makes long horizons tractable and prefix
 values let the commitment vary. Yet the commitment is still selected by scoring candidates at
-deployment rather than optimized jointly with the actions, and no such construction has been
-developed into a purely offline post-training stage that leaves a VLA better than its supervised
-starting point. What is missing is a method that
+deployment rather than optimized jointly with the actions. Selection alone also cannot shrink the
+share of the commitment trade-off that stems from policy error, which only updating the policy
+removes, and recent execution-length methods indeed resort to attaching a separate
+policy-improvement stage to move past the frozen action distribution~\citep{exrl}. Moreover, no
+such construction has been developed into a purely offline post-training stage that leaves a VLA
+better than its supervised starting point. What is missing is a method that
 optimizes both dimensions at once, directly on the policy, at VLA scale.
 
 We present such a method, an offline reinforcement fine-tuning stage that improves the policy over
