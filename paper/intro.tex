@@ -43,12 +43,20 @@ conservative in-sample targets~\citep{iql, deas}, drives state-dependent commitm
 extraction. The result surpasses supervised fine-tuning from the very same demonstrations, without a
 single additional rollout.
 
-\paragraph{Contributions.}
-(i)~A structural analysis of why filtering, test-time rescoring, and fixed commitments cannot surpass
-the policy they start from, each failure mode confirmed in controlled
-experiments~\citep{emaq, dqc, park2024bottleneck}. (ii)~The principle that follows and its
-instantiation: a value acting through in-data channels, state-dependent commitment and policy
-extraction, as a complete offline pipeline on frozen VLA representations. (iii)~A component-isolated
-stability recipe for chunk-space TD at VLA scale. (iv)~End-to-end validation on offline RL
-benchmarks~\citep{ogbench} and VLA-scale manipulation~\citep{robocasa}, using only the demonstrations
-supervised fine-tuning already uses.
+In summary, our main contributions are threefold:
+\begin{itemize}
+    \item We analyze why the prevailing ways of using a learned value on a VLA, filtering the data,
+    rescoring samples at test time, and executing fixed commitments, cannot surpass the policy they
+    start from, and confirm each failure mode in controlled
+    experiments~\citep{emaq, dqc, park2024bottleneck}.
+    \item We present a complete offline reinforcement fine-tuning pipeline built on the principle
+    that follows: a prefix-valued critic over frozen VLA representations acts through in-data
+    channels, deciding state by state how long to commit and distilling its preferences back into the
+    policy, together with a component-isolated stability recipe that makes chunk-space TD reliable at
+    this scale.
+    \item Through experiments on standard offline RL benchmarks~\citep{ogbench} and VLA-scale
+    manipulation~\citep{robocasa}, we show that the resulting policies surpass supervised fine-tuning
+    using only the demonstrations it already had, without a single additional rollout.
+\end{itemize}
+Together, these findings establish offline value learning, applied where the value can genuinely act,
+as a practical path to improving VLAs beyond the quality of their demonstrations.
