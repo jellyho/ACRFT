@@ -16,6 +16,9 @@ import time
 
 import numpy as np
 
+from openpi.patch_critic import preproc as critic_preproc
+from openpi.patch_critic import spec as critic_spec
+
 # reuse the validated target math + checkpoint writer from the clip trainer
 from scripts.train_patch_critic_clip import _save
 from scripts.train_patch_critic_clip import analytic_targets
@@ -50,6 +53,14 @@ def main():
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/patch_critic_cached"))
     ap.add_argument("--init-params", type=pathlib.Path, default=None)
     ap.add_argument(
+        "--input-mode",
+        choices=critic_preproc.MODES,
+        default="pi05",
+        help="pi05: state/actions go through the base VLA's own preprocessing (joint delta + "
+        "quantile norm), so the sampler's output IS the critic's input. raw: legacy dataset units.",
+    )
+    ap.add_argument("--norm-stats", type=pathlib.Path, default=None, help="norm_stats.json (required for pi05)")
+    ap.add_argument(
         "--preload",
         action="store_true",
         help="materialize the feature/state/action memmaps into RAM (needs ~feature-cache GB of --mem; "
@@ -67,6 +78,20 @@ def main():
     a.backbone = meta["backbone"]
     a.clip_len = 0  # not applicable to the cached path
     a.repo_id = f"cache:{a.cache.name}"
+    # the input contract + the reference distribution, saved with every checkpoint (see critic_spec)
+    spec = critic_spec.input_spec(meta, horizon=H)
+    spec["cache"] = str(a.cache)
+    spec["n_episodes"] = len(meta["episodes"])
+    stats = critic_spec.norm_stats(a.cache, meta)
+    pre = None
+    if a.input_mode == "pi05":
+        if a.norm_stats is None:
+            raise SystemExit("--input-mode pi05 needs --norm-stats (the base checkpoint's norm_stats.json)")
+        from openpi.policies import yam_policy
+
+        pre = critic_preproc.Pi05Preproc.build(a.norm_stats, yam_policy.joint_delta_reference())
+        spec.update(pre.spec(a.norm_stats))
+        print(f"input mode: pi05 preprocessing (joint delta + quantile norm) from {a.norm_stats}", flush=True)
     feats = np.memmap(a.cache / "features.dat", np.float16, "r", shape=(N, npatch, emb))
     states = np.memmap(a.cache / "state.dat", np.float32, "r", shape=(N, sd))
     actions = np.memmap(a.cache / "action.dat", np.float32, "r", shape=(N, ad))
@@ -77,7 +102,7 @@ def main():
         feats = np.ascontiguousarray(feats)  # -> RAM (float16); ~N*npatch*emb*2 bytes
         states = np.ascontiguousarray(states)
         actions = np.ascontiguousarray(actions)
-        print(f"preloaded cache into RAM ({feats.nbytes/1e9:.0f}GB features) in {_t.time()-_t0:.0f}s", flush=True)
+        print(f"preloaded cache into RAM ({feats.nbytes / 1e9:.0f}GB features) in {_t.time() - _t0:.0f}s", flush=True)
 
     outc = {}
     for line in pathlib.Path(a.outcomes).read_text().splitlines():
@@ -231,12 +256,18 @@ def main():
         hpos = pos[:, None] + ar_h[None]  # [T, H]
         gch = g0[:, None] + np.clip(hpos, 0, full[:, None] - 1)
         chunk = np.asarray(actions[gch.reshape(-1)]).reshape(a.batch, H, ad)
-        chunk[hpos >= full[:, None]] = 0.0
+        s_cur_raw = np.asarray(states[gcur])
+        s_nxt_raw = np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd)
+        if pre is not None:
+            # delta is taken against the chunk's BASE frame, exactly as the base VLA does
+            chunk = pre.actions(chunk, s_cur_raw)
+            s_cur_raw, s_nxt_raw = pre.state(s_cur_raw), pre.state(s_nxt_raw)
+        chunk[hpos >= full[:, None]] = 0.0  # pad AFTER preprocessing so padding stays exactly zero
         # transfer features as float16 (half the PCIe traffic); the model upcasts to f32 on-device.
         pcur = jnp.asarray(np.asarray(feats[gcur]))
         pnxt = jnp.asarray(np.asarray(feats[gnxt.reshape(-1)]).reshape(a.batch, P_, npatch, emb))
-        scur = jnp.asarray(np.asarray(states[gcur]))
-        snxt = jnp.asarray(np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd))
+        scur = jnp.asarray(s_cur_raw)
+        snxt = jnp.asarray(s_nxt_raw)
         carry, info = step(
             carry,
             pcur,
@@ -265,8 +296,8 @@ def main():
                 flush=True,
             )
         if a.save_every and (s + 1) % a.save_every == 0:
-            _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad)
-    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad)
+            _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats)
+    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats)
     if wb is not None:
         wb.finish()
 
