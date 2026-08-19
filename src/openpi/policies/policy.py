@@ -111,16 +111,24 @@ class Policy(BasePolicy):
 
 
 class MultiSamplePolicy(BasePolicy):
-    """Draw several action chunks for one observation, when the client asks for them.
+    """Draw several action chunks for one observation, as many as the server was started with.
 
     The policy is a distribution, not a single answer: flow matching maps different noise to
     different chunks. Drawing a handful and showing them together is the only cheap way to see
     whether it is confident (a tight bundle) or torn between options (a wide spray) -- a scalar
     loss averages exactly that away.
 
-    Opt-in per request, via a ``num_samples`` key on the observation, because N samples costs N
-    forward passes. A rollout has no reason to pay that, so a client that never sends the key
-    gets today's behaviour and today's latency, byte for byte.
+    Configured on the SERVER (``--num-samples N``), not asked for per request. What the policy
+    returns is the policy's business: the client's job is to execute ``actions`` and record
+    whatever the handshake declared, exactly as it already takes the chunk LENGTH from the reply
+    rather than from a setting of its own. A count that lives on both sides is a count that can
+    disagree -- and it did: the declared ``action_samples`` column came from the server's N while
+    the array actually sent came from the request's, so a mismatch silently dropped the column
+    from every frame. N is one number in one place now.
+
+    A request may still override it (a viewer sampling more heavily than the rollout does), but
+    nothing has to: with the server started at N <= 1 this costs exactly one inference, byte for
+    byte the old behaviour.
 
     ``actions`` stays the single chunk to execute and keeps its shape. The extra draws ride
     along under ``action_samples``, PER STEP -- leading axis X (chunk step), matching
@@ -158,13 +166,17 @@ class MultiSamplePolicy(BasePolicy):
         # Pop before anything else touches it: the input transforms are built from the model's
         # own input spec and reject keys they do not know.
         obs = dict(obs)
-        num_samples = int(obs.pop("num_samples", 0) or 0)
+        # The server's N unless the request overrides it (see the class docstring).
+        num_samples = int(obs.pop("num_samples", 0) or self._default_samples)
+        # Historic request key: selection is now decided by how the server was started, so this
+        # says nothing. Popped rather than ignored -- the model's input transforms reject keys
+        # they do not know.
+        obs.pop("critic_select", None)
 
-        # A critic-selected request already samples N candidates from ONE backbone pass and
-        # picks between them, and it reads `num_samples` itself. Drawing more here would both
-        # hide that key from it and pay N full forwards on top of the N it already did -- at
-        # N=16, sixteen replans' work for a result that gets thrown away.
-        if obs.get("critic_select"):
+        # A policy that picks among its own candidates already samples N from ONE backbone pass
+        # and returns them under `action_samples`. Drawing more here would pay N full forwards on
+        # top of the N it already did -- at N=16, sixteen replans' work, thrown away.
+        if getattr(self._policy, "selects_candidates", False):
             if num_samples:
                 obs["num_samples"] = num_samples
             return self._policy.infer(obs)
@@ -279,9 +291,12 @@ class CriticSelectPolicy(BasePolicy):
     """Best-of-N with a trained RLT critic, selected server-side.
 
     The client cannot run the critic itself: the critic reads the RL token, and the token never
-    leaves the model in a plain infer. So selection has to happen where the token lives. Opt-in
-    per request via a ``critic_select`` key (with an optional ``num_samples``, default 16) so a
-    plain rollout keeps today's behaviour and latency.
+    leaves the model in a plain infer. So selection has to happen where the token lives -- and
+    it happens on every request, because a server started with a critic IS a critic-selected
+    policy. It used to be per-request opt-in, which meant a server could load its critic, log it,
+    and then be bypassed on every step by a client that did not know to ask; a plain rollout is a
+    plain server instead. What the client sees is what it always sees: a chunk to execute, plus
+    whatever the handshake declared.
 
     Sampling reuses ``extract_token_and_base_actions``: one backbone pass amortized over all N
     flow decodes, instead of MultiSamplePolicy's N full forwards - at N=16 that is the
@@ -329,11 +344,11 @@ class CriticSelectPolicy(BasePolicy):
     @override
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         obs = dict(obs)
-        selected = bool(obs.pop("critic_select", False))
+        # Historic opt-in key; selection is unconditional now (see the class docstring). Popped
+        # because the model's input transforms reject keys they do not know.
+        obs.pop("critic_select", None)
         want_hud = bool(obs.pop("critic_hud", False))
         num_samples = int(obs.pop("num_samples", 0) or self._default_samples)
-        if not selected:
-            return self._pol.infer(obs, noise=noise)
 
         raw_state = np.asarray(obs.get(self._pro[2] if self._pro else "observation/state", ()), np.float32)
         inputs = jax.tree.map(lambda x: x, obs)
@@ -379,6 +394,10 @@ class CriticSelectPolicy(BasePolicy):
             out["critic_best_prefix"] = np.full((chunk, 1), q.shape[1] - 1, np.float32)
             out["critic_macro"] = np.full((chunk, 1), self._macro, np.float32)
         return out
+
+    #: This policy draws and picks among its own candidates, so a MultiSamplePolicy wrapped
+    #: around it must not draw more on top (N full forwards for a result it would discard).
+    selects_candidates = True
 
     def extra_features(self, num_samples: int | None = None) -> dict:
         """Per-step shapes to advertise at handshake, for the client to record.

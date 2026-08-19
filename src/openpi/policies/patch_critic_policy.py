@@ -6,7 +6,9 @@ So selection can run anywhere the raw images are — but we still do it server-s
 VLA's shared-backbone sampler (``extract_token_and_base_actions``) is what draws N candidates in one
 pass, and the critic weights live here.
 
-Opt-in per request via ``critic_select`` (with optional ``num_samples``). Two modes:
+Selection is unconditional: a server started with a critic IS a value-guided policy, so the
+client sends a plain observation and gets back the chunk to execute (plus the candidates and their
+scores, declared at handshake). Two modes:
   * ``bon``      execute the full chunk of the argmax-Q candidate (best-of-N).
   * ``adaptive`` execute only that candidate's highest-value commitment prefix K, then replan.
 
@@ -129,11 +131,11 @@ class PatchCriticSelectPolicy(BasePolicy):
     @override
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         obs = dict(obs)
-        selected = bool(obs.pop("critic_select", False))
+        # Historic opt-in key; a server started with a critic selects on every request now.
+        # Popped because the model's input transforms reject keys they do not know.
+        obs.pop("critic_select", None)
         want_hud = bool(obs.pop("critic_hud", False))
         num_samples = int(obs.pop("num_samples", 0) or self._default_samples)
-        if not selected:
-            return self._pol.infer(obs, noise=noise)
 
         state = np.asarray(obs[self._state_key], np.float32).reshape(-1)
         patches = self._patches_of(obs)
@@ -176,6 +178,9 @@ class PatchCriticSelectPolicy(BasePolicy):
             out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
             out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         return out
+
+    #: Picks among its own candidates -- see CriticSelectPolicy.selects_candidates.
+    selects_candidates = True
 
     @property
     def metadata(self):

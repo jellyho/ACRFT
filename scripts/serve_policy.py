@@ -65,13 +65,12 @@ class Args:
     # best-of-N chosen by the critic server-side; requests without the key are untouched.
     critic: str | None = None
 
-    # How many action-chunk samples MultiSamplePolicy declares at handshake, so a client's
-    # `num_samples` requests actually get an `action_samples` column in its recorded dataset
-    # (see MultiSamplePolicy.extra_features). 0 (default): num_samples requests are still served,
-    # just not recorded -- today's behaviour. The dataset schema is fixed at handshake, so every
-    # request against this server has to ask for exactly this many samples; a client asking for a
-    # different N gets a reshape error at record time, same constraint --critic already has via
-    # its own default_samples.
+    # How many action chunks to draw per observation. This is what the server DOES, not what a
+    # client may ask for: it is both what gets sampled and what the handshake declares the
+    # `action_samples` column for, so the two cannot disagree. The robot client sends nothing about
+    # it -- it executes `actions` and records whatever was declared. 0/1 (default) is a plain
+    # rollout, one forward pass. Above that costs N forward passes (or one backbone pass with
+    # --critic, which samples its own candidates).
     num_samples: int = 0
 
 
@@ -166,7 +165,13 @@ def main(args: Args) -> None:
     if args.critic is not None:
         # Selection must wrap the BARE policy: it drives the model's own shared-backbone
         # sampler, and stacking it over MultiSamplePolicy would pay N full forwards instead.
-        policy = _policy.CriticSelectPolicy(policy, args.critic)
+        # N comes from the server flag when given, so the count the critic samples and the count
+        # its handshake declares are one number rather than two that can disagree.
+        policy = (
+            _policy.CriticSelectPolicy(policy, args.critic, default_samples=args.num_samples)
+            if args.num_samples > 1
+            else _policy.CriticSelectPolicy(policy, args.critic)
+        )
     robot_action_dim = None
     if args.num_samples > 1:
         # A critic already probed this at its own construction; reuse it rather than decode a
