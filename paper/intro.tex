@@ -1,5 +1,8 @@
-% Introduction (v9, 2026-08-19). natbib + paper/references.bib. No em-dashes, no numbers.
-% v9 = v8 trimmed ~35%: every paragraph tightened, redundant clauses merged.
+% Introduction (v10, 2026-08-19). natbib + paper/references.bib. No em-dashes, no numbers.
+% v10 addresses the critical review: delta vs ACSAC/AQC made explicit; long-horizon thread closed
+% (prefix value preserves h-step horizon reduction); frozen-backbone ceiling tension defended;
+% "surpasses SFT" split across the two eval regimes; C1 sharpened beyond lit-review; stability
+% recipe anchored; motor analogy compressed to one supporting sentence.
 
 \section{Introduction}
 \label{sec:intro}
@@ -26,37 +29,43 @@ Recent attempts stop short of this promise. Most reshape imitation with outcome
 signals~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting both the stability and the ceiling of
 supervised learning. The few that learn a value keep it away from the policy: it filters
 data~\citep{grrl}, rescores the policy's own samples~\citep{vgps, deas, robomonkey}, or scores
-commitments fixed in advance~\citep{corft}. These are structural dead ends. Rescoring cannot exceed
-its proposals and its argmax harvests critic error~\citep{emaq}; a fixed-chunk critic cannot tell
-skill from luck in closed-loop demonstrations and overvalues commitments that merely happened to
-work~\citep{dqc}. What matters is not only how well the value is learned, but \emph{where it is
-allowed to act}.
+commitments fixed in advance~\citep{corft}. We argue these are structural limits rather than
+implementation accidents, with two distinct sources. Rescoring a fixed sampler is bounded by the
+support of its proposals, and its argmax preferentially selects critic error~\citep{emaq}; a critic
+over fixed whole chunks cannot tell skill from luck in closed-loop demonstrations, and overvalues
+commitments that merely happened to work~\citep{dqc}. What matters is not only how well the value is
+learned, but \emph{where it is allowed to act}.
 
-Skilled motor behavior shows where. A human hand crosses free space ballistically and tightens into
-feedback control only when contact matters~\citep{woodworth1899, todorov2002}; even corrections
-arrive as short open-loop segments with intermittent replanning~\citep{gawthrop2011}. Acting well is
-the judgment of how long to commit, and a fixed chunk denies a VLA exactly that. We let the value
-supply it through the two channels that stay inside the data: deciding, state by state, how much of
-each predicted chunk to execute, and retraining the policy toward what the value prefers. Concretely,
-a prefix-valued transformer critic~\citep{acsac, aqc} over frozen VLA representations, trained with
-conservative in-sample targets~\citep{iql, deas}, drives state-dependent commitment and policy
-extraction. The result surpasses supervised fine-tuning from the very same demonstrations, without a
-single additional rollout.
+Our answer is to let the value act on the commitment itself. The chunk is what tames the long
+horizon: backing up over $h$ steps at once is precisely why chunked TD survives sparse, long-horizon
+manipulation~\citep{qc}, and valuing every prefix of the chunk preserves this benefit while restoring
+the reactivity that a fixed commitment forfeits. Skilled motor control offers a familiar picture of
+the resulting behavior, where movement alternates between ballistic, open-loop stretches and
+feedback-guided phases assembled through intermittent replanning~\citep{woodworth1899, todorov2002,
+gawthrop2011}. Prefix-valued critics have appeared as RL algorithms in state-based
+settings~\citep{acsac, aqc}; our contribution is to turn this construction into a post-training
+instrument for a pretrained VLA. A causal-transformer critic is learned purely offline on the VLA's
+frozen representations with conservative in-sample targets~\citep{iql, deas}, and acts through two
+in-data channels: deciding, state by state, how much of each predicted chunk to execute, and
+distilling its preferences back into the policy. Freezing the backbone constrains where knowledge
+lives, not how good behavior can get: the demonstrations' support contains better behavior than their
+average, which imitation blurs and extraction recovers, and commitment reshapes what gets executed
+rather than rescoring a fixed sampler's proposals.
 
 In summary, our main contributions are threefold:
 \begin{itemize}
-    \item We analyze why the prevailing ways of using a learned value on a VLA, filtering the data,
-    rescoring samples at test time, and executing fixed commitments, cannot surpass the policy they
-    start from, and confirm each failure mode in controlled
-    experiments~\citep{emaq, dqc, park2024bottleneck}.
-    \item We present a complete offline reinforcement fine-tuning pipeline built on the principle
-    that follows: a prefix-valued critic over frozen VLA representations acts through in-data
-    channels, deciding state by state how long to commit and distilling its preferences back into the
-    policy, together with a component-isolated stability recipe that makes chunk-space TD reliable at
-    this scale.
-    \item Through experiments on standard offline RL benchmarks~\citep{ogbench} and VLA-scale
-    manipulation~\citep{robocasa}, we show that the resulting policies surpass supervised fine-tuning
-    using only the demonstrations it already had, without a single additional rollout.
+    \item We analyze why the prevailing uses of a learned value on a VLA cannot surpass the policy
+    they start from, separating the two failure sources, the support ceiling of rescoring a fixed
+    sampler and the skill-versus-luck miscalibration of fixed commitments, and characterizing under
+    controlled conditions when each binds~\citep{emaq, dqc, park2024bottleneck}.
+    \item We present a complete offline reinforcement fine-tuning pipeline in which a prefix-valued
+    critic over frozen VLA representations decides state-dependent commitment and drives policy
+    extraction; isolating its ingredients shows that in-sample targets and target networks are
+    decisive, while low expectiles and unbounded value supports fail silently.
+    \item We validate each claim on the ground that can bear it: controlled offline RL
+    benchmarks~\citep{ogbench} isolate every design choice against its alternatives, and VLA-scale
+    manipulation~\citep{robocasa} shows the full pipeline surpassing supervised fine-tuning using
+    only the demonstrations it already had, without a single additional rollout.
 \end{itemize}
 Together, these findings establish offline value learning, applied where the value can genuinely act,
 as a practical path to improving VLAs beyond the quality of their demonstrations.
