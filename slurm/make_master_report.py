@@ -1751,7 +1751,8 @@ entry(
 <tr><td><b>GR-RL</b></td><td>VLA가 정밀·장지평에서 불신뢰 → 구두끈 예시로 구체화 → 병목 둘: <b>사람 데모의 열화</b>(주저·감속) + train-inference 불일치 → 3단 파이프라인</td><td>"human demonstrators would slow down, hesitate, and introduce noisy suboptimal demonstrations"</td></tr>
 <tr><td><b>BORA</b></td><td>dexterous에서 VLA 고전 → 기술 실패 둘: denoising 체인 credit 붕괴 + critic의 배경 시각 과적합 → 실기 배포 불일치 → offline critic + online residual</td><td>"critics ... overfitting to background visual artifacts ... provide erroneous guidance"</td></tr>
 <tr><td><b>GigaBrain-0.5M*</b></td><td>VLA는 근시안적 관측 의존(반응적) → world model이 미래 예측 → RAMP 4단 → RECAP은 sparse advantage뿐이라 부족</td><td>"architectural bias toward <b>reactive control rather than prospective planning</b>"</td></tr>
-<tr><td><b>MoRE</b></td><td>MLLM 발전 → VLA로 결합 → 문제 둘: 아키텍처 부적합 + <b>IL은 suboptimal 데이터 활용 불가</b> → MoE+offline RL</td><td>"unable to leverage more easily gathered <b>sub-optimal data</b>"</td></tr></table>
+<tr><td><b>MoRE</b></td><td>MLLM 발전 → VLA로 결합 → 문제 둘: 아키텍처 부적합 + <b>IL은 suboptimal 데이터 활용 불가</b> → MoE+offline RL</td><td>"unable to leverage more easily gathered <b>sub-optimal data</b>"</td></tr>
+<tr><td><b>DEHP</b> (추가 08-20)</td><td>청킹은 표준인데 실행 지평이 고정 → 긴 지평=부드러움/짧은 지평=반응성의 트레이드오프 → <b>올바른 지평은 task phase마다 다름</b> → 동결 정책 위에 지평 head를 online RL로</td><td>"A single fixed execution horizon <b>cannot capture this variation</b> across different task phases"</td></tr></table>
 
 <h3>② 공통 패턴 — 그리고 아무도 안 하는 말</h3>
 <p><b>공통 수법</b>: 전원 P1은 "VLA 유망, 그러나"로 열고, 절반(GR-RL·MoRE·CO-RFT)이 <b>suboptimal 데모</b>를 동기의
@@ -1766,6 +1767,13 @@ entry(
 <li><b>"같은 데이터, 더 나은 VLA"의 완결 경로를 약속하지 않는다</b> — GR-RL·BORA·GigaBrain은 online/개입/월드모델
 스택이 끼고, CO-RFT만 순수 offline인데 소규모 실기에 그친다. "SFT가 이미 쓰는 그 데모만으로"라는 우리 마지막
 문장의 자리가 비어 있다.</li></ul>
+
+<p class='sub'><b>DEHP 추가 분석(08-20)</b>: 인트로 논리가 우리 둘째 축과 가장 근접한 논문이다 — "고정 지평의
+트레이드오프 → phase-의존 지평"은 우리 P2의 커밋 축 동기와 사실상 동일. 다만 그들의 동기는 <b>정책의 실행 방식</b>에서
+출발하고(스무스함 vs 반응성), 우리는 <b>데이터의 non-Markovian 구조</b>(사람 제어의 커밋/반응 교차)에서 출발한다 — 같은
+결론, 다른 뿌리라 공존 가능하나 인용·대비 필수. 차별화는 명확: DEHP는 지평만(온라인 PPO·정책 동결·state-only critic),
+우리는 <b>action×지평 결합을 순수 offline으로 직접 최적화</b>. 이들의 related work가 정리한 적응 실행 계보
+(BID·SGAC·TAS·MoH·AAC·HiPolicy)는 우리 related work에도 편입할 것.</p>
 
 <h3>③ 겹침 경보와 우리 인트로 손질 포인트</h3>
 <p>① <b>CO-RFT와의 유사 경보</b>: P1~P3 골격(SFT 한계→RL→online 소거→offline→chunk)이 우리와 가장 가깝다.
@@ -1844,6 +1852,19 @@ Laundry Folding·Box Packing·Espresso 등에서 <b>RECAP 대비 약 +30%</b> �
 "automatically collected mixed-quality data" 위에 RL 기반 목적(CQL 계열)으로 학습. <b>결과</b>: 6개 스킬 전반에서
 베이스라인 상회, OOD 일반화 우위. <b>간극</b>: 조작(manipulation)이 아니라 보행, chunk 개념 없음. (abstract 기준.)</p>
 
+<h3>⑦ DEHP (arXiv:2606.11408, 추가 2026-08-20) — 실행 지평만 online RL로</h3>
+<p><b>정체</b>: chunk 정책의 <b>실행 지평(execution horizon)만</b> 예측하는 경량 head를 <b>online RL(PPO)</b>로 학습
+(Zhao·Garg 그룹). 원문:</p>
+<blockquote class='sub'>"existing chunk-based methods typically use a fixed prediction horizon and, more importantly,
+a fixed execution horizon throughout the task. ... A single fixed execution horizon cannot capture this variation
+across different task phases."</blockquote>
+<p><b>방법</b>: 기반 chunk 정책은 <b>완전 동결</b>, categorical horizon head가 관측+예측 청크를 조건으로 몇 스텝 실행할지
+선택. chunk-level PPO(청크 목적=기저 MDP 리턴 증명), state-only critic, sparse 이진 보상. <b>결과</b>: 고정 지평 최적
+대비 조립·삽입에서 큰 이득(one_leg 70→95%, round_table 30→94%, needle 10→29%); 학습된 지평이 phase에 정렬(자유공간
+길게, 정밀 정렬 짧게). <b>간극</b>: ① <b>action은 전혀 최적화 안 함</b>(지평만) — 정책이 동결이라 데모 suboptimality는
+그대로, ② <b>online RL 필요</b>(PPO 롤아웃), ③ 가치가 action 공간 위에 없음(state-only critic). 참고: 이들의 related
+work에 적응 실행 계열 계보(BID·SGAC·TAS·MoH·AAC·HiPolicy)가 정리돼 있음 — 이 축이 빠르게 붐비고 있다는 신호.</p>
+
 <h3>종합 — Tier 1이 남긴 빈칸</h3>
 <table class='num'><tr><th>논문</th><th>순수 offline</th><th>직접 TD</th><th>chunk 인지</th><th>커밋 길이 결정</th><th>기제 비교</th><th>SFT 초과(VLA 스케일)</th></tr>
 <tr><td>CO-RFT</td><td>✅</td><td>✅</td><td>✅(고정)</td><td>✕</td><td>✕</td><td>✅(소규모)</td></tr>
@@ -1851,7 +1872,8 @@ Laundry Folding·Box Packing·Espresso 등에서 <b>RECAP 대비 약 +30%</b> �
 <tr><td>GR-RL</td><td>✅</td><td>✅</td><td>✕</td><td>✕</td><td>✕(필터 가정)</td><td>△(필터 경유)</td></tr>
 <tr><td>BORA</td><td>△(+online)</td><td>✅</td><td>✅(고정)</td><td>✕</td><td>✕</td><td>△(미분리)</td></tr>
 <tr><td>GigaBrain</td><td>✅(모델기반)</td><td>△</td><td>✕</td><td>✕</td><td>✕</td><td>✅(산업 스택)</td></tr>
-<tr><td>MoRE</td><td>△</td><td>✅</td><td>✕</td><td>✕</td><td>✕</td><td>△(보행)</td></tr></table>
+<tr><td>MoRE</td><td>△</td><td>✅</td><td>✕</td><td>✕</td><td>✕</td><td>△(보행)</td></tr>
+<tr><td>DEHP</td><td>✕(online)</td><td>△(state-only)</td><td>✅</td><td>✅(지평만)</td><td>✕</td><td>✕(action 불변)</td></tr></table>
 <p><b>모두가 비운 세 칸</b>: 상태의존 <b>커밋 길이 결정</b>(전원 ✕), <b>기제 비교</b>(선택/커밋/추출 — 전원 자기 기제 가정),
 그리고 <b>순수 offline + VLA 조작 스케일 + SFT 초과</b>의 동시 달성. 이 세 칸이 우리 논문의 슬롯이다.</p>
 <p class='sub'><b>인접 경보</b>: LWD(2605.00416)는 분포형 implicit value(=우리 계열)+adjoint 추출로 flow VLA를 개선하나
@@ -4458,6 +4480,12 @@ presuppose their deployment (fixed execution, BoN, filtering, residual); our Que
 none uses the nominal-vs-actual gap as motivation. (3) none promises the complete "same demonstrations, better VLA"
 path: GR-RL/BORA/GigaBrain need online or world-model stacks, and CO-RFT stays purely offline but small-scale.</p>
 
+<p><b>DEHP added (08-20)</b>. Its introduction is the closest neighbor to our second axis: fixed-horizon trade-off,
+then "the right horizon differs by task phase", then a horizon head. The difference in roots matters: DEHP motivates
+from the policy's execution trade-off, we motivate from the non-Markovian structure of human demonstrations; and DEHP
+optimizes the horizon only, with online PPO on a frozen policy, whereas we jointly optimize actions and commitments
+purely offline. Must cite and contrast.</p>
+
 <p><b>Overlap alarms for our draft</b>: CO-RFT's P1–P3 skeleton is closest to ours — our contrast must be explicit:
 they <i>incorporate</i> chunking, we argue the chunk <i>forces three questions</i>. DEAS owns the overestimation
 narrative — we elevate it from a value-learning problem to a mechanism-dependent one (selection exploits error,
@@ -4503,6 +4531,14 @@ Laundry/Box/Espresso. Gap: no chunk granularity treatment; industrial-scale stac
 
 <p><b>⑥ MoRE</b> (2503.08007). Quadruped VLA: LoRA experts as sparse MoE inside an MLLM, RL objective (CQL family) on
 auto-collected mixed-quality data; beats baselines on six skills. Gap: locomotion, no chunks. (Abstract-level.)</p>
+
+<p><b>⑦ DEHP</b> (2606.11408, added 08-20). A lightweight execution-horizon head trained with <b>online</b> PPO on top
+of a <b>frozen</b> chunk policy ("A single fixed execution horizon cannot capture this variation across different task
+phases"); chunk-level PPO with a state-only critic and sparse rewards. Large gains over the best fixed horizon on
+assembly/insertion (e.g. one_leg 70→95%), with learned horizons aligned to task phases. Gaps: actions are never
+optimized (the policy stays frozen, so demonstration suboptimality remains), online rollouts are required, and no value
+is learned over actions. Their related work also maps a fast-growing adaptive-execution lineage (BID, SGAC, TAS, MoH,
+AAC, HiPolicy).</p>
 
 <p><b>The three cells everyone leaves empty</b>: state-dependent <b>commitment-length decision</b> (all ✕),
 <b>mechanism comparison</b> (each assumes its own: BoN, filter, fixed execution), and the conjunction of
