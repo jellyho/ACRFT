@@ -65,10 +65,10 @@ In summary, our main contributions are threefold:
     sampling-based selection and fixed-length execution, cannot surpass the policy they start from,
     and locate the missing piece in direct policy optimization over both actions and
     commitments~\citep{emaq, dqc, park2024bottleneck}.
-    \item We present a complete offline reinforcement fine-tuning pipeline in which a prefix-valued
-    critic over frozen VLA representations drives direct policy improvement over both actions and
-    commitment lengths, together with a training recipe that keeps chunk-level value learning stable
-    at this scale, identifying which components are essential and which fail silently.
+    \item We present a complete offline reinforcement fine-tuning method for VLAs that jointly
+    optimizes the policy over actions and commitment lengths through a single learned value,
+    together with a training recipe that keeps chunk-level value learning stable at this scale,
+    identifying which components are essential and which fail silently.
     \item Through experiments on challenging manipulation tasks in both simulation~\citep{robocasa}
     and the real world, with every design choice isolated against its alternatives in controlled
     ablations, we show that the resulting policies surpass supervised fine-tuning using only the
