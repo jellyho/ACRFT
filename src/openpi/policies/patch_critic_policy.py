@@ -275,14 +275,21 @@ class PatchCriticSelectPolicy(BasePolicy):
             scored_state = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
         else:
             # Legacy raw-units critic. The output transform un-normalizes AND undoes the joint-delta
-            # parameterisation, and the latter needs the REAL state (JointAbsoluteActions does
-            # actions[..., i] += state[..., ref[i]]). This passed zeros, which silently left the
-            # chunks as DELTAS while the critic was trained on ABSOLUTE joint targets -- no error,
-            # just meaningless values. Broadcast the live state over the N candidates.
+            # parameterisation, and the latter needs the state (JointAbsoluteActions does
+            # actions[..., i] += state[..., ref[i]]). It must be handed the NORMALIZED state, which
+            # is what Policy.infer passes (`inputs["state"]`): Unnormalize runs FIRST in this
+            # transform and converts it to real units before JointAbsoluteActions ever sees it.
+            #
+            # Passing the raw state instead un-normalizes an already-physical value a second time,
+            # so every candidate chunk is displaced by a garbage offset -- identically, which is why
+            # the candidates still agreed with each other and nothing looked wrong until the arm
+            # moved. Measured on a real rollout: the command sat 1.58 rad from the robot (a plain
+            # rollout of the same checkpoint tracks it within 0.17) and snapped ~1.5 rad at every
+            # replan. Before that it passed zeros, which left the chunks as DELTAS entirely.
             scored_actions = np.asarray(
                 self._pol._output_transform(
                     {
-                        "state": np.broadcast_to(state, (chunks_model.shape[0], state.shape[0])).copy(),
+                        "state": np.broadcast_to(norm_state, (chunks_model.shape[0], norm_state.shape[0])).copy(),
                         "actions": chunks_model,
                     }
                 )["actions"],
