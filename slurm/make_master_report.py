@@ -1732,6 +1732,181 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-19 Tier1 선행연구 정독
+entry(
+    "08-19",
+    "papers-tier1",
+    "📄 Tier 1 정독 — VLA를 위한 offline 직접 가치학습, 선행 6편 상세 요약",
+    "완결",
+    """
+<p class='sub'>논문 related-work 조사의 심화판. <b>Tier 1 = "offline 데이터에서 직접 가치함수(TD)를 학습해 VLA/로봇
+generalist를 개선"</b>이라는, 우리와 같은 목표의 선행 전부(10여 회 검색·서베이 마이닝으로 포화 확인). 각 논문을
+정체→방법(원문 인용)→결과→우리와의 간극 순으로 정리한다. BORA·GigaBrain·MoRE는 abstract·프로젝트 페이지 기준
+요약이며 전문 정독은 필요 시 후속. <span class='xref' data-eid='paper-intro'>인트로 초안</span>의 P6 근거 자료.</p>
+
+<h3>① CO-RFT (arXiv:2508.02219) — 정면 베이스라인</h3>
+<p><b>정체</b>: VLA를 chunked TD로 offline 파인튜닝한 최초 계열. <b>방법</b>: "Chunked RL" — TD 학습을 action
+chunking에 맞게 확장. 원문:</p>
+<blockquote class='sub'>"we propose Chunked RL, a novel reinforcement learning framework specifically designed for
+VLA models [in which] temporal difference (TD) learning is extended to incorporate action chunking."</blockquote>
+<p>절차는 2단계: 전체 파라미터 IL로 백본·정책 초기화 → action chunking을 포함한 offline RL(Cal-QL 계열)로 최적화.
+<b>결과</b>: 실기(30–60 데모)에서 지도학습 대비 <b>성공률 +57%p, 사이클타임 −22.3%</b>, 미학습 위치 44.3%.
+<b>간극</b>: chunk는 <b>고정 실행</b>(커밋 길이 결정 없음), 소규모 태스크, 배포 기제 비교 없음. 우리 실험의 정면
+베이스라인 후보.</p>
+
+<h3>② DEAS (arXiv:2510.07730) — 가장 가까운 방법, 우리가 재현한 그 논문</h3>
+<p><b>정체</b>: GR00T급 VLA에 action-sequence 가치학습을 얹은 offline RL. <b>방법</b>: SMDP 관점의 청크 가치 +
+<b>detached value learning</b>. 핵심 원문:</p>
+<blockquote class='sub'>"directly adopting such sequences in actor-critic algorithms introduces excessive value
+overestimation, which we address through detached value learning that steers value estimates toward in-distribution
+actions that achieve high return in the offline dataset."</blockquote>
+<p>구현(코드 실측, <span class='xref' data-eid='deas'>우리 재현 리포트</span>): V는 expectile+HL-Gauss로 데모 액션의
+min-double-Q를 좇고, Q는 그 V로만 부트스트랩(후보 max 없음), dual discount(γ1 청크 내/γ2 청크 간),
+negative(cost-to-go) reward. <b>배포는 BoN</b>(N=10 argmax). <b>결과</b>: OGBench 장지평에서 표준 offline RL 대비
+우위, RoboCasa에서 GR00T 대비 예 45%→65%. <b>간극</b>: 고정 청크 + BoN 배포 — 우리 고전력 재현에선 같은 데이터로
+<b>VLA와 동률</b>(단일태스크 near-demo 후보에선 BoN이 캡). 방법의 가치학습은 강하나 기제가 병목.</p>
+
+<h3>③ GR-RL (arXiv:2512.01801, ByteDance Seed) — 가치를 필터로</h3>
+<p><b>정체</b>: 장지평 정밀 조작(dexterous)용 VLA 개선 파이프라인. <b>방법</b>: 원문:</p>
+<blockquote class='sub'>"GR-RL learns a vision-language-conditioned task progress [function] and filters demonstration
+trajectories, keeping only transitions that contribute positively to progress. By directly applying offline RL with
+sparse reward, the resulting Q-values can be treated as a robust progress function."</blockquote>
+<p>즉 sparse-reward offline RL로 Q를 배우되, 그 Q를 <b>정책 학습 신호가 아니라 데이터 필터</b>(progress 함수)로 쓴다.
++ 형태학적 대칭 증강. <b>결과</b>: noisy·suboptimal 데모에서 장지평 dexterous 태스크 성능 향상(실기). <b>간극</b>:
+가치→정책의 직접 경로(추출/커밋)가 없다 — 가치학습의 이득 중 "필터링" 한 조각만 사용. suboptimal-데모 문제의식은
+우리 인트로 P2와 동일(인용 예정).</p>
+
+<h3>④ BORA (arXiv:2605.30226) — chunk-critic + online residual</h3>
+<p><b>정체</b>: 실기 dexterous VLA용, offline RL과 online 잔차 적응의 브리지. <b>방법</b>: 원문:</p>
+<blockquote class='sub'>"[BORA] constructs a critic that takes both the VLM's cognition tokens and action chunks as
+inputs [enabling] action-conditioned value guidance."</blockquote>
+<p>critic이 VLM 인지 토큰+action chunk를 입력으로 받는 점이 우리 frozen-feature critic과 유사 발상. 이후 online
+residual 적응으로 마무리. <b>결과</b>: 실기 dexterous 5태스크 평균 <b>+33%p</b>. <b>간극</b>: 이득에서 offline 기여가
+<b>분리 보고되지 않음</b>(online residual 포함 수치), 고정 청크, 기제 비교 없음. (abstract 기준 요약.)</p>
+
+<h3>⑤ GigaBrain-0.5M* (arXiv:2602.12099) — world-model 노선</h3>
+<p><b>정체</b>: world-model 기반 RL(RAMP)로 학습하는 VLA. 원문:</p>
+<blockquote class='sub'>"VLA models that directly predict multi-step action chunks from current observations face
+inherent limitations due to constrained scene understanding and weak future anticipation capabilities."</blockquote>
+<p><b>방법</b>: RAMP = world-model-conditioned policy RL — 실환경 탐색 대신 world model이 개선 신호 제공(모델 기반
+offline 노선; 우리 <span class='xref' data-eid='mb-arq'>model-based critic 논의</span>와 문제의식 공유). <b>결과</b>:
+Laundry Folding·Box Packing·Espresso 등에서 <b>RECAP 대비 약 +30%</b> 보고. <b>간극</b>: chunk granularity 무처리,
+대규모 산업 스택(0.5M 데이터) 전제 — 학술 재현 불가 규모. (abstract 기준 요약.)</p>
+
+<h3>⑥ MoRE (arXiv:2503.08007) — CQL 계열, 사족보행</h3>
+<p><b>정체</b>: 사족보행 quadruped VLA에 RL 목적함수. <b>방법</b>: MLLM 안에 LoRA 전문가들을 sparse MoE로 넣고,
+"automatically collected mixed-quality data" 위에 RL 기반 목적(CQL 계열)으로 학습. <b>결과</b>: 6개 스킬 전반에서
+베이스라인 상회, OOD 일반화 우위. <b>간극</b>: 조작(manipulation)이 아니라 보행, chunk 개념 없음. (abstract 기준.)</p>
+
+<h3>종합 — Tier 1이 남긴 빈칸</h3>
+<table class='num'><tr><th>논문</th><th>순수 offline</th><th>직접 TD</th><th>chunk 인지</th><th>커밋 길이 결정</th><th>기제 비교</th><th>SFT 초과(VLA 스케일)</th></tr>
+<tr><td>CO-RFT</td><td>✅</td><td>✅</td><td>✅(고정)</td><td>✕</td><td>✕</td><td>✅(소규모)</td></tr>
+<tr><td>DEAS</td><td>✅</td><td>✅</td><td>✅(고정)</td><td>✕</td><td>✕(BoN 가정)</td><td>△(우리 재현선 동률)</td></tr>
+<tr><td>GR-RL</td><td>✅</td><td>✅</td><td>✕</td><td>✕</td><td>✕(필터 가정)</td><td>△(필터 경유)</td></tr>
+<tr><td>BORA</td><td>△(+online)</td><td>✅</td><td>✅(고정)</td><td>✕</td><td>✕</td><td>△(미분리)</td></tr>
+<tr><td>GigaBrain</td><td>✅(모델기반)</td><td>△</td><td>✕</td><td>✕</td><td>✕</td><td>✅(산업 스택)</td></tr>
+<tr><td>MoRE</td><td>△</td><td>✅</td><td>✕</td><td>✕</td><td>✕</td><td>△(보행)</td></tr></table>
+<p><b>모두가 비운 세 칸</b>: 상태의존 <b>커밋 길이 결정</b>(전원 ✕), <b>기제 비교</b>(선택/커밋/추출 — 전원 자기 기제 가정),
+그리고 <b>순수 offline + VLA 조작 스케일 + SFT 초과</b>의 동시 달성. 이 세 칸이 우리 논문의 슬롯이다.</p>
+<p class='sub'><b>인접 경보</b>: LWD(2605.00416)는 분포형 implicit value(=우리 계열)+adjoint 추출로 flow VLA를 개선하나
+<b>fleet online 데이터 필요</b>; PA-RL(2412.06685)은 후보최적화+증류나 VLA 결과는 online 파인튠; VGAS(2602.07399)는
+"Q-Chunk-Former"로 <b>chunk-critic이 이미 등장</b>했음을 알린다(단 BoN 선택). 슬롯이 좁혀지고 있다 — 서두를 것.
+전체 서지는 repo <code>paper/references.bib</code>(30편).</p>""",
+)
+
+# ============================================== 08-17 논문 인트로 초안 (living)
+entry(
+    "08-17",
+    "paper-intro",
+    "📝 논문 인트로 초안 v4 — 방법이 바뀌어도 성립하는 동기 중심 서사",
+    "살아있음",
+    """
+<p class='sub'>논문(ICLR 본논문, 8–9p) 인트로 작업 문서. <b>설계 원칙</b>: 세부 방법(IQL 여부, BoN 여부,
+critic 형태)이 바뀌어도 그대로 성립해야 한다. 그래서 방법 서술을 전부 <b>"어떤 해법이든 답해야 할
+세 가지 질문"</b>으로 치환했다 — 구현이 바뀌면 본문이 바뀔 뿐 인트로는 불변. 마감 08-19, 피드백 반영 중.</p>
+
+<div style="border:1px solid #d8d8e0;border-radius:10px;padding:22px 26px;background:#fcfcfe;font-family:Georgia,'Times New Roman',serif;line-height:1.75">
+<h3 style="margin-top:0">1&nbsp;&nbsp;Introduction</h3>
+
+<p>Vision-language-action models have turned robot manipulation into a data problem
+[<i>RT-2; OpenVLA; &pi;<sub>0</sub></i>]. With a pretrained vision-language backbone and supervised finetuning on
+teleoperated demonstrations, a single policy can follow instructions, generalize across objects, and run on real
+hardware. The recipe is attractive precisely because it is so simple: collect demonstrations, imitate them, scale up.</p>
+
+<p>The weakness of the recipe is the data it imitates. Teleoperated demonstrations are produced by human operators
+working in real time, and every large corpus mixes expert trajectories with hesitation, detours, and recovered
+mistakes [<i>GR-RL; &pi;*<sub>0.6</sub></i>]. Supervised finetuning cannot tell these apart: its objective rewards
+resembling the data, so the policy converges to the average operator, mistakes included. This ceiling is not a
+capacity problem, and it does not yield to scale. A larger model trained on more of the same data reproduces the
+same average more faithfully. Meanwhile, the signal that could break the tie is already sitting in the dataset.
+Every demonstration records whether and how quickly the task was accomplished, and this outcome information is
+exactly what the imitation loss ignores. Improving a VLA beyond its data, without the unsafe and prohibitively
+expensive route of running reinforcement learning on hardware, is therefore not a question of whether to use this
+signal but of how.</p>
+
+<p>Today the field uses it timidly. The post-training methods actually applied to VLAs keep the imitation
+objective at their core and let outcomes only condition or reweight it: advantage-conditioned finetuning
+[<i>&pi;*<sub>0.6</sub></i>], weighted imitation [<i>ARFM; ARM</i>], return conditioning [<i>ReinboT</i>],
+preference tuning [<i>NORA-1.5</i>]. These inherit the stability of supervised learning, and also its defining
+limit, since the policy is never trained to do better than the behavior it imitates. The few attempts at genuine
+value learning on VLAs remain partial. The learned value ends up filtering the dataset [<i>GR-RL</i>], or
+rescoring sampled actions at test time [<i>V-GPS; DEAS</i>], or it is trained at a scale far below the models it
+is meant to improve [<i>Q-Transformer; CO-RFT</i>]. A complete, working path from a VLA's own demonstrations to a
+measurably better VLA has not been shown.</p>
+
+<p>We argue this path has been blocked because VLAs are not the agents offline reinforcement learning was
+developed for, and any post-training stage that hopes to work must answer three questions that the standard
+machinery leaves open. First, at what temporal granularity should credit be assigned? A VLA does not emit an
+action; it emits a commitment, a chunk of actions executed open loop until the next replanning point
+[<i>ACT; &pi;<sub>0</sub></i>]. Credit at the level of single steps dissolves over manipulation horizons, credit at
+the level of whole chunks is blind exactly where contact demands reactivity [<i>QC</i>], and the right granularity
+changes from state to state [<i>AQC; ACSAC</i>]. Second, how can value be learned reliably at this scale? The
+backbone that makes a VLA general is also too large to train jointly with a critic, and the value must remain
+trustworthy far from the data it was fitted on [<i>CQL; IQL</i>]. Third, once a value exists, how should it act on
+the policy? Rescoring the policy's own samples, deciding how long to commit, and retraining the policy are all
+plausible mechanisms, and, as we show, they are far from equivalent [<i>EMaQ</i>].</p>
+
+<p>In this paper we develop an offline post-training stage for VLAs built around these three questions, and we
+evaluate each answer in controlled isolation, on standard offline RL benchmarks where every component can be
+measured against its alternatives [<i>OGBench</i>], and on VLA-scale manipulation where the full pipeline must
+hold together [<i>RoboCasa</i>]. Our aim is not another offline RL algorithm but a working conversion: the same
+demonstrations, a better VLA, and an account of why each piece is there.</p>
+
+<p><b>Contributions.</b>
+(i)&nbsp;We diagnose why outcome signals recorded in demonstration data have failed to improve VLAs so far,
+despite a decade of offline reinforcement learning machinery built to exploit them.
+(ii)&nbsp;We formulate the three questions any VLA post-training stage must answer, about credit granularity,
+value learning at scale, and the mechanism by which value acts on the policy, and provide a complete instantiation.
+(iii)&nbsp;We give a controlled empirical analysis of the answers, showing which mechanisms genuinely improve a
+VLA and which silently fail.
+(iv)&nbsp;We validate the resulting pipeline end to end, from demonstrations to deployment, without any online
+interaction.</p>
+</div>
+
+<h3>참고문헌 키 (초안용 — bibtex 전환 예정)</h3>
+<table class='num'><tr><th>key</th><th>논문</th></tr>
+<tr><td>RT-2 / OpenVLA / ACT / &pi;<sub>0</sub></td><td>VLA·청크 정책 대표작 (2307.15818 / 2406.09246 / 2304.13705 / 2410.24164)</td></tr>
+<tr><td>&pi;*<sub>0.6</sub> (RECAP)</td><td>advantage-conditioned VLA post-training (2511.14759)</td></tr>
+<tr><td>ARFM / ARM / ReinboT / NORA-1.5</td><td>가중 flow loss (2509.04063) / AW-BC (2604.03037) / RTG 조건화 (ICML25) / DPO (2511.14659)</td></tr>
+<tr><td>GR-RL</td><td>offline 가치를 데이터 필터로 (2512.01801)</td></tr>
+<tr><td>V-GPS / DEAS</td><td>test-time 재랭킹·BoN 배포 (2410.13816 / 2510.07730)</td></tr>
+<tr><td>Q-Transformer / CO-RFT</td><td>대규모 이전 세대 Q / chunked TD 소규모 실기 (2309.10150 / 2508.02219)</td></tr>
+<tr><td>QC / AQC / ACSAC</td><td>chunked TD와 적응 커밋 기계 (2507.07969 / 2605.05544 / 2605.11009)</td></tr>
+<tr><td>CQL / IQL / EMaQ</td><td>offline 가치학습 기초·BoN 연산자 분석 (2006.04779 / 2110.06169 / 2007.11091)</td></tr>
+<tr><td>OGBench / RoboCasa</td><td>평가 벤치마크 (2410.20092 / 2406.02523)</td></tr></table>
+
+<h3>이 인트로가 무엇에 강건한가 (설계 노트)</h3>
+<table class='num'><tr><th>바뀔 수 있는 것</th><th>인트로 영향</th></tr>
+<tr><td>IQL → 다른 가치학습(TD-max, DEAS식, distributional 여부)</td><td>없음 — "질문 2(신뢰 가능한 가치학습)"의 답만 바뀜</td></tr>
+<tr><td>BoN 채택/폐기, adaptive commitment 세부</td><td>없음 — "질문 3(가치가 정책에 닿는 기제)"의 답만 바뀜</td></tr>
+<tr><td>chunk 처리 방식(고정/적응, prefix 구조)</td><td>없음 — "질문 1(credit granularity)"의 답만 바뀜</td></tr>
+<tr><td>백본/과제(pi05, GR00T, RoboCasa, 실기)</td><td>없음 — 스케일 서술은 일반형</td></tr></table>
+<p class='sub'>v5 변경(2026-08-17 밤): LLM post-training 유추 문단 삭제(지시), "offline RL이 BC보다 낫다"류 교과서
+논증 삭제(지시) — 대신 "개선 신호는 이미 데이터에 있다; 쓸지가 아니라 <b>어떻게</b> 쓰느냐"로 재프레임. 인라인
+레퍼런스 [key] 추가(지시). 고정된 뼈대: "SFT 천장 → 신호는 있는데 소심하게 쓰인다 → 세 질문". 성능 수치 없음,
+em-dash 없음, 우리 방법명 없음.</p>""",
+)
+
 # ============================================== 08-16 acrft_ogbench apple-to-apple ablation
 entry(
     "08-16",
@@ -2865,6 +3040,24 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "papers-tier1": {
+        "date": "2026-08-19 14:30",
+        "who": "워커B(논문 담당, 리뷰)",
+        "where": "arXiv (CO-RFT·DEAS·GR-RL·BORA·GigaBrain·MoRE)",
+        "what": "Tier 1(offline 직접 가치학습으로 VLA 개선) 선행 6편 상세 정독 + 빈칸 표",
+        "how": "10여 회 검색·서베이 마이닝으로 포화 확인 후 각 논문 정체/방법(원문 인용)/결과/간극 정리",
+        "why": "사용자 지시 'Tier 1 자세하게 요약해서 포스트' — 논문 P6·related work 근거",
+        "links": ["paper-intro", "deas", "aqc-ablation", "mb-arq", "wa-emaq-bon"],
+    },
+    "paper-intro": {
+        "date": "2026-08-17 21:30",
+        "who": "워커B(논문 담당)",
+        "where": "논문 초안 (ICLR 본논문 목표)",
+        "what": "인트로 v4 — 방법 세부에 불변인 동기 중심 서사(세 가지 질문 구조), 08-19 마감",
+        "how": "SFT 천장→offline post-training 필요→세 질문(credit granularity/가치학습 스케일/가치가 정책에 닿는 기제); 수치·방법명·dash 배제",
+        "why": "사용자 지시 — 논문 작성 담당, 방법이 바뀌어도 성립하는 인트로",
+        "links": ["deas", "aqc-ablation", "wc-policy-extraction", "conservatism"],
     },
     "aqc-ablation": {
         "date": "2026-08-16 20:00",
@@ -4179,6 +4372,68 @@ with our standing binding-constraint = coverage.</p>
 <p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
 <b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
 td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
+)
+
+en(
+    "papers-tier1",
+    "📄 Tier 1 read in depth — the six prior works on offline direct value learning for VLAs",
+    """
+<p class='sub'>The deep-dive companion to our related-work survey. <b>Tier 1 = prior work sharing our exact goal:
+learn a value function directly (TD) from offline data to improve a VLA / robot generalist.</b> Saturation was
+confirmed over ten-plus searches. Each paper: identity → method (verbatim quotes) → results → gap. BORA, GigaBrain
+and MoRE are summarized from abstracts/project pages; full reads to follow if needed. Feeds P6 of the
+<span class='xref' data-eid='paper-intro'>introduction draft</span>.</p>
+
+<p><b>① CO-RFT</b> (2508.02219). Two stages: full-parameter IL init, then offline RL with action chunking ("Chunked
+RL", TD extended to chunks; Cal-QL family). Real robot, 30 to 60 demos: <b>+57%p success over supervised methods</b>,
+cycle time −22.3%. Gap: the chunk is executed at a <b>fixed</b> length, small tasks, no deployment-mechanism study.
+Our head-on baseline.</p>
+
+<p><b>② DEAS</b> (2510.07730), the method we reproduced. Chunk-level value with <b>detached value learning</b>:
+"directly adopting such sequences in actor-critic algorithms introduces excessive value overestimation, which we
+address through detached value learning that steers value estimates toward in-distribution actions." In code: V is
+expectile+HL-Gauss chasing min-double-Q of demo actions, Q bootstraps from V only, dual discounts, cost-to-go reward,
+<b>deployed as best-of-N</b>. Beats GR00T on RoboCasa (e.g. 45%→65%). Gap: fixed chunk + BoN deployment; in our
+high-power reproduction it <b>tied the VLA</b> on single-task near-demo candidates. Strong value learning, bottlenecked
+by the mechanism.</p>
+
+<p><b>③ GR-RL</b> (2512.01801, ByteDance Seed). Learns Q by sparse-reward offline RL but uses it as a <b>data
+filter</b>: "filters demonstration trajectories, keeping only transitions that contribute positively to progress...
+the resulting Q-values can be treated as a robust progress function." Plus symmetry augmentation; real dexterous
+long-horizon gains. Gap: no direct value-to-policy path; the value's benefit is reduced to filtering.</p>
+
+<p><b>④ BORA</b> (2605.30226). A critic over <b>the VLM's cognition tokens and action chunks</b> (kin to our
+frozen-feature critic idea) for action-conditioned value guidance, then online residual adaptation. +33%p on five
+real dexterous tasks. Gap: offline contribution not isolated from the online residual; fixed chunk. (Abstract-level.)</p>
+
+<p><b>⑤ GigaBrain-0.5M*</b> (2602.12099). World-model-based RL (RAMP) for a VLA; motivation quote: chunk-predicting
+VLAs suffer "constrained scene understanding and weak future anticipation." Reports ~+30% over a RECAP baseline on
+Laundry/Box/Espresso. Gap: no chunk granularity treatment; industrial-scale stack. (Abstract-level.)</p>
+
+<p><b>⑥ MoRE</b> (2503.08007). Quadruped VLA: LoRA experts as sparse MoE inside an MLLM, RL objective (CQL family) on
+auto-collected mixed-quality data; beats baselines on six skills. Gap: locomotion, no chunks. (Abstract-level.)</p>
+
+<p><b>The three cells everyone leaves empty</b>: state-dependent <b>commitment-length decision</b> (all ✕),
+<b>mechanism comparison</b> (each assumes its own: BoN, filter, fixed execution), and the conjunction of
+<b>purely-offline + VLA-scale manipulation + surpassing SFT</b>. Those cells are our paper's slot. Adjacent alarms:
+LWD (distributional implicit value + adjoint extraction, but fleet-online), PA-RL (candidate optimization +
+distillation, online for VLA results), VGAS (a "Q-Chunk-Former" chunk critic already appearing, though for BoN).
+Full bibliography in <code>paper/references.bib</code> (30 entries).</p>""",
+)
+
+en(
+    "paper-intro",
+    "📝 Paper introduction draft v4 — a motivation-first narrative invariant to method details",
+    """
+<p class='sub'>Working document for the paper (ICLR full paper target). <b>Design principle</b>: the introduction must
+survive any change in method details (IQL or not, BoN or not, critic form). All method exposition is replaced by
+<b>three questions any solution must answer</b>; if the implementation changes, the body changes but the intro stands.
+Deadline 08-19. The draft itself is in English; open the Korean toggle for the full text with design notes, or read
+the same draft there. Robustness table: value-learning swaps only change the answer to Question&nbsp;2; deployment
+changes (BoN kept or dropped, adaptive commitment details) only change Question&nbsp;3; chunk handling only changes
+Question&nbsp;1; backbone/benchmark swaps do not touch the intro at all. Fixed skeleton: SFT ceiling → offline
+post-training stage → the three questions. No performance numbers, no method names, no em-dashes (per instruction);
+baseline limitations stated at the family level (conditioned/weighted imitation, filtering, test-time rescoring).</p>""",
 )
 
 en(

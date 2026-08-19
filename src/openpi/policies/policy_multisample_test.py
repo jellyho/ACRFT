@@ -1,4 +1,10 @@
-"""MultiSamplePolicy: several chunks per observation, only when asked."""
+"""MultiSamplePolicy: several chunks per observation, as many as the SERVER was started with.
+
+The count is server configuration, not a request key: the client executes `actions` and records
+whatever the handshake declared, the same way it already takes the chunk length off the reply.
+These tests pin that -- N comes from `default_samples`, and a critic-like inner policy is left to
+draw its own candidates.
+"""
 
 from typing import ClassVar
 
@@ -101,9 +107,10 @@ def test_metadata_passes_through():
 
 
 class _CriticLike:
-    """Stands in for CriticSelectPolicy: reads num_samples itself, declares its own features."""
+    """Stands in for CriticSelectPolicy: picks among its own candidates, declares its own features."""
 
     metadata: ClassVar[dict] = {}
+    selects_candidates = True
 
     def __init__(self):
         self.calls = 0
@@ -125,9 +132,9 @@ def test_a_critic_request_is_not_sampled_over_again():
     for a result that is then discarded.
     """
     critic = _CriticLike()
-    policy = MultiSamplePolicy(critic, action_horizon=30, action_dim=32)
+    policy = MultiSamplePolicy(critic, action_horizon=30, action_dim=32, default_samples=8)
 
-    policy.infer({"state": np.zeros(42), "critic_select": True, "num_samples": 8})
+    policy.infer({"state": np.zeros(42)})
 
     assert critic.calls == 1
 
@@ -135,9 +142,9 @@ def test_a_critic_request_is_not_sampled_over_again():
 def test_num_samples_reaches_the_critic_that_reads_it():
     """Popping it unconditionally left the critic on its own default, silently."""
     critic = _CriticLike()
-    policy = MultiSamplePolicy(critic, action_horizon=30, action_dim=32)
+    policy = MultiSamplePolicy(critic, action_horizon=30, action_dim=32, default_samples=8)
 
-    policy.infer({"state": np.zeros(42), "critic_select": True, "num_samples": 8})
+    policy.infer({"state": np.zeros(42)})
 
     assert critic.saw_num_samples == 8
 
@@ -163,8 +170,8 @@ def test_declares_its_own_action_samples_when_configured():
 
 
 def test_an_inner_action_samples_declaration_wins():
-    """Reachable only via the critic_select passthrough, which this wrapper never shapes itself
-    -- so the critic's own declaration (its own N, its own width) is the one that is honest."""
+    """The critic shapes its own candidates, so its declaration (its own N, its own width) is the
+    honest one -- this wrapper never draws them."""
 
     class _CriticWithSamples(_CriticLike):
         def extra_features(self, num_samples=None):
@@ -179,3 +186,33 @@ def test_an_inner_action_samples_declaration_wins():
 def test_a_policy_that_declares_nothing_forwards_nothing():
     policy, _ = _policy()
     assert policy.extra_features() == {}
+
+
+def test_the_server_s_n_applies_without_the_client_asking():
+    """The whole point: a client that sends a plain observation still gets the configured spread,
+    so the robot side needs no knowledge of sampling at all."""
+    inner = _FlowLike()
+    policy = MultiSamplePolicy(inner, action_horizon=30, action_dim=32, robot_action_dim=14, default_samples=4)
+
+    result = policy.infer({"state": np.zeros(42)})
+
+    assert result["action_samples"].shape == (30, 4, 14)
+    assert len(inner.noises) == 4
+    # ...and it matches what the handshake promised, which is what makes the column recordable.
+    assert policy.extra_features()["action_samples"] == [4, 14]
+
+
+def test_a_stale_critic_select_key_never_reaches_the_model():
+    """An older client may still send it. It means nothing now, but the model's input transforms
+    reject keys they do not know, so it must not be forwarded."""
+    inner = _FlowLike()
+    seen = {}
+
+    def spy(obs, *, noise=None):
+        seen.update(obs)
+        return _FlowLike.infer(inner, obs, noise=noise)
+
+    inner.infer = spy
+    policy = MultiSamplePolicy(inner, action_horizon=30, action_dim=32)
+    policy.infer({"state": np.zeros(42), "critic_select": True})
+    assert "critic_select" not in seen
