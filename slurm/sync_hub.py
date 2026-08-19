@@ -10,12 +10,16 @@ worker's entries untouched, and opens+merges a PR.
 """
 
 import json
+import os
 import pathlib
 import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import make_master_report as mm
+
+# same cache root as make_master_report (CACHE_DIR), so this runs on hosts without /scratch
+CACHE = pathlib.Path(os.environ.get("CACHE_DIR", "/scratch/jellyho/acrft"))
 
 SPACE = "jellyho/acrft-reports"
 MARK = "워커B"
@@ -402,8 +406,8 @@ function wbGraphInit(){
     import base64
     import hashlib
 
-    fig_dir = pathlib.Path("/scratch/jellyho/acrft/hub_figs")
-    fig_dir.mkdir(exist_ok=True)
+    fig_dir = CACHE / "hub_figs"
+    fig_dir.mkdir(parents=True, exist_ok=True)
     fig_ops = []
     seen_figs = set()
 
@@ -420,7 +424,7 @@ function wbGraphInit(){
 
     out = re.sub(r'src="data:image/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)"', extract_fig, out)
 
-    tmp = pathlib.Path("/scratch/jellyho/acrft/hub_index_new.html")
+    tmp = CACHE / "hub_index_new.html"
     tmp.write_text(out)
     size_mb = tmp.stat().st_size / 1e6
     if size_mb > 9.5:
@@ -431,7 +435,7 @@ function wbGraphInit(){
     ops_extra = []
     if "index.html filter=lfs" in attrs:
         attrs = "\n".join(line for line in attrs.splitlines() if not line.startswith("index.html ")) + "\n"
-        atmp = pathlib.Path("/scratch/jellyho/acrft/hub_gitattributes")
+        atmp = CACHE / "hub_gitattributes"
         atmp.write_text(attrs)
         ops_extra.append(CommitOperationAdd(path_in_repo=".gitattributes", path_or_fileobj=str(atmp)))
     res = api.create_commit(
