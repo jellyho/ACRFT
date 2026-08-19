@@ -29,8 +29,8 @@ Recent attempts stop short of this promise. Most reshape imitation with outcome
 signals~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting both the stability and the ceiling of
 supervised learning. The few that learn a value keep it away from the policy: it filters
 data~\citep{grrl}, rescores the policy's own samples~\citep{vgps, deas}, or scores
-commitments fixed in advance~\citep{corft}. We argue these are structural limits rather than
-implementation accidents, with two distinct sources. Rescoring a fixed sampler is bounded by the
+commitments fixed in advance~\citep{corft}. We argue that these limitations are structural rather
+than incidental, arising from two distinct sources. Rescoring a fixed sampler is bounded by the
 support of its proposals, and its argmax preferentially selects critic error~\citep{emaq}; a critic
 over fixed whole chunks cannot tell skill from luck in closed-loop demonstrations, and overvalues
 commitments that merely happened to work~\citep{dqc}. What matters is not only how well the value is
