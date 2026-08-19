@@ -38,7 +38,7 @@ import openpi.models.siglip as _siglip
 import openpi.shared.array_typing as at
 
 
-@dataclasses.dataclass(repr=False)
+@dataclasses.dataclass(frozen=True, repr=False)
 class Pi0FQLConfig(pi0_config.Pi0Config):
     """pi05 with a one-step FQL actor + a critic expert over the frozen BC flow expert.
 

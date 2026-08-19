@@ -39,6 +39,11 @@ def main():
     ap.add_argument("--discount", type=float, default=0.99)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--flow-ode-steps", type=int, default=10)
+    # expert variants: real by default; 'dummy' everywhere gives a CPU-runnable trainer smoke
+    ap.add_argument("--paligemma-variant", default="gemma_2b")
+    ap.add_argument("--flow-variant", default="gemma_300m")
+    ap.add_argument("--actor-variant", default="gemma_300m")
+    ap.add_argument("--critic-variant", default="gemma_150m")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--steps", type=int, default=100)
@@ -61,6 +66,10 @@ def main():
         action_dim=a.action_dim,
         action_horizon=a.action_horizon,
         pi05=True,
+        paligemma_variant=a.paligemma_variant,
+        action_expert_variant=a.flow_variant,
+        actor_expert_variant=a.actor_variant,
+        critic_expert_variant=a.critic_variant,
         fql_num_atoms=a.num_atoms,
         fql_v_min=a.v_min,
         fql_v_max=a.v_max,
@@ -88,7 +97,10 @@ def main():
 
     graphdef = nnx.graphdef(model)
     params = nnx.state(model)
-    target_params = jax.tree.map(jnp.copy, params)  # EMA target (only its critic head is read)
+    # EMA target: only the CRITIC subset. Copying the full 3.4B-param state (frozen VLM included)
+    # would burn ~13.6GB for weights that never move; the target model is the online model with just
+    # its critic params swapped for the EMA copy.
+    target_critic = jax.tree.map(jnp.copy, params.filter(critic_filter))
     tx_c = optax.adam(a.lr)
     tx_a = optax.adam(a.lr)
     opt_c = tx_c.init(params.filter(critic_filter))
@@ -116,10 +128,11 @@ def main():
         return l_q + a.alpha * l_distill, {"l_distill": l_distill, "q_pi": -l_q}
 
     @jax.jit
-    def step(params, target_params, opt_c, opt_a, batch, rng):
+    def step(params, target_critic, opt_c, opt_a, batch, rng):
         rc, ra = jax.random.split(rng)
         model = nnx.merge(graphdef, params)
-        target_model = nnx.merge(graphdef, target_params)
+        target_model = nnx.merge(graphdef, params)
+        nnx.update(target_model, target_critic)  # online everywhere, EMA critic
         (lc, ci), gc = nnx.value_and_grad(critic_loss_fn, argnums=nnx.DiffState(0, critic_filter), has_aux=True)(
             model, target_model, batch, rc
         )
@@ -133,8 +146,10 @@ def main():
         ua, opt_a = tx_a.update(ga, opt_a, pa)
         nnx.update(model, optax.apply_updates(pa, ua))
         params = nnx.state(model)
-        target_params = jax.tree.map(lambda t, p: a.target_tau * p + (1 - a.target_tau) * t, target_params, params)
-        return params, target_params, opt_c, opt_a, {"l_critic": lc, "l_actor": la, **ci, **ai}
+        target_critic_new = jax.tree.map(
+            lambda t, p: a.target_tau * p + (1 - a.target_tau) * t, target_critic, params.filter(critic_filter)
+        )
+        return params, target_critic_new, opt_c, opt_a, {"l_critic": lc, "l_actor": la, **ci, **ai}
 
     # ---- data ----
     def synthetic_batch(rng):
@@ -166,7 +181,7 @@ def main():
     for s in range(a.steps):
         rng, kb, ks = jax.random.split(rng, 3)
         batch = synthetic_batch(kb)
-        params, target_params, opt_c, opt_a, info = step(params, target_params, opt_c, opt_a, batch, ks)
+        params, target_critic, opt_c, opt_a, info = step(params, target_critic, opt_c, opt_a, batch, ks)
         if s % 10 == 0 or s == a.steps - 1:
             i = {k: float(v) for k, v in info.items()}
             print(
