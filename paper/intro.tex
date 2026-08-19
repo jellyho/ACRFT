@@ -1,72 +1,72 @@
-% Introduction (v10, 2026-08-19). natbib + paper/references.bib. No em-dashes, no numbers.
-% v10 addresses the critical review: delta vs ACSAC/AQC made explicit; long-horizon thread closed
-% (prefix value preserves h-step horizon reduction); frozen-backbone ceiling tension defended;
-% "surpasses SFT" split across the two eval regimes; C1 sharpened beyond lit-review; stability
-% recipe anchored; motor analogy compressed to one supporting sentence.
+% Introduction (v12, 2026-08-19). natbib + paper/references.bib. No em-dashes, no numbers.
+% v12 = full professionalization pass: colloquial and rhetorical constructions replaced with formal
+% academic register; logic, citations, and all prior review fixes preserved.
 
 \section{Introduction}
 \label{sec:intro}
 
 Vision-language-action models (VLAs) have made large-scale pretraining the dominant recipe for robot
 manipulation~\citep{rt2, openvla, pi0}. The pretrained backbone provides priors strong enough that a
-new task rarely starts from scratch; in practice, a VLA is deployed by fine-tuning it on
+new task rarely needs to be learned from scratch; in practice, a VLA is deployed by fine-tuning it on
 demonstrations of the target task.
 
 The limitation of this recipe lies in the data it imitates. Teleoperated demonstrations interleave
 expert behavior with hesitation, detours, and failure, and their quality varies even within a single
-trajectory~\citep{grrl, reinbot}. An imitation objective treats every transition as an equally valid
-target, so collecting more data reproduces the same average; filtering discards the scarce experience
-the recipe depends on, and online refinement is costly and unsafe at this scale.
+trajectory~\citep{grrl, reinbot}. Because an imitation objective treats every transition as an
+equally valid target, additional data only reproduces the same average behavior more faithfully;
+filtering discards the scarce experience the recipe depends on, and refining the policy through
+online interaction remains costly and unsafe at this scale.
 
-Can an optimal policy be extracted from suboptimal human data with a VLA-scale model?
-Temporal-difference (TD) learning promises precisely this, stitching high-value segments of mediocre
-trajectories into behavior no single demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. But a VLA is not the
-policy this machinery was designed for: it predicts a fixed, long action chunk~\citep{act, pi0}, it
-faces long horizons where one-step TD struggles~\citep{qc}, and its backbone cannot be trained
-jointly with a critic at practical cost.
+Can an optimal policy be extracted from suboptimal human data at VLA scale? Temporal-difference (TD)
+learning promises precisely this, stitching high-value segments of mediocre trajectories into
+behavior that no single demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. A VLA, however,
+is not the policy for which this machinery was designed: it predicts a fixed, long action
+chunk~\citep{act, pi0}, it operates over long horizons where one-step TD degrades~\citep{qc}, and its
+backbone cannot be trained jointly with a critic at practical cost.
 
-Recent attempts stop short of this promise. Most reshape imitation with outcome
-signals~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting both the stability and the ceiling of
-supervised learning. The few that learn a value keep it away from the policy: it filters
-data~\citep{grrl}, performs best-of-$N$ selection over samples drawn from the policy
-itself~\citep{vgps, deas}, or scores commitments fixed in advance~\citep{corft}. We argue that these limitations are structural rather
-than incidental, arising from two distinct sources. Sampling-based selection is bounded by the
-support of what the sampler proposes, and its argmax preferentially selects critic
-error~\citep{emaq}; a critic
-over fixed whole chunks cannot tell skill from luck in closed-loop demonstrations, and overvalues
-commitments that merely happened to work~\citep{dqc}. What matters is not only how well the value is
-learned, but \emph{where it is allowed to act}.
+Recent attempts fall short of this promise. Most reshape the imitation objective with outcome
+signals~\citep{pistar06, arfm, arm, reinbot, nora15}, and thereby inherit both the stability and the
+ceiling of supervised learning. The few methods that learn a value decouple it from policy
+improvement itself: the value filters the dataset~\citep{grrl}, performs best-of-$N$ selection over
+samples drawn from the policy~\citep{vgps, deas}, or scores commitments whose length is fixed in
+advance~\citep{corft}. We argue that these limitations are structural rather than incidental, arising
+from two distinct sources. Sampling-based selection is bounded by the support of what the sampler
+proposes, and the induced argmax preferentially selects overestimated candidates~\citep{emaq}; a
+critic over fixed whole chunks cannot distinguish skillful behavior from fortunate outcomes in
+closed-loop demonstrations, and systematically overestimates commitments that succeeded by
+chance~\citep{dqc}. The decisive question is therefore not only how accurately the value is learned,
+but \emph{where it is permitted to act}.
 
-Our answer is to let the value act on the commitment itself. The chunk is what tames the long
-horizon: backing up over $h$ steps at once is precisely why chunked TD survives sparse, long-horizon
-manipulation~\citep{qc}, and valuing every prefix of the chunk preserves this benefit while restoring
-the reactivity that a fixed commitment forfeits. Skilled motor control offers a familiar picture of
-the resulting behavior: human movement alternates between non-Markovian stretches, executed
-ballistically from an internal plan while ignoring the current state, and reactive phases under
-feedback whose delays make even the corrections intermittent~\citep{woodworth1899, todorov2002,
-gawthrop2011}. Prefix-valued critics have appeared as RL algorithms in state-based
-settings~\citep{acsac, aqc}; our contribution is to turn this construction into a post-training
-instrument for a pretrained VLA. A causal-transformer critic is learned purely offline on the VLA's
-frozen representations with conservative in-sample targets~\citep{iql, deas}, and acts through two
-in-data channels: deciding, state by state, how much of each predicted chunk to execute, and
-distilling its preferences back into the policy. Freezing the backbone constrains where knowledge
-lives, not how good behavior can get: the demonstrations' support contains better behavior than their
-average, which imitation blurs and extraction recovers, and commitment reshapes what gets executed
-rather than selecting among a sampler's proposals.
+We propose to let the value act on the commitment itself. The chunk is also what makes the long
+horizon tractable: backing up over $h$ steps at once is the reason chunked TD remains effective in
+sparse, long-horizon manipulation~\citep{qc}, and valuing every prefix of the chunk preserves this
+benefit while restoring the reactivity that a fixed commitment forfeits. Human motor control offers a
+natural precedent: skilled movement alternates between non-Markovian segments, executed ballistically
+from an internal plan without consulting the current state, and reactive phases under feedback whose
+delays render even the corrections intermittent~\citep{woodworth1899, todorov2002, gawthrop2011}.
+Prefix-valued critics have appeared as RL algorithms in state-based settings~\citep{acsac, aqc}; our
+contribution is to turn this construction into a post-training instrument for a pretrained VLA. A
+causal-transformer critic is learned entirely offline on the VLA's frozen representations with
+conservative in-sample targets~\citep{iql, deas}, and acts through two channels that remain within
+the data: determining, state by state, how much of each predicted chunk to execute, and distilling
+its preferences back into the policy. Freezing the backbone constrains where knowledge resides, not
+the quality of the resulting behavior: the support of the demonstrations contains better behavior
+than their average, which imitation blurs and extraction recovers, and commitment reshapes what is
+executed rather than selecting among a sampler's proposals.
 
 In summary, our main contributions are threefold:
 \begin{itemize}
     \item We analyze why the prevailing uses of a learned value on a VLA cannot surpass the policy
-    they start from, separating the two failure sources, the support ceiling of rescoring a fixed
-    sampler and the skill-versus-luck miscalibration of fixed commitments, and characterizing under
+    they start from, separating the two failure sources, the support ceiling of sampling-based
+    selection and the skill-versus-luck miscalibration of fixed commitments, and characterizing under
     controlled conditions when each binds~\citep{emaq, dqc, park2024bottleneck}.
     \item We present a complete offline reinforcement fine-tuning pipeline in which a prefix-valued
-    critic over frozen VLA representations decides state-dependent commitment and drives policy
+    critic over frozen VLA representations determines state-dependent commitment and drives policy
     extraction; isolating its ingredients shows that in-sample targets and target networks are
     decisive, while low expectiles and unbounded value supports fail silently.
-    \item Through experiments on VLA-scale manipulation~\citep{robocasa}, with every design
-    choice isolated against its alternatives in controlled ablations, we show the full pipeline
-    surpassing supervised fine-tuning using only the demonstrations it already had, without a single
+    \item Through experiments on VLA-scale manipulation~\citep{robocasa}, with every design choice
+    isolated against its alternatives in controlled ablations, we show that the resulting policies
+    surpass supervised fine-tuning using only the demonstrations it already had, without a single
     additional rollout.
 \end{itemize}
 Together, these findings establish offline value learning, applied where the value can genuinely act,
