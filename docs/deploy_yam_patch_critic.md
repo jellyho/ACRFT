@@ -116,6 +116,29 @@ sbatch ... --wrap 'uv run --no-sync python scripts/train_patch_critic_cached.py 
 (`LEROBOT_VIDEO_BACKEND=pyav`), which ships its own FFmpeg and therefore works on every node —
 torchcodec needs system `libavutil`, which the older nodes lack.
 
+## 6b. The input contract (read this before training or serving a critic)
+
+A critic is only meaningful in the input space it was trained in, so every checkpoint now records that
+space in `config.json`'s `input_spec`, with `norm_stats.json` alongside as the reference distribution.
+The server validates the contract at load and refuses a mismatch.
+
+| `normalization` | what the critic eats | how the server feeds it |
+|---|---|---|
+| `pi05` (default) | pi05-normalized **joint deltas** + normalized state — the base VLA's own space | the sampler's output **directly**, no conversion |
+| `raw` (legacy) | absolute joint targets, unnormalized 42-d state | via `_output_transform` (un-normalize + un-delta) |
+
+Prefer `pi05`. It removes the conversion between the sampler and the critic entirely — which is where
+the bug below lived — and it fixes conditioning: raw state channels span std 0.096–3.124 (32×), the
+normalized ones 0.265–0.650 (2.5×). It needs no re-caching, because the delta and normalization are
+computed on the fly from the cached raw state and actions:
+
+```bash
+--input-mode pi05 --norm-stats assets/pi05_yam_lego_taxi_rlt/jellyho/yam_lego_taxi_s300/norm_stats.json
+```
+
+Use the **same** `norm_stats.json` as the base checkpoint being served. A pre-contract checkpoint can
+be stamped with `scripts/backfill_critic_spec.py` (it is raw-space by definition).
+
 ## 7. Known limitations — read before trusting a number
 
 - **Failure values are not calibrated.** The terminal `v_min` anchor deepens them but they do not reach
@@ -128,6 +151,14 @@ torchcodec needs system `libavutil`, which the older nodes lack.
   information about outcomes and biases the estimate (Li, Park & Levine, arXiv:2512.10926). The bias is
   expected to **grow with the commitment length**, so `--mode adaptive`'s cross-prefix comparison is
   **provisional** until that bias is measured.
+- **Every number produced by the serving path before 2026-08-19 is void.** The wrapper passed
+  `state=zeros` into the output transform, so `JointAbsoluteActions` (`actions[..., i] +=
+  state[..., ref[i]]`) was a no-op and the critic scored joint **deltas** (mean ≈ 0, std ≈ 0.25) while
+  it had been trained on **absolute** joint targets (mean ≈ 1.7, std ≈ 0.44). It failed silently. Fixed,
+  and made unrepeatable by the shared-preprocessing path in §6b — but any earlier `bon`/`adaptive`
+  comparison must be re-run.
+- **The two checkpoints in the HF repo are raw-space** (`g5_s347`, `fixed_s347`) and were only ever
+  served through that broken path. Re-train with `--input-mode pi05` before deploying.
 - **`adaptive` has not been validated end-to-end on the robot** in this repo — the server loads and
   serves, and the critic is scored offline, but no paired robot evaluation of `adaptive` vs `bon` vs plain
   VLA has been reported yet. Treat it as ready-to-test, not as a validated result.
