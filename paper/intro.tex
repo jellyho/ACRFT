@@ -1,9 +1,8 @@
-% Introduction (v13, 2026-08-19). natbib + paper/references.bib. No em-dashes, no numbers.
-% v13 restructure per user: P1 merged (VLA -> fine-tuning -> suboptimal data); P2 poses the question
-% with offline RL as the named answer; P3 surveys lightly, moves CO-RFT to the direct-attempt clause
-% (it is actor-critic, not decoupled), touches the two mechanisms in half-sentences, and lands on our
-% actual problem (the chunk treated as a constant rather than a decision); P4 our method +
-% positioning; P5 contributions + closing.
+% Introduction (v14, 2026-08-19). natbib + paper/references.bib. Style: no em-dashes, no prose
+% colons, no numbers. v14 flow per user: P1 recipe + shared suboptimality -> P2 the SECOND axis
+% (non-Markovian/reactive structure of human demonstrations) elevates commitment to an optimization
+% dimension -> P3 prior lines each miss one or both dimensions, incl. adaptive chunking itself ->
+% P4 our method optimizes both, directly on the policy -> contributions.
 
 \section{Introduction}
 \label{sec:intro}
@@ -18,50 +17,43 @@ mixture. Additional data reproduces the same average more faithfully, filtering 
 experience the recipe depends on, and refining the policy through online interaction remains costly
 and unsafe at this scale.
 
-Can the policy instead learn more from the data it already has? Offline reinforcement learning (RL)
-is designed for precisely this setting. Temporal-difference (TD) learning propagates recorded
-outcomes through the dataset, stitching high-value segments of mediocre trajectories into behavior
-that no single demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. A VLA, however, is not
-the policy for which this machinery was developed. Its backbone cannot be trained jointly with a
-critic at practical cost, and its long action chunks~\citep{act, pi0} pose a dilemma for value
-learning. One-step TD degrades over the long horizons these tasks involve, while chunk-level TD
-(Q-chunking), which restores tractability by backing up over the whole chunk at once, inherits the
-chunk's fixed open-loop commitment and becomes suboptimal exactly where reactivity
-matters~\citep{qc}.
+The suboptimality of demonstrations is widely recognized, and offline reinforcement learning (RL) is
+its natural remedy. Because outcomes are recorded with every trajectory, a learned value can prefer
+the good segments of mediocre demonstrations and stitch them into behavior that no single
+demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. We argue, however, that human data
+poses a second problem along an axis that data quality does not capture. A teleoperator does not
+emit a Markovian stream of state-conditioned actions. Skilled human control alternates between
+committed, non-Markovian stretches executed from an internal plan without consulting the scene, and
+reactive phases in which delayed feedback drives intermittent
+corrections~\citep{woodworth1899, todorov2002, gawthrop2011}. How long to commit is therefore itself
+part of the behavior the data records, and it varies from state to state. Offline RL for VLAs should
+accordingly optimize not only which actions to take but also this second dimension, the commitment,
+and adaptive action chunking is exactly the machinery for it.
 
-Existing adaptations of RL to VLAs stop at different points. Most retain the supervised objective and
-let outcome signals reshape it~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting its ceiling.
-Others learn a value but apply it around the policy rather than to it, filtering the
-dataset~\citep{grrl} or selecting among sampled chunks at test time~\citep{vgps, deas}; either way the
-value only chooses among options that already exist, and sampling-based selection in particular is
-bounded by what the sampler proposes and biased toward overestimated candidates~\citep{emaq}. The
-most direct attempts run actor-critic RL over chunks~\citep{corft}, but treat the chunk as a fixed,
-indivisible action whose full length is executed in every state, even though a critic
-scoring whole chunks of closed-loop demonstrations conflates skill with fortunate
-outcomes~\citep{dqc}, and even though the appropriate commitment plainly differs between free space
-and contact. The chunk, the very feature that makes VLAs practical, is what current offline RL
-handles most poorly.
+Existing adaptations of RL to VLAs serve neither dimension fully. Most retain the supervised
+objective and let outcome signals reshape it~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting
+its ceiling. Methods that learn a value tend to apply it around the policy rather than to it,
+filtering the dataset~\citep{grrl} or selecting among sampled chunks at test
+time~\citep{vgps, deas}; the value then only chooses among options that already exist, and
+sampling-based selection is bounded by what the sampler proposes and biased toward overestimated
+candidates~\citep{emaq}. Direct actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
+the chunk as a fixed, indivisible action, even though a critic scoring whole chunks of closed-loop
+demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
+developed in state-based RL~\citep{qc, aqc, acsac}, where chunk-level TD makes long horizons
+tractable and prefix values let the commitment vary; but there the commitment is picked by scoring
+candidates at deployment rather than optimized jointly with the actions, and these constructions have
+not been brought to a pretrained VLA with its frozen backbone. What is missing is a method that
+optimizes both dimensions at once, directly on the policy, at VLA scale.
 
-We propose an offline reinforcement fine-tuning method that improves the policy directly, by
-optimizing over the joint space of what to do and how long to commit. Chunking is what makes the long horizon tractable, since backing up over
-$h$ steps at once is the reason chunked TD remains effective in sparse, long-horizon
-manipulation~\citep{qc}; valuing every prefix of the chunk preserves this benefit while restoring the
-reactivity that a fixed commitment forfeits. Human motor control offers a natural precedent. Skilled
-movement alternates between non-Markovian segments, executed ballistically from an internal plan
-without consulting the current state, and reactive phases under feedback whose delays render even the
-corrections intermittent~\citep{woodworth1899, todorov2002, gawthrop2011}. Concretely, a
-causal-transformer critic is learned entirely offline on the VLA's frozen representations with
+We present such a method, an offline reinforcement fine-tuning stage that improves the policy over
+the joint space of what to do and how long to commit. A causal-transformer critic valuing every
+prefix of the action chunk is learned entirely offline on the VLA's frozen representations with
 conservative in-sample targets~\citep{iql, deas}, and the policy is updated against it in both
-dimensions of its output. The actions within the chunk are pulled toward what the value prefers, and
-the commitment length becomes a state-dependent decision rather than a constant. This positions our method against each line of prior work.
-Prefix-valued critics have appeared as RL algorithms in state-based settings~\citep{acsac, aqc},
-whereas we turn the construction into a post-training instrument for a pretrained VLA; unlike
-fixed-chunk actor-critic fine-tuning~\citep{corft}, optimization covers commitments as well as
-actions; and unlike test-time selection~\citep{vgps, deas}, the policy itself is updated, with
-nothing sampled and ranked at deployment.
-Freezing the backbone constrains where knowledge resides, not the quality of the resulting behavior.
-The support of the demonstrations contains better behavior than their average, which imitation blurs
-and extraction recovers.
+dimensions of its output; the actions within the chunk are pulled toward what the value prefers, and
+the commitment length becomes a state-dependent decision rather than a constant. Nothing is sampled
+and ranked at deployment. Freezing the backbone constrains where knowledge resides, not the quality
+of the resulting behavior; the support of the demonstrations contains better behavior than their
+average, which imitation blurs and extraction recovers.
 
 In summary, our main contributions are threefold:
 \begin{itemize}
