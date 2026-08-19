@@ -33,6 +33,12 @@ def main():
     ap.add_argument("--cache", type=pathlib.Path, required=True)
     ap.add_argument("--outcomes", required=True)
     ap.add_argument("--homing-onsets", type=pathlib.Path, default=None)
+    ap.add_argument(
+        "--truncate-homing",
+        choices=["all", "failure", "none"],
+        default="all",
+        help="must match how the critic was trained (see its config.json input_spec)",
+    )
     ap.add_argument("--stride", type=int, default=10, help="frames to skip when scoring an episode")
     ap.add_argument("--batch", type=int, default=512)
     a = ap.parse_args()
@@ -88,7 +94,11 @@ def main():
         full, off = info["full_len"], info["offset"]
         is_succ = outc[e] == "success"
         eff = full
-        if not is_succ and homing is not None and str(e) in homing:
+        if (
+            homing is not None
+            and str(e) in homing
+            and (a.truncate_homing == "all" or (a.truncate_homing == "failure" and not is_succ))
+        ):
             eff = int(homing[str(e)]["homing_onset"])
         pos = np.arange(0, max(1, eff), a.stride)
         # An episode is CONTIGUOUS in the cache, so read its block once (sequential) and subsample in
@@ -126,15 +136,15 @@ def main():
         return np.array([r[k] for r in rs])
 
     print(f"critic {a.critic.name}  |  {len(succ_stats)} success / {len(fail_stats)} fail episodes")
-    print(f"  AUC(mean value) = {roc_auc(col(succ_stats,'mean'), col(fail_stats,'mean')):.4f}")
-    print(f"  AUC(max value)  = {roc_auc(col(succ_stats,'max'),  col(fail_stats,'max')):.4f}")
-    print(f"  AUC(last value) = {roc_auc(col(succ_stats,'last'), col(fail_stats,'last')):.4f}")
+    print(f"  AUC(mean value) = {roc_auc(col(succ_stats, 'mean'), col(fail_stats, 'mean')):.4f}")
+    print(f"  AUC(max value)  = {roc_auc(col(succ_stats, 'max'), col(fail_stats, 'max')):.4f}")
+    print(f"  AUC(last value) = {roc_auc(col(succ_stats, 'last'), col(fail_stats, 'last')):.4f}")
     for name, rs in (("success", succ_stats), ("fail", fail_stats)):
         if rs:
             print(
-                f"  {name:8s}: first {col(rs,'first').mean():9.1f}  last {col(rs,'last').mean():9.1f} "
-                f" mean {col(rs,'mean').mean():9.1f}  min {col(rs,'min').mean():9.1f} "
-                f" deep-atom mass {col(rs,'deep').mean():.3f}"
+                f"  {name:8s}: first {col(rs, 'first').mean():9.1f}  last {col(rs, 'last').mean():9.1f} "
+                f" mean {col(rs, 'mean').mean():9.1f}  min {col(rs, 'min').mean():9.1f} "
+                f" deep-atom mass {col(rs, 'deep').mean():.3f}"
             )
     print(f"  (v_min = {cc['v_min']:.1f}; 'deep-atom mass' = probability below 0.72*v_min)")
 

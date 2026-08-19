@@ -29,6 +29,15 @@ def main():
     ap.add_argument("--cache", type=pathlib.Path, required=True, help="dir from cache_patch_features.py")
     ap.add_argument("--outcomes", required=True)
     ap.add_argument("--homing-onsets", type=pathlib.Path, default=None)
+    ap.add_argument(
+        "--truncate-homing",
+        choices=["all", "failure", "none"],
+        default="all",
+        help="drop the trailing return-to-home motion. all (default): from every episode -- a success's "
+        "homing frames are not task progress, and with h_goal=30 they would otherwise make up most of "
+        "the goal region, teaching the critic that 'arms back home' IS the goal. failure: the old "
+        "behaviour, which left success homing in.",
+    )
     ap.add_argument("--horizon", type=int, default=30)
     ap.add_argument("--num-atoms", type=int, default=101)
     ap.add_argument("--macro-group-size", type=int, default=5)
@@ -101,6 +110,7 @@ def main():
     spec["proprio_dims"] = a.proprio_dims
     spec["proprio_indices"] = None if pidx is None else pidx.tolist()
     spec["proprio_dim"] = sd
+    spec["truncate_homing"] = a.truncate_homing
     stats = critic_spec.norm_stats(a.cache, meta)
     pre = None
     embedded = None
@@ -141,7 +151,11 @@ def main():
         full = info["full_len"]
         succ = outc[e] == "success"
         eff = full
-        if not succ and homing is not None and str(e) in homing:
+        if (
+            homing is not None
+            and str(e) in homing
+            and (a.truncate_homing == "all" or (a.truncate_homing == "failure" and not succ))
+        ):
             eff = int(homing[str(e)]["homing_onset"])
         off = info["offset"]
         cur_g0.append(np.full(eff, off))
@@ -319,7 +333,9 @@ def main():
                 flush=True,
             )
         if a.save_every and (s + 1) % a.save_every == 0:
+            a._step = s + 1
             _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
+    a._step = a.steps
     _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
     if wb is not None:
         wb.finish()

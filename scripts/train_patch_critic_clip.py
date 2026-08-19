@@ -429,6 +429,10 @@ def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=
         "clip_len": a.clip_len,
         "source": a.repo_id,
         "loader": getattr(a, "loader", "critic_clip"),
+        # how long this ran: without it a checkpoint cannot be dated except by finding its log
+        "steps": a.steps,
+        "saved_at_step": getattr(a, "_step", None),
+        "batch": getattr(a, "batch", None),
         "git": _git_stamp(),
     }
     # The INPUT CONTRACT. Without this the only record of "what scale does this critic eat" lives in two
