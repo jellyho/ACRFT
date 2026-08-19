@@ -62,6 +62,11 @@ class Pi0FQLConfig(pi0_config.Pi0Config):
     fql_discount: float = 0.99
     fql_target_tau: float = 0.005
     fql_flow_ode_steps: int = 10  # steps to roll the frozen flow ODE for the distillation target
+    # floor the TD target with the transition's Monte-Carlo return (y = max(y, MC)) -- the same
+    # anchor the patch-critic uses, and the same idea as Cal-QL's max(Q, V^mu): a bootstrapped
+    # target below the return actually observed from this state is provably too pessimistic, and
+    # with sparse/terminal rewards the floor is what keeps early critics from free-falling.
+    fql_mc_floor: bool = True
 
     @property
     @override
@@ -194,10 +199,18 @@ class Pi0FQL(nnx.Module):
     def action_dim(self) -> int:
         return self.config.action_dim
 
-    def flow_ode(self, obs: _model.Observation, noise: at.Float[at.Array, "b ah ad"], num_steps: int | None = None):
+    def flow_ode(
+        self,
+        obs: _model.Observation,
+        noise: at.Float[at.Array, "b ah ad"],
+        num_steps: int | None = None,
+        kv_cache=None,
+        prefix_mask=None,
+    ):
         """Roll the FROZEN flow ODE from noise (t=1) to the action (t=0). This is mu_theta(s, z)."""
         num_steps = num_steps or self.config.fql_flow_ode_steps
-        kv_cache, prefix_mask = self._prefix_kv(obs)
+        if kv_cache is None:
+            kv_cache, prefix_mask = self._prefix_kv(obs)
         dt = -1.0 / num_steps
         b = noise.shape[0]
 

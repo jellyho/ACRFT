@@ -6,7 +6,10 @@ from a pretrained pi05 checkpoint (CheckpointWeightLoaderKeepMissing: base loads
 Trainable: one-step actor mu_omega (expert 2) + critic Q_phi (expert 3) + their projections.
 
 Objectives (per FQL, offline transitions (s, a, r, s', done)):
-  L_critic = CE( HL-Gauss[ r + gamma (1-done) Qbar(s', mu_omega(s',z')) ],  Q_phi(s, a) )   # Eq.1
+  L_critic = CE( HL-Gauss[ max(r + gamma (1-done) Qbar(s', mu_omega(s',z')),  MC) ],  Q_phi(s, a) )
+             # Eq.1 + the patch-critic's MC floor (--no-mc-floor disables): the bootstrapped target is
+             # floored by the transition's observed Monte-Carlo return, Cal-QL's max(Q, V^mu) in
+             # target form -- with sparse rewards this stops an uncalibrated early critic free-fall.
   L_distill = || mu_omega(s, z) - mu_theta_ODE(s, z) ||^2                                     # Eq.7
   L_actor  = -E[ Q_phi(s, mu_omega(s, z)) ] + alpha * L_distill                               # Eq.9
 
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import pathlib
 import time
 
@@ -38,6 +42,12 @@ def main():
     ap.add_argument("--alpha", type=float, default=10.0, help="distillation coefficient in L_actor")
     ap.add_argument("--discount", type=float, default=0.99)
     ap.add_argument("--target-tau", type=float, default=0.005)
+    ap.add_argument(
+        "--mc-floor",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="floor the TD target with the transition's MC return (house patch-critic recipe)",
+    )
     ap.add_argument("--flow-ode-steps", type=int, default=10)
     # expert variants: real by default; 'dummy' everywhere gives a CPU-runnable trainer smoke
     ap.add_argument("--paligemma-variant", default="gemma_2b")
@@ -77,6 +87,7 @@ def main():
         fql_discount=a.discount,
         fql_target_tau=a.target_tau,
         fql_flow_ode_steps=a.flow_ode_steps,
+        fql_mc_floor=a.mc_floor,
     )
     hl = HLGauss(a.v_min, a.v_max, a.num_atoms)
 
@@ -106,28 +117,50 @@ def main():
     opt_c = tx_c.init(params.filter(critic_filter))
     opt_a = tx_a.init(params.filter(actor_filter))
 
+    # The VLM prefix (SigLIP x3 cams + 2b attention) is by far the most expensive forward, and it is
+    # FROZEN -- so each loss computes it ONCE per observation (stop-gradient) and every expert call
+    # reuses the KV. The first smoke recomputed it six times per training step and OOM'd an L40S.
+    def _kv(model, obs):
+        return jax.tree.map(jax.lax.stop_gradient, model._prefix_kv(obs))
+
     def critic_loss_fn(model, target_model, batch, rng):
-        obs, act, rew, nobs, done = batch
+        obs, act, rew, nobs, done, mc = batch
+        kv, pm = _kv(model, obs)
+        kv_n, pm_n = _kv(model, nobs)
         zr = jax.random.normal(rng, act.shape)
-        a_next = jax.lax.stop_gradient(model.actor(nobs, zr))  # a' ~ mu_omega(s', z') (online actor)
-        qn = hl.from_logits(jax.lax.stop_gradient(target_model.critic_logits(nobs, a_next)))  # target critic
+        a_next = jax.lax.stop_gradient(model.actor(nobs, zr, kv_n, pm_n))  # a' ~ mu_omega(s', z')
+        qn = hl.from_logits(jax.lax.stop_gradient(target_model.critic_logits(nobs, a_next, kv_n, pm_n)))
         y = rew + a.discount * (1.0 - done) * qn
+        floor_frac = jnp.zeros(())
+        if a.mc_floor:
+            # the observed discounted return from s is a certificate: a bootstrapped target below it
+            # is provably too low, so lift it (and log how often the floor is doing work).
+            floor_frac = jnp.mean((mc > y).astype(jnp.float32))
+            y = jnp.maximum(y, mc)
         tgt = jax.lax.stop_gradient(hl.to_probs(jnp.clip(y, a.v_min, a.v_max)))
-        q_logits = model.critic_logits(obs, act)
+        q_logits = model.critic_logits(obs, act, kv, pm)
         loss = jnp.mean(-jnp.sum(tgt * jax.nn.log_softmax(q_logits, -1), -1))
-        return loss, {"q_mean": jnp.mean(hl.from_logits(q_logits)), "td_target": jnp.mean(y)}
+        return loss, {
+            "q_mean": jnp.mean(hl.from_logits(q_logits)),
+            "td_target": jnp.mean(y),
+            "mc_floor_frac": floor_frac,
+        }
 
     def actor_loss_fn(model, batch, rng):
         obs = batch[0]
+        kv, pm = _kv(model, obs)
         z = jax.random.normal(rng, (obs.state.shape[0], a.action_horizon, a.action_dim))
-        a_theta = jax.lax.stop_gradient(model.flow_ode(obs, z))  # frozen flow ODE endpoint
-        a_omega = model.actor(obs, z)
+        a_theta = jax.lax.stop_gradient(model.flow_ode(obs, z, kv_cache=kv, prefix_mask=pm))
+        a_omega = model.actor(obs, z, kv, pm)
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
-        qpi = hl.from_logits(model.critic_logits(obs, a_omega))  # critic read; grad only to actor (filter)
+        qpi = hl.from_logits(model.critic_logits(obs, a_omega, kv, pm))  # grad only to actor (filter)
         l_q = -jnp.mean(qpi)
         return l_q + a.alpha * l_distill, {"l_distill": l_distill, "q_pi": -l_q}
 
-    @jax.jit
+    # donate params/targets/opt states: without donation the jit holds input AND output copies of
+    # the 3.15B-param state (~25GB just in weights), which is what OOM'd the L40S even after the
+    # prefix-KV sharing fix. Donation makes the update in-place.
+    @functools.partial(jax.jit, donate_argnums=(0, 1, 2, 3))
     def step(params, target_critic, opt_c, opt_a, batch, rng):
         rc, ra = jax.random.split(rng)
         model = nnx.merge(graphdef, params)
@@ -168,7 +201,10 @@ def main():
         act = jax.random.normal(k[3], (a.batch, a.action_horizon, a.action_dim))
         rew = -jnp.ones((a.batch,), jnp.float32)
         done = jnp.zeros((a.batch,), jnp.float32)
-        return obs, act, rew, nobs, done
+        # synthetic MC returns spread over the value support so the floor branch actually fires for
+        # a fraction of the batch (a constant below every TD target would silently test nothing).
+        mc = jax.random.uniform(k[2], (a.batch,), minval=a.v_min, maxval=a.v_max)
+        return obs, act, rew, nobs, done, mc
 
     if not a.synthetic:
         raise NotImplementedError(
