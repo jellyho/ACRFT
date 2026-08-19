@@ -3041,10 +3041,89 @@ curriculum — 학습이 epistemic만 흡수하므로 평균 k*는 aleatoric flo
 """,
 )
 
+
+def _p2_rows():
+    """Recompute the P2 table from the raw measurement JSON on every build (never hand-copied)."""
+    import math
+
+    import numpy as _np  # noqa: ICN001 (np is taken at module level in some builds)
+
+    src = pathlib.Path(__file__).parent.parent / ".scratch/p2_uncertainty/p2_split.json"
+    if not src.exists():
+        return "<tr><td colspan='6'>p2_split.json missing</td></tr>", ""
+    d = json.loads(src.read_text())
+    rows, lnA, lnE = [], [], []
+    for e in ["320", "79", "23", "214", "5", "141"]:
+        a0 = _np.median(_np.asarray(d["20k"][e]["u_alea"])[:, -1])
+        a1 = _np.median(_np.asarray(d["120k"][e]["u_alea"])[:, -1])
+        e0 = _np.median(_np.asarray(d["20k"][e]["u_epis"])[:, -1])
+        e1 = _np.median(_np.asarray(d["120k"][e]["u_epis"])[:, -1])
+        ra, re = a1 / a0, e1 / e0
+        lnA.append(math.log(ra))
+        lnE.append(math.log(re))
+        succ = "성공" if d["20k"][e]["success"] else "<b>실패</b>"
+        rows.append(
+            f"<tr><td>ep{e}</td><td>{succ}</td><td>{a0:,.0f} → {a1:,.0f}</td><td>×{ra:.2f}</td>"
+            f"<td>{e0:,.0f} → {e1:,.0f}</td><td>×{re:.2f}</td></tr>"
+        )
+    ga, ge = math.exp(_np.mean(lnA)), math.exp(_np.mean(lnE))
+    summary = f"기하평균: u_alea ×{ga:.2f} ({(ga - 1) * 100:+.0f}%) · u_epis ×{ge:.2f} ({(ge - 1) * 100:+.0f}%)"
+    return "".join(rows), summary
+
+
+_P2_ROWS, _P2_SUMMARY = _p2_rows()
+
+entry(
+    "08-20",
+    "p2-uncertainty-meas",
+    "P2 측정 — 학습은 epistemic만 줄이는가 (20k vs 120k): 방향 일치, 강한 형태는 미지지",
+    "완결",
+    f"""
+<p><b>왜.</b> <span class='xref' data-eid='uncertainty-split'>불확실성 분해 노트</span>의 예측 ②(사전 등록:
+"학습이 진행되면 u_epis만 감소, u_alea는 불변; u_alea가 같은 비율로 줄면 분해 무의미")를 첫 실측한다.
+같은 크리틱(g5_pi05)의 20k 체크포인트와 +100k 이어-학습(120k) 체크포인트로, 가치 비디오와 동일한
+6개 에피소드의 전 프레임(stride 8)에서 K=2 앙상블의 HL-Gauss 분포를 분해했다
+(u_alea=멤버 내 분산 평균, u_epis=멤버 간 평균의 분산; full-prefix 기준, 스크립트
+<code>measure_uncertainty_split.py</code>, 원본 JSON에서 게시 때마다 재계산).</p>
+
+<table class='num'><tr><th>에피소드</th><th>결과</th><th>u_alea (분산)</th><th>비율</th><th>u_epis</th><th>비율</th></tr>
+{_P2_ROWS}</table>
+<p class='sub'>{_P2_SUMMARY}</p>
+
+{{img32}}
+
+<p><b>판정 — 방향 일치, 강한 형태 미지지.</b> 기하평균으로 u_epis가 u_alea보다 더 줄었다(−39% vs −24%)
+— 부호는 예측과 맞다. 그러나 사전 등록한 강한 형태는 <b>지지되지 않는다</b>: u_alea도 같은 자릿수로
+움직였고(기각 조건의 절반 발동), 에피소드 분산이 커서 6개 중 2개(ep23 +15%, ep141 ×2.01)에서는
+u_epis가 오히려 늘었다. 정직한 라벨은 <b>미결·약지지</b>다. 지배적 교란은 K=2 — 두 멤버의 불일치로
+epistemic을 재는 것은 원리적으로 고분산이며(분해 노트의 자기 경고), <code>head_ensemble</code> K≥8
+재측정이 판정의 전제다.</p>
+
+<p><b>부수 발견 (다음 가설감).</b> 성공/실패가 u_alea에서 갈렸다: 성공 3편은 u_alea가 내려가고
+(×0.52·×1.00·×0.60 — 예측 가능한 구간의 분포가 조여짐), 실패 3편 중 2편은 유지·상승했다
+(×1.41·×1.06 — 학습이 실패 구간의 산포를 더 정직하게 표현). 최단 즉시중단 실패 ep141만 양쪽 모두
+반대 방향의 outlier인데, 353프레임짜리 특이 에피소드라 별도 조사감이다. 이 성공/실패 비대칭은 분해
+노트의 "행동정책 산포가 u_alea에 섞인다"는 경고와 정합적이며, u_alea의 정체(환경 확률성 vs return
+다봉성)를 가르는 다음 측정을 정의한다.</p>
+
+<p><b>재현.</b> 스크립트·JSON·figure 모두 리포에 있다. 같은 6 에피소드의 120k "after" 가치 비디오는
+별도 업로드(갤러리 <code>videos/yam_value</code>)로 잇는다.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "p2-uncertainty-meas": {
+        "date": "2026-08-20 09:40",
+        "who": "워커B (밤샘 이론 프로그램 후속 측정)",
+        "where": "g5_pi05 20k vs +100k cont(120k) 체크포인트 · yam_s347 캐시 · 6 에피소드(stride 8)",
+        "what": "예측 P2 첫 실측 — u_alea/u_epis 중앙값 변화율: 방향 일치(epis −39% > alea −24%), 강한 형태 미지지(미결·약지지)",
+        "how": "measure_uncertainty_split.py (K=2 HL-Gauss 분해, full-prefix), fig_32 오버레이, 표는 JSON 재계산",
+        "why": "사전 등록 예측의 정직한 판정 + K≥8 재측정 필요성 확정 + 성공/실패 u_alea 비대칭 발견",
+        "links": ["uncertainty-split", "three-forces", "tie-knife-edge"],
+    },
     "three-forces": {
         "date": "2026-08-20 06:30",
         "who": "워커B (밤샘 이론 프로그램 6/6 — 결산)",
@@ -3641,6 +3720,47 @@ classical half; Zhang (executed-length lower bound) the modern half; ExRL/DEHP (
 learning) the empirical half — this series attempts to join them into one <b>offline, value-based,
 improvement-coupled</b> frame. What remains: measuring P1–P5 and completing the knife-edge v2
 proofs.</p>
+""",
+)
+
+en(
+    "p2-uncertainty-meas",
+    "Measuring P2 — does training shrink only the epistemic part (20k vs 120k)? Direction agrees; the strong form is unsupported",
+    f"""
+<p><b>Why.</b> First measurement of prediction ② of the
+<span class='xref' data-eid='uncertainty-split'>uncertainty-split note</span> (preregistered: "training
+shrinks only u_epis, u_alea stays; if u_alea drops at the same rate the decomposition is
+meaningless"). Using the same critic at 20k (g5_pi05) and after a +100k continuation (120k), we
+decomposed the K=2 ensemble's HL-Gauss distributions on every frame (stride 8) of the six episodes
+already rendered as value videos (u_alea = mean within-member variance, u_epis = variance of member
+means; full prefix; script <code>measure_uncertainty_split.py</code>; the table is recomputed from
+the raw JSON on every publish).</p>
+
+<table class='num'><tr><th>episode</th><th>outcome</th><th>u_alea (variance)</th><th>ratio</th><th>u_epis</th><th>ratio</th></tr>
+{_P2_ROWS}</table>
+<p class='sub'>{_P2_SUMMARY}</p>
+
+{{img32}}
+
+<p><b>Verdict — direction agrees; the strong form is unsupported.</b> By geometric mean u_epis fell
+more than u_alea (−39% vs −24%) — the sign matches the prediction. But the preregistered strong form
+is <b>not supported</b>: u_alea moved by the same order (half of the refutation condition fires), and
+per-episode variance is large — in 2 of 6 episodes (ep23 +15%, ep141 ×2.01) u_epis actually rose.
+The honest label is <b>inconclusive, weakly supportive</b>. The dominant confound is K=2: measuring
+epistemic uncertainty as the disagreement of two members is intrinsically high-variance (the split
+note's own warning), so a <code>head_ensemble</code> K≥8 re-measurement is the precondition for a
+real verdict.</p>
+
+<p><b>Side finding (next hypothesis).</b> Success and failure separated in u_alea: the three
+successes tightened (×0.52, ×1.00, ×0.60 — the distribution sharpens where returns are predictable)
+while two of three failures held or grew (×1.41, ×1.06 — training represents the dispersion of
+failure segments more honestly). Only ep141, the shortest instant-abort failure (353 frames), is an
+outlier in both quantities and needs its own look. This success/failure asymmetry is consistent with
+the split note's caveat that behavior-policy dispersion contaminates u_alea, and it defines the next
+measurement, separating environment stochasticity from return multimodality inside u_alea.</p>
+
+<p><b>Reproduction.</b> Script, JSON, and figure are all in the repo. The 120k "after" value videos
+of the same six episodes follow as a separate upload (gallery <code>videos/yam_value</code>).</p>
 """,
 )
 

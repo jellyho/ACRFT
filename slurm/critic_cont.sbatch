@@ -12,7 +12,7 @@
 #SBATCH --chdir=/data5/jellyho/ACRFT/openpi-alphaflow
 #SBATCH --output=/data5/jellyho/ACRFT/openpi-alphaflow/critic_g5_pi05_cont.slurm.log
 export UV_PROJECT_ENVIRONMENT=/data5/jellyho/ACRFT/openpi/.venv
-export PYTHONPATH=/data5/jellyho/ACRFT/openpi-alphaflow/src:/data5/jellyho/ACRFT/openpi-alphaflow/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH=/data5/jellyho/ACRFT/openpi-alphaflow:/data5/jellyho/ACRFT/openpi-alphaflow/src:/data5/jellyho/ACRFT/openpi-alphaflow/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}
 exec uv run --no-sync python -u scripts/train_patch_critic_cached.py \
   --cache /data1/jellyho/pc_cache/yam_s347 \
   --outcomes /data5/jellyho/yam_v2/lerobot/outcomes.jsonl \

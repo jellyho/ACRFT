@@ -323,6 +323,72 @@ def fig_31_three_forces():
     plt.close(fig)
 
 
+def fig_32_p2_split():
+    """P2 measurement: u_alea / u_epis along episodes, 20k vs 120k checkpoints (from p2_split.json).
+
+    Prediction 2 of the uncertainty-split entry: training shrinks only the epistemic part. Full-prefix
+    values, sqrt to value units, per-episode median bars + one example episode's curves."""
+    src = REPO / ".scratch/p2_uncertainty/p2_split.json"
+    if not src.exists():
+        return
+    d = json.loads(src.read_text())
+    labels = list(d.keys())  # ["20k", "120k"]
+    eps_ids = sorted(d[labels[0]].keys(), key=int)
+    apply()
+    fig, axes = plt.subplots(1, 3, figsize=(12.6, 3.5))
+
+    # (1) per-episode median sqrt(u) bars for both checkpoints, both quantities
+    ax = axes[0]
+    x = np.arange(len(eps_ids))
+    w = 0.2
+    for j, lab in enumerate(labels):
+        med_a = [np.median(np.sqrt(np.asarray(d[lab][e]["u_alea"])[:, -1])) for e in eps_ids]
+        med_e = [np.median(np.sqrt(np.asarray(d[lab][e]["u_epis"])[:, -1])) for e in eps_ids]
+        ax.bar(x + (j - 0.5) * 2 * w, med_a, w, color=PALETTE[0], alpha=0.5 + 0.5 * j, label=f"alea {lab}")
+        ax.bar(x + (j - 0.5) * 2 * w + w, med_e, w, color=PALETTE[3], alpha=0.5 + 0.5 * j, label=f"epis {lab}")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"ep{e}" for e in eps_ids], fontsize=7)
+    ax.set_yscale("log")
+    ax.set_ylabel("median sqrt(u)  (value units)")
+    ax.set_title("per-episode medians")
+    ax.legend(fontsize=6.5, ncol=2)
+
+    # (2) example success episode curves
+    for ax, e, name in [(axes[1], eps_ids[0], "success"), (axes[2], None, "fail")]:
+        if e is None:
+            fails = [k for k in eps_ids if not d[labels[0]][k]["success"]]
+            if not fails:
+                continue
+            ep_id = fails[0]
+        else:
+            ep_id = e
+        fr = np.asarray(d[labels[0]][ep_id]["frames"])
+        for j, lab in enumerate(labels):
+            ax.plot(
+                fr,
+                np.sqrt(np.asarray(d[lab][e]["u_alea"])[:, -1]),
+                color=PALETTE[0],
+                alpha=0.45 + 0.5 * j,
+                lw=1.5,
+                label=f"alea {lab}",
+            )
+            ax.plot(
+                fr,
+                np.sqrt(np.asarray(d[lab][e]["u_epis"])[:, -1]),
+                color=PALETTE[3],
+                alpha=0.45 + 0.5 * j,
+                lw=1.5,
+                label=f"epis {lab}",
+            )
+        ax.set_yscale("log")
+        ax.set_xlabel("frame")
+        ax.set_title(f"ep{ep_id} ({name})")
+        ax.legend(fontsize=6.5)
+    fig.tight_layout()
+    fig.savefig(P / "32_p2_split.png", dpi=160)
+    plt.close(fig)
+
+
 def main():
     P.mkdir(exist_ok=True)
     fig_16_v11()
@@ -331,6 +397,7 @@ def main():
     fig_20_final()
     fig_30_af_sched()
     fig_31_three_forces()
+    fig_32_p2_split()
 
 
 if __name__ == "__main__":
