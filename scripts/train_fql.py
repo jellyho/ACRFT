@@ -162,28 +162,31 @@ def main():
         loss = jnp.mean(-jnp.sum(tgt * jax.nn.log_softmax(q_logits, -1), -1))
         return loss, {"q_mean": jnp.mean(hl.from_logits(q_logits)), "td_target": jnp.mean(mc)}
 
-    def critic_loss_fn(model, target_model, batch, rng, *, bb_grad=False):
-        obs, act, rew, nobs, done, mc = batch
-        kv, pm = _kv(model, obs, grad=bb_grad)
-        kv_n, pm_n = _kv(model, nobs)
-        zr = jax.random.normal(rng, act.shape)
-        a_next = jax.lax.stop_gradient(model.actor(nobs, zr, kv_n, pm_n))  # a' ~ mu_omega(s', z')
-        qn = hl.from_logits(jax.lax.stop_gradient(target_model.critic_logits(nobs, a_next, kv_n, pm_n)))
-        y = rew + a.discount * (1.0 - done) * qn
-        floor_frac = jnp.zeros(())
-        if a.mc_floor:
-            # the observed discounted return from s is a certificate: a bootstrapped target below it
-            # is provably too low, so lift it (and log how often the floor is doing work).
-            floor_frac = jnp.mean((mc > y).astype(jnp.float32))
-            y = jnp.maximum(y, mc)
-        tgt = jax.lax.stop_gradient(hl.to_probs(jnp.clip(y, a.v_min, a.v_max)))
-        q_logits = model.critic_logits(obs, act, kv, pm)
-        loss = jnp.mean(-jnp.sum(tgt * jax.nn.log_softmax(q_logits, -1), -1))
-        return loss, {
-            "q_mean": jnp.mean(hl.from_logits(q_logits)),
-            "td_target": jnp.mean(y),
-            "mc_floor_frac": floor_frac,
-        }
+    def make_critic_loss_fn(bb_grad):  # closure: nnx transforms cannot resolve keyword-only args
+        def critic_loss_fn(model, target_model, batch, rng):
+            obs, act, rew, nobs, done, mc = batch
+            kv, pm = _kv(model, obs, grad=bb_grad)
+            kv_n, pm_n = _kv(model, nobs)
+            zr = jax.random.normal(rng, act.shape)
+            a_next = jax.lax.stop_gradient(model.actor(nobs, zr, kv_n, pm_n))  # a' ~ mu_omega(s', z')
+            qn = hl.from_logits(jax.lax.stop_gradient(target_model.critic_logits(nobs, a_next, kv_n, pm_n)))
+            y = rew + a.discount * (1.0 - done) * qn
+            floor_frac = jnp.zeros(())
+            if a.mc_floor:
+                # the observed discounted return from s is a certificate: a bootstrapped target below it
+                # is provably too low, so lift it (and log how often the floor is doing work).
+                floor_frac = jnp.mean((mc > y).astype(jnp.float32))
+                y = jnp.maximum(y, mc)
+            tgt = jax.lax.stop_gradient(hl.to_probs(jnp.clip(y, a.v_min, a.v_max)))
+            q_logits = model.critic_logits(obs, act, kv, pm)
+            loss = jnp.mean(-jnp.sum(tgt * jax.nn.log_softmax(q_logits, -1), -1))
+            return loss, {
+                "q_mean": jnp.mean(hl.from_logits(q_logits)),
+                "td_target": jnp.mean(y),
+                "mc_floor_frac": floor_frac,
+            }
+
+        return critic_loss_fn
 
     def actor_loss_fn(model, batch, rng):
         obs = batch[0]
@@ -230,8 +233,8 @@ def main():
                 target_model = nnx.merge(graphdef, params)
                 nnx.update(target_model, target_critic)  # online everywhere, EMA critic
                 (lc, ci), gc = nnx.value_and_grad(
-                    critic_loss_fn, argnums=nnx.DiffState(0, critic_train_filter), has_aux=True
-                )(model, target_model, batch, rc, bb_grad=bb_grad)
+                    make_critic_loss_fn(bb_grad), argnums=nnx.DiffState(0, critic_train_filter), has_aux=True
+                )(model, target_model, batch, rc)
                 (la, ai), ga = nnx.value_and_grad(actor_loss_fn, argnums=nnx.DiffState(0, actor_filter), has_aux=True)(
                     model, batch, ra
                 )
