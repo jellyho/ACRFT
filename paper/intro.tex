@@ -26,27 +26,28 @@ designed: it predicts a fixed, long action chunk~\citep{act, pi0}, it typically 
 tasks where standard one-step TD struggles~\citep{qc}, and its heavy backbone cannot be trained jointly
 with a critic at practical cost.
 
-We argue that these are not incidental frictions but three questions that any offline RL stage for
-VLAs must answer, and that the action chunk forces all three. \emph{At what temporal granularity should
-credit be assigned?} A chunk executed open loop is blind exactly where contact demands reactivity,
-per-step credit dissolves over manipulation horizons, and the right commitment length changes from
-state to state~\citep{dqc, aqc}. \emph{How can value be learned reliably at this scale?} The critic
-must live on frozen representations, and TD over chunks amplifies bootstrapped overestimation
-precisely where the data is thinnest~\citep{deas}. \emph{And through which mechanism should the value
-act on the policy?} Rescoring the policy's own samples, deciding how long to commit, and retraining
-the policy are all plausible, and they are far from equivalent~\citep{emaq, park2024bottleneck}.
+These three frictions map onto the three stages of any offline RL pipeline, and each stage has to be
+rethought. The fixed chunk raises a question of granularity: what should the critic score, and for how
+long should the robot commit? Critics that value every prefix of an action sequence
+exist~\citep{acsac, aqc}, but at VLA scale the commitment has so far been fixed in
+advance~\citep{corft, deas}. The long horizon and the frozen backbone raise a question of stability:
+TD over chunks amplifies overestimation exactly where data is thin~\citep{dqc}, and the critic must
+learn on representations it cannot shape. Conservative chunk-level targets exist as
+well~\citep{iql, deas}, but which ingredients actually matter at this scale has never been isolated.
+And solving both exposes a question the pipeline usually hides: a learned value does not improve a
+robot by existing. It must act on the policy through some mechanism, by rescoring sampled
+chunks~\citep{vgps, robomonkey}, by deciding how long to commit~\citep{aqc}, or by retraining the
+policy~\citep{parl}. These mechanisms are routinely assumed and rarely compared, and, as we show, they
+are far from equivalent~\citep{emaq, park2024bottleneck}.
 
-We therefore develop an offline reinforcement fine-tuning method for VLAs that answers each question
-with a design decision. First, an \emph{effective critic}: a causal-transformer critic over action
-chunks, learned on the VLA's frozen representations with conservative in-sample targets, keeping
-chunk-level TD stable over long horizons at practical cost. Second, \emph{evaluation across chunk
-sizes}: instead of scoring only the fixed chunk the VLA predicts, the critic values every executable
-prefix of the chunk in a single forward pass, and the policy commits adaptively, state by state,
-executing exactly as many steps as the value supports. Third, an \emph{effective path to improvement}:
-we determine the mechanism empirically rather than presume it, and apply the value where it measurably
-improves the policy, deciding commitment and updating the policy itself rather than merely rescoring
-its samples. Together these make offline RL operational at VLA scale: the resulting policies surpass
-supervised fine-tuning from the very same demonstrations, without a single additional rollout.
+Our contribution is accordingly not a new component but a working composition, determined by
+measurement. We attach a prefix-valued causal-transformer critic~\citep{acsac} to the VLA's frozen
+representations, train it with conservative in-sample chunk-level targets in the spirit
+of~\citet{deas}, and put the value to work in the two places where controlled comparisons show it
+helps: deciding, state by state, how much of each predicted chunk to execute, and updating the policy
+itself. Test-time rescoring, the mechanism most prior work presumes, is the one our experiments rule
+out. The resulting pipeline surpasses supervised fine-tuning from the very same demonstrations,
+without a single additional rollout.
 
 Prior efforts toward this goal largely sidestep value learning. Advantage-conditioned fine-tuning
 \citep{pistar06}, advantage-weighted imitation~\citep{arfm, arm}, return conditioning~\citep{reinbot},
@@ -57,19 +58,16 @@ complete path. Q-Transformer~\citep{qtransformer} predates chunked policies; CO-
 extends TD to action chunks but commits to fixed-length execution at small scale; GR-RL~\citep{grrl}
 learns a value yet uses it only to filter data; DEAS~\citep{deas} learns a strong chunk-level value
 but deploys it by rescoring sampled chunks, a mechanism whose improvement is bounded by the proposals
-it ranks~\citep{emaq, vgps, robomonkey}. Across this line the deployment mechanism is assumed rather
-than examined, echoing the observation in state-based offline RL that how a policy uses the value,
-not the value's quality, is often the binding constraint~\citep{park2024bottleneck}. Where prior work
-incorporates chunking, we treat the chunk as the source of the problem structure: it dictates the
-credit granularity, the stability recipe, and the space of deployment mechanisms alike.
+it ranks~\citep{emaq}. Where prior work incorporates chunking as a feature, we treat the chunk as the
+source of the problem structure: it dictates the credit granularity, the stability recipe, and the
+space of deployment mechanisms alike.
 
 \paragraph{Contributions.}
 (i)~We present a complete offline reinforcement fine-tuning pipeline for chunked VLAs, from a critic
 on frozen representations through adaptive commitment to policy extraction, requiring no online
-interaction. (ii)~We formulate the three questions any such stage must answer, about credit
-granularity, value learning at scale, and the mechanism by which value acts on the policy, and answer
-each with controlled evidence, showing in particular that test-time rescoring is structurally capped
-while commitment and extraction are not. (iii)~We provide a component-isolated stability recipe for
+interaction. (ii)~We compare, under a single learned value, the mechanisms by which it can act on a
+chunked policy, and show that test-time rescoring is structurally capped while adaptive commitment and
+policy extraction are not. (iii)~We provide a component-isolated stability recipe for
 chunk-space TD at VLA scale, identifying what is decisive and what silently fails. (iv)~We validate
 the pipeline end to end on standard offline RL benchmarks~\citep{ogbench} and VLA-scale
 manipulation~\citep{robocasa}, using only the demonstrations that supervised fine-tuning already uses.
