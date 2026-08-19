@@ -27,6 +27,19 @@ import numpy as np
 
 MODES = ("raw", "pi05")
 
+# Which proprio channels the critic is allowed to see.
+#
+# YAM logs 42 dims per frame: each arm is pos(7), vel(7), eff(7). Nearly every VLA -- openpi's own
+# ALOHA (14), Libero (8) and DROID (joint_position + gripper) included -- feeds POSITIONS ONLY, so
+# taking all 42 quietly hands our model two sensor streams the baselines never get, and any headline
+# number stops being a method-only difference. Torque is the sharp case: contact effort says almost
+# directly whether the gripper has hold of something, which is much of what separates success from
+# failure, so a critic reading it can score well without understanding the task at all.
+PROPRIO_SETS = {
+    "all": None,  # every channel (legacy)
+    "pos": [*range(7), *range(21, 28)],  # left pos(6)+gripper, right pos(6)+gripper -- 14 dims
+}
+
 
 def compare(a: dict, b: dict, *, tol: float = 1e-5) -> list[str]:
     """How two sets of norm stats disagree (empty list = same numbers).
