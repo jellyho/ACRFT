@@ -29,9 +29,12 @@ signals~\citep{pistar06, arfm, arm, reinbot, nora15}, and thereby inherit both t
 ceiling of supervised learning. The few methods that learn a value decouple it from policy
 improvement itself: the value filters the dataset~\citep{grrl}, performs best-of-$N$ selection over
 samples drawn from the policy~\citep{vgps, deas}, or scores commitments whose length is fixed in
-advance~\citep{corft}. We argue that these limitations are structural rather than incidental, arising
-from two distinct sources. Sampling-based selection is bounded by the support of what the sampler
-proposes, and the induced argmax preferentially selects overestimated candidates~\citep{emaq}; a
+advance~\citep{corft}. Each of these is effective at its immediate goal, yet all three share a common
+structure: the value only ever chooses among options that exist before it intervenes, namely the
+trajectories already collected, the chunks already sampled, and the horizon already chosen. What the
+policy can become is thereby bounded in advance, and this bound manifests through two mechanisms.
+Sampling-based selection is limited by the support of what the sampler proposes, and the induced
+argmax preferentially selects overestimated candidates~\citep{emaq}; a
 critic over fixed whole chunks cannot distinguish skillful behavior from fortunate outcomes in
 closed-loop demonstrations, and systematically overestimates commitments that succeeded by
 chance~\citep{dqc}. The decisive question is therefore not only how accurately the value is learned,
