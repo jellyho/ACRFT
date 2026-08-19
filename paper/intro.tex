@@ -36,7 +36,10 @@ its ceiling. Methods that learn a value tend to apply it around the policy rathe
 filtering the dataset~\citep{grrl} or selecting among sampled chunks at test
 time~\citep{vgps, deas}; the value then only chooses among options that already exist, and
 sampling-based selection is bounded by what the sampler proposes and biased toward overestimated
-candidates~\citep{emaq}. Direct actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
+candidates~\citep{emaq}.
+
+On the RL side, the machinery for chunked value learning is further along, yet it has not reached
+VLAs either. Direct actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
 the chunk as a fixed, indivisible action, even though a critic scoring whole chunks of closed-loop
 demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
 developed in state-based RL~\citep{qc, aqc, acsac}, where chunk-level TD makes long horizons
