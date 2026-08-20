@@ -45,6 +45,14 @@ def main():
     ap.add_argument("--episodes", type=int, nargs="*", default=None, help="explicit episode ids (override --pick)")
     ap.add_argument("--stride", type=int, default=8, help="score/draw every k-th frame (YAM eps are ~2-4k frames)")
     ap.add_argument("--h-goal", type=int, default=3)
+    ap.add_argument(
+        "--homing-onsets",
+        type=pathlib.Path,
+        default=pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/yam_homing_onsets.json"),
+        help="trim rendering at each episode's homing onset (the return-home tail is not task "
+        "behavior and the newer critic arms do not even train on it); missing file disables",
+    )
+    ap.add_argument("--no-trim-homing", action="store_true", help="render the full episode incl. homing")
     ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/yam_value_videos"))
     a = ap.parse_args()
@@ -105,9 +113,17 @@ def main():
 
     a.out.mkdir(parents=True, exist_ok=True)
     written = []
+    onsets = {}
+    if not a.no_trim_homing and a.homing_onsets.exists():
+        onsets = {int(k): v["homing_onset"] for k, v in json.loads(a.homing_onsets.read_text()).items()}
+
     for episode, is_succ in picks:
         off, n = eps[episode]["offset"], eps[episode]["full_len"]
-        sel = np.arange(0, n, a.stride)
+        # render only up to the homing onset: the tail is the arms returning home, not the task.
+        # values/mc keep using the FULL episode geometry (that is what training saw); we just stop
+        # drawing where the task ends.
+        n_draw = min(n, onsets.get(episode, n)) if onsets else n
+        sel = np.arange(0, n_draw, a.stride)
         T = len(sel)
         chunks = np.zeros((T, H, ad), np.float32)
         for i, t in enumerate(sel):
@@ -127,11 +143,11 @@ def main():
         dist = np.concatenate(dists)
         qpref = np.concatenate(qprefs)
         qfull = qpref[:, -1]
-        mc = cost_to_goal(n, is_succ, a.h_goal, disc)[:: a.stride]
+        mc = cost_to_goal(n, is_succ, a.h_goal, disc)[: n_draw : a.stride]
 
         # with episodes=[e] the dataset is exactly that episode, indexed from 0
         ds = lerobot_dataset.LeRobotDataset(a.repo_id, root=a.root, episodes=[episode], video_backend="pyav")
-        assert len(ds) == n, f"cache says ep{episode} has {n} frames, dataset has {len(ds)}"
+        assert len(ds) >= n_draw, f"dataset has {len(ds)} frames, need {n_draw}"
         frames_np = []
         for i in range(T):
             img = ds[int(sel[i])][a.cam]  # [3,h,w] float tensor 0..1
@@ -164,7 +180,7 @@ def main():
             ax[2].plot(sel[: i + 1], qfull[: i + 1], color=rs.ORANGE, lw=2, label="mean Q")
             ax[2].plot(sel, mc, color=rs.GRAY, ls=":", lw=1.4, label="cost-to-goal")
             ax[2].scatter([sel[i]], [qfull[i]], s=30, color=rs.ORANGE, zorder=5)
-            ax[2].set_xlim(0, n)
+            ax[2].set_xlim(0, n_draw)
             lo = min(qfull.min(), mc.min())
             ax[2].set_ylim(lo * 1.05, vmax + abs(lo) * 0.05)
             ax[2].set_xlabel("frame")
