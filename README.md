@@ -108,6 +108,21 @@ uv run scripts/serve_policy.py --port 8000 policy:checkpoint \
 
 ---
 
+## Looking at a rollout
+
+A deployed rollout is a dataset; `misc/` turns one into a video — the candidate chunks the policy
+proposed, which one the critic picked, how far ahead it committed, and the value it was scored on,
+overlaid on the three cameras.
+
+```bash
+misc/yam-misc render-gui        # pick a dataset and an episode, press Render
+misc/yam-misc render-samples --repo-id lerobot_rollout/<name> --root ~/lerobot_rollout --episode 0
+```
+
+Self-contained: it carries its own copy of the arm's kinematics and the rig's agentview extrinsics,
+so it needs nothing from the robot repo. See [misc/README.md](misc/README.md) — including which of
+those files are snapshots to re-copy after a recalibration.
+
 ## Stage 1 — RLT training
 
 `examples/robocasa/run_train_rlt.sh <Task> [<Task> ...] [flags]` wraps `scripts/train.py`. It
