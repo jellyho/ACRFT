@@ -74,7 +74,13 @@ class Args:
 
     # Patch critics only: "bon" executes the whole winning chunk, "adaptive" executes just its
     # highest-value commitment prefix and replans -- so the chunk length varies per reply.
-    critic_mode: str = "bon"
+    #
+    # Left unset, it follows the critic: one trained with `macro_group_size == horizon` has a
+    # single commitment group and can only ever return the whole chunk, so adaptive would be bon
+    # under another name; one trained with several groups was trained to be committed to a prefix.
+    # Set it explicitly to run the other mode -- bon on a multi-group critic is a real comparison,
+    # and the artifact cannot know which of the two you meant to run today.
+    critic_mode: str | None = None
 
     # How many action chunks to draw per observation. This is what the server DOES, not what a
     # client may ask for: it is both what gets sampled and what the handshake declares the
@@ -184,8 +190,22 @@ def _build_critic_policy(policy, args: Args):
     if "num_patches" in cfg:
         from openpi.policies import patch_critic_policy as _pcp
 
-        logging.info("critic: patch-critic (%s), mode=%s", critic_dir.name, args.critic_mode)
-        return _pcp.PatchCriticSelectPolicy(policy, str(critic_dir), mode=args.critic_mode, **samples)
+        groups = max(1, int(cfg.get("horizon", 0)) // max(1, int(cfg.get("macro_group_size", 0) or 1)))
+        mode = args.critic_mode or ("adaptive" if groups > 1 else "bon")
+        if args.critic_mode == "adaptive" and groups <= 1:
+            logging.warning(
+                "critic-mode=adaptive but %s has one commitment group (macro_group_size == horizon)"
+                " -- every reply will be the whole chunk, which is what bon does",
+                critic_dir.name,
+            )
+        logging.info(
+            "critic: patch-critic (%s), mode=%s%s, %d commitment group(s)",
+            critic_dir.name,
+            mode,
+            "" if args.critic_mode else " (from the critic)",
+            groups,
+        )
+        return _pcp.PatchCriticSelectPolicy(policy, str(critic_dir), mode=mode, **samples)
     logging.info("critic: RLT-token critic (%s)", critic_dir.name)
     return _policy.CriticSelectPolicy(policy, str(critic_dir), **samples)
 
