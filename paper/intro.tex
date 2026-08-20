@@ -42,8 +42,9 @@ A more direct line of work lets the value train the policy itself, yet still sto
 Actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
 the chunk as a fixed, indivisible action, even though a critic scoring whole chunks of closed-loop
 demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
-developed within RL~\citep{qc, aqc, acsac}; chunk-level TD makes long horizons tractable and prefix
-values let the commitment vary. Yet the commitment is still selected by scoring candidates at
+developed within RL~\citep{qc, aqc, acsac}, resting on the classical semi-Markov treatment of
+temporally extended actions~\citep{sutton1999options, bradtke1994smdp}; chunk-level TD makes long
+horizons tractable and prefix values let the commitment vary. Yet the commitment is still selected by scoring candidates at
 deployment rather than optimized jointly with the actions, and no such construction has been
 developed into a purely offline post-training stage that leaves a VLA better than its supervised
 starting point. What is missing is a method that
@@ -64,7 +65,8 @@ In summary, our main contributions are threefold:
     \item We analyze why the prevailing mechanisms for applying a learned value to a VLA,
     sampling-based selection and fixed-length execution, cannot surpass the policy they start from,
     and locate the missing piece in direct policy optimization over both actions and
-    commitments~\citep{emaq, dqc, park2024bottleneck}.
+    commitments~\citep{emaq, dqc, park2024bottleneck}, an argument we make precise in
+    Appendix~\ref{app:theory}.
     \item We present a complete offline reinforcement fine-tuning method for VLAs that jointly
     optimizes the policy over actions and commitment lengths through a single learned value,
     together with a training recipe that keeps chunk-level value learning stable at this scale,

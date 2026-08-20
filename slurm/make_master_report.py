@@ -1769,6 +1769,84 @@ DEAS가 쓴 태스크 2종(CoffeeSetupMug·PnP계열)과 겹침도 확보. <b>�
 <code>gr1_eval/task_scan/&lt;Task&gt;/results.json</code>.</p>""",
 )
 
+# ============================================== 08-20 이론 논문화 + 사전실험 사전 등록
+entry(
+    "08-20",
+    "theory-preexp",
+    "📐 이론 → 논문 → 사전실험 — SMDP 부록(theory.tex)과 사전 등록 M1–M5",
+    "완결",
+    """
+<p class='sub'>밤샘 이론 프로그램을 논문 부록 <code>paper/theory.tex</code>(정리 3 · 명제 3 · 보조정리 2 ·
+따름정리 2, 전부 증명 포함)로 정식화하고, 그 이론의 반증 가능한 예측 다섯을 사전실험 M1–M5로 사전 등록한다.</p>
+
+<p>원천은 <span class='xref' data-eid='chunking-theory'>chunking-theory</span> Part III와
+<span class='xref' data-eid='three-forces'>네 힘</span>이고, intro에도 SMDP 계보 인용과 부록 포인터를 살짝
+반영했다. M1–M5는 예측·프로토콜·기각 조건을 <b>실행 전에 고정</b>하며, 이 포스트는 게시 후 수정하지 않는다.
+결과는 각각 별도 엔트리로 보고한다.</p>
+
+<h3>① 논문 배치 — 허브의 정리가 부록의 어떤 명제가 되었나</h3>
+<table class='num'><tr><th>부록 (theory.tex)</th><th>내용</th><th>원천</th></tr>
+<tr><td>식 (A.1)</td><td>가변 커밋의 <b>SMDP 백업</b> — 커밋 길이 k의 옵션 가치는
+\\(\\sum_{j&lt;k}\\gamma^j r_j + \\gamma^k V(s_k)\\). 길이가 다른 커밋을 공정 비교하는 유일한 부기</td>
+<td>options/SMDP 고전(Sutton–Precup–Singh, Bradtke–Duff) + QC(고정 k)·DEAS(이중 할인)를 그 사례로 위치 지정</td></tr>
+<tr><td>Prop 1</td><td><b>부기 편향</b>: duration-blind 백업(결정당 γ 한 번)의 왜곡 = \\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)] \\ge 0\\>
+— k에 단조 증가, <b>긴 커밋을 결과와 무관하게 부풀린다</b>(k-스텝 도달이 1-스텝 지름길처럼 보임). ExRL이 온라인에서 식별한 편향의 정량형</td>
+<td>신규 정식화 (ExRL 귀속 명시)</td></tr>
+<tr><td>Prop 2</td><td><b>선택 천장 + winner's curse</b>: BoN 실현값은 frozen 정책의 support 상한을 절대 못 넘고(∀N),
+believed−realized 격차는 \\(\\sigma\\sqrt{2\\ln N}\\)로 성장 — N 스케일링은 자기기만을 키운다</td>
+<td>신규 정식화 (EMaQ의 N-보간 명시)</td></tr>
+<tr><td>Lemma 1·2</td><td>샌드위치(\\(V^\\star_H \\le V^\\star_{ada} \\le V^\\star_1\\)) / <b>full-chunk 목적함수는
+배포값의 tight한 하한</b> — 짧은 prefix만 개선하면 하한이 안 움직여 커밋이 안 자란다 (선택-only 계열이 길이에 갇히는 이유)</td>
+<td>chunking-theory Lemma A·B</td></tr>
+<tr><td>Thm 1–3 + 따름 2</td><td>손실 분해(aleatoric/epistemic) · 결정론 ⇒ 반응성 가치 0 + <b>흡수</b>(적응 이득은 더 나은
+full chunk로 컴파일 가능) · floor 바운드 · <b>curriculum</b>(개선이 진행되면 평균 커밋이 환경이 정한 floor까지 증가 — replan cost 불필요)</td>
+<td>chunking-theory III.2–III.7</td></tr>
+<tr><td>Prop 3</td><td><b>누출은 baseline이 못 지운다</b>: \\(b^Q_k\\)는 k에 증가(DQC Thm 1은 Fact로 인용),
+V는 chunk 비조건이라 차감 불완전, \\(\\gamma^{-k}\\) 정규화가 잔차를 증폭</td>
+<td>chunking-theory III.8 + DQC</td></tr>
+<tr><td>worked example</td><td>복도(커밋 승: 재질의마다 ε 재샘플 위험) vs 분기점(반응 승: 1스텝 뒤 동전 공개) —
+ε∈(0,½)에서 <b>모든 고정 k가 엄격 열등</b>, 상태의존 κ만 둘 다 취함. 복도 마진은 ε→0에서 소멸(curriculum의 축소판), 분기점 이득은 잔존(floor)</td>
+<td>신규</td></tr></table>
+
+<p><b>두 편향의 분리 (핵심 규율).</b> ① <b>부기 편향</b>(Prop 1)은 추정기의 성질 — SMDP 백업 (A.1)이 정확히 제거한다.
+② <b>hindsight 누출</b>(Prop 3)은 데이터 생성 과정의 성질 — 부기를 올바로 해도 남고 k에 따라 자란다.
+전자는 백업으로, 후자는 conservative in-sample 타깃으로 — <b>도구가 다르다</b>. 귀속 규율: 부기 편향의 식별은
+ExRL, 누출 정량화는 DQC — "우리가 처음 짚었다"고 쓰지 않는다
+(<span class='xref' data-eid='adaptive-exec-map'>전수 지도</span>의 주장 강도 경계 그대로).</p>
+
+<h3>② 사전실험 M1–M5 (사전 등록 — 실행 전 고정)</h3>
+<table class='num'><tr><th>#</th><th>이론</th><th>예측</th><th>프로토콜</th><th>기각 조건</th><th>인프라·시기</th></tr>
+<tr><td><b>M1</b> 부기 A/B</td><td>Prop 1</td><td>같은 critic에 duration-blind scorer를 끼우면 k-분포가 길게 밀리고
+분기 있는 태스크에서 SR 하락</td><td>동일 critic·동일 장면, scorer만 \\(\\gamma^k\\) vs \\(\\gamma\\) 교체 —
+k 히스토그램 + 페어드 closed-loop SR (2태스크 × 3시드 × 25)</td><td>두 scorer의 k-분포·SR 구분 불가</td>
+<td>critic ckpt 재사용, scorer는 후처리 — 소규모</td></tr>
+<tr><td><b>M2</b> 누출 곡선</td><td>Prop 3 + DQC</td><td>\\(b_k := \\hat Q^k - \\)(open-loop replay 할인 MC)가 k에 단조 증가;
+\\(b^V_k\\) 차감 후에도 잔차 잔존</td><td>데모 prefix를 open-loop 재생 → 실현 리턴 vs critic 추정, k별 run-level CI
+(에피소드 계층 부트스트랩)</td><td>\\(b_k\\) 평탄 (k 무의존)</td>
+<td>robocasa 상태-리셋 지원 확인 필요 — 불가면 에피소드 시작상태 open-loop으로 대체 (리스크 명기)</td></tr>
+<tr><td><b>M3</b> BoN N-스윕</td><td>Prop 2</td><td>SR(N) 포화, believed(선택 후보의 \\(\\hat Q\\))−realized(실현 리턴)
+격차는 \\(\\sqrt{\\ln N}\\) 꼴로 성장</td><td>N ∈ {1,2,4,8,16,32}, 상위 2태스크 × 3시드 × 25 —
+serve_bon_policy에 \\(\\hat Q\\) 로깅 추가</td><td>realized가 believed와 동행 성장 (격차 무성장)</td>
+<td>serve_bon_policy 있음 — 중규모 롤아웃</td></tr>
+<tr><td><b>M4</b> 고정-k 스윕</td><td>Thm 3 (+ 네 힘 P4)</td><td>best fixed k가 태스크별로 다르고, k=1이 전역최적이
+아니며, SR(k)가 비단조</td><td>공식 pi05, k ∈ {1,2,4,8,H/2,H} × 5태스크 × 20 (선별 시드) —
+<b>best-fixed-k 기준선 확정</b> (워커C 교훈: adaptive의 비교 상대는 항상 best-fixed)</td><td>k=1이 전역최적 (Zhang 힘 부재)</td>
+<td>클라이언트 execute-horizon 옵션 확인/소패치 — M-계열 최우선</td></tr>
+<tr><td><b>M5</b> 커리큘럼 on/off</td><td>curriculum 따름정리 (+ P3)</td><td>정책 개선 arm에서만 평균 선택 k*가
+학습에 따라 증가</td><td>개선 on/off 두 arm(베이스라인 사다리 B2/B4와 결합), 동일 데이터·동일 critic — 평균 k* 궤적</td>
+<td>off arm에서도 증가 (curriculum이 개선의 서명이 아님)</td><td>베이스라인 사다리 뒤</td></tr></table>
+
+<p><b>실행 순서.</b> M4(인프라 최소·정보 최대 — best-fixed 기준선은 이후 모든 adaptive 비교의 전제) → M3(serve_bon_policy
+재사용) → critic 도착 시 M1·M2 → 사다리 뒤 M5. <b>판정 규율</b>: 전부 run-level 다중시드 CI, 분류는 프로그램적으로.
+<span class='xref' data-eid='three-forces'>네 힘</span>의 P1(κ*↔불확실성 반상관)·P2(20k→120k epistemic만 감소)는 병렬
+프로그램이 이미 등록·측정 중이라 여기 중복 등록하지 않는다 — M1–M3은 <b>추정기 쪽</b>, M4–M5는 <b>실행 쪽</b> 검증으로 상보적이다.</p>
+
+<p class='sub'><b>재현.</b> 부록 <code>paper/theory.tex</code> · intro 반영 <code>paper/intro.tex</code> ·
+서지 <code>paper/references.bib</code>(sutton1999options·bradtke1994smdp 추가; exrl은 워크샵 PDF가 미색인이라
+저자란 TODO로 남김 — 채워야 함). 부수 정정: task-scan 엔트리의 date가 미래 시각(14:00)으로 잘못 찍혀 있어
+실제 게시 시각(09:06 KST)으로 바로잡았다.</p>""",
+)
+
 # ============================================== 08-19 Tier1 인트로 비교분석
 entry(
     "08-19",
@@ -3146,8 +3224,17 @@ META = {
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
     },
+    "theory-preexp": {
+        "date": "2026-08-20 13:10",
+        "who": "워커B(논문·이론)",
+        "where": "paper/theory.tex·intro.tex·references.bib + 허브 이론 엔트리(chunking-theory·three-forces)",
+        "what": "밤샘 이론의 논문 부록 정식화(정리 3·명제 3·보조정리 2·따름정리 2) + 사전실험 M1–M5 사전 등록",
+        "how": "허브 정리 → 부록 명제 매핑, 신규 명제 2건(부기 편향·선택 천장) 증명, 예측·프로토콜·기각 조건 고정",
+        "why": "사용자 지시 — 이론적 토대를 논문 형태로(인트로 살짝 + 부록 증명) + 이론 기반 사전실험 설계",
+        "links": ["chunking-theory", "three-forces", "adaptive-exec-map", "task-scan", "paper-intro", "exp-board"],
+    },
     "task-scan": {
-        "date": "2026-08-20 14:00",
+        "date": "2026-08-20 09:06",
         "who": "워커B(실험)",
         "where": "공식 robocasa365 pi05 + 우리 run_trials 하네스 (A6000, job 2059735)",
         "what": "14태스크 SR 스캔 → 베이스라인 사다리용 30–60% 밴드 5태스크 선정",
@@ -4510,6 +4597,94 @@ PickPlaceMicrowaveToCounter 0.15 and CoffeeSetupMug 0.10 in reserve; faucet/stov
 excluded; the two door tasks failed on env naming and will be retried. Single-seed n=20 is for selection only; the
 ladder itself runs at run-level multi-seed. Next: B1 (success-filtered SFT) on the five selected tasks. Reproduce:
 <code>probes/run_task_scan.sh</code>, per-task JSONs under <code>gr1_eval/task_scan/</code>.</p>""",
+)
+
+en(
+    "theory-preexp",
+    "📐 Theory → paper → pre-experiments — the SMDP appendix (theory.tex) and pre-registered M1–M5",
+    """
+<p class='sub'>The overnight theory program is now formalized as paper appendix <code>paper/theory.tex</code>
+(3 theorems, 3 propositions, 2 lemmas, 2 corollaries, all with proofs), and five falsifiable predictions of that
+theory are pre-registered here as pre-experiments M1–M5.</p>
+
+<p>The sources are <span class='xref' data-eid='chunking-theory'>chunking-theory</span> Part III and the
+<span class='xref' data-eid='three-forces'>four forces</span>; the introduction received a light touch (SMDP lineage
+citations and an appendix pointer). M1–M5 fix prediction, protocol, and rejection condition <b>before any run</b>;
+this post will not be edited after publication. Results will be reported as separate entries.</p>
+
+<h3>① Paper placement — which hub result became which appendix statement</h3>
+<table class='num'><tr><th>Appendix (theory.tex)</th><th>Content</th><th>Source</th></tr>
+<tr><td>Eq. (A.1)</td><td>The <b>SMDP backup</b> for variable commitment — the option value of committing k steps is
+\\(\\sum_{j&lt;k}\\gamma^j r_j + \\gamma^k V(s_k)\\); the only bookkeeping that compares commitments of different
+lengths fairly</td><td>classical options/SMDP (Sutton–Precup–Singh, Bradtke–Duff), with QC (fixed k) and DEAS (dual
+discounts) positioned as its instantiations</td></tr>
+<tr><td>Prop 1</td><td><b>Bookkeeping bias</b>: the duration-blind backup (one γ per decision) distorts values by
+\\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)] \\ge 0\\) — monotone in k, <b>inflating long commitments regardless of
+outcomes</b> (a k-step reach masquerades as a one-step shortcut). The quantitative form of the bias ExRL identified
+online</td><td>new formalization (ExRL credited)</td></tr>
+<tr><td>Prop 2</td><td><b>Support ceiling + winner's curse</b>: best-of-N execution can never exceed the frozen
+policy's support (for every N), and the believed-minus-realized gap grows like \\(\\sigma\\sqrt{2\\ln N}\\) —
+scaling N scales the self-deception</td><td>new formalization (EMaQ's N-interpolation made explicit)</td></tr>
+<tr><td>Lemmas 1·2</td><td>Sandwich (\\(V^\\star_H \\le V^\\star_{ada} \\le V^\\star_1\\)) / <b>the full-chunk
+objective is a tight lower bound on deployed value</b> — improving only short prefixes leaves the bound unmoved, so
+commitments never lengthen (why the selection-only family stays stuck at its initial lengths)</td>
+<td>chunking-theory Lemmas A·B</td></tr>
+<tr><td>Thms 1–3 + 2 corollaries</td><td>Shortfall decomposition (aleatoric/epistemic) · determinism ⇒ zero value of
+reactivity + <b>absorption</b> (every adaptive gain compiles into a better full chunk) · the floor bound ·
+<b>curriculum</b> (as improvement proceeds, mean commitment grows to an environment-set floor — no replan cost
+needed)</td><td>chunking-theory III.2–III.7</td></tr>
+<tr><td>Prop 3</td><td><b>The prefix baseline cannot cancel leakage</b>: \\(b^Q_k\\) grows with k (DQC Thm 1 cited
+as Fact), the baseline conditions on the state alone so subtraction leaves a residual, and the \\(\\gamma^{-k}\\)
+normalization amplifies it</td><td>chunking-theory III.8 + DQC</td></tr>
+<tr><td>Worked example</td><td>Corridor (commitment wins: each requery risks an ε-resample) vs junction (reaction
+wins: a coin is revealed after step 1) — for ε∈(0,½) <b>every fixed k is strictly suboptimal</b>; only a
+state-dependent κ takes both. The corridor margin vanishes as ε→0 (the curriculum in miniature); the junction gain
+persists (the floor)</td><td>new</td></tr></table>
+
+<p><b>Separating the two biases (the core discipline).</b> ① The <b>bookkeeping bias</b> (Prop 1) is a property of
+the estimator — the SMDP backup (A.1) removes it exactly. ② <b>Hindsight leakage</b> (Prop 3) is a property of the
+data-generating process — it survives correct bookkeeping and grows with k. The former is cured by the backup, the
+latter by conservative in-sample targets — <b>different tools</b>. Attribution discipline: the bookkeeping bias was
+identified by ExRL, leakage was quantified by DQC — we never claim either as ours (exactly the claim-strength guard
+of the <span class='xref' data-eid='adaptive-exec-map'>family map</span>).</p>
+
+<h3>② Pre-experiments M1–M5 (pre-registered — fixed before running)</h3>
+<table class='num'><tr><th>#</th><th>Theory</th><th>Prediction</th><th>Protocol</th><th>Rejected if</th><th>Infra · when</th></tr>
+<tr><td><b>M1</b> bookkeeping A/B</td><td>Prop 1</td><td>plugging a duration-blind scorer into the same critic
+shifts the k distribution long and drops SR on branching tasks</td><td>same critic, same scenes, only the scorer
+swaps \\(\\gamma^k\\) vs \\(\\gamma\\) — k histogram + paired closed-loop SR (2 tasks × 3 seeds × 25)</td>
+<td>k distributions and SR indistinguishable</td><td>reuses critic ckpt; scorer is post-processing — small</td></tr>
+<tr><td><b>M2</b> leakage curve</td><td>Prop 3 + DQC</td><td>\\(b_k := \\hat Q^k - \\)(discounted MC of open-loop
+replay) increases monotonically in k; a residual survives subtracting \\(b^V_k\\)</td><td>replay demo prefixes open
+loop → realized return vs critic estimate, per-k run-level CI (episode-clustered bootstrap)</td>
+<td>\\(b_k\\) flat in k</td><td>needs robocasa state-reset support — else fall back to episode-start open-loop
+(risk noted)</td></tr>
+<tr><td><b>M3</b> best-of-N sweep</td><td>Prop 2</td><td>SR(N) saturates while believed (selected \\(\\hat Q\\))
+minus realized (return) grows like \\(\\sqrt{\\ln N}\\)</td><td>N ∈ {1,2,4,8,16,32}, top-2 tasks × 3 seeds × 25 —
+add \\(\\hat Q\\) logging to serve_bon_policy</td><td>realized keeps pace with believed (no gap growth)</td>
+<td>serve_bon_policy exists — medium rollouts</td></tr>
+<tr><td><b>M4</b> fixed-k sweep</td><td>Thm 3 (+ P4 of the four forces)</td><td>best fixed k differs across tasks,
+k=1 is not globally optimal, SR(k) is non-monotone</td><td>official pi05, k ∈ {1,2,4,8,H/2,H} × 5 tasks × 20
+(selection seed) — <b>establishes the best-fixed-k baseline</b> (worker C's lesson: adaptive must always be compared
+against best-fixed)</td><td>k=1 globally optimal (no Zhang force)</td><td>check/patch client execute-horizon option —
+first in the M series</td></tr>
+<tr><td><b>M5</b> curriculum on/off</td><td>curriculum corollary (+ P3)</td><td>mean selected k* grows over training
+only in the policy-improvement arm</td><td>improvement on/off arms (joined with ladder B2/B4), same data, same
+critic — mean k* trajectory</td><td>growth in the off arm too (curriculum not a signature of improvement)</td>
+<td>after the baseline ladder</td></tr></table>
+
+<p><b>Execution order.</b> M4 (least infra, most information — the best-fixed baseline is a precondition for every
+later adaptive comparison) → M3 (reuses serve_bon_policy) → M1·M2 once the critic lands → M5 after the ladder.
+<b>Verdict discipline</b>: run-level multi-seed CIs throughout, programmatic classification. P1 (κ*↔uncertainty
+anti-correlation) and P2 (20k→120k shrinks epistemic only) of the <span class='xref'
+data-eid='three-forces'>four forces</span> are already registered and being measured by the parallel program, so they
+are not duplicated here — M1–M3 probe the <b>estimator</b>, M4–M5 probe <b>execution</b>; the two sets are
+complementary.</p>
+
+<p class='sub'><b>Reproduce.</b> Appendix <code>paper/theory.tex</code> · intro touch <code>paper/intro.tex</code> ·
+bibliography <code>paper/references.bib</code> (sutton1999options and bradtke1994smdp added; exrl left with a TODO
+author field — the workshop PDF is not indexed yet and must be filled in). Side correction: the task-scan entry
+carried a future timestamp (14:00); fixed to the actual publication time (09:06 KST).</p>""",
 )
 
 en(

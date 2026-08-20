@@ -1,0 +1,358 @@
+% Appendix: theoretical foundations (v1, 2026-08-20). Paper form of the hub theory program
+% (chunking-theory Part III, three-forces, adaptive-exec-map claim-strength guard).
+% Assumed preamble (main.tex): amsmath, booktabs, natbib, amsthm with
+%   \newtheorem{theorem}{Theorem}  \newtheorem{proposition}{Proposition}
+%   \newtheorem{lemma}{Lemma}      \newtheorem{corollary}{Corollary}
+%   \newtheorem{fact}{Fact}        \theoremstyle{remark}\newtheorem{remark}{Remark}
+% Style: no em-dashes, no prose colons. Imported results are stated as Facts with citations;
+% everything labeled Theorem/Proposition/Lemma/Corollary here is ours.
+
+\section{Commitment as an Optimization Dimension}
+\label{app:theory}
+
+This appendix formalizes the claims of Section~\ref{sec:intro}. We show that
+(i)~valuing commitments of different lengths requires semi-Markov bookkeeping, without which the
+critic acquires a spurious preference for long commitments (Proposition~\ref{prop:bookkeeping});
+(ii)~deployment-time selection is bounded by the support of the frozen policy and cannot lengthen
+commitments (Proposition~\ref{prop:selection}, Lemma~\ref{lem:fullchunk});
+(iii)~the gain available to an adaptive commitment decomposes into a policy-dependent part that
+policy improvement absorbs and an irreducible part set by the environment
+(Theorems~\ref{thm:decomp}--\ref{thm:floor}); and
+(iv)~closed-loop demonstrations induce an optimism that grows with the commitment length and that
+correct bookkeeping does not remove (Proposition~\ref{prop:leakage}).
+Together these results locate the mechanism our method needs. The policy must be improved in both
+of its output dimensions, and the two biases that act on the commitment must be handled by
+different tools.
+
+\subsection{Setup}
+\label{app:setup}
+
+Let $M=(\mathcal S,\mathcal A,T,r,\gamma)$ be a Markov decision process with rewards in $[0,1]$
+and discount $\gamma\in(0,1)$. A \emph{chunk policy} with horizon $H$ is a map
+$\pi\colon\mathcal S\to\Delta(\mathcal A^{H})$, and a \emph{commitment selector} is a map
+$\kappa\colon\mathcal S\to\{1,\dots,H\}$. The pair $(\pi,\kappa)$ is executed by querying
+$a_{1:H}\sim\pi(\cdot\mid s)$, executing the first $\kappa(s)$ actions open loop, and requerying at
+the state reached; we write $V^{\pi,\kappa}$ for the value of this process and abbreviate
+$V^{\pi,k}$ when $\kappa\equiv k$ is constant.
+
+Requery times are decision points of a semi-Markov decision process whose actions are the
+temporally extended pairs $(a_{1:k},k)$~\citep{sutton1999options, bradtke1994smdp}. The option
+value of committing to the first $k$ actions of a chunk and thereafter following $(\pi,\kappa)$ is
+\begin{equation}
+\label{eq:smdp-backup}
+Q^{\pi,\kappa}(s, a_{1:H}, k)
+  \;=\;
+  \mathbb E\!\left[\;\sum_{j=0}^{k-1}\gamma^{j}\, r(s_j,a_{j+1})
+  \;+\;\gamma^{k}\, V^{\pi,\kappa}(s_k)\right],
+\end{equation}
+where the expectation is over the open-loop rollout of $a_{1:k}$ from $s_0=s$. Chunk-level
+temporal-difference learning instantiates \eqref{eq:smdp-backup} for fixed $k=H$~\citep{qc}, and
+dual-discount schemes are its within-chunk and across-chunk factorization~\citep{deas}. Because the
+$H$ prefixes of one chunk share a single rollout, a causal critic over the chunk emits all $H$
+option values in one pass; this is the object our method trains.
+
+Three optimal values will be compared,
+\[
+V^{\star}_{1}\;:=\;\sup_{\text{closed-loop}}V,
+\qquad
+V^{\star}_{H}\;:=\;\sup_{\pi}V^{\pi,H},
+\qquad
+V^{\star}_{\mathrm{ada}}\;:=\;\sup_{\pi,\kappa}V^{\pi,\kappa}.
+\]
+
+\begin{lemma}[Sandwich]
+\label{lem:sandwich}
+$V^{\star}_{H}\le V^{\star}_{\mathrm{ada}}\le V^{\star}_{1}$.
+\end{lemma}
+\begin{proof}
+The left inequality holds because $\kappa\equiv H$ is an admissible selector. For the right one,
+any execution of $(\pi,\kappa)$ is a particular policy measurable with respect to the observation
+filtration, so its value cannot exceed the closed-loop optimum.
+\end{proof}
+
+\subsection{Bookkeeping. Comparing commitments requires the semi-Markov backup}
+\label{app:bookkeeping}
+
+Consider the \emph{duration-blind} backup that charges one step of discount per decision
+regardless of the committed duration,
+$\widetilde Q(s,a_{1:H},k):=\mathbb E[\sum_{j<k}\gamma^{j}r_j+\gamma\,V(s_k)]$. This is the most
+favorable form of the error, since the within-commitment rewards are still discounted correctly;
+only the bootstrap term is mis-charged.
+
+\begin{proposition}[Duration-blind bookkeeping inflates long commitments]
+\label{prop:bookkeeping}
+For every $s$, $a_{1:H}$, and $k\in\{1,\dots,H\}$,
+\[
+\widetilde Q(s,a_{1:H},k)-Q(s,a_{1:H},k)
+  \;=\;\bigl(\gamma-\gamma^{k}\bigr)\,\mathbb E\bigl[V(s_k)\bigr]\;\ge\;0 ,
+\]
+with equality iff $k=1$ or the landing value vanishes. The distortion is strictly increasing in
+$k$ and proportional to the value of the landing state.
+\end{proposition}
+\begin{proof}
+Subtract \eqref{eq:smdp-backup} from $\widetilde Q$; all terms cancel except the bootstrap, and
+$\gamma\ge\gamma^{k}$ with $V\ge0$ since rewards are nonnegative.
+\end{proof}
+
+Under goal-reaching reward the distortion is easiest to see. A $k$-step commitment that reaches
+the goal is valued $\gamma$ instead of $\gamma^{k}$, as if the commitment were a single-step
+shortcut through the decision graph. Any commitment rule trained or evaluated against
+$\widetilde Q$ therefore receives a spurious monotone pressure toward long commitments that has
+nothing to do with task outcomes. This failure mode of naive backups for variable execution
+horizons was identified in the online setting by ExRL~\citep{exrl}, whose remedy is likewise the
+semi-Markov backup. Our critic trains on \eqref{eq:smdp-backup} directly, so commitments of
+different lengths compete on equal terms; every result below assumes this bookkeeping.
+
+\subsection{Selection. What a value applied around a frozen policy can and cannot do}
+\label{app:selection}
+
+\begin{proposition}[Support ceiling and winner's curse]
+\label{prop:selection}
+Fix a state $s$ and a frozen sampler $\bar\pi$. Let $a^{(1)},\dots,a^{(N)}\sim\bar\pi(\cdot\mid s)$
+be independent proposals, let $\widehat Q=Q+\epsilon$ be the critic with zero-mean,
+$\sigma$-sub-Gaussian errors $\epsilon_i$ independent across proposals, and let
+$\hat a=\arg\max_i\widehat Q(s,a^{(i)})$ be the selected chunk. Then
+\begin{enumerate}
+\item[(i)] the realized value obeys
+$Q(s,\hat a)\le\sup_{a\in\operatorname{supp}\bar\pi(\cdot\mid s)}Q(s,a)$ almost surely, for every
+$N$; and
+\item[(ii)] the believed value of the selection overstates it,
+\[
+\mathbb E\bigl[\widehat Q(s,\hat a)\bigr]-\mathbb E\bigl[Q(s,\hat a)\bigr]
+\;\ge\;0,
+\qquad
+\mathbb E\bigl[\widehat Q(s,\hat a)\bigr]
+\;\le\;
+\mathbb E\Bigl[\max_i Q(s,a^{(i)})\Bigr]+\sigma\sqrt{2\ln N}.
+\]
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+(i) is immediate since $\hat a$ lies in the support. For (ii), the first inequality follows from
+$\widehat Q(s,\hat a)=\max_i(Q+\epsilon)_i\ge Q(s,\hat a)+\epsilon_{\hat a}$ and
+$\mathbb E[\epsilon_{\hat a}\mid\hat a]$ being the error of the argmax, which is nonnegative in
+expectation because larger errors are more likely to be selected; formally
+$\mathbb E[\max_i(Q_i+\epsilon_i)]\ge\mathbb E[Q_{\hat a}+\epsilon_{\hat a}]$ with
+$\mathbb E[\max_i(Q_i+\epsilon_i)]\le\mathbb E[\max_iQ_i]+\mathbb E[\max_i\epsilon_i]$ and the
+standard sub-Gaussian maximal inequality $\mathbb E[\max_i\epsilon_i]\le\sigma\sqrt{2\ln N}$.
+\end{proof}
+
+Part (i) is the ceiling that best-of-$N$ execution interpolates toward as $N$ grows~\citep{emaq};
+part (ii) says that scaling $N$ widens the gap between what the system believes and what it
+achieves, since the believed value grows like $\sigma\sqrt{2\ln N}$ while the realized value is
+capped by (i). Neither defect is repaired by more compute at deployment.
+
+Selection also cannot move the commitment distribution. The next lemma makes precise why
+improvement must be applied to the full chunk.
+
+\begin{lemma}[The full-chunk objective is a tight lower bound on deployed value]
+\label{lem:fullchunk}
+Let $\kappa^{*}_{\pi}(s)\in\arg\max_{k}Q^{\pi}(s,\mu_\pi(s),k)$ be the selector induced by exact
+option values, where $\mu_\pi(s)$ denotes the deployed chunk. Then for every $\pi$,
+\[
+V^{\pi,\kappa^{*}_{\pi}}\;\ge\;V^{\pi,H},
+\]
+so the full-chunk objective $J_H(\pi):=\mathbb E_{s}\bigl[Q^{\pi}(s,\mu_\pi(s),H)\bigr]$ is a lower
+bound on the deployed value, and the bound is tight exactly when adaptive execution no longer
+helps, that is when $V^{\pi,\kappa^{*}_{\pi}}=V^{\pi,H}$.
+\end{lemma}
+\begin{proof}
+$\kappa\equiv H$ is among the candidates the exact selector maximizes over.
+\end{proof}
+
+\begin{remark}[Selection-only systems inherit their commitment distribution]
+\label{rem:frozen}
+If the policy is frozen and only $\kappa$ is tuned, the option values
+$Q^{\bar\pi}(\cdot,\cdot,k)$ are fixed, so the selected commitments are a deterministic functional
+of the initial policy and never lengthen as competence would allow. Conversely, improving only the
+selected short prefixes raises $Q(\cdot,\cdot,k)$ for small $k$ while leaving the full-chunk value
+unimproved, so by Lemma~\ref{lem:fullchunk} the deployed lower bound does not move and no
+commitment growth occurs. Improvement must therefore attack the full chunk, with the selector
+harvesting whatever reactivity remains valuable.
+\end{remark}
+
+\subsection{Reactivity. Decomposition, absorption, and the floor}
+\label{app:reactivity}
+
+\begin{theorem}[Decomposition of the shortfall]
+\label{thm:decomp}
+For any chunk policy $\pi$,
+\[
+\underbrace{V^{\star}_{1}-V^{\pi,H}}_{\text{total shortfall}}
+=\underbrace{\bigl(V^{\star}_{1}-V^{\star}_{H}\bigr)}_{\Delta_{\mathrm{alea}}\;\text{(policy independent)}}
++\underbrace{\bigl(V^{\star}_{H}-V^{\pi,H}\bigr)}_{\Delta_{\mathrm{epis}}(\pi)\;\text{(vanishes under improvement)}} .
+\]
+\end{theorem}
+\begin{proof}
+Add and subtract $V^{\star}_{H}$. The first summand does not depend on $\pi$; the second is
+nonnegative and has infimum $0$ over $\pi$ by definition of $V^{\star}_{H}$.
+\end{proof}
+
+\begin{theorem}[Determinism makes reactivity worthless]
+\label{thm:determinism}
+If $T$ and $r$ are deterministic and the state is fully observed, then
+$V^{\star}_{1}=V^{\star}_{H}=V^{\star}_{\mathrm{ada}}$.
+\end{theorem}
+\begin{proof}
+From any $s$ the closed-loop optimum traces a single trajectory. Define $\tilde\pi(s)$ to emit its
+first $H$ actions; $\tilde\pi$ is an admissible chunk policy. Executed with full commitment,
+determinism delivers exactly the state the optimal trajectory visits at time $H$, where requerying
+continues the optimal trajectory by the Markov property. By induction the full-commitment
+execution of $\tilde\pi$ reproduces the optimal trajectory, so $V^{\tilde\pi,H}=V^{\star}_{1}$ and
+hence $V^{\star}_{H}\ge V^{\star}_{1}$; Lemma~\ref{lem:sandwich} closes the chain.
+\end{proof}
+
+\begin{corollary}[Absorption]
+\label{cor:absorb}
+Under the hypotheses of Theorem~\ref{thm:determinism}, for every $(\pi,\kappa)$,
+\[
+V^{\pi,\kappa}-V^{\pi,H}\;\le\;V^{\star}_{\mathrm{ada}}-V^{\pi,H}\;=\;\Delta_{\mathrm{epis}}(\pi).
+\]
+Every gain that adapting the commitment can produce is achievable instead by a better full chunk;
+policy improvement absorbs it.
+\end{corollary}
+
+\begin{remark}[Reactive information]
+\label{rem:reactive-info}
+The proof of Theorem~\ref{thm:determinism} uses determinism only through the fact that no
+information unpredictable from $s_t$ arrives during $(t,t+H]$. The value of reactivity is
+therefore nonzero exactly when such information arrives, through stochastic dynamics or through
+partial observability. Vision-based manipulation has both, notably occlusion and unobserved
+contact forces, so the floor below is positive in our setting and its size is a measurable
+property of each task.
+\end{remark}
+
+\begin{theorem}[Floor and gain decomposition]
+\label{thm:floor}
+Let $\Delta_{\mathrm{react}}:=V^{\star}_{\mathrm{ada}}-V^{\star}_{H}\ge0$. Then
+$\Delta_{\mathrm{react}}\le\Delta_{\mathrm{alea}}$, and for every $(\pi,\kappa)$,
+\[
+V^{\pi,\kappa}-V^{\pi,H}\;\le\;\Delta_{\mathrm{react}}+\Delta_{\mathrm{epis}}(\pi).
+\]
+Under determinism $\Delta_{\mathrm{react}}=0$ by Theorem~\ref{thm:determinism}, and in general
+$\Delta_{\mathrm{alea}}$ is bounded by the reactivity penalty of open-loop
+execution~\citep[Cor.~1]{dqc}.
+\end{theorem}
+\begin{proof}
+$\Delta_{\mathrm{react}}\le\Delta_{\mathrm{alea}}$ follows from
+$V^{\star}_{\mathrm{ada}}\le V^{\star}_{1}$ (Lemma~\ref{lem:sandwich}). For the gain bound,
+$V^{\pi,\kappa}\le V^{\star}_{\mathrm{ada}}=V^{\star}_{H}+\Delta_{\mathrm{react}}$ and
+$V^{\star}_{H}-V^{\pi,H}=\Delta_{\mathrm{epis}}(\pi)$.
+\end{proof}
+
+The two summands have different fates. $\Delta_{\mathrm{epis}}$ is removed by improving the
+policy, and by Corollary~\ref{cor:absorb} this removal also absorbs the corresponding share of the
+adaptive gain; $\Delta_{\mathrm{react}}$ can only ever be collected at execution time, by
+committing for shorter horizons where reactive information genuinely arrives. A method that only
+selects collects at most $\Delta_{\mathrm{react}}$ and forfeits $\Delta_{\mathrm{epis}}$
+(Remark~\ref{rem:frozen}); a method that improves at fixed full commitment absorbs
+$\Delta_{\mathrm{epis}}$ and forfeits $\Delta_{\mathrm{react}}$. Joint optimization is the unique
+combination that takes both.
+
+\begin{corollary}[Curriculum]
+\label{cor:curriculum}
+As improvement drives $\Delta_{\mathrm{epis}}(\pi)\to0$, the set of states on which a strictly
+shorter commitment beats the full chunk shrinks to the states where reactive information arrives,
+so the mean selected commitment increases toward a limit set by the environment alone. No
+replanning cost is needed to produce this growth; where values tie near convergence, a
+lexicographic preference for the longest commitment within an $\epsilon$-optimal set resolves the
+indifference with $\epsilon$ its only free parameter.
+\end{corollary}
+
+\subsection{Leakage. Closed-loop demonstrations inflate long commitments in a second way}
+\label{app:leakage}
+
+Teleoperated demonstrations are closed loop; the recorded action at each step reacts to the
+realized outcome of the previous ones. Conditioning a chunk-level regression target on the
+executed segment $a_{1:k}$ therefore conditions on outcome information that the demonstrator's
+reactions reveal, and the estimated value of executing that segment open loop inherits an optimism
+that the open-loop executor cannot realize.
+
+\begin{fact}[\citealp{dqc}]
+\label{fact:dqc}
+There exist MDPs and closed-loop data distributions on which the chunk-conditioned value estimate
+prefers a chunk whose actual open-loop value is worse by $\Omega\!\left(1/(1-\gamma)\right)$, and
+under an $\varepsilon_h$-open-loop-consistency assumption the estimation bias admits an upper
+bound that is monotonically increasing in the committed length.
+\end{fact}
+
+\begin{proposition}[The prefix baseline does not cancel leakage]
+\label{prop:leakage}
+Write $\widehat Q_k=Q_k+b^{Q}_{k}$ and $\widehat V_k=V_k+b^{V}_{k}$ for the estimated option value
+and its state baseline at commitment $k$, and consider any commitment score of the normalized
+advantage form $(\widehat Q_k-\widehat V_k)/\gamma^{k}$. Then
+\[
+\frac{\widehat Q_k-\widehat V_k}{\gamma^{k}}
+=\underbrace{\frac{Q_k-V_k}{\gamma^{k}}}_{\text{true normalized advantage}}
++\underbrace{\frac{b^{Q}_{k}-b^{V}_{k}}{\gamma^{k}}}_{\text{selection bias}},
+\]
+where (i) $b^{Q}_{k}$ contains the closed-loop leakage of Fact~\ref{fact:dqc} and grows with $k$;
+(ii) $b^{V}_{k}$ does not contain the corresponding component, because the baseline conditions on
+the state alone and not on the executed chunk, so the difference does not vanish; and (iii) the
+$\gamma^{-k}$ normalization amplifies the residual exponentially in $k$.
+\end{proposition}
+
+The two biases that act on the commitment therefore have different characters and different
+cures. The bookkeeping bias of Proposition~\ref{prop:bookkeeping} is a property of the estimator
+and is removed exactly by the backup \eqref{eq:smdp-backup}. The leakage bias is a property of the
+data-generating process; it survives correct bookkeeping, grows with $k$, and pushes in the
+opposite direction to the discount-scale artifact, so correcting only one of the two amplifies the
+other. This is why our targets are built conservatively within the support of the
+data~\citep{iql, deas} rather than by trusting chunk-conditioned estimates at face value, and why
+the commitment must be learned rather than scored.
+
+\subsection{A worked example where the optimal commitment is state dependent}
+\label{app:example}
+
+The forces above already imply that no fixed commitment is optimal in general; a two-situation
+example makes the separation strict and quantitative. Let the chunk length be $H=2$ and let the
+policy resample its chunk imperfectly at every query, producing a correct chunk with probability
+$1-\varepsilon$ and an arbitrary one otherwise.
+
+In a \emph{corridor} the dynamics are deterministic and a correct two-step sequence succeeds.
+Committing fully succeeds with probability $1-\varepsilon$, since one query suffices; requerying
+after one step succeeds with probability $(1-\varepsilon)^{2}$, since each query risks a bad
+resample. Commitment wins by $\varepsilon(1-\varepsilon)>0$.
+
+In a \emph{junction} the environment reveals a binary event after the first step and the correct
+second action depends on it. Committing fixes the second action before the event and succeeds with
+probability $\tfrac12(1-\varepsilon)$; requerying observes the event and succeeds with probability
+$(1-\varepsilon)^{2}$, which is larger whenever $\varepsilon<\tfrac12$. Reaction wins.
+
+For every $\varepsilon\in(0,\tfrac12)$ any constant commitment is strictly suboptimal in one of
+the two situations, while a state-dependent $\kappa$ takes both, and the margin in the corridor
+shrinks as $\varepsilon\to0$, which is the curriculum of Corollary~\ref{cor:curriculum} in
+miniature. The junction gain persists, which is the floor of Theorem~\ref{thm:floor}.
+
+\subsection{From theory to measurement}
+\label{app:predictions}
+
+Each result above yields a falsifiable prediction that our experiments test; none of them requires
+the full method to run.
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Result & Prediction & Measurement & Rejected if \\
+\midrule
+Prop.~\ref{prop:bookkeeping} & duration-blind scoring shifts & same critic, two scorers, & $k$ histograms \\
+ & commitments long and loses & $k$ histogram and success & indistinguishable \\
+\addlinespace
+Prop.~\ref{prop:selection} & best-of-$N$ plateaus while its & $N$ sweep; believed minus & realized value keeps \\
+ & believed value keeps rising & realized value of selection & pace with believed \\
+\addlinespace
+Fact~\ref{fact:dqc}, Prop.~\ref{prop:leakage} & chunk-value optimism grows & open-loop replay of demo & gap flat in $k$ \\
+ & with committed length & prefixes vs.\ critic estimate & \\
+\addlinespace
+Thm.~\ref{thm:floor} & best fixed $k$ varies by task; & fixed-$k$ sweep plus oracle & oracle matches best \\
+ & state-dependent $\kappa$ beats it & per-state selection & fixed $k$ everywhere \\
+\addlinespace
+Cor.~\ref{cor:curriculum} & mean commitment grows only & improvement on/off arms, & growth without \\
+ & under policy improvement & mean selected $k$ over training & improvement \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The first three rows probe the estimator and require only the critic and the demonstrations; the
+last two probe execution and require rollouts of the base policy. Section~\ref{sec:experiments}
+reports all five, with protocols registered before the runs.
