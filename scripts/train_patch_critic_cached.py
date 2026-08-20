@@ -48,6 +48,26 @@ def main():
     ap.add_argument("--v-min", type=float, default=None)
     ap.add_argument("--v-max", type=float, default=0.0)
     ap.add_argument("--expectile", type=float, default=0.7)
+    ap.add_argument(
+        "--q-reduction",
+        choices=["min", "mean"],
+        default="min",
+        help="how the ensemble is reduced for the expectile comparison. min is the usual pessimism, but "
+        "it pulls against the tau>0.5 optimism that is supposed to stop a failure's value propagating "
+        "back through states it shares with successes; mean removes that tug-of-war.",
+    )
+    ap.add_argument(
+        "--feat-dropout",
+        type=float,
+        default=0.0,
+        help="probability of zeroing a whole patch TOKEN (occlusion in feature space). The backbone is "
+        "frozen and its features are cached, so image-space augmentation is impossible; this is the "
+        "stand-in that forces the head to generalise across visually similar frames instead of "
+        "memorising which episode a frame came from.",
+    )
+    ap.add_argument(
+        "--feat-noise", type=float, default=0.0, help="gaussian noise on patch features, as a fraction of their std"
+    )
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -111,6 +131,9 @@ def main():
     spec["proprio_indices"] = None if pidx is None else pidx.tolist()
     spec["proprio_dim"] = sd
     spec["truncate_homing"] = a.truncate_homing
+    spec["feat_dropout"] = a.feat_dropout
+    spec["feat_noise"] = a.feat_noise
+    spec["q_reduction"] = a.q_reduction
     stats = critic_spec.norm_stats(a.cache, meta)
     pre = None
     embedded = None
@@ -234,7 +257,7 @@ def main():
         q_loss = jnp.sum(per * valid[None]) / (jnp.sum(valid) * pred.shape[0] + 1e-8)
         qd_log = net.apply(jax.lax.stop_gradient(tgt_p), pcur.astype(jnp.float32), chunk, scur)[:, :, -1, :]
         qd_probs = jnp.mean(jax.nn.softmax(qd_log, -1), 0)
-        qbar = jnp.min(from_logits(qd_log), 0)
+        qbar = (jnp.min if a.q_reduction == "min" else jnp.mean)(from_logits(qd_log), 0)
         vlog_c = v_net.apply(v_params, pcur.astype(jnp.float32), scur)
         vbar = from_logits(vlog_c)
         u = jax.lax.stop_gradient(qbar) - vbar
@@ -248,8 +271,23 @@ def main():
             "v_mean": jnp.mean(vbar),
         }
 
+    def _augment(key, x):
+        """Occlusion + noise on frozen patch tokens. Scale-free: noise is relative to the batch std."""
+        if a.feat_dropout <= 0.0 and a.feat_noise <= 0.0:
+            return x
+        x = x.astype(jnp.float32)
+        k1, k2 = jax.random.split(key)
+        if a.feat_dropout > 0.0:
+            keep = jax.random.uniform(k1, (*x.shape[:-1], 1)) >= a.feat_dropout
+            x = x * keep  # occlusion, not dropout: no 1/(1-p) rescale
+        if a.feat_noise > 0.0:
+            x = x + a.feat_noise * jnp.std(x) * jax.random.normal(k2, x.shape, x.dtype)
+        return x
+
     @jax.jit
-    def step(carry, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc):
+    def step(carry, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc):
+        kc, kn = jax.random.split(key)
+        pcur, pnxt = _augment(kc, pcur), _augment(kn, pnxt)
         params, tgt, opt, v_params, v_opt = carry
         (_, info), (gp, gv) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(
             params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc
@@ -270,6 +308,7 @@ def main():
     a.out.mkdir(parents=True, exist_ok=True)
     carry = (params, tgt, opt, v_params, v_opt)
     rng_np = np.random.default_rng(0)
+    aug_key = jax.random.key(1)
     ar_h = np.arange(H)
     pref = np.asarray(prefixes)
     t0 = time.time()
@@ -312,8 +351,10 @@ def main():
         pnxt = jnp.asarray(np.asarray(feats[gnxt.reshape(-1)]).reshape(a.batch, P_, npatch, emb))
         scur = jnp.asarray(s_cur_raw)
         snxt = jnp.asarray(s_nxt_raw)
+        aug_key, k_step = jax.random.split(aug_key)
         carry, info = step(
             carry,
+            k_step,
             pcur,
             pnxt,
             jnp.asarray(chunk),
