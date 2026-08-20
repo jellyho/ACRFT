@@ -1602,6 +1602,10 @@ def _yam_bc_config(delta_mode: str = "joint", horizon: int = 30, fsdp_devices: i
 
 
 _CONFIGS.extend(_yam_bc_config(_m) for _m in ("joint", "none"))
+# Chunk-length ablation for the BC policy. The adaptive-chunking work needs a base policy whose chunk
+# is long enough that stopping early is a real choice; at horizon 30 the longest commitment the critic
+# can score is one second.
+_CONFIGS.append(_yam_bc_config("joint", horizon=50))
 
 
 def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:
