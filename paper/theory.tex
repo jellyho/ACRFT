@@ -363,10 +363,17 @@ estimates a value the open-loop executor cannot realize. Two repairs correspond 
 positions $U$ can occupy. If $U$ is decodable from the pre-decision history, conditioning the
 critic on that history blocks the confound; this is a representation change, not a loss change.
 If $U$ is revealed only inside the commitment window, no conditioning at decision time can block
-it, but composing one-step backups through the observed intermediate states integrates $U$ with
-its marginal distribution, which chunk-level outcome regression structurally cannot. The states
-where reaction is genuinely valuable are exactly the states where chunk regression is confounded,
-since the same mid-window revelation creates both the reactive value and the confound.
+it, and composing one-step backups is necessary but not sufficient. A composed backup that
+bootstraps each transition from its own recorded successor still pairs the executed tail with the
+realization of $U$ that the demonstrator saw when choosing it, so the correlation survives the
+change of estimator. What removes it is composing \emph{interventionally}, evaluating the value of
+the tail at successors drawn from the distribution of the decision point rather than from the
+tail's own episode. The target then estimates $Q(h, \mathrm{do}(a_{1:k}))$, integrating $U$ with its
+marginal, which is what open-loop execution actually faces. Under open-loop-consistent
+data~\citep{dqc} the two coincide, since the tail is then already independent of the realization;
+the intervention is what buys that independence when the data is closed loop. The states where
+reaction is genuinely valuable are exactly the states where chunk regression is confounded, since
+the same mid-window revelation creates both the reactive value and the confound.
 \end{remark}
 
 \begin{definition}[Commitment-fair critic]
@@ -374,7 +381,8 @@ since the same mid-window revelation creates both the reactive value and the con
 A per-prefix critic is \emph{commitment-fair} if it
 (i) follows the semi-Markov bookkeeping \eqref{eq:smdp-backup};
 (ii) conditions on the executed history, not the instantaneous observation alone;
-(iii) forms within-window values by composing backups through observed intermediate states rather
+(iii) forms within-window values by composing backups interventionally through intermediate
+states, so that the evaluated tail is conditionally independent of the realized successor, rather
 than by chunk-conditioned outcome regression; and
 (iv) bootstraps the requery branch with the deployed policy's own expectation.
 The induced selector takes the longest commitment within $\epsilon$ of the best

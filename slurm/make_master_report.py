@@ -1770,6 +1770,83 @@ DEAS가 쓴 태스크 2종(CoffeeSetupMug·PnP계열)과 겹침도 확보. <b>�
 )
 
 
+def _cfacnn_rows(lang="ko"):
+    """Neural-CFAC toy table, recomputed from the run JSON at build time."""
+    path = "/scratch/jellyho/acrft/probes/toy_cfac_nn/results.json"
+    try:
+        with open(path) as f:
+            s = json.load(f)["summary"]
+    except (OSError, KeyError, ValueError):
+        msg = "결과 JSON 미발견 — 평가 대기" if lang == "ko" else "results JSON missing — pending"
+        return f"<tr><td colspan='4'>{msg}</td></tr>"
+    label = {
+        "bc_k1": "고정 k=1" if lang == "ko" else "fixed k=1",
+        "bc_k2": "고정 k=2" if lang == "ko" else "fixed k=2",
+        "bc_k4": "고정 k=4 (전체 청크)" if lang == "ko" else "fixed k=4 (full chunk)",
+        "naive_sel": "naive 크리틱 (청크-결과 회귀, obs 조건)"
+        if lang == "ko"
+        else "naive critic (chunk-outcome regression, obs-keyed)",
+        "cfac_neither_sel": "— 둘 다 없음" if lang == "ko" else "— neither ingredient",
+        "cfac_nohist_sel": "— 개입적 합성만" if lang == "ko" else "— interventional composition only",
+        "cfac_nointerv_sel": "— 히스토리만" if lang == "ko" else "— history only",
+        "cfac_sel": "<b>CFAC 크리틱 (선택만, 정책 동결)</b>"
+        if lang == "ko"
+        else "<b>CFAC critic (selection only, policy frozen)</b>",
+        "cfac_joint": "<b>CFAC joint (정책 개선 + 선택)</b>"
+        if lang == "ko"
+        else "<b>CFAC joint (policy improvement + selection)</b>",
+        "bc_oracle": "수제 오라클 κ*" if lang == "ko" else "hand-crafted oracle κ*",
+    }
+    rows = []
+    for arm, name in label.items():
+        m = s[arm]
+
+        def g(k, m=m):
+            return f"{m[k][0]:.3f} ± {m[k][1]:.3f}"
+
+        rows.append(f"<tr><td>{name}</td><td>{g('ret')}</td><td>{g('k_corridor')}</td><td>{g('react_rate')}</td></tr>")
+    return "".join(rows)
+
+
+def _cfacnn_paired(key, lang="ko"):
+    path = "/scratch/jellyho/acrft/probes/toy_cfac_nn/results.json"
+    try:
+        with open(path) as f:
+            v = json.load(f)["summary"]["_paired"][key]
+    except (OSError, KeyError, ValueError):
+        return "평가 대기" if lang == "ko" else "pending"
+    return f"{v[0]:+.3f} ± {v[1]:.3f} ({v[2]}/{v[3]})"
+
+
+def _cfacnn_curric(lang="ko"):
+    """Curriculum variant: mean commitment and return across improvement rounds."""
+    path = "/scratch/jellyho/acrft/probes/toy_cfac_nn_curric/results.json"
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return "<tr><td colspan='4'>" + ("평가 대기 — 실행 중" if lang == "ko" else "pending — running") + "</td></tr>"
+    ps = d["per_seed"]
+    names = {
+        "cfac_sel": "개선 전 (BC 정책)" if lang == "ko" else "before improvement (BC policy)",
+        "cfac_joint_r1": "라운드 1" if lang == "ko" else "round 1",
+        "cfac_joint_r2": "라운드 2" if lang == "ko" else "round 2",
+        "cfac_joint_r3": "라운드 3" if lang == "ko" else "round 3",
+    }
+    import statistics as st
+
+    rows = []
+    for arm, nm in names.items():
+        kc = [p[arm]["k_corridor"] for p in ps]
+        rt = [p[arm]["ret"] for p in ps]
+        rr = [p[arm]["react_rate"] for p in ps]
+        rows.append(
+            f"<tr><td>{nm}</td><td>{st.mean(kc):.3f} ± {st.pstdev(kc):.3f}</td>"
+            f"<td>{st.mean(rt):.3f} ± {st.pstdev(rt):.3f}</td><td>{st.mean(rr):.2f}</td></tr>"
+        )
+    return "".join(rows)
+
+
 def _cfac_rows(lang="ko"):
     """CFAC toy results table, recomputed from the run's JSON at build time (no hand-copied numbers)."""
     path = "/scratch/jellyho/acrft/probes/toy_cfac/results.json"
@@ -1900,6 +1977,107 @@ blind 부기의 커밋 선호는 과제에 대해 잘 정의되지 않는 양이
 서지 <code>paper/references.bib</code>(sutton1999options·bradtke1994smdp 추가; exrl은 워크샵 PDF가 미색인이라
 저자란 TODO로 남김 — 채워야 함). 부수 정정: task-scan 엔트리의 date가 미래 시각(14:00)으로 잘못 찍혀 있어
 실제 게시 시각(09:06 KST)으로 바로잡았다.</p>""",
+)
+
+# ============================================== 08-21 CFAC 함수근사 검증
+entry(
+    "08-21",
+    "cfac-nn",
+    "🔬 CFAC를 실제로 돌려봤다 — 함수근사에서 작동하고, 합성만으로는 부족했다",
+    "완결",
+    """
+<p class='sub'>tabular 기제 증명(<span class='xref' data-eid='cfac'>CFAC 제안</span>)을 <b>실제 알고리즘</b>으로
+구현해 연속 환경에서 검증했다 — 신경 per-prefix 크리틱, 모델 없는 per-step TD, 정책-기대 부트스트랩,
+AWR full-chunk 개선, lexicographic selector. 결과: 작동한다(오라클 수준 도달). 그리고 <b>구현하면서 이론이
+한 번 틀렸다</b> — "합성 백업"만으로는 부족하고 <b>개입적(interventional) 짝짓기</b>가 필요하다.</p>
+
+<p><b>왜.</b> 앞 포스트의 toy는 tabular 전수 열거 + 경험 모델이었다. 논문이 주장하려면 실제로 배포할 형태
+(신경망·모델 없음·정책 개선 포함)에서 작동해야 한다. 환경도 열거 불가능한 <b>연속</b>으로 바꿨다.</p>
+
+<h3>① 구현하다 발견한 것 — 이론의 정정</h3>
+<p>첫 구현은 합성 TD를 데이터 그대로 썼다: <code>Q_k(h_t, c) ← r_t + γ Q_{k-1}(s_{t+1}^데이터, c_{2:k})</code>.
+그런데 <b>분기점 과커밋이 안 고쳐졌다</b>. 원인: 데모의 후속상태 s_{t+1}에는 그 데모가 <b>알고 고른</b> tail과
+짝지어진 사건이 들어 있다. 부기를 합성해도 tail↔사건 상관이 그대로라 교란이 살아남는다. 데이터 안에는
+"눈감고 고른 tail"이 없으니 크리틱은 그것이 나쁘다고 배울 자료가 없다.</p>
+<p>tabular 판이 작동한 진짜 이유는 <b>모델로 후속상태를 주변화</b>하면서 후보 tail은 고정한 것이었다 —
+즉 <b>do(c) 개입</b>. 모델 없이 같은 것을 하는 방법: <b>같은 결정 지점의 다른 에피소드에서 후속상태를
+재샘플</b>하고, 평가할 tail과 자기 실행 히스토리는 고정한다. 창 안에서 공개되는 외생 사건이 주변분포로
+들어가고, 후보 tail이 그 각각에 대해 채점된다.</p>
+<p><b>정정된 조항</b> (부록 A.6 Definition 반영 예정): "창-내 가치를 <b>합성</b>으로 만든다" →
+"<b>tail과 실현된 후속상태가 조건부 독립이 되도록 개입적으로 합성한다</b>". DQC의 open-loop consistency
+가정이 왜 필요한지도 같은 언어로 설명된다 — OLC 데이터에서는 그 독립이 공짜로 성립한다.</p>
+
+<h3>② 환경 · 알고리즘 · 사전등록</h3>
+<p><b>PlanReach</b>(연속): 3구간 × 4스텝, H=4, 행동 a∈R², 구간마다 목표 방향 g가 단위원에서 균등 추출.
+<b>복도</b>(구간 0·2) — g는 입구 관측에만 있고 이후 가려짐, 매 스텝 채점(과거 잠재: 커밋이 계획을 운반).
+<b>분기점</b>(구간 1) — g는 첫 스텝 <b>이후</b>에만 공개, 스텝 1–3 채점(미래 잠재: 반응이 정답).
+보상 r=exp(−2‖a−g‖²), γ=0.95. 데모는 g를 <b>기억</b>하며 노이즈 0.25로 실행 — non-Markov 데이터.
+정책은 Markov 청크 정책(VLA 대역), 전부 오프라인.</p>
+<p><b>2×2 factorial</b>(히스토리 조건화 × 개입적 합성) + naive(청크-결과 회귀) + 고정 k + 오라클 + joint,
+6시드 × 데모 800에피소드 × 평가 300에피소드. 사전등록: V1 CFAC>naive, V2 joint>선택만,
+V3 커리큘럼(개선 라운드마다 복도 커밋 증가), V4 naive 분기점 과커밋. 기각 조건 코드 docstring에 고정.</p>
+
+<h3>③ 결과</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac_nn.png",
+        "neural CFAC toy: deployment return, and what each ingredient buys",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>배포 할인수익</th><th>평균 k @ 복도 입구 (정답 4)</th><th>공개 후 재질의 비율 (정답 1.0)</th></tr>
+"""
+    + _cfacnn_rows("ko")
+    + """</table>
+
+<p><b>짝지은 판정</b> (6시드, 시드별 차의 평균 ± SD, 승수):
+CFAC−naive <b>"""
+    + _cfacnn_paired("cfac_sel-naive_sel", "ko")
+    + """</b> ·
+CFAC−(개입 없음) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nointerv_sel", "ko")
+    + """</b> ·
+CFAC−(히스토리 없음) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nohist_sel", "ko")
+    + """</b> ·
+joint−선택만 <b>"""
+    + _cfacnn_paired("cfac_joint-cfac_sel", "ko")
+    + """</b> ·
+joint−오라클 <b>"""
+    + _cfacnn_paired("cfac_joint-bc_oracle", "ko")
+    + """</b>.</p>
+
+<p><b>읽기.</b> ① <b>V1·V4 확정</b>: naive는 분기점 반응이 0.70±0.30로 흔들리고 수익 5.12, CFAC는 반응 1.00,
+수익 6.98 (+1.86, 6/6). ② <b>두 성분 모두 필요</b>: 하나만 빼도 −0.76(개입) / −0.97(히스토리)이고 둘 다 빼면
+5.74 — 특히 <b>편차가 커진다</b>(반응률 SD 0.30~0.43): 성분이 빠지면 시드에 따라 반응하기도 안 하기도 한다.
+③ <b>V2 확정하되 작다</b>: joint−선택만 +0.124(6/6) — 이 환경은 오라클 천장이 낮아 여지가 적다.
+④ <b>joint가 수제 오라클과 동률</b>(+0.037, 5/6): 학습된 κ가 손으로 짠 규칙을 재현했다.</p>
+
+<h3>④ V3(커리큘럼)은 이 환경에서 시험되지 않았다 — 기각으로 기록</h3>
+<p><b>기본 환경에서는 기각.</b> 복도 커밋이 처음부터 3.98이라 <b>자랄 여지가 없었다</b>(천장 효과).
+사전등록 문구대로 "수익은 오르는데 복도 커밋이 안 자랐다"에 해당하므로 이 환경에서 V3는 기각으로 남긴다.
+원인은 설계 결함이다: 복도 중간에 단서가 전혀 없어 재질의가 항상 파국이라, 정책 품질과 무관하게 k=4가
+최적이다.</p>
+<p><b>변형 환경에서는 확정.</b> 재질의가 파국이 아니도록 복도 중간에 <b>열화된 단서</b>(노이즈 0.6)를 두고
+데모 노이즈를 0.5로 키워 초기 정책을 나쁘게 만들면, 짧은 커밋이 처음에 유리해져 여지가 생긴다.
+결과: 평균 복도 커밋이 <b>3.04 → 3.27 → 3.39 → 3.49</b>로 자라고 수익도 6.42 → 6.72로 함께 오른다 —
+<b>Δk = +0.446 ± 0.328 (6/6 시드), Δ수익 = +0.297 ± 0.117 (6/6)</b>. 이것이 네 힘의 ②(정책 오차 흡수)가
+만드는 커리큘럼이며, <b>replan 비용 항 없이</b> return만으로 나타난다.</p>
+<p><b>정직한 단서 둘.</b> ① 시드별로 라운드 간 <b>엄격 단조는 3/6</b>이다 — 평균 궤적은 단조지만 라운드
+단위 잡음이 있다. ② 이 변형에서는 <b>개입적 짝짓기가 분리되지 않는다</b>(naive 6.46 ≈ CFAC 6.42):
+모두가 자주 재질의하는 레짐이라 분기점 교란이 결정적이지 않다. 대신 <b>히스토리가 결정적</b>이다 —
+빼면 커밋이 k=1.18로 붕괴하고 수익 5.56으로 떨어진다. 두 환경이 서로 다른 성분을 시험한 셈이고,
+따라서 <b>두 성분 모두</b> 필요하다는 결론은 두 실험의 합으로만 나온다.</p>
+<table class='num'><tr><th>단계</th><th>평균 k @ 복도 입구</th><th>배포 수익</th><th>반응률</th></tr>
+"""
+    + _cfacnn_curric("ko")
+    + """</table>
+
+<h3>⑤ 한계</h3>
+<p>toy는 기제 검증이지 성능 주장이 아니다. 개입적 짝짓기의 "같은 결정 지점" 정의가 여기서는
+(구간, 스텝)으로 자명하지만 실제 RoboCasa에서는 자명하지 않다 — 상태 유사도/학습된 모델/앙상블 중
+무엇으로 후속상태를 주변화할지가 <b>M6·M7의 실제 설계 쟁점</b>이다. 데모 노이즈 단일 값, H=4,
+2차원 행동. 재현: <code>probes/toy_cfac_nn.py --seeds 6</code> → <code>toy_cfac_nn_fig.py</code>,
+결과 JSON 커밋.</p>""",
 )
 
 # ============================================== 08-21 CFAC 제안 + toy 검증
@@ -3360,6 +3538,15 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "cfac-nn": {
+        "date": "2026-08-21 03:40",
+        "who": "워커B(구현·실험)",
+        "where": "probes/toy_cfac_nn.py (PlanReach 연속 toy, torch CPU, 6시드)",
+        "what": "CFAC를 실제 알고리즘으로 구현·검증 — 오라클 동률, 그리고 '합성만으로 부족, 개입적 짝짓기 필요' 이론 정정",
+        "how": "신경 per-prefix 크리틱 + 모델 없는 per-step TD + 정책-기대 부트스트랩 + AWR full-chunk + 2×2 factorial",
+        "why": "사용자 지시 — toy로 실제 알고리즘이 작동하는지 확인",
+        "links": ["cfac", "theory-preexp", "chunking-theory", "three-forces", "wc-r-0820-extract"],
     },
     "cfac": {
         "date": "2026-08-21 01:20",
@@ -4859,6 +5046,114 @@ complementary.</p>
 bibliography <code>paper/references.bib</code> (sutton1999options and bradtke1994smdp added; exrl left with a TODO
 author field — the workshop PDF is not indexed yet and must be filled in). Side correction: the task-scan entry
 carried a future timestamp (14:00); fixed to the actual publication time (09:06 KST).</p>""",
+)
+
+en(
+    "cfac-nn",
+    "🔬 Running CFAC for real — it works under function approximation, and composition alone was not enough",
+    """
+<p class='sub'>The tabular existence proof (<span class='xref' data-eid='cfac'>the CFAC proposal</span>) is now
+implemented as <b>the actual algorithm</b> and tested in a continuous environment: neural per-prefix critic,
+model-free per-step TD, policy-expectation bootstrap, AWR full-chunk improvement, lexicographic selector. It
+works (it reaches oracle level). And <b>implementing it corrected the theory once</b>: a composed backup is not
+enough, the pairing must be <b>interventional</b>.</p>
+
+<p><b>Why.</b> The previous toy was tabular with an empirical model. For the paper's claim, the mechanism must
+survive the form we would actually ship (neural, model-free, with policy improvement), so the environment is now
+<b>continuous</b> and enumeration is impossible.</p>
+
+<h3>① What implementation revealed — a correction to the theory</h3>
+<p>The first implementation composed the TD backup with the data as it lies:
+<code>Q_k(h_t, c) ← r_t + γ Q_{k-1}(s_{t+1}^data, c_{2:k})</code>. Junction over-commitment <b>did not go away</b>.
+The reason: the demonstration's own successor carries the event that the demonstrator <b>already knew</b> when it
+chose that tail. Composing the bookkeeping leaves the tail↔event correlation intact, so the confound survives, and
+the dataset contains no "blind tail" from which the critic could learn that blindness is bad.</p>
+<p>What actually made the tabular version work was <b>marginalizing the successor through the model</b> while
+holding the candidate tail fixed, which is the <b>do(c) intervention</b>. Model-free equivalent: <b>resample the
+successor from another episode at the same decision point</b>, keeping the evaluated tail and one's own executed
+history fixed. The exogenous mid-window revelation then enters with its marginal, and the candidate tail is scored
+against each realization.</p>
+<p><b>Corrected clause</b> (to land in appendix A.6): "form within-window values by <b>composition</b>" becomes
+"compose <b>interventionally</b>, so that the tail is conditionally independent of the realized successor". The
+same language explains why DQC's open-loop-consistency assumption is needed: under OLC data that independence
+holds for free.</p>
+
+<h3>② Environment, algorithm, pre-registration</h3>
+<p><b>PlanReach</b> (continuous): 3 segments × 4 steps, H=4, action a∈R², a target direction g drawn uniformly on
+the unit circle per segment. <b>Corridor</b> (segments 0, 2) — g appears in the observation only at entry, then is
+hidden, and every step is scored (past latent: commitment carries the plan). <b>Junction</b> (segment 1) — g is
+revealed only <b>after</b> the first step, steps 1–3 scored (future latent: reaction wins). Reward
+r=exp(−2‖a−g‖²), γ=0.95. The demonstrator <b>remembers</b> g and acts with noise 0.25, so the data is
+non-Markovian. The policy is a Markov chunk policy (the VLA analogue). Everything is offline.</p>
+<p><b>2×2 factorial</b> (history conditioning × interventional composition) plus naive chunk-outcome regression,
+fixed k, oracle, and joint; 6 seeds × 800 demo episodes × 300 eval episodes. Pre-registered: V1 CFAC > naive,
+V2 joint > selection-only, V3 curriculum (corridor commitment grows across improvement rounds), V4 naive
+over-commits at junctions. Rejection conditions fixed in the code docstring.</p>
+
+<h3>③ Results</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac_nn.png",
+        "neural CFAC toy: deployment return, and what each ingredient buys",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>deployed discounted return</th><th>mean k @ corridor entry (truth 4)</th><th>re-query rate after the reveal (truth 1.0)</th></tr>
+"""
+    + _cfacnn_rows("en")
+    + """</table>
+
+<p><b>Paired verdicts</b> (6 seeds, mean ± SD of per-seed differences, wins):
+CFAC−naive <b>"""
+    + _cfacnn_paired("cfac_sel-naive_sel", "en")
+    + """</b> ·
+CFAC−(no intervention) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nointerv_sel", "en")
+    + """</b> ·
+CFAC−(no history) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nohist_sel", "en")
+    + """</b> ·
+joint−selection-only <b>"""
+    + _cfacnn_paired("cfac_joint-cfac_sel", "en")
+    + """</b> ·
+joint−oracle <b>"""
+    + _cfacnn_paired("cfac_joint-bc_oracle", "en")
+    + """</b>.</p>
+
+<p><b>Reading.</b> ① <b>V1 and V4 confirmed</b>: the naive critic reacts at only 0.70±0.30 of junctions and returns
+5.12; CFAC reacts at 1.00 and returns 6.98 (+1.86, 6/6). ② <b>Both ingredients are needed</b>: removing either
+costs −0.76 (intervention) or −0.97 (history), removing both gives 5.74 — and the <b>variance grows</b> (reaction
+rate SD 0.30–0.43): without an ingredient, whether the system reacts becomes seed-dependent. ③ <b>V2 confirmed but
+small</b>: joint−selection-only is +0.124 (6/6); this environment's oracle ceiling leaves little headroom.
+④ <b>Joint ties the hand-crafted oracle</b> (+0.037, 5/6): the learned κ reproduced the hand-written rule.</p>
+
+<h3>④ V3 (curriculum) was not testable here — recorded as rejected</h3>
+<p><b>Rejected in the base environment.</b> Corridor commitment starts at 3.98, so there was <b>no room to
+grow</b> (a ceiling effect). By the letter of the pre-registered rejection condition ("returns improve while
+corridor commitment fails to grow"), V3 is rejected here. The cause is a design flaw: with no cue at all
+mid-corridor, requerying is always catastrophic, so k=4 is optimal for a bad policy and a good one alike.</p>
+<p><b>Confirmed in a variant.</b> Make requerying non-catastrophic by leaving a <b>degraded cue</b> (noise 0.6)
+mid-corridor and worsen the initial policy (demo noise 0.5), and short commitments become initially attractive, so
+there is headroom. Result: mean corridor commitment grows <b>3.04 → 3.27 → 3.39 → 3.49</b> while return rises
+6.42 → 6.72, giving <b>Δk = +0.446 ± 0.328 (6/6 seeds) and Δreturn = +0.297 ± 0.117 (6/6)</b>. This is the
+curriculum produced by force ② (absorption of policy error), and it appears <b>with no replanning-cost term</b>,
+from the return alone.</p>
+<p><b>Two honest caveats.</b> ① Strict round-to-round monotonicity holds for only <b>3/6 seeds</b>; the mean
+trajectory is monotone but individual rounds are noisy. ② In this variant <b>the interventional ingredient does not
+separate</b> (naive 6.46 ≈ CFAC 6.42): in a regime where everything requeries often, the junction confound is not
+decisive. <b>History is decisive instead</b> — removing it collapses commitment to k=1.18 and return to 5.56. The
+two environments stress different ingredients, so the conclusion that <b>both</b> are needed rests on the pair of
+experiments, not on either alone.</p>
+<table class='num'><tr><th>stage</th><th>mean k @ corridor entry</th><th>deployed return</th><th>reaction rate</th></tr>
+"""
+    + _cfacnn_curric("en")
+    + """</table>
+
+<h3>⑤ Limits</h3>
+<p>A toy validates mechanisms, not performance. The "same decision point" that interventional pairing needs is
+trivial here (segment, step) but not in RoboCasa — whether to marginalize successors by state similarity, a learned
+model, or an ensemble is <b>the real design question for M6 and M7</b>. Single demo-noise level, H=4, 2-D actions.
+Reproduce: <code>probes/toy_cfac_nn.py --seeds 6</code> → <code>toy_cfac_nn_fig.py</code>; results JSON
+committed.</p>""",
 )
 
 en(
