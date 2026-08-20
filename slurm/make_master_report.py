@@ -1790,7 +1790,8 @@ entry(
 \\(\\sum_{j&lt;k}\\gamma^j r_j + \\gamma^k V(s_k)\\). 길이가 다른 커밋을 공정 비교하는 유일한 부기</td>
 <td>options/SMDP 고전(Sutton–Precup–Singh, Bradtke–Duff) + QC(고정 k)·DEAS(이중 할인)를 그 사례로 위치 지정</td></tr>
 <tr><td>Prop 1</td><td><b>부기 편향</b>: duration-blind 백업(결정당 γ 한 번)의 왜곡 = \\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)] \\ge 0\\>
-— k에 단조 증가, <b>긴 커밋을 결과와 무관하게 부풀린다</b>(k-스텝 도달이 1-스텝 지름길처럼 보임). ExRL이 온라인에서 식별한 편향의 정량형</td>
+— k에 단조 증가, <b>긴 커밋을 결과와 무관하게 부풀린다</b>(k-스텝 도달이 1-스텝 지름길처럼 보임; 성공-보상 규약
+기준 — cost-to-go면 부호 반전, 아래 ⚠️ 정정 참조). ExRL이 온라인에서 식별한 편향의 정량형</td>
 <td>신규 정식화 (ExRL 귀속 명시)</td></tr>
 <tr><td>Prop 2</td><td><b>선택 천장 + winner's curse</b>: BoN 실현값은 frozen 정책의 support 상한을 절대 못 넘고(∀N),
 believed−realized 격차는 \\(\\sigma\\sqrt{2\\ln N}\\)로 성장 — N 스케일링은 자기기만을 키운다</td>
@@ -1835,6 +1836,15 @@ serve_bon_policy에 \\(\\hat Q\\) 로깅 추가</td><td>realized가 believed와 
 <tr><td><b>M5</b> 커리큘럼 on/off</td><td>curriculum 따름정리 (+ P3)</td><td>정책 개선 arm에서만 평균 선택 k*가
 학습에 따라 증가</td><td>개선 on/off 두 arm(베이스라인 사다리 B2/B4와 결합), 동일 데이터·동일 critic — 평균 k* 궤적</td>
 <td>off arm에서도 증가 (curriculum이 개선의 서명이 아님)</td><td>베이스라인 사다리 뒤</td></tr></table>
+
+<p><b>⚠️ 정정 (2026-08-20 13:40, 게시 30분 뒤 · M1 실행 전 amendment).</b> 사용자 지적(DEHP·AQC는 <b>짧은</b> 쪽
+편향을 보고한다)으로 재검토 — Prop 1의 왜곡 \\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)]\\)의 <b>부호는 착지가치의
+부호를 따른다</b>. 성공-보상(V≥0)이면 long 인플레, cost-to-go(V≤0 — 우리 DEAS-계 critic과 floq의 [−1,0] 정규화가
+여기)이면 <b>short 인플레로 반전</b>. 따라서 M1의 예측을 "길게 밀린다"에서 <b>"V̂ 규약과 부호가 일치하는 단조
+이동"</b>으로 정정한다(기각 조건 "분포 구분 불가"는 불변, 시험 critic의 보상 규약을 결과에 명기). DEHP·AQC의
+short-편향은 별도 기제(재질의의 약우월 [DQC Lemma 8] + 보수적 타깃의 open-loop 분산 벌점 + advantage의 γ^k 스케일
+압축 [AQC의 정규화 동기])로, 올바른 부기 하에서도 작동한다 — 부록 Prop 1 뒤 Remark(sign)로 반영. ExRL 자체의 편향
+방향은 PDF 재확인 전까지 단정하지 않는다.</p>
 
 <p><b>실행 순서.</b> M4(인프라 최소·정보 최대 — best-fixed 기준선은 이후 모든 adaptive 비교의 전제) → M3(serve_bon_policy
 재사용) → critic 도착 시 M1·M2 → 사다리 뒤 M5. <b>판정 규율</b>: 전부 run-level 다중시드 CI, 분류는 프로그램적으로.
@@ -4620,7 +4630,8 @@ lengths fairly</td><td>classical options/SMDP (Sutton–Precup–Singh, Bradtke�
 discounts) positioned as its instantiations</td></tr>
 <tr><td>Prop 1</td><td><b>Bookkeeping bias</b>: the duration-blind backup (one γ per decision) distorts values by
 \\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)] \\ge 0\\) — monotone in k, <b>inflating long commitments regardless of
-outcomes</b> (a k-step reach masquerades as a one-step shortcut). The quantitative form of the bias ExRL identified
+outcomes</b> (a k-step reach masquerades as a one-step shortcut; under the success-reward convention — the sign
+reverses under cost-to-go, see the ⚠️ amendment below). The quantitative form of the bias ExRL identified
 online</td><td>new formalization (ExRL credited)</td></tr>
 <tr><td>Prop 2</td><td><b>Support ceiling + winner's curse</b>: best-of-N execution can never exceed the frozen
 policy's support (for every N), and the believed-minus-realized gap grows like \\(\\sigma\\sqrt{2\\ln N}\\) —
@@ -4672,6 +4683,18 @@ first in the M series</td></tr>
 only in the policy-improvement arm</td><td>improvement on/off arms (joined with ladder B2/B4), same data, same
 critic — mean k* trajectory</td><td>growth in the off arm too (curriculum not a signature of improvement)</td>
 <td>after the baseline ladder</td></tr></table>
+
+<p><b>⚠️ Amendment (2026-08-20 13:40, 30 min after posting · before any M1 run).</b> Prompted by the user (DEHP and
+AQC report a <b>short</b>-side bias), we re-examined Prop 1. The distortion
+\\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)]\\) <b>takes the sign of the landing value</b>: with success rewards
+(V≥0) it inflates long commitments, with cost-to-go (V≤0 — where our DEAS-family critics and floq's [−1,0]
+normalization live) it <b>reverses and inflates short ones</b>. M1's prediction is therefore amended from "shifts
+long" to <b>"a monotone shift whose sign matches the critic's value convention"</b> (the rejection condition,
+indistinguishable distributions, is unchanged; the tested critic's reward convention must be reported). The
+short-side biases of DEHP/AQC involve separate mechanisms (weak dominance of requerying [DQC Lemma 8] + conservative
+targets penalizing open-loop variance + γ^k-compressed advantage scales [AQC's motivation for normalizing]) that
+operate even under correct bookkeeping — reflected as a sign Remark after Prop 1 in the appendix. ExRL's own bias
+direction is left unasserted until the PDF is re-checked.</p>
 
 <p><b>Execution order.</b> M4 (least infra, most information — the best-fixed baseline is a precondition for every
 later adaptive comparison) → M3 (reuses serve_bon_policy) → M1·M2 once the critic lands → M5 after the ladder.
