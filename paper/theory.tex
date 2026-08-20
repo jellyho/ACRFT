@@ -323,6 +323,73 @@ other. This is why our targets are built conservatively within the support of th
 data~\citep{iql, deas} rather than by trusting chunk-conditioned estimates at face value, and why
 the commitment must be learned rather than scored.
 
+\subsection{Pricing the requery. Two further misspecifications, and a critic that removes them}
+\label{app:fair}
+
+The biases above concern how commitments are scored. Two further misspecifications concern what
+the critic believes happens \emph{after} a requery and \emph{during} a commitment, and both act on
+the commitment decision.
+
+\begin{proposition}[Continuation optimism is a gauge-independent short bias]
+\label{prop:optimism}
+Suppose the backup \eqref{eq:smdp-backup} bootstraps with $\widetilde V=V^{\mathrm{dep}}+\delta$,
+where $V^{\mathrm{dep}}$ is the value of the deployed system's own continuation and
+$\delta(s)\ge0$ is an optimism, as arises when the bootstrap encodes oracle continuations or the
+demonstrator's closed-loop continuation $V^{\beta}\ge V^{\mathrm{dep}}$. Then every prefix score
+is distorted by $\gamma^{k}\,\mathbb E[\delta(s_k)]$, which is strictly decreasing in $k$, so the
+induced selector is biased toward short commitments. The distortion is invariant to constant
+reward shifts, since $\delta$ is a difference of values.
+\end{proposition}
+\begin{proof}
+Substitute $\widetilde V$ into \eqref{eq:smdp-backup}; the extra term is $\gamma^{k}\mathbb
+E[\delta(s_k)]$, and $\gamma^{k}$ decreases in $k$. A shift $r\mapsto r+c$ moves $V^{\beta}$ and
+$V^{\mathrm{dep}}$ by the same $c/(1-\gamma)$.
+\end{proof}
+
+Requerying is thus systematically flattered whenever the critic's bootstrap is more competent
+than the policy that will actually resume control. The cure is to price the requery honestly, by
+bootstrapping with the deployed policy's own expectation,
+$\widetilde V(s)=\mathbb E_{a\sim\pi}\bigl[Q(s,a,\kappa(s,a))\bigr]$, which sets $\delta=0$ by
+construction and makes the critic a fixed point of the deployed process rather than of an
+idealized one.
+
+\begin{remark}[Chunk-conditioned regression is confounded, and composition repairs it]
+\label{rem:confound}
+Hindsight leakage (Proposition~\ref{prop:leakage}) can be read causally. Let $U$ be information
+the demonstrator used that the observation does not carry, a formed plan or an event revealed
+mid-window. $U$ causes both the recorded actions and the outcome, so regressing outcomes on
+$(s,a_{1:k})$ conditions on demonstrations whose $U$ happened to be consistent with $a_{1:k}$ and
+estimates a value the open-loop executor cannot realize. Two repairs correspond to the two
+positions $U$ can occupy. If $U$ is decodable from the pre-decision history, conditioning the
+critic on that history blocks the confound; this is a representation change, not a loss change.
+If $U$ is revealed only inside the commitment window, no conditioning at decision time can block
+it, but composing one-step backups through the observed intermediate states integrates $U$ with
+its marginal distribution, which chunk-level outcome regression structurally cannot. The states
+where reaction is genuinely valuable are exactly the states where chunk regression is confounded,
+since the same mid-window revelation creates both the reactive value and the confound.
+\end{remark}
+
+\begin{definition}[Commitment-fair critic]
+\label{def:cfac}
+A per-prefix critic is \emph{commitment-fair} if it
+(i) follows the semi-Markov bookkeeping \eqref{eq:smdp-backup};
+(ii) conditions on the executed history, not the instantaneous observation alone;
+(iii) forms within-window values by composing backups through observed intermediate states rather
+than by chunk-conditioned outcome regression; and
+(iv) bootstraps the requery branch with the deployed policy's own expectation.
+The induced selector takes the longest commitment within $\epsilon$ of the best
+(Corollary~\ref{cor:curriculum}), and the policy is improved against the same critic in both of
+its output dimensions.
+\end{definition}
+
+Each clause removes one identified bias, in order the gauge-dependent bookkeeping distortion
+(Proposition~\ref{prop:bookkeeping}), the aliasing of plan information, the confounding of
+mid-window revelations, and the gauge-independent continuation optimism
+(Proposition~\ref{prop:optimism}). A minimal environment that separates the two latent positions,
+a corridor whose plan is visible only at entry and a junction whose event is revealed only after
+the first step, confirms the corresponding factorial predictions; we report it with the
+experiments.
+
 \subsection{A worked example where the optimal commitment is state dependent}
 \label{app:example}
 

@@ -13,6 +13,7 @@ TAGS = {
     "mb-arq": ["표현", "MB-AC", "설명"],
     "exp-board": ["실험", "보드"],
     "aqc-ablation": ["ablation", "OGBench", "AQC"],
+    "cfac": ["이론", "방법제안", "toy"],
     "theory-preexp": ["이론", "사전등록", "논문"],
 }
 # mindmap column (worker A's phase taxonomy) per eid — the client-side mindmap groups by this
@@ -66,6 +67,7 @@ PHASE_MAP = {
     "tier1-intros": "논문·교차",
     "task-scan": "판정·종합",
     "theory-preexp": "논문·교차",
+    "cfac": "진단·방법",
 }
 
 

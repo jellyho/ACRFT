@@ -1769,6 +1769,45 @@ DEAS가 쓴 태스크 2종(CoffeeSetupMug·PnP계열)과 겹침도 확보. <b>�
 <code>gr1_eval/task_scan/&lt;Task&gt;/results.json</code>.</p>""",
 )
 
+
+def _cfac_rows(lang="ko"):
+    """CFAC toy results table, recomputed from the run's JSON at build time (no hand-copied numbers)."""
+    path = "/scratch/jellyho/acrft/probes/toy_cfac/results.json"
+    try:
+        with open(path) as f:
+            s = json.load(f)["summary"]
+    except (OSError, KeyError, ValueError):
+        msg = (
+            "결과 JSON 미발견 — 평가 대기 (probes/toy_cfac.py 재실행)"
+            if lang == "ko"
+            else "results JSON missing — pending (rerun probes/toy_cfac.py)"
+        )
+        return f"<tr><td colspan='5'>{msg}</td></tr>"
+    label = {
+        "A0_naive": "A0 naive (chunk-회귀 + data-V)" if lang == "ko" else "A0 naive (chunk-regression + data-V)",
+        "A1_hist": "A1 + history",
+        "A2_polboot": "A2 + policy bootstrap",
+        "A3_cfac": "<b>A3 CFAC (+ 합성 백업)</b>" if lang == "ko" else "<b>A3 CFAC (+ composed backup)</b>",
+        "k1": "고정 k=1" if lang == "ko" else "fixed k=1",
+        "k2": "고정 k=2" if lang == "ko" else "fixed k=2",
+        "k3": "고정 k=3" if lang == "ko" else "fixed k=3",
+        "k4": "고정 k=4" if lang == "ko" else "fixed k=4",
+        "oracle": "수제 오라클" if lang == "ko" else "hand-crafted oracle",
+    }
+    rows = []
+    for arm, name in label.items():
+        m = s[arm]
+
+        def g(k, m=m):
+            return f"{m[k][0]:.3f} ± {m[k][1]:.3f}" if m.get(k) else "—"
+
+        belief = g("belief_gap") if arm.startswith("A") else ("해당 없음" if lang == "ko" else "n/a")
+        rows.append(
+            f"<tr><td>{name}</td><td>{g('sr')}</td><td>{g('mean_k_C')}</td><td>{g('mean_k_J')}</td><td>{belief}</td></tr>"
+        )
+    return "".join(rows)
+
+
 # ============================================== 08-20 이론 논문화 + 사전실험 사전 등록
 entry(
     "08-20",
@@ -1861,6 +1900,88 @@ blind 부기의 커밋 선호는 과제에 대해 잘 정의되지 않는 양이
 서지 <code>paper/references.bib</code>(sutton1999options·bradtke1994smdp 추가; exrl은 워크샵 PDF가 미색인이라
 저자란 TODO로 남김 — 채워야 함). 부수 정정: task-scan 엔트리의 date가 미래 시각(14:00)으로 잘못 찍혀 있어
 실제 게시 시각(09:06 KST)으로 바로잡았다.</p>""",
+)
+
+# ============================================== 08-21 CFAC 제안 + toy 검증
+entry(
+    "08-21",
+    "cfac",
+    "🧭 CFAC 제안 — 크리틱이 커밋과 반응을 공정 평가하게 만들기, 그리고 toy 전예측 적중",
+    "완결",
+    """
+<p class='sub'>표준 청크 크리틱이 non-Markov 커밋과 반응성을 공정 평가하지 못하는 원인을 <b>3중 미명세</b>로
+정식화하고, 셋을 모두 제거한 새 adaptive chunking 방법 <b>CFAC</b>(Commitment-Fair Adaptive Chunking)를
+제안한다. corridor–junction toy에서 사전등록 예측 4개 전부 적중 — CFAC만 커밋/반응을 상태별로 분리한다.</p>
+
+<p>사용자 지시 — "크리틱이 데이터셋의 non-Markovian·reactiveness를 공정 평가하도록 트릭·이론을 발전시켜
+새 방법을 제안하고 toy로 실험하라." 배경: 지금의 value learning은 <b>구조적으로 짧은 실행을 선호</b>한다는
+관찰(<span class='xref' data-eid='theory-preexp'>사전등록 포스트</span>의 게이지 논증과는 별개의, 게이지
+불변 편향까지 포함해서). 원인을 명세 수준에서 셋으로 분해했다.</p>
+
+<h3>① 3중 미명세 — 크리틱이 커밋을 잘못 재는 세 가지 이유</h3>
+<table class='num'><tr><th>미명세</th><th>내용</th><th>편향 방향</th><th>치료</th></tr>
+<tr><td><b>공짜 재질의</b></td><td>부트스트랩 V가 "재질의 후 좋은 연속이 온다"고 가정 — 실제 배포는 불완전 π의
+재샘플. 낙관 δ≥0가 γ^k 가중으로 들어와 <b>k에 감소</b></td><td>short (게이지 불변!)</td>
+<td>정책-기대 부트스트랩: V(s)=E_{a~π}[Q(s,a,κ)] — 배포 과정의 고정점</td></tr>
+<tr><td><b>Markov 조건 (과거 잠재)</b></td><td>데모의 계획 z가 관측에 없으면(가림) 상태-조건 크리틱은 커밋의
+사적 정보를 표현할 공간이 없다</td><td>커밋 가치 붕괴</td><td>히스토리 조건화 (표현 교정 — backdoor 차단)</td></tr>
+<tr><td><b>청크-회귀 교란 (미래 잠재)</b></td><td>창 안에서 공개되는 사건 b가 데모 행동과 결과를 동시에 유발 —
+(s, a₁:ₖ) 조건 회귀는 "b가 우연히 맞은 에피소드"만 골라 낙관(DQC 누출의 인과 독해). 히스토리로도 못 막는다
+(결정 시점에 b는 미래)</td><td>long (nominal≫actual)</td><td><b>합성 백업</b>: 관측된 중간 상태를 지나는 1-스텝
+백업의 합성 — b가 주변분포로 정직하게 들어옴</td></tr></table>
+
+<p><b>시적 정리</b>: 반응이 가치 있는 상태 = 청크 회귀가 거짓말하는 상태다 (같은 창-내 공개가 반응 가치와
+교란을 동시에 만든다). 그래서 naive 크리틱은 정확히 반응해야 할 곳에서 커밋을 부풀린다.</p>
+
+<h3>② CFAC 정의</h3>
+<p>per-prefix causal critic에 네 조항: (i) SMDP 부기(게이지 불변), (ii) <b>히스토리 조건화</b>,
+(iii) 창-내 가치는 <b>합성 백업</b>으로(청크-결과 회귀 금지), (iv) 재질의 가지는 <b>배포 정책의 기대</b>로
+부트스트랩. selector는 ε-내-최장 k(lexicographic — 커리큘럼 장치), actor는 같은 크리틱에 대해 action·k
+양 차원 갱신(joint — toy는 critic+selector 부분을 검증). 논문 부록 A.6에 명제·정의로 수록
+(<code>paper/theory.tex</code>).</p>
+
+<h3>③ Toy — 두 잠재 위치를 분리하는 최소 환경</h3>
+<p><b>plan maze</b>: [복도, 분기점, 복도] × 4스텝, H=4, 보상은 완주 1, γ=0.95, 데모 스텝오류 4%.
+<b>복도</b> — 계획 z가 <b>입구에서만</b> 보이고 이후 가려짐; 매 스텝 정답 = z (과거 잠재: 커밋이 정보를
+운반, Markov 재질의는 50/50). <b>분기점</b> — 사건 b가 <b>첫 스텝 후에야</b> 공개; 이후 정답 = b (미래 잠재:
+커밋은 b를 추측, 반응이 정답). 정답 κ*: 복도 입구 k=4, 분기점 입구 k=1. 크리틱 4종 factorial(A0 naive →
+A1 +히스토리 → A2 +정책 부트스트랩 → A3 = CFAC 합성 백업) + 고정 k 4종 + 수제 오라클, 8시드 × 데모
+1000 에피소드 × 평가 2000 에피소드. 분류는 전부 프로그램적.</p>
+
+<p><b>사전 등록</b> (실행 전 코드 docstring에 고정): T1 A0는 누출로 "다 성공"이라 믿고 분기점도 커밋, belief−realized
+격차 최대. T2 히스토리(A1)·정책 부트스트랩(A2)로는 분기점 과커밋이 <b>안 고쳐진다</b>(미래 잠재는 조건화가 못 막음).
+T3 A3만 복도 커밋 + 분기점 반응을 분리, 오라클급 SR. T4 고정-k 스윕은 비단조. 기각: A3가 A0–A2와 분리 실패.</p>
+
+<h3>④ 결과 — 전예측 적중</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac.png",
+        "CFAC toy: deployment SR, commitment by state type, self-deception",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>배포 SR</th><th>평균 k @ 복도 입구 (정답 4)</th><th>평균 k @ 분기점 입구 (정답 1)</th><th>believed − realized</th></tr>
+"""
+    + _cfac_rows("ko")
+    + """</table>
+
+<p>읽기: <b>A0–A2는 분기점에서도 k≈3.8로 커밋</b>하고(누출이 "모든 청크가 성공했다"고 속임) 자기 예보를
++0.20 과신한다. <b>A3만 분기점 k=1.000</b>으로 꺾고, belief 격차 ≈ 0 — <b>캘리브레이션된 크리틱</b>.
+고정-k는 비단조(k2 > k3). A1≈A0, A2 소폭 개선 — 세 미명세 중 <b>합성 백업이 결정적</b>이고(T2 예측 그대로),
+이는 "히스토리만 넣으면 된다"는 손쉬운 답을 기각한다.</p>
+
+<p><b>창발 관찰 (사전등록 밖, 사후 해석임을 명시)</b>: A3(0.778)가 수제 오라클(0.642)을 넘는다. 기제는
+<b>암묵적 rejection</b> — 샘플된 청크가 나쁘면(데모 노이즈) 크리틱이 그 청크의 모든 k에 낮은 값을 주고,
+ε-내-최장 규칙이 k=1로 떨어져 <b>즉시 재샘플</b>한다. 오라클은 규칙이 고정이라 나쁜 샘플을 그대로 실행한다.
+즉 상태의존 k는 반응성 회수만이 아니라 <b>정책 오차의 흡수</b>(네 힘의 ②)를 배포 시점에 수행한다 —
+<span class='xref' data-eid='three-forces'>네 힘</span> 이론의 예측이 toy에서 저절로 나타났다.</p>
+
+<h3>⑤ 한계와 다음</h3>
+<p>한계: tabular·완전 열거 가능한 toy, 경험 모델 합성은 함수근사에서 per-step TD 합성으로 대체해야 하며,
+미관측 (h,c)는 비관 폴백(선언됨), 데모 노이즈 단일 값. toy≠VLA — 이건 <b>기제 존재 증명</b>이지 성능 주장이
+아니다. 다음: ① M6(부트스트랩 소스 A/B)·M7(히스토리 조건화)을 RoboCasa critic에 사전등록 이식,
+② CFAC actor(joint 갱신) 설계, ③ 워커C 0820_headcond의 대조군 설계(자기 marginal 고정)를 M5·본방법
+평가에 채택. 재현: <code>probes/toy_cfac.py --seeds 8</code> → <code>probes/toy_cfac_fig.py</code>,
+결과 JSON 커밋 경로 <code>/scratch/jellyho/acrft/probes/toy_cfac/results.json</code>.</p>""",
 )
 
 # ============================================== 08-19 Tier1 인트로 비교분석
@@ -3239,6 +3360,22 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "cfac": {
+        "date": "2026-08-21 01:20",
+        "who": "워커B(이론·방법 제안·toy 실험)",
+        "where": "paper/theory.tex A.6 + probes/toy_cfac.py (plan-maze toy, 8시드 tabular)",
+        "what": "3중 미명세(공짜 재질의·Markov 조건·청크-회귀 교란) 정식화 → CFAC 제안 → toy에서 사전등록 4예측 전부 적중",
+        "how": "corridor(과거 잠재)–junction(미래 잠재) 최소쌍 환경, 크리틱 4종 factorial + 고정k + 오라클, 프로그램 분류",
+        "why": "사용자 지시 — 크리틱이 non-Markov 커밋·반응성을 공정 평가하도록 이론·트릭 발전 + 새 방법 제안 + toy 실험",
+        "links": [
+            "theory-preexp",
+            "chunking-theory",
+            "three-forces",
+            "nonmarkov-longer",
+            "adaptive-exec-map",
+            "wc-r-0820-headcond",
+        ],
     },
     "theory-preexp": {
         "date": "2026-08-20 13:10",
@@ -4722,6 +4859,99 @@ complementary.</p>
 bibliography <code>paper/references.bib</code> (sutton1999options and bradtke1994smdp added; exrl left with a TODO
 author field — the workshop PDF is not indexed yet and must be filled in). Side correction: the task-scan entry
 carried a future timestamp (14:00); fixed to the actual publication time (09:06 KST).</p>""",
+)
+
+en(
+    "cfac",
+    "🧭 CFAC — making the critic price commitment and reaction fairly, and a toy where every prediction lands",
+    """
+<p class='sub'>We formalize <b>three misspecifications</b> that prevent a standard chunked critic from pricing
+non-Markovian commitment and reactiveness fairly, and propose <b>CFAC</b> (Commitment-Fair Adaptive Chunking),
+which removes all three. In a corridor–junction toy, all four pre-registered predictions land — only CFAC
+separates commitment from reaction state by state.</p>
+
+<p>User directive — "develop tricks and theory so the critic fairly values the dataset's non-Markovianness and
+reactiveness, propose a new adaptive chunking method, and test it on a toy." Background: current value learning
+<b>structurally prefers short executions</b> (including a gauge-invariant bias, distinct from the gauge argument
+in the <span class='xref' data-eid='theory-preexp'>pre-registration post</span>). We decompose the cause into
+three specification errors.</p>
+
+<h3>① The three misspecifications</h3>
+<table class='num'><tr><th>misspecification</th><th>content</th><th>bias direction</th><th>cure</th></tr>
+<tr><td><b>free requery</b></td><td>the bootstrap V assumes "a good continuation arrives after requery" — deployment
+actually resamples an imperfect π. The optimism δ≥0 enters with weight γ^k, <b>decreasing in k</b></td>
+<td>short (gauge-invariant!)</td><td>policy-expectation bootstrap: V(s)=E_{a~π}[Q(s,a,κ)] — a fixed point of the
+deployed process</td></tr>
+<tr><td><b>Markov conditioning (past latent)</b></td><td>when the demonstrator's plan z is absent from the
+observation (occlusion), a state-conditioned critic has no room to represent the private information a commitment
+carries</td><td>commitment value collapses</td><td>history conditioning (a representation fix — backdoor
+blocking)</td></tr>
+<tr><td><b>confounded chunk regression (future latent)</b></td><td>an event b revealed inside the window causes both
+the demo's actions and the outcome — regressing outcomes on (s, a₁:ₖ) selects episodes where b happened to match
+(the causal reading of DQC's leak). History cannot block it (b is still future at decision time)</td>
+<td>long (nominal≫actual)</td><td><b>composed backup</b>: one-step backups composed through observed intermediate
+states — b enters with its marginal</td></tr></table>
+
+<p><b>The poetic summary</b>: the states where reaction is valuable are exactly the states where chunk regression
+lies (the same mid-window revelation creates both). So the naive critic inflates commitment precisely where it
+should react.</p>
+
+<h3>② CFAC</h3>
+<p>A per-prefix causal critic with four clauses: (i) SMDP bookkeeping (gauge-invariant), (ii) <b>history
+conditioning</b>, (iii) within-window values by <b>composition</b> (no chunk-outcome regression), (iv) the requery
+branch bootstrapped by the <b>deployed policy's own expectation</b>. The selector takes the longest k within ε
+(lexicographic — the curriculum device); the actor is updated against the same critic in both output dimensions
+(joint — the toy validates the critic+selector half). Now in the paper appendix A.6 as propositions and a
+definition (<code>paper/theory.tex</code>).</p>
+
+<h3>③ The toy — a minimal environment separating the two latent positions</h3>
+<p><b>Plan maze</b>: [corridor, junction, corridor] × 4 steps, H=4, reward 1 on completion, γ=0.95, 4% demo step
+error. <b>Corridor</b> — the plan z is visible <b>only at entry</b>, then hidden; the correct action is z every
+step (past latent: commitment carries information, Markov requery is 50/50). <b>Junction</b> — the event b is
+revealed <b>only after the first step</b>; steps 1–3 must match b (future latent: committing guesses b, reacting
+wins). Ground truth κ*: corridor entry k=4, junction entry k=1. Four critics factorially (A0 naive → A1 +history →
+A2 +policy bootstrap → A3 = CFAC composed backup) + four fixed k + a hand-crafted oracle, 8 seeds × 1000 demo ×
+2000 eval episodes. All classification programmatic.</p>
+
+<p><b>Pre-registered</b> (fixed in the code docstring before running): T1 A0 believes "everything succeeds"
+(leak) and over-commits junctions; largest believed−realized gap. T2 history (A1) and policy bootstrap (A2) do
+<b>not</b> fix junction over-commitment (no conditioning blocks a future latent). T3 only A3 separates corridor
+commitment from junction reaction, at oracle-level SR. T4 the fixed-k sweep is non-monotone. Rejected if A3 fails
+to separate from A0–A2.</p>
+
+<h3>④ Results — every prediction lands</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac.png",
+        "CFAC toy: deployment SR, commitment by state type, self-deception",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>deployed SR</th><th>mean k @ corridor entry (truth 4)</th><th>mean k @ junction entry (truth 1)</th><th>believed − realized</th></tr>
+"""
+    + _cfac_rows("en")
+    + """</table>
+
+<p>Reading: <b>A0–A2 commit even at junctions (k≈3.8)</b> — the leak tells them every chunk in the data succeeded —
+and overestimate their own forecast by +0.20. <b>Only A3 drops to k=1.000 at junctions</b>, with a belief gap ≈ 0 —
+a <b>calibrated critic</b>. Fixed k is non-monotone (k2 > k3). A1≈A0 and A2 only slightly better — of the three
+misspecifications, <b>the composed backup is decisive</b> (exactly T2), which rejects the easy answer "just add
+history."</p>
+
+<p><b>Emergent observation (outside the pre-registration, post-hoc)</b>: A3 (0.778) beats the hand-crafted oracle
+(0.642). The mechanism is <b>implicit rejection</b> — when the sampled chunk is bad (demo noise), the critic scores
+all its prefixes low, the longest-within-ε rule falls to k=1, and the system <b>resamples immediately</b>. The
+oracle executes its fixed rule regardless. So state-dependent k performs not only reactivity collection but
+<b>absorption of policy error</b> (force ② of the <span class='xref' data-eid='three-forces'>four forces</span>)
+at deployment time — the theory's prediction appeared in the toy unprompted.</p>
+
+<h3>⑤ Limits and next</h3>
+<p>Limits: a tabular, fully enumerable toy; the empirical-model composition must become per-step TD composition
+under function approximation; unseen (h,c) fall back pessimistically (declared); single demo-noise level. Toy ≠
+VLA — this is an <b>existence proof of the mechanisms</b>, not a performance claim. Next: ① port M6 (bootstrap
+source A/B) and M7 (history conditioning) to the RoboCasa critic as pre-registered probes, ② design the CFAC
+actor (joint update), ③ adopt worker C's 0820_headcond control design (freeze the head's own marginal) for M5 and
+the main method's evaluation. Reproduce: <code>probes/toy_cfac.py --seeds 8</code> →
+<code>probes/toy_cfac_fig.py</code>; results JSON at <code>/scratch/jellyho/acrft/probes/toy_cfac/results.json</code>.</p>""",
 )
 
 en(
