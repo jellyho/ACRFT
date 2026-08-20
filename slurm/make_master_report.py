@@ -1844,7 +1844,13 @@ serve_bon_policy에 \\(\\hat Q\\) 로깅 추가</td><td>realized가 believed와 
 이동"</b>으로 정정한다(기각 조건 "분포 구분 불가"는 불변, 시험 critic의 보상 규약을 결과에 명기). DEHP·AQC의
 short-편향은 별도 기제(재질의의 약우월 [DQC Lemma 8] + 보수적 타깃의 open-loop 분산 벌점 + advantage의 γ^k 스케일
 압축 [AQC의 정규화 동기])로, 올바른 부기 하에서도 작동한다 — 부록 Prop 1 뒤 Remark(sign)로 반영. ExRL 자체의 편향
-방향은 PDF 재확인 전까지 단정하지 않는다.</p>
+방향은 PDF 재확인 전까지 단정하지 않는다.
+<b>추가 (13:55, 사용자 반문 "규약이 아니라 MDP 전역 성질 아닌가").</b> 더 정확한 정식화 — 왜곡의 <b>존재</b>는
+전역이지만(착지가치≠0인 모든 MDP), <b>방향은 MDP의 성질이 아니다</b>: 할인 무한지평에서 보상에 상수 c를 더하면
+최적 정책은 불변인데, 올바른 백업은 모든 k에 c/(1−γ)가 균일히 더해져 순서 불변, blind 점수는
+c(1+γ−γ^k)/(1−γ)로 <b>k-의존</b>이라 c의 부호만으로 선택 방향이 뒤집힌다. 즉 방향은 값 영점(게이지)의 인공물 —
+blind 부기의 커밋 선호는 과제에 대해 잘 정의되지 않는 양이며, 문헌의 상반 보고는 한 결함의 두 부호다.
+부록 Remark를 이 게이지 형태로 강화했다.</p>
 
 <p><b>실행 순서.</b> M4(인프라 최소·정보 최대 — best-fixed 기준선은 이후 모든 adaptive 비교의 전제) → M3(serve_bon_policy
 재사용) → critic 도착 시 M1·M2 → 사다리 뒤 M5. <b>판정 규율</b>: 전부 run-level 다중시드 CI, 분류는 프로그램적으로.
@@ -4694,7 +4700,15 @@ indistinguishable distributions, is unchanged; the tested critic's reward conven
 short-side biases of DEHP/AQC involve separate mechanisms (weak dominance of requerying [DQC Lemma 8] + conservative
 targets penalizing open-loop variance + γ^k-compressed advantage scales [AQC's motivation for normalizing]) that
 operate even under correct bookkeeping — reflected as a sign Remark after Prop 1 in the appendix. ExRL's own bias
-direction is left unasserted until the PDF is re-checked.</p>
+direction is left unasserted until the PDF is re-checked.
+<b>Addendum (13:55, after the user's counter-question "is this not global to any MDP rather than a reward-regime
+thing").</b> The sharper formalization — the distortion's <b>existence</b> is global (any MDP with nonzero landing
+values), but its <b>direction is not a property of the MDP</b>: in discounted infinite horizon, adding a constant c
+to all rewards leaves optimal behavior unchanged, shifts every correct option value by c/(1−γ) uniformly in k
+(ordering invariant), yet shifts the blind score by c(1+γ−γ^k)/(1−γ), which is <b>k-dependent</b>, so the sign of c
+alone flips the selector's direction. The direction is a gauge artifact of where the value scale puts zero — the
+blind selector's commitment preference is not even well defined for the task, and the opposite-direction reports in
+the literature are the two signs of one defect. The appendix Remark now states this gauge form.</p>
 
 <p><b>Execution order.</b> M4 (least infra, most information — the best-fixed baseline is a precondition for every
 later adaptive comparison) → M3 (reuses serve_bon_policy) → M1·M2 once the critic lands → M5 after the ladder.

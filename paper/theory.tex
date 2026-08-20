@@ -103,20 +103,26 @@ horizons was identified in the online setting by ExRL~\citep{exrl}, whose remedy
 semi-Markov backup. Our critic trains on \eqref{eq:smdp-backup} directly, so commitments of
 different lengths compete on equal terms; every result below assumes this bookkeeping.
 
-\begin{remark}[The sign of the distortion follows the reward convention]
+\begin{remark}[The direction of the distortion is not a property of the task]
 \label{rem:sign}
 Proposition~\ref{prop:bookkeeping} assumes nonnegative rewards, under which landing values are
-nonnegative and the mis-charged bootstrap inflates long commitments. Under a nonpositive
-convention, such as step penalties or negative cost to go, the same identity gives
-$(\gamma-\gamma^{k})\,\mathbb E[V(s_k)]\le0$ and the distortion reverses, deflating long
-commitments. Reports of horizon selectors collapsing toward short executions are therefore not in
-tension with the proposition; beyond the sign flip, independent pressures push short even under
-correct bookkeeping, since one more open-loop step weakly decreases the achievable value under any
-data distribution~\citep{dqc}, so an idealized critic breaks ties toward requerying, conservative
-targets penalize the larger open-loop variance of longer prefixes, and advantages at different
-horizons live on $\gamma^{k}$-compressed scales that must be renormalized before they are
-commensurable~\citep{aqc}. The bookkeeping distortion is a separate, convention-signed term, and
-it is the one the backup \eqref{eq:smdp-backup} removes exactly, in either direction.
+nonnegative and the mis-charged bootstrap inflates long commitments; under a nonpositive
+convention, such as step penalties or negative cost to go, the same identity reverses and deflates
+them. The dependence is deeper than a choice of convention. In a discounted infinite-horizon MDP a
+constant reward shift $r\mapsto r+c$ leaves optimal behavior unchanged and adds $c/(1-\gamma)$ to
+every option value in \eqref{eq:smdp-backup} uniformly in $k$, so the correct cross-commitment
+ordering is invariant; the duration-blind score instead gains $c\,(1+\gamma-\gamma^{k})/(1-\gamma)$,
+which is strictly increasing in $k$, so a sufficiently positive $c$ drives the selector toward the
+longest commitment and a sufficiently negative $c$ toward the shortest. The direction of the naive
+selector's preference is therefore an artifact of where the value scale places its zero, not a
+property of the MDP, and within one task it varies from state to state with the sign of
+$\mathbb E[V(s_k)]$. Opposite-direction reports in the literature are consistent with this single
+defect. Separately, genuine pressures push short even under correct bookkeeping, since one more
+open-loop step weakly decreases the achievable value under any data distribution~\citep{dqc},
+conservative targets penalize the larger open-loop variance of longer prefixes, and advantages at
+different horizons live on $\gamma^{k}$-compressed scales that must be renormalized before they
+are commensurable~\citep{aqc}. The bookkeeping distortion is separate from all of these, and the
+backup \eqref{eq:smdp-backup} removes it exactly, in either direction.
 \end{remark}
 
 \subsection{Selection. What a value applied around a frozen policy can and cannot do}
