@@ -322,10 +322,22 @@ class PatchCriticSelectPolicy(BasePolicy):
             "critic_scores": np.broadcast_to(pv[:, -1], (x, pv.shape[0])).copy(),  # (X, N)
             "critic_choice": np.full((x, 1), best, np.float32),  # (X, 1)
         }
+        # How the commitment was carved up, always sent: one float each, and without them a
+        # recording cannot say where the macro-group boundaries were or how much of the winning
+        # chunk was actually committed. Both are per-REPLAN facts (the decision is made once);
+        # they ride per-step because that is the only layout the broker slices and the recorder
+        # records, so a replan's frames repeat them.
+        out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
+        out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
+        if self._mode == "adaptive":
+            # Only adaptive drops part of what the model proposed: `action_samples` above is the
+            # EXECUTED prefix, so the un-executed tail exists nowhere else. In `bon` the executed
+            # chunk IS the full horizon, so this would be a duplicate column.
+            out["action_samples_full"] = np.broadcast_to(
+                np.swapaxes(decoded, 0, 1)[None], (x, decoded.shape[1], decoded.shape[0], decoded.shape[2])
+            ).copy()
         if want_hud:
             out["critic_grid"] = np.broadcast_to(pv, (x, *pv.shape)).copy()  # (X, N, mh)
-            out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
-            out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         return out
 
     def extra_features(self, num_samples: int | None = None) -> dict:
@@ -340,11 +352,18 @@ class PatchCriticSelectPolicy(BasePolicy):
         adaptive and is read off each reply (see the note on `action_samples` in `infer`).
         """
         n = int(num_samples or self._default_samples)
-        return {
+        declared = {
             "action_samples": [n, self._robot_action_dim],
             "critic_scores": [n],
             "critic_choice": [1],
+            # Where the macro-group boundaries fell, and which group the commitment stopped at.
+            "critic_macro": [1],
+            "critic_best_prefix": [1],
         }
+        if self._mode == "adaptive":
+            # The full horizon the model proposed, of which only a prefix was executed (see infer).
+            declared["action_samples_full"] = [self._action_horizon, n, self._robot_action_dim]
+        return declared
 
     @property
     def robot_action_dim(self) -> int:
