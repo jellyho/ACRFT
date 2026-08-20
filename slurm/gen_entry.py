@@ -63,6 +63,7 @@ PHASE_MAP = {
     "paper-intro": "논문·교차",
     "papers-tier1": "논문·교차",
     "tier1-intros": "논문·교차",
+    "task-scan": "판정·종합",
 }
 
 

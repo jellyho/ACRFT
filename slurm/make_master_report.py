@@ -1732,6 +1732,43 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-20 다태스크 SR 스캔
+entry(
+    "08-20",
+    "task-scan",
+    "다태스크 SR 스캔 — 공식 RoboCasa-365 pi05로 베이스라인 사다리의 무대 선정",
+    "완결",
+    """
+<p class='sub'>베이스라인 사다리(성공-필터 SFT → 가중 SFT → Q-필터 → chunked RL)의 무대를 정하기 위해,
+<b>공식 robocasa365 pi05</b>(pretrain_human300/75000, 워커A의 serve 수정: mean/std norm + env action order)를
+atomic/pick-place 14태스크에서 평가했다. 태스크당 20 trial, seed 3000 고정(동일 장면 관례), 서버 1회 기동 +
+클라이언트 순회. 목적은 <b>SFT baseline 30–60% 밴드</b>(개선 여지 有, 천장 無) 태스크 선별.</p>
+
+<h3>결과 (20 trial/태스크, 단일 시드 — 선별용 잠정치)</h3>
+<table class='num'><tr><th>태스크</th><th>SR</th><th>판정</th></tr>
+<tr><td>CloseDrawer</td><td>0.90</td><td>천장 — 제외</td></tr>
+<tr><td>PickPlaceCounterToSink</td><td>0.75</td><td>높음 — 보조</td></tr>
+<tr><td><b>PickPlaceSinkToCounter</b></td><td><b>0.60</b></td><td><b>선정</b> (밴드 상단)</td></tr>
+<tr><td><b>CoffeeServeMug</b></td><td><b>0.40</b></td><td><b>선정</b></td></tr>
+<tr><td><b>OpenDrawer</b></td><td><b>0.30</b></td><td><b>선정</b> (워커A ~44%와 정합)</td></tr>
+<tr><td><b>TurnOnStove</b></td><td><b>0.20</b></td><td><b>선정</b> (하단)</td></tr>
+<tr><td><b>PickPlaceCounterToMicrowave</b></td><td><b>0.20</b></td><td><b>선정</b> (하단, DEAS 태스크)</td></tr>
+<tr><td>PickPlaceMicrowaveToCounter</td><td>0.15</td><td>예비</td></tr>
+<tr><td>CoffeeSetupMug</td><td>0.10</td><td>예비 (DEAS 태스크)</td></tr>
+<tr><td>TurnOnSinkFaucet</td><td>0.05</td><td>과난 — 제외</td></tr>
+<tr><td>TurnOffStove / StartCoffeeMachine</td><td>0.00</td><td>과난 — 제외</td></tr>
+<tr><td>OpenDoor / CloseDoor</td><td>—</td><td>env 이름 불일치로 실패 (OpenSingleDoor류 재시도 예정)</td></tr></table>
+
+<h3>판정·다음</h3>
+<p><b>선정 5태스크</b>: PickPlaceSinkToCounter(0.60) · CoffeeServeMug(0.40) · OpenDrawer(0.30) ·
+TurnOnStove(0.20) · PickPlaceCounterToMicrowave(0.20) — 0.2~0.6 스펙트럼으로 개선 여지와 신호가 공존.
+DEAS가 쓴 태스크 2종(CoffeeSetupMug·PnP계열)과 겹침도 확보. <b>주의</b>: 단일 시드 n=20이라 선별용이며(±0.2급 CI),
+본 실험은 run-level 다중시드로. <b>다음</b>: 이 5태스크에서 B1(성공-필터 SFT)부터 베이스라인 사다리 착수 —
+데모+롤아웃 수집 → 성공 에피소드 필터 재파인튠 vs SFT. 재현: <code>probes/run_task_scan.sh</code>
+(LD_LIBRARY_PATH unset·PYTHONPATH robocasa 필수 — 둘 다 잡은 사다리 기록 포함), 결과 JSON
+<code>gr1_eval/task_scan/&lt;Task&gt;/results.json</code>.</p>""",
+)
+
 # ============================================== 08-19 Tier1 인트로 비교분석
 entry(
     "08-19",
@@ -3109,6 +3146,15 @@ META = {
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
     },
+    "task-scan": {
+        "date": "2026-08-20 14:00",
+        "who": "워커B(실험)",
+        "where": "공식 robocasa365 pi05 + 우리 run_trials 하네스 (A6000, job 2059735)",
+        "what": "14태스크 SR 스캔 → 베이스라인 사다리용 30–60% 밴드 5태스크 선정",
+        "how": "서버 1회 기동+클라 순회, 20 trial/태스크 seed 고정; 실패 2건(env 이름)·환경버그 2건 기록",
+        "why": "베이스라인 사다리(B1 성공-필터 SFT부터)의 무대 확정 — 단일태스크 천장 교훈 반영",
+        "links": ["aqc-ablation", "deas", "exp-board", "critic-heads"],
+    },
     "tier1-intros": {
         "date": "2026-08-19 21:30",
         "who": "워커B(논문 담당, 리뷰)",
@@ -4449,6 +4495,21 @@ with our standing binding-constraint = coverage.</p>
 <p class='sub'><b>Meta-lesson.</b> Five n=25 single-seed closed-loop verdicts were all noise. From now, verdicts start at
 <b>run-level multi-seed</b>. Reproduce: <code>probes/eval_deas.py</code> (DEAS), <code>eval_compare.py</code> (high-power
 td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> read in full.</p>""",
+)
+
+en(
+    "task-scan",
+    "Multi-task SR scan — staging the baseline ladder with the official RoboCasa-365 pi05",
+    """
+<p class='sub'>To stage the baseline ladder (success-filtered SFT, weighted SFT, Q-filtered, chunked RL), the
+official robocasa365 pi05 (pretrain_human300/75000, worker A's serving fixes) was evaluated on 14 atomic and
+pick-and-place tasks, 20 trials each at a fixed seed. Goal: tasks in the 30 to 60 percent band, with room to improve
+and no ceiling. Results: CloseDrawer 0.90 (ceiling), PickPlaceCounterToSink 0.75, <b>PickPlaceSinkToCounter 0.60,
+CoffeeServeMug 0.40, OpenDrawer 0.30, TurnOnStove 0.20, PickPlaceCounterToMicrowave 0.20 selected</b>;
+PickPlaceMicrowaveToCounter 0.15 and CoffeeSetupMug 0.10 in reserve; faucet/stove-off/coffee-start at or near zero
+excluded; the two door tasks failed on env naming and will be retried. Single-seed n=20 is for selection only; the
+ladder itself runs at run-level multi-seed. Next: B1 (success-filtered SFT) on the five selected tasks. Reproduce:
+<code>probes/run_task_scan.sh</code>, per-task JSONs under <code>gr1_eval/task_scan/</code>.</p>""",
 )
 
 en(
