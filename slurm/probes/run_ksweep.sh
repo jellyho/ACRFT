@@ -13,7 +13,8 @@
 # Registered prediction (Thm floor / P4): best fixed k varies by task, k=1 not globally optimal,
 # SR(k) non-monotone. Rejected if k=1 is globally optimal.
 set -uo pipefail
-K=${1:?usage: sbatch run_ksweep.sh K}
+K=${1:?usage: sbatch run_ksweep.sh K [Task1,Task2,...]}
+ONLY=${2:-}   # optional comma list to re-run individual cells (e.g. after an infra failure)
 unset LD_LIBRARY_PATH   # miniconda libcrypto poisons system python (_hashlib OPENSSL mismatch)
 cd /home/jellyho/ACRFT/ACRFT
 export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 WANDB_MODE=offline
@@ -27,6 +28,7 @@ mkdir -p "$OUT"
 EVAL_PYTHON=.venv/bin/python
 
 TASKS=(OpenDrawer CoffeeServeMug TurnOnStove PickPlaceSinkToCounter PickPlaceCounterToMicrowave)
+if [ -n "$ONLY" ]; then IFS=',' read -r -a TASKS <<< "$ONLY"; fi
 
 echo "=== ksweep K=$K: starting policy server (config=$CONFIG, port=$PORT) ==="
 uv run scripts/serve_policy.py --port "$PORT" policy:checkpoint \

@@ -15,6 +15,7 @@ TAGS = {
     "aqc-ablation": ["ablation", "OGBench", "AQC"],
     "cfac": ["이론", "방법제안", "toy"],
     "cfac-nn": ["구현", "검증", "toy"],
+    "m4-ksweep": ["사전등록", "기준선", "고정k"],
     "theory-preexp": ["이론", "사전등록", "논문"],
 }
 # mindmap column (worker A's phase taxonomy) per eid — the client-side mindmap groups by this
@@ -70,6 +71,7 @@ PHASE_MAP = {
     "theory-preexp": "논문·교차",
     "cfac": "진단·방법",
     "cfac-nn": "진단·방법",
+    "m4-ksweep": "판정·종합",
 }
 
 

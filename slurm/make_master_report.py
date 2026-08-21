@@ -1770,6 +1770,45 @@ DEAS가 쓴 태스크 2종(CoffeeSetupMug·PnP계열)과 겹침도 확보. <b>�
 )
 
 
+def _ksweep_table(lang="ko"):
+    """M4 fixed-k sweep table, recomputed from the per-task result JSONs at build time."""
+    path = "slurm/probes/ksweep_results.json"
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return "<tr><td colspan='8'>" + ("평가 대기" if lang == "ko" else "pending") + "</td></tr>", {}
+    ks = d["ks"]
+    rows = []
+    for t, r in d["per_task"].items():
+        cells = []
+        for k in ks:
+            if k not in r["sr"]:
+                cells.append("<td>" + ("재실행 중" if lang == "ko" else "re-running") + "</td>")
+                continue
+            v = r["sr"][k]
+            mark = " class='good'" if k == r["best_k"] else ""
+            cells.append(f"<td{mark}>{v:.2f}</td>")
+        rows.append(f"<tr><td>{t}</td>" + "".join(cells) + f"<td><b>{r['best_k']}</b></td></tr>")
+    return "".join(rows), d
+
+
+def _ksweep_stat(key, lang="ko"):
+    try:
+        with open("slurm/probes/ksweep_results.json") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return "평가 대기" if lang == "ko" else "pending"
+    v = d.get(key)
+    if key == "mean_best_minus_full_chunk":
+        return f"{v:+.3f}"
+    if isinstance(v, list) and len(v) == 2 and isinstance(v[0], int):
+        return f"{v[0]}/{v[1]}"
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v)
+    return str(v)
+
+
 def _cfacnn_rows(lang="ko"):
     """Neural-CFAC toy table, recomputed from the run JSON at build time."""
     path = "/scratch/jellyho/acrft/probes/toy_cfac_nn/results.json"
@@ -1977,6 +2016,72 @@ blind 부기의 커밋 선호는 과제에 대해 잘 정의되지 않는 양이
 서지 <code>paper/references.bib</code>(sutton1999options·bradtke1994smdp 추가; exrl은 워크샵 PDF가 미색인이라
 저자란 TODO로 남김 — 채워야 함). 부수 정정: task-scan 엔트리의 date가 미래 시각(14:00)으로 잘못 찍혀 있어
 실제 게시 시각(09:06 KST)으로 바로잡았다.</p>""",
+)
+
+# ============================================== 08-22 M4 고정-k 스윕
+entry(
+    "08-22",
+    "m4-ksweep",
+    "📏 M4 고정-k 스윕 — 어느 고정 길이와 비교하느냐가 답을 정한다 (RoboCasa 5태스크 × 6길이)",
+    "완결",
+    """
+<p class='sub'>사전등록 M4(<span class='xref' data-eid='theory-preexp'>사전등록 포스트</span>) 실행 결과.
+공식 RoboCasa-365 pi05를 5태스크 × 실행길이 k∈{1,2,4,8,12,16}(청크 H=16)에서 평가했다. 목적은 두 가지 —
+① 상태의존 커밋이 원리적으로 필요한지의 <b>필요조건</b>(고정 k가 태스크마다 다른가, 비단조인가) 확인,
+② 이후 모든 adaptive 비교의 <b>정직한 기준선(best-fixed-k)</b> 확정.</p>
+
+<p><b>왜 이 실험이 먼저인가.</b> adaptive chunking 논문들이 흔히 <b>기본값 k=H</b>(전체 청크)와 비교해
+이득을 주장한다. 그런데 <b>더 나은 상수</b>만으로도 상당 부분이 설명된다면 그 이득은 방법의 것이 아니다.
+워커C가 OGBench에서 얻은 교훈(<span class='xref' data-eid='wc-r-0819-nonmarkov'>0819_nonmarkov</span>:
+"어느 고정 길이와 비교하느냐가 답을 정한다")을 우리 VLA 스택에서 <b>정량화</b>한다.</p>
+
+<h3>설정</h3>
+<p>체크포인트 <code>robocasa365_official/pi05_pretrain_human300/multitask_learning/75000</code>(워커A의 serve 수정),
+클라이언트 <code>--replan-steps k</code>로 청크의 앞 k개만 실행 후 재질의. 태스크당 20 trial, seed 3000 고정
+(<span class='xref' data-eid='task-scan'>태스크 스캔</span>과 동일 장면 관례). k별로 잡을 분리(=서버 1회 기동,
+k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 8과 겹쳐 12로 대체.</p>
+
+<h3>결과</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/ksweep.png", "fixed-k sweep on five RoboCasa tasks")
+    + """
+<table class='num'><tr><th>태스크</th><th>k=1</th><th>k=2</th><th>k=4</th><th>k=8</th><th>k=12</th><th>k=16 (전체 청크)</th><th>best k</th></tr>
+"""
+    + _ksweep_table("ko")[0]
+    + """</table>
+<p class='sub'>초록 칸이 그 태스크의 best k. 오차막대는 이항 표준오차(n=20, 단일 시드) — 선별 등급이다.</p>
+
+<h3>판정</h3>
+<p><b>① k=1은 전역최적이 아니다 (기각 조건 미충족).</b> 매 스텝 재질의는 """
+    + _ksweep_stat("k1_is_worst", "ko")
+    + """
+태스크에서 <b>최악</b>이고, CoffeeServeMug는 0.40 → <b>0.00</b>, PickPlaceSinkToCounter는 0.55 → 0.15로
+붕괴한다. 반응성이 공짜라는 직관은 실제 VLA에서 틀렸다 — 잦은 재질의는 오차를 재주입한다(Zhang 힘).</p>
+<p><b>② 최적 고정 길이가 태스크마다 다르다.</b> best k ∈ {"""
+    + _ksweep_stat("distinct_best_k", "ko")
+    + """}로 갈리고,
+"""
+    + _ksweep_stat("interior_peaks", "ko")
+    + """ 태스크에서 <b>내부 정점</b>(비단조)이다. 단일 상수로는 어느 태스크에서든
+손해를 본다 — 상태의존 κ의 <b>필요조건</b>이 성립한다.</p>
+<p><b>③ 기준선 교체가 시급하다.</b> best-fixed-k는 기본값 k=16 대비 평균 <b>"""
+    + _ksweep_stat("mean_best_minus_full_chunk", "ko")
+    + """</b>
+(태스크별 +0.20 / 0.00 / +0.10 / +0.25 / +0.15). 즉 <b>상수 하나만 바꿔도 평균 +0.14</b>가 나온다.
+앞으로 우리의 adaptive/CFAC 결과는 <b>반드시 best-fixed-k와 비교</b>하며, k=16 대비 수치는 보고하지 않는다.
+이 표가 그 기준선이다.</p>
+
+<h3>한계 (정직하게)</h3>
+<p>칸마다 <b>단일 시드 n=20</b>이라 이항 SE가 0.5 근처에서 ±0.11이다. 따라서 <b>개별 칸의 0.1급 차이는
+미해결</b>이고, 태스크별 best k의 정확한 값도 확정이 아니다. 확정적인 것은 5태스크에 걸쳐 <b>일관된 패턴</b>
+(k=1 최악, 내부 정점 다수, best k 불일치)이다. 워커C의 폭 실측(<span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>:
+짝지은 차의 시드 SD 0.092–0.127)을 우리 판정에도 적용해, 본 방법 평가는 <b>다중 시드</b>로 간다.
+그리고 k=4 × PickPlaceCounterToMicrowave 한 칸은 서버 웹소켓 끊김(인프라)으로 실패해 재실행 중이며,
+도착하면 이 표가 자동 갱신된다.</p>
+
+<p class='sub'><b>재현.</b> <code>probes/run_ksweep.sh K [Task,...]</code>(K별 sbatch 6건 + 실패 칸 재실행),
+집계·figure <code>probes/ksweep_collect.py</code>, 결과 JSON <code>probes/ksweep_results.json</code> 커밋.
+<b>다음</b>: M3(BoN N-스윕, serve_bon_policy 재사용) → 크리틱 도착 후 M1·M2 → CFAC의 RoboCasa 이식(M6·M7).</p>""",
 )
 
 # ============================================== 08-21 CFAC 함수근사 검증
@@ -3539,6 +3644,15 @@ META = {
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
     },
+    "m4-ksweep": {
+        "date": "2026-08-22 09:30",
+        "who": "워커B(실험)",
+        "where": "공식 robocasa365 pi05 + run_trials 하네스 (A6000, 잡 2063897–2063902)",
+        "what": "사전등록 M4 — 5태스크 × k∈{1,2,4,8,12,16} 고정 실행길이 스윕, best-fixed-k 기준선 확정",
+        "how": "--replan-steps k, 20 trial/칸 seed 3000, k별 잡 분리; 판정은 프로그램 집계(ksweep_collect.py)",
+        "why": "adaptive 비교의 정직한 기준선 확보 + 상태의존 κ의 필요조건 검증 (사전등록 예측·기각조건 고정)",
+        "links": ["theory-preexp", "task-scan", "cfac", "cfac-nn", "three-forces", "wc-r-0819-nonmarkov"],
+    },
     "cfac-nn": {
         "date": "2026-08-21 03:40",
         "who": "워커B(구현·실험)",
@@ -5046,6 +5160,76 @@ complementary.</p>
 bibliography <code>paper/references.bib</code> (sutton1999options and bradtke1994smdp added; exrl left with a TODO
 author field — the workshop PDF is not indexed yet and must be filled in). Side correction: the task-scan entry
 carried a future timestamp (14:00); fixed to the actual publication time (09:06 KST).</p>""",
+)
+
+en(
+    "m4-ksweep",
+    "📏 M4 fixed-k sweep — which constant you compare against decides the answer (5 RoboCasa tasks × 6 lengths)",
+    """
+<p class='sub'>Results of pre-registered M4 (<span class='xref' data-eid='theory-preexp'>the pre-registration
+post</span>). The official RoboCasa-365 pi05 was evaluated on five tasks × execution length k∈{1,2,4,8,12,16}
+(chunk H=16), for two purposes: ① check the <b>necessary condition</b> for state-dependent commitment (does the
+best constant differ across tasks, is the curve non-monotone), and ② fix the <b>honest baseline</b>
+(best-fixed-k) for every adaptive comparison that follows.</p>
+
+<p><b>Why this comes first.</b> Adaptive-chunking papers routinely claim gains against the <b>default k=H</b>
+(the full chunk). If a merely <b>better constant</b> explains much of that, the gain is not the method's. We
+quantify on our VLA stack the lesson worker C drew on OGBench
+(<span class='xref' data-eid='wc-r-0819-nonmarkov'>0819_nonmarkov</span>: "which fixed length you compare against
+decides the answer").</p>
+
+<h3>Setup</h3>
+<p>Checkpoint <code>robocasa365_official/pi05_pretrain_human300/multitask_learning/75000</code> (worker A's serving
+fixes); the client's <code>--replan-steps k</code> executes only the first k actions of each chunk before
+requerying. 20 trials per task at fixed seed 3000 (the same scene convention as the
+<span class='xref' data-eid='task-scan'>task scan</span>). One job per k (a single server start; the k=1 arm makes
+16× the inference calls and dominates wall-clock). The registered grid's H/2 collided with 8 and was replaced by
+12.</p>
+
+<h3>Results</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/ksweep.png", "fixed-k sweep on five RoboCasa tasks")
+    + """
+<table class='num'><tr><th>task</th><th>k=1</th><th>k=2</th><th>k=4</th><th>k=8</th><th>k=12</th><th>k=16 (full chunk)</th><th>best k</th></tr>
+"""
+    + _ksweep_table("en")[0]
+    + """</table>
+<p class='sub'>Green marks each task's best k. Error bars are binomial standard errors (n=20, single seed): this is
+selection grade.</p>
+
+<h3>Verdicts</h3>
+<p><b>① k=1 is not globally optimal (the rejection condition is not met).</b> Requerying every step is the
+<b>worst</b> arm on """
+    + _ksweep_stat("k1_is_worst", "en")
+    + """ tasks, and it collapses CoffeeServeMug from 0.40 to <b>0.00</b> and
+PickPlaceSinkToCounter from 0.55 to 0.15. The intuition that reactivity is free is wrong on a real VLA: frequent
+requerying re-injects error (the Zhang force).</p>
+<p><b>② The best fixed length differs by task.</b> best k ∈ {"""
+    + _ksweep_stat("distinct_best_k", "en")
+    + """}, with an <b>interior peak</b>
+(non-monotone) on """
+    + _ksweep_stat("interior_peaks", "en")
+    + """ tasks. No single constant is right everywhere, which is the <b>necessary
+condition</b> for a state-dependent κ.</p>
+<p><b>③ The baseline must change.</b> best-fixed-k beats the default k=16 by <b>"""
+    + _ksweep_stat("mean_best_minus_full_chunk", "en")
+    + """</b> on average
+(+0.20 / 0.00 / +0.10 / +0.25 / +0.15 per task). A single constant, chosen better, is worth +0.14. From here on
+our adaptive and CFAC results are compared <b>against best-fixed-k</b>, and we do not report numbers relative to
+k=16. This table is that baseline.</p>
+
+<h3>Limits (stated plainly)</h3>
+<p>Each cell is a <b>single seed, n=20</b>, so the binomial SE near 0.5 is ±0.11. Differences of order 0.1 within
+a cell are therefore <b>unresolved</b>, and the exact per-task best k is not settled. What is settled is the
+<b>pattern across five tasks</b> (k=1 worst, interior peaks common, best k inconsistent). Applying worker C's
+measured spread (<span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>: seed SD 0.092–0.127 on paired
+differences), the method evaluation itself will be <b>multi-seed</b>. One cell (k=4 × PickPlaceCounterToMicrowave)
+failed on a server websocket drop (infrastructure) and is re-running; this table updates itself when it lands.</p>
+
+<p class='sub'><b>Reproduce.</b> <code>probes/run_ksweep.sh K [Task,...]</code> (six per-K sbatches plus the failed
+cell), aggregation and figure <code>probes/ksweep_collect.py</code>, results JSON
+<code>probes/ksweep_results.json</code> committed. <b>Next</b>: M3 (best-of-N sweep, reusing serve_bon_policy) →
+M1 and M2 once the critic lands → porting CFAC to RoboCasa (M6, M7).</p>""",
 )
 
 en(

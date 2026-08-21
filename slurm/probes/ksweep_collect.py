@@ -48,7 +48,22 @@ def main():
         ks_seen = sorted(sr)
         interior = best not in (ks_seen[0], ks_seen[-1])
         rows[t] = {"sr": sr, "best_k": best, "best_sr": sr[best], "interior_peak": interior, "n": d[(t, ks_seen[0])][1]}
-    payload = {"per_task": rows, "ks": KS, "n_trials": 20, "seed": 3000}
+    # how much a merely BETTER CONSTANT buys over the default full chunk (k=H): the baseline that
+    # any adaptive method must beat, not k=16 (worker C's lesson, quantified here)
+    gains = {t: r["best_sr"] - r["sr"][16] for t, r in rows.items() if 16 in r["sr"]}
+    interior = sum(r["interior_peak"] for r in rows.values())
+    k1_worst = sum(1 for r in rows.values() if 1 in r["sr"] and r["sr"][1] == min(r["sr"].values()))
+    payload = {
+        "per_task": rows,
+        "ks": KS,
+        "n_trials": 20,
+        "seed": 3000,
+        "best_minus_full_chunk": gains,
+        "mean_best_minus_full_chunk": (sum(gains.values()) / len(gains)) if gains else None,
+        "interior_peaks": [interior, len(rows)],
+        "k1_is_worst": [k1_worst, len(rows)],
+        "distinct_best_k": sorted({r["best_k"] for r in rows.values()}),
+    }
     if a.json:
         a.json.write_text(json.dumps(payload, indent=1))
     for t, r in rows.items():
