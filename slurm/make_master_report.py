@@ -2089,10 +2089,17 @@ k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 
 (best-fixed-k가 태스크마다 다르다·k=1 최악)에는 영향이 적지만, 절대 수치를 "고정 정책의 최선"으로 읽으면
 안 된다는 뜻이다.</p>
 
-<p><b>상보적 결과.</b> 같은 날 워커C는 OGBench에서 <b>적응이 최고 고정을 넘는다</b>(task2 +0.233, 3/3 —
-그쪽 시드 폭 0.092의 2.5배)를 통제 비교로 보였다. 우리 M4는 VLA에서 <b>필요조건</b>(어떤 상수도 다 못 맞춘다),
-그쪽은 state 도메인에서 <b>충분조건</b>(학습된 적응이 실제로 넘는다)을 채운 셈이다. 우리 스택에서 후자를
-보이는 것이 CFAC의 RoboCasa 이식(M6·M7)의 과제다.</p>
+<p><b>상보적 결과, 그리고 그 범위 (2026-08-22 갱신).</b> 같은 날 워커C는 OGBench에서 적응이 최고 고정을
+넘는 것을 통제 비교로 보였고(<span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>: task2 +0.233, 3/3),
+곧이어 <b>다섯 task 전부로 넓혀 그 주장을 좁혔다</b>(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>):
+분명히 값을 하는 것은 task1·task2뿐이고 task3·4·5는 시드 폭 안이다. 그쪽의 정직한 요약은
+<b>"항상 괜찮고 가끔 훨씬 낫다"</b>이지 "항상 낫다"가 아니다(게다가 고정 arm을 h∈{1,5}로만 잡아 새 task의
+최적이 안쪽이면 최고 고정을 과소평가하므로, 그 null들은 적응 쪽에 유리한 편향 아래서도 살아남은 강한 null이다).</p>
+<p>그래서 두 리포트를 합친 정직한 그림은 이렇다. <b>필요조건</b>(우리 M4, VLA): 최적 고정 길이가 태스크마다
+다르고 미리 알 수 없다. <b>충분조건은 조건부</b>(그쪽, state): 학습된 적응이 어디서도 유의하게 나쁘지 않고
+절반에서 크게 낫다. 즉 배포 논거는 "적응이 언제나 이긴다"가 아니라 <b>"어느 상수가 맞는지 모르는 채로도
+손해 없이 간다"</b>이다. 이 점은 우리 포지셔닝을 오히려 강화한다 — 선택만으로 얻는 이득은 태스크 의존적이고,
+그래서 <b>정책 개선</b>(joint 최적화)이 이득의 본체여야 한다는 우리 주장(Lemma B)이 경험적으로 뒷받침된다.</p>
 
 <p class='sub'><b>재현.</b> <code>probes/run_ksweep.sh K [Task,...]</code>(K별 sbatch 6건 + 실패 칸 재실행),
 집계·figure <code>probes/ksweep_collect.py</code>, 결과 JSON <code>probes/ksweep_results.json</code> 커밋.
@@ -5252,11 +5259,22 @@ not possible here, but <b>our own method must be compared against fixed baseline
 The limitation barely touches M4's conclusions (best k differs by task; k=1 worst), but the absolute numbers must
 not be read as "the best a fixed policy can do".</p>
 
-<p><b>Complementary result.</b> On the same day, worker C showed on OGBench that <b>adaptivity beats the best fixed
-length</b> (task2 +0.233, 3/3 — 2.5× their measured seed spread of 0.092) in a controlled comparison. Our M4
-supplies the <b>necessary condition</b> on a VLA (no constant fits every task); theirs supplies the <b>sufficient
-side</b> in a state domain (a learned adaptive rule actually beats it). Showing the latter on our stack is the job
-of porting CFAC to RoboCasa (M6, M7).</p>
+<p><b>Complementary result, and its scope (updated 2026-08-22).</b> On the same day worker C showed in a
+controlled comparison that adaptivity beats the best fixed length
+(<span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>: task2 +0.233, 3/3), then immediately
+<b>narrowed the claim by extending it to all five tasks</b>
+(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>): the advantage is clear on task1 and task2 and
+inside the seed band on task3, task4 and task5. Their honest summary is <b>"always fine, sometimes much
+better"</b>, not "always better" — and because their fixed arms were only h∈{1,5}, an interior optimum on a new
+task would understate the best fixed arm, a bias that favours the adaptive arm, so those nulls survived a test
+tilted in adaptivity's favour.</p>
+<p>Combining the two reports gives the honest picture. The <b>necessary condition</b> (our M4, on a VLA): the best
+fixed length differs by task and cannot be known in advance. The <b>sufficient side is conditional</b> (theirs, in
+a state domain): a learned adaptive rule is never significantly worse and is much better on half the tasks. The
+deployment argument is therefore not "adaptivity always wins" but <b>"it costs nothing to be wrong about which
+constant is right"</b>. This strengthens our positioning rather than weakening it: gains from selection alone are
+task-dependent, which is precisely why the bulk of the improvement must come from <b>updating the policy</b>
+(Lemma B), as our joint formulation argues.</p>
 
 <p class='sub'><b>Reproduce.</b> <code>probes/run_ksweep.sh K [Task,...]</code> (six per-K sbatches plus the failed
 cell), aggregation and figure <code>probes/ksweep_collect.py</code>, results JSON
