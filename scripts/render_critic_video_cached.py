@@ -113,19 +113,12 @@ def main():
         q = jnp.sum(prob * centers, -1)  # [K,B,mh]
         return jnp.mean(prob[:, :, -1, :], 0), jnp.mean(q, 0)  # dist at full H, per-prefix values
 
-    ds = lerobot_dataset.LeRobotDataset(a.repo_id, root=a.root, episodes=eps, video_backend="pyav")
-    ep_rows = {
-        int(e): (int(f), int(t))
-        for e, f, t in zip(
-            ds.meta.episodes["episode_index"],
-            ds.meta.episodes["dataset_from_index"],
-            ds.meta.episodes["dataset_to_index"],
-            strict=True,
-        )
-    }
-
     a.out.mkdir(parents=True, exist_ok=True)
     for e in eps:
+        # Load ONE episode at a time: with episodes=[...] LeRobot re-indexes rows from 0, so the
+        # metadata's dataset_from_index (a GLOBAL offset) does not apply and indexing with it runs
+        # off the end for every episode but the first.
+        ds = lerobot_dataset.LeRobotDataset(a.repo_id, root=a.root, episodes=[int(e)], video_backend="pyav")
         info = meta["episodes"][str(e)]
         off, full = info["offset"], info["full_len"]
         eff = int(homing[str(e)]["homing_onset"]) if str(e) in homing else full
@@ -151,11 +144,10 @@ def main():
         dist, qpref = np.concatenate(dist), np.concatenate(qpref)
         vfull = qpref[:, -1]
 
-        row0 = ep_rows[int(e)][0]
         cen = np.asarray(hl.centers)
         frames = []
         for j, p in enumerate(pos):
-            sample = ds[row0 + int(p)]
+            sample = ds[int(p)]
             img = np.asarray(sample[CAMS[0]], np.float32)
             img = (np.clip(np.transpose(img, (1, 2, 0)), 0, 1) * 255).astype(np.uint8)
 

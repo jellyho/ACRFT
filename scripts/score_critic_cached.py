@@ -96,12 +96,21 @@ def main():
     hl = HLGauss(cc["v_min"], cc["v_max"], atoms)
     centers = jnp.asarray(hl.centers)
 
+    from openpi.patch_critic.critic import PatchV
+
+    v_net = PatchV(num_atoms=atoms)
+    v_params = flax.serialization.msgpack_restore((a.critic / "v_params.msgpack").read_bytes())
+
     @jax.jit
     def value(p, chunk, s):
-        out = net.apply(params, p.astype(jnp.float32), chunk, s)  # [K,B,P,atoms]
-        v = jnp.sum(jax.nn.softmax(out[:, :, -1, :], -1) * centers, -1)  # full-horizon prefix
-        deep = jnp.sum(jax.nn.softmax(out[:, :, -1, :], -1) * (centers < 0.72 * cc["v_min"]), -1)
-        return jnp.min(v, 0), jnp.mean(deep, 0)  # ensemble-min value, deep-atom mass
+        pf = p.astype(jnp.float32)
+        out = net.apply(params, pf, chunk, s)  # [K,B,P,atoms]
+        prob = jax.nn.softmax(out, -1)
+        qpref = jnp.mean(jnp.sum(prob * centers, -1), 0)  # [B,P] per-prefix value
+        v = jnp.min(jnp.sum(prob[:, :, -1, :] * centers, -1), 0)  # ensemble-min at k=H
+        deep = jnp.mean(jnp.sum(prob[:, :, -1, :] * (centers < 0.72 * cc["v_min"]), -1), 0)
+        vs = jnp.sum(jax.nn.softmax(v_net.apply(v_params, pf, s), -1) * centers, -1)  # state value
+        return v, deep, qpref, vs
 
     succ_stats, fail_stats = [], []
     ar = np.arange(H)
@@ -128,7 +137,7 @@ def main():
         ep_feats = np.asarray(feats[off : off + full])
         ep_states = np.asarray(states[off : off + full])
         ep_actions = np.asarray(actions[off : off + full])
-        vs, ds = [], []
+        vs, ds, qps, svs = [], [], [], []
         for i in range(0, len(pos), a.batch):
             p = pos[i : i + a.batch]
             hp = p[:, None] + ar[None]
@@ -141,11 +150,28 @@ def main():
                 st = pre.state(st)
             if pidx is not None:
                 st = st[..., pidx]
-            v, d = value(jnp.asarray(ep_feats[p]), jnp.asarray(ch), jnp.asarray(st))
+            v, d, qp, sv = value(jnp.asarray(ep_feats[p]), jnp.asarray(ch), jnp.asarray(st))
             vs.append(np.asarray(v))
             ds.append(np.asarray(d))
+            qps.append(np.asarray(qp))
+            svs.append(np.asarray(sv))
         vs = np.concatenate(vs)
         ds = np.concatenate(ds)
+        qps, svs = np.concatenate(qps), np.concatenate(svs)
+        # Which commitment length the selector would pick, and how well the learned state value tracks
+        # the TRUE cost_to_goal slope. All prefixes tie exactly under a correct V (Bellman consistency),
+        # so a short-biased argmax is a symptom of V under-rising, not of the selector.
+        kbest = float(np.mean((np.argmax(qps, axis=1) + 1) * gsz))
+        # Only defined for SUCCESSES: cost_to_goal has no goal to count down to on a failure, whose
+        # true value is the floor throughout, so the reference slope there is ~0 and the ratio is noise.
+        slope_rec = float("nan")
+        if is_succ:
+            n_to_goal = np.maximum(0.0, (eff - cc["h_goal"]) - pos.astype(np.float64))
+            v_true = -(1.0 - cc["discount"] ** n_to_goal) / (1.0 - cc["discount"])
+            d_learn, d_true = np.diff(svs.astype(np.float64)), np.diff(v_true)
+            ok = np.abs(d_true) > 1e-9
+            if ok.any():
+                slope_rec = float(np.mean(d_learn[ok] / d_true[ok]))
         rec = {
             "ep": e,
             "mean": float(vs.mean()),
@@ -155,6 +181,8 @@ def main():
             "last": float(vs[-1]),
             "deep": float(ds.mean()),
             "n": len(vs),
+            "kbest": kbest,
+            "slope": slope_rec,
         }
         (succ_stats if is_succ else fail_stats).append(rec)
         _done += 1
@@ -170,8 +198,10 @@ def main():
     print(f"  AUC(last value) = {roc_auc(col(succ_stats, 'last'), col(fail_stats, 'last')):.4f}")
     for name, rs in (("success", succ_stats), ("fail", fail_stats)):
         if rs:
+            slope = f"{np.nanmean(col(rs, 'slope')):5.2f}" if name == "success" else "  n/a"
             print(
-                f"  {name:8s}: first {col(rs, 'first').mean():9.1f}  last {col(rs, 'last').mean():9.1f} "
+                f"  {name:8s}: k*={col(rs, 'kbest').mean():5.1f}  Vslope={slope}  "
+                f"first {col(rs, 'first').mean():9.1f}  last {col(rs, 'last').mean():9.1f} "
                 f" mean {col(rs, 'mean').mean():9.1f}  min {col(rs, 'min').mean():9.1f} "
                 f" deep-atom mass {col(rs, 'deep').mean():.3f}"
             )
