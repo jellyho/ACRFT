@@ -92,7 +92,7 @@ def main():
         repo_id=a.repo_id,
         fps=a.fps,
         features=features_like_demos(z0["state"].shape[1], z0["action"].shape[1]),
-        root=a.root / a.repo_id.split("/")[-1],
+        root=a.root / a.repo_id,
         robot_type="panda_mobile",
         use_videos=True,
     )
@@ -136,9 +136,9 @@ def main():
         "episodes_successful": n_succ,
         "episodes_written": written,
         "frames_written": ds.num_frames,
-        "root": str(a.root / a.repo_id.split("/")[-1]),
+        "root": str(a.root / a.repo_id),
     }
-    (a.root / a.repo_id.split("/")[-1] / "conversion_summary.json").write_text(json.dumps(summary, indent=1))
+    (a.root / a.repo_id / "conversion_summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary, indent=1))
 
 
