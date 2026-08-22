@@ -1061,6 +1061,13 @@ _CONFIGS = [
             repo_id="jellyho/rc_b1_PickPlaceSinkToCounter",
             base_config=DataConfig(prompt_from_task=True),
             force_mean_std_norm=True,  # the released checkpoint's norm_stats carry no quantiles
+            # Reuse the RELEASED checkpoint's normalization rather than computing new stats from the
+            # rollouts. Recomputing would renormalize states and actions under weights trained with
+            # the old statistics, which silently corrupts the policy we are trying to continue.
+            assets=AssetsConfig(
+                assets_dir="/scratch/jellyho/acrft/assets/official",
+                asset_id="robocasa365_official",
+            ),
         ),
         batch_size=32,
         # short, low-LR continuation: the run must not relearn the task, only re-weight what the

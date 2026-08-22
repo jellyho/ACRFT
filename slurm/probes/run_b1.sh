@@ -25,10 +25,14 @@ ROLLOUT_ROOT=/scratch/jellyho/acrft/rollout_v3
 export HF_LEROBOT_HOME=$ROLLOUT_ROOT
 REPO="jellyho/rc_${FILTER}_${TASK}"
 
-echo "=== [1/2] build dataset $REPO (filter=$FILTER) ==="
-.venv/bin/python examples/robocasa/convert_rollouts.py \
-    --task "$TASK" --filter "$FILTER" --repo-id "$REPO" --root "$ROLLOUT_ROOT" 2>&1 | tail -12 \
-    || { echo "CONVERT FAILED $TASK"; exit 1; }
+if [ -f "$ROLLOUT_ROOT/$REPO/meta/info.json" ]; then
+  echo "=== [1/2] dataset $REPO already built, reusing ==="
+else
+  echo "=== [1/2] build dataset $REPO (filter=$FILTER) ==="
+  .venv/bin/python examples/robocasa/convert_rollouts.py \
+      --task "$TASK" --filter "$FILTER" --repo-id "$REPO" --root "$ROLLOUT_ROOT" 2>&1 | tail -12 \
+      || { echo "CONVERT FAILED $TASK"; exit 1; }
+fi
 
 echo "=== [2/2] fine-tune from the released checkpoint ==="
 EXP="b1_${FILTER}_${TASK}"
