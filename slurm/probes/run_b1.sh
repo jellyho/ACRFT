@@ -17,6 +17,9 @@ set -uo pipefail
 TASK=${1:?usage: sbatch run_b1.sh Task [filter] [steps]}
 FILTER=${2:-success}
 STEPS=${3:-10000}
+BATCH=${4:-16}   # activations scale with batch: 32 needs a 14.5 GB single allocation, which OOMs
+                 # on a 48 GB A6000 even with the parameters sharded. Both arms use the same batch,
+                 # so the success-vs-all comparison stays a method-only difference.
 unset LD_LIBRARY_PATH
 cd /home/jellyho/ACRFT/ACRFT
 # pi0.5 is 3B parameters: bf16 weights plus fp32 AdamW moments and master weights do not fit in one
@@ -49,6 +52,7 @@ uv run scripts/train.py pi05_robocasa_b1 \
     --data.repo-id "$REPO" \
     --num-train-steps "$STEPS" \
     --fsdp-devices 2 \
+    --batch-size "$BATCH" \
     --overwrite \
     --checkpoint-base-dir /scratch/jellyho/acrft/checkpoints/b1 2>&1 | tail -20
 
