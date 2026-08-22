@@ -2089,37 +2089,23 @@ k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 
 (best-fixed-k가 태스크마다 다르다·k=1 최악)에는 영향이 적지만, 절대 수치를 "고정 정책의 최선"으로 읽으면
 안 된다는 뜻이다.</p>
 
-<p><b>상보적 결과, 그리고 그 범위 (2026-08-22 갱신).</b> 같은 날 워커C는 OGBench에서 적응이 최고 고정을
-넘는 것을 통제 비교로 보였고(<span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>: task2 +0.233, 3/3),
-곧이어 <b>다섯 task 전부로 넓혀 그 주장을 좁혔다</b>(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>):
-분명히 값을 하는 것은 task1·task2뿐이고 task3·4·5는 시드 폭 안이다. 그쪽의 정직한 요약은
-<b>"항상 괜찮고 가끔 훨씬 낫다"</b>이지 "항상 낫다"가 아니다(게다가 고정 arm을 h∈{1,5}로만 잡아 새 task의
-최적이 안쪽이면 최고 고정을 과소평가하므로, 그 null들은 적응 쪽에 유리한 편향 아래서도 살아남은 강한 null이다).</p>
-<p>그래서 두 리포트를 합친 정직한 그림은 이렇다. <b>필요조건</b>(우리 M4, VLA): 최적 고정 길이가 태스크마다
-다르고 미리 알 수 없다. <b>충분조건은 조건부</b>(그쪽, state): 학습된 적응이 어디서도 유의하게 나쁘지 않고
-절반에서 크게 낫다. 즉 배포 논거는 "적응이 언제나 이긴다"가 아니라 <b>"어느 상수가 맞는지 모르는 채로도
-손해 없이 간다"</b>이다. 이 점은 우리 포지셔닝을 오히려 강화한다 — 선택만으로 얻는 이득은 태스크 의존적이고,
-그래서 <b>정책 개선</b>(joint 최적화)이 이득의 본체여야 한다는 우리 주장(Lemma B)이 경험적으로 뒷받침된다.</p>
+<p><b>상보적 결과, 그리고 그 범위 (2026-08-23 재갱신).</b> 워커C는 OGBench에서 같은 질문(적응이 최고 고정을
+넘는가)을 연속 라운드로 파고 있고, 답이 세 번 움직였다: <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>
+(task2 +0.233, 3/3 — 적응이 이긴다) → <span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>(다섯 task로
+넓히니 task1·task2만, 나머지는 시드 폭 안) → <span class='xref' data-eid='wc-r-0823-nothing'>0823_nothing</span>
+(그 "나머지" 중 task3의 적응 셀이 <b>재현되지 않음</b>: 같은 설정·같은 시드에서 0.433 → 0.636). 재현 격차
++0.202는 판정 근거였던 −0.020의 <b>열 배</b>라, task3의 null은 판정이 아니라 제출본 잡음이었다.</p>
 
-<p class='sub'><b>재현.</b> <code>probes/run_ksweep.sh K [Task,...]</code>(K별 sbatch 6건 + 실패 칸 재실행),
-집계·figure <code>probes/ksweep_collect.py</code>, 결과 JSON <code>probes/ksweep_results.json</code> 커밋.
-<b>다음</b>: M3(BoN N-스윕, serve_bon_policy 재사용) → 크리틱 도착 후 M1·M2 → CFAC의 RoboCasa 이식(M6·M7).</p>""",
-)
+<p><b>지금 확정적으로 말할 수 있는 것</b>은 좁다. 적응이 <b>어떤 task에서는 최고 고정을 크게 넘고</b>(task2 +0.233
+재현됨, task1 +0.156), 다른 task들에서의 상태는 <b>미해결</b>이다("이득이 없다"가 아니라 "근거가 없다").
+우리 M4가 채운 <b>필요조건</b>(어떤 상수도 다 못 맞춘다, k=1은 4/5에서 최악)은 그와 독립이므로 영향을 받지 않는다.</p>
 
-# ============================================== 08-21 CFAC 함수근사 검증
-entry(
-    "08-21",
-    "cfac-nn",
-    "🔬 CFAC를 실제로 돌려봤다 — 함수근사에서 작동하고, 합성만으로는 부족했다",
-    "완결",
-    """
-<p class='sub'>tabular 기제 증명(<span class='xref' data-eid='cfac'>CFAC 제안</span>)을 <b>실제 알고리즘</b>으로
-구현해 연속 환경에서 검증했다 — 신경 per-prefix 크리틱, 모델 없는 per-step TD, 정책-기대 부트스트랩,
-AWR full-chunk 개선, lexicographic selector. 결과: 작동한다(오라클 수준 도달). 그리고 <b>구현하면서 이론이
-한 번 틀렸다</b> — "합성 백업"만으로는 부족하고 <b>개입적(interventional) 짝짓기</b>가 필요하다.</p>
-
-<p><b>왜.</b> 앞 포스트의 toy는 tabular 전수 열거 + 경험 모델이었다. 논문이 주장하려면 실제로 배포할 형태
-(신경망·모델 없음·정책 개선 포함)에서 작동해야 한다. 환경도 열거 불가능한 <b>연속</b>으로 바꿨다.</p>
+<p><b>우리 프로토콜에 대한 교훈 (자기 점검).</b> 세 번의 수정 모두 원인이 같다 — <b>제출본을 건너뛴 비교</b>.
+그쪽에서는 제출본 간 격차(+0.202)가 시드 폭(0.092–0.127)을 압도하는데, 그쪽 제출본은 <b>재학습</b>을 포함하므로
+초기화·데이터 순서 잡음이 통째로 들어간다. 우리 M4는 <b>같은 체크포인트·같은 장면 시드</b>로 평가만 하므로 그
+성분이 없지만, k별로 <b>잡을 나눠</b> 돌렸으니 서버 프로세스 차이(플로우 샘플링 난수 등)만큼의 노출은 있다.
+따라서 앞으로 <b>본 방법 판정은 한 제출본 안에서 arm을 나란히</b> 돌리고(B1의 success/all 쌍이 그 형태),
+제출본을 건너뛴 수치는 참고로만 쓴다.</p>
 
 <h3>① 구현하다 발견한 것 — 이론의 정정</h3>
 <p>첫 구현은 합성 TD를 데이터 그대로 썼다: <code>Q_k(h_t, c) ← r_t + γ Q_{k-1}(s_{t+1}^데이터, c_{2:k})</code>.
@@ -5260,42 +5246,27 @@ not possible here, but <b>our own method must be compared against fixed baseline
 The limitation barely touches M4's conclusions (best k differs by task; k=1 worst), but the absolute numbers must
 not be read as "the best a fixed policy can do".</p>
 
-<p><b>Complementary result, and its scope (updated 2026-08-22).</b> On the same day worker C showed in a
-controlled comparison that adaptivity beats the best fixed length
-(<span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>: task2 +0.233, 3/3), then immediately
-<b>narrowed the claim by extending it to all five tasks</b>
-(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>): the advantage is clear on task1 and task2 and
-inside the seed band on task3, task4 and task5. Their honest summary is <b>"always fine, sometimes much
-better"</b>, not "always better" — and because their fixed arms were only h∈{1,5}, an interior optimum on a new
-task would understate the best fixed arm, a bias that favours the adaptive arm, so those nulls survived a test
-tilted in adaptivity's favour.</p>
-<p>Combining the two reports gives the honest picture. The <b>necessary condition</b> (our M4, on a VLA): the best
-fixed length differs by task and cannot be known in advance. The <b>sufficient side is conditional</b> (theirs, in
-a state domain): a learned adaptive rule is never significantly worse and is much better on half the tasks. The
-deployment argument is therefore not "adaptivity always wins" but <b>"it costs nothing to be wrong about which
-constant is right"</b>. This strengthens our positioning rather than weakening it: gains from selection alone are
-task-dependent, which is precisely why the bulk of the improvement must come from <b>updating the policy</b>
-(Lemma B), as our joint formulation argues.</p>
+<p><b>Complementary result, and its scope (re-updated 2026-08-23).</b> Worker C is drilling the same question
+(does adaptivity beat the best fixed length) in consecutive rounds on OGBench, and the answer has moved three
+times: <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span> (task2 +0.233, 3/3, adaptivity wins) →
+<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span> (extended to five tasks: only task1 and task2, the
+rest inside the seed band) → <span class='xref' data-eid='wc-r-0823-nothing'>0823_nothing</span> (one of those
+"rest", task3, <b>does not reproduce</b>: same setting, same seeds, 0.433 → 0.636). The reproduction gap of +0.202
+is <b>ten times</b> the −0.020 the null rested on, so task3's null was submission noise, not a verdict.</p>
 
-<p class='sub'><b>Reproduce.</b> <code>probes/run_ksweep.sh K [Task,...]</code> (six per-K sbatches plus the failed
-cell), aggregation and figure <code>probes/ksweep_collect.py</code>, results JSON
-<code>probes/ksweep_results.json</code> committed. <b>Next</b>: M3 (best-of-N sweep, reusing serve_bon_policy) →
-M1 and M2 once the critic lands → porting CFAC to RoboCasa (M6, M7).</p>""",
-)
+<p><b>What can be stated confidently is narrow.</b> Adaptivity <b>clearly beats the best fixed length on some
+tasks</b> (task2 +0.233, reproduced; task1 +0.156), and its status on the others is <b>unresolved</b> ("no
+evidence", not "no gain"). The <b>necessary condition</b> our M4 supplies (no constant fits every task; k=1 worst
+on 4 of 5) is independent of that and is unaffected.</p>
 
-en(
-    "cfac-nn",
-    "🔬 Running CFAC for real — it works under function approximation, and composition alone was not enough",
-    """
-<p class='sub'>The tabular existence proof (<span class='xref' data-eid='cfac'>the CFAC proposal</span>) is now
-implemented as <b>the actual algorithm</b> and tested in a continuous environment: neural per-prefix critic,
-model-free per-step TD, policy-expectation bootstrap, AWR full-chunk improvement, lexicographic selector. It
-works (it reaches oracle level). And <b>implementing it corrected the theory once</b>: a composed backup is not
-enough, the pairing must be <b>interventional</b>.</p>
-
-<p><b>Why.</b> The previous toy was tabular with an empirical model. For the paper's claim, the mechanism must
-survive the form we would actually ship (neural, model-free, with policy improvement), so the environment is now
-<b>continuous</b> and enumeration is impossible.</p>
+<p><b>A lesson for our own protocol (self-check).</b> All three revisions share one cause: <b>comparisons that skip
+across submissions</b>. In their setup the submission-to-submission gap (+0.202) dwarfs the seed spread
+(0.092–0.127), because their submissions include <b>retraining</b> and therefore carry initialization and
+data-order noise. Our M4 evaluates a <b>fixed checkpoint on fixed scene seeds</b>, so that component is absent, but
+we did split the k arms into <b>separate jobs</b>, which leaves exposure to server-process differences such as flow
+sampling randomness. From here on, verdicts about our method put the arms <b>side by side within one
+submission</b> (the success/all pair in B1 is exactly that shape), and cross-submission numbers are used only as
+context.</p>
 
 <h3>① What implementation revealed — a correction to the theory</h3>
 <p>The first implementation composed the TD backup with the data as it lies:
