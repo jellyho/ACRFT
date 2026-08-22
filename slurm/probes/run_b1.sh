@@ -20,6 +20,10 @@ STEPS=${3:-10000}
 unset LD_LIBRARY_PATH
 cd /home/jellyho/ACRFT/ACRFT
 export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 WANDB_MODE=offline
+# torchcodec needs system FFmpeg, which these nodes lack once LD_LIBRARY_PATH is unset (and it must
+# be unset, or miniconda's libcrypto breaks the eval python). pyav ships its own FFmpeg, so it
+# decodes the rollout videos everywhere -- the same fix openpi already applies in the critic loader.
+export LEROBOT_VIDEO_BACKEND=pyav
 export PYTHONPATH=/home/jellyho/ACRFT/ACRFT/third_party/robocasa:${PYTHONPATH:-}
 ROLLOUT_ROOT=/scratch/jellyho/acrft/rollout_v3
 export HF_LEROBOT_HOME=$ROLLOUT_ROOT
