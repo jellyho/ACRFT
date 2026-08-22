@@ -62,7 +62,7 @@ PY
 import json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
 r = json.load(open(out / "results.json"))
-n = len(list((out / "traj").glob("*.npz")))
+n = len([d for d in (out / "traj").glob("*") if d.is_dir()])
 print(f"COLLECT {out.name}: {r['successes']}/{r['num_trials']} = {r['success_rate']} | {n} episodes recorded")
 PY
 echo "COLLECT_DONE ${TASK}"
