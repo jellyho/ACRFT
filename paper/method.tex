@@ -117,20 +117,26 @@ is compiled into the policy.
 \subsection{Deployment}
 \label{sec:method:deploy}
 
-At each query the policy emits one chunk, the critic scores its $H$ prefixes in the same forward
-pass, and the system executes the longest prefix whose value is within $\epsilon$ of the best,
+At each query the policy emits one chunk, the critic scores its prefixes in the same forward pass,
+and the system executes the longest admissible prefix whose value is within $\epsilon$ of the best,
 \begin{equation}
 \label{eq:method-kappa}
-\kappa(x, c) \;=\; \max\Big\{\,k \;:\; Q_\phi(x, c, k) \;\ge\; \max_{k'} Q_\phi(x, c, k') - \epsilon
-\,\Big\}.
+\kappa(x, c) \;=\; \max\Big\{\,k \in \mathcal K \;:\; Q_\phi(x, c, k) \;\ge\;
+\max_{k' \in \mathcal K} Q_\phi(x, c, k') - \epsilon \,\Big\}.
 \end{equation}
+The menu $\mathcal K \subseteq \{1,\dots,H\}$ of admissible commitments is a design choice, not
+necessarily every length. A coarse menu costs little, because the values of neighbouring
+commitments are close, while it shortens the range the actor must cover and keeps results
+comparable to prior work that adapts over a small set. We report the menu with every result and
+treat its size as an ablation rather than a fixed part of the method.
 The tie-breaking direction matters. Values of neighbouring commitments are often
 indistinguishable, and a rule that breaks ties toward short commitments requeries constantly, which
 re-injects policy error and destroys the plan continuity that made the demonstration succeed;
 breaking them toward long commitments yields the curriculum that improvement predicts, as the set
 of states where a strictly shorter commitment wins shrinks to those where reactive information
-genuinely arrives (Corollary~\ref{cor:curriculum}). The comparison tolerance $\epsilon$ is the only
-free parameter introduced by the commitment rule, and no cost term is added to the reward.
+genuinely arrives (Corollary~\ref{cor:curriculum}). Apart from the menu, the comparison tolerance
+$\epsilon$ is the only free parameter the commitment rule introduces, and no cost term is added to
+the reward.
 
 \subsection{Algorithm}
 \label{sec:method:algo}
