@@ -2098,7 +2098,7 @@ k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 
 
 <p><b>지금 확정적으로 말할 수 있는 것</b>은 좁다. 적응이 <b>어떤 task에서는 최고 고정을 크게 넘고</b>(task2 +0.233
 재현됨, task1 +0.156), 다른 task들에서의 상태는 <b>미해결</b>이다("이득이 없다"가 아니라 "근거가 없다").
-우리 M4가 채운 <b>필요조건</b>(어떤 상수도 다 못 맞춘다, k=1은 4/5에서 최악)은 그와 독립이므로 영향을 받지 않는다.</p>
+우리 M4가 채운 <b>필요조건</b>(어떤 상수도 다 못 맞춘다, k=1은 4/5에서 최악)은 그와 독립이므로 영향받지 않는다.</p>
 
 <p><b>우리 프로토콜에 대한 교훈 (자기 점검).</b> 세 번의 수정 모두 원인이 같다 — <b>제출본을 건너뛴 비교</b>.
 그쪽에서는 제출본 간 격차(+0.202)가 시드 폭(0.092–0.127)을 압도하는데, 그쪽 제출본은 <b>재학습</b>을 포함하므로
@@ -2106,6 +2106,26 @@ k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 
 성분이 없지만, k별로 <b>잡을 나눠</b> 돌렸으니 서버 프로세스 차이(플로우 샘플링 난수 등)만큼의 노출은 있다.
 따라서 앞으로 <b>본 방법 판정은 한 제출본 안에서 arm을 나란히</b> 돌리고(B1의 success/all 쌍이 그 형태),
 제출본을 건너뛴 수치는 참고로만 쓴다.</p>
+
+<p class='sub'><b>재현.</b> <code>probes/run_ksweep.sh K [Task,...]</code>(K별 sbatch 6건 + 실패 칸 재실행),
+집계·figure <code>probes/ksweep_collect.py</code>, 결과 JSON <code>probes/ksweep_results.json</code> 커밋.
+<b>다음</b>: M3(BoN N-스윕, serve_bon_policy 재사용) → 크리틱 도착 후 M1·M2 → CFAC의 RoboCasa 이식(M6·M7).</p>""",
+)
+
+# ============================================== 08-21 CFAC 함수근사 검증
+entry(
+    "08-21",
+    "cfac-nn",
+    "🔬 CFAC를 실제로 돌려봤다 — 함수근사에서 작동하고, 합성만으로는 부족했다",
+    "완결",
+    """
+<p class='sub'>tabular 기제 증명(<span class='xref' data-eid='cfac'>CFAC 제안</span>)을 <b>실제 알고리즘</b>으로
+구현해 연속 환경에서 검증했다 — 신경 per-prefix 크리틱, 모델 없는 per-step TD, 정책-기대 부트스트랩,
+AWR full-chunk 개선, lexicographic selector. 결과: 작동한다(오라클 수준 도달). 그리고 <b>구현하면서 이론이
+한 번 틀렸다</b> — "합성 백업"만으로는 부족하고 <b>개입적(interventional) 짝짓기</b>가 필요하다.</p>
+
+<p><b>왜.</b> 앞 포스트의 toy는 tabular 전수 열거 + 경험 모델이었다. 논문이 주장하려면 실제로 배포할 형태
+(신경망·모델 없음·정책 개선 포함)에서 작동해야 한다. 환경도 열거 불가능한 <b>연속</b>으로 바꿨다.</p>
 
 <h3>① 구현하다 발견한 것 — 이론의 정정</h3>
 <p>첫 구현은 합성 TD를 데이터 그대로 썼다: <code>Q_k(h_t, c) ← r_t + γ Q_{k-1}(s_{t+1}^데이터, c_{2:k})</code>.
@@ -5255,18 +5275,38 @@ rest inside the seed band) → <span class='xref' data-eid='wc-r-0823-nothing'>0
 is <b>ten times</b> the −0.020 the null rested on, so task3's null was submission noise, not a verdict.</p>
 
 <p><b>What can be stated confidently is narrow.</b> Adaptivity <b>clearly beats the best fixed length on some
-tasks</b> (task2 +0.233, reproduced; task1 +0.156), and its status on the others is <b>unresolved</b> ("no
-evidence", not "no gain"). The <b>necessary condition</b> our M4 supplies (no constant fits every task; k=1 worst
-on 4 of 5) is independent of that and is unaffected.</p>
+tasks</b> (task2 +0.233, reproduced; task1 +0.156), and its status elsewhere is <b>unresolved</b> ("no evidence",
+not "no gain"). The <b>necessary condition</b> our M4 supplies (no constant fits every task; k=1 worst on 4 of 5)
+is independent of that and unaffected.</p>
 
 <p><b>A lesson for our own protocol (self-check).</b> All three revisions share one cause: <b>comparisons that skip
 across submissions</b>. In their setup the submission-to-submission gap (+0.202) dwarfs the seed spread
-(0.092–0.127), because their submissions include <b>retraining</b> and therefore carry initialization and
-data-order noise. Our M4 evaluates a <b>fixed checkpoint on fixed scene seeds</b>, so that component is absent, but
-we did split the k arms into <b>separate jobs</b>, which leaves exposure to server-process differences such as flow
+(0.092–0.127), because their submissions include <b>retraining</b> and so carry initialization and data-order
+noise. Our M4 evaluates a <b>fixed checkpoint on fixed scene seeds</b>, so that component is absent, but we did
+split the k arms into <b>separate jobs</b>, which leaves exposure to server-process differences such as flow
 sampling randomness. From here on, verdicts about our method put the arms <b>side by side within one
-submission</b> (the success/all pair in B1 is exactly that shape), and cross-submission numbers are used only as
-context.</p>
+submission</b> (the success/all pair in B1 is exactly that shape), and cross-submission numbers are context
+only.</p>
+
+<p class='sub'><b>Reproduce.</b> <code>probes/run_ksweep.sh K [Task,...]</code> (six per-K sbatches plus the failed
+cell), aggregation and figure <code>probes/ksweep_collect.py</code>, results JSON
+<code>probes/ksweep_results.json</code> committed. <b>Next</b>: M3 (best-of-N sweep, reusing serve_bon_policy) →
+M1 and M2 once the critic lands → porting CFAC to RoboCasa (M6, M7).</p>""",
+)
+
+en(
+    "cfac-nn",
+    "🔬 Running CFAC for real — it works under function approximation, and composition alone was not enough",
+    """
+<p class='sub'>The tabular existence proof (<span class='xref' data-eid='cfac'>the CFAC proposal</span>) is now
+implemented as <b>the actual algorithm</b> and tested in a continuous environment: neural per-prefix critic,
+model-free per-step TD, policy-expectation bootstrap, AWR full-chunk improvement, lexicographic selector. It
+works (it reaches oracle level). And <b>implementing it corrected the theory once</b>: a composed backup is not
+enough, the pairing must be <b>interventional</b>.</p>
+
+<p><b>Why.</b> The previous toy was tabular with an empirical model. For the paper's claim, the mechanism must
+survive the form we would actually ship (neural, model-free, with policy improvement), so the environment is now
+<b>continuous</b> and enumeration is impossible.</p>
 
 <h3>① What implementation revealed — a correction to the theory</h3>
 <p>The first implementation composed the TD backup with the data as it lies:
