@@ -412,14 +412,16 @@ class Pi0AlphaFlow(Pi0):
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
         prefix_mask, kv_cache = self._prefix_forward(observation)
 
-        num_steps = int(num_steps)
-        dt = 1.0 / num_steps
-        x = noise
-        for i in range(num_steps):
+        # trace-compatible (num_steps may be a tracer when the caller jits sample_kwargs, as
+        # Policy.infer does) -- a fori_loop, not a Python loop.
+        dt = 1.0 / jnp.asarray(num_steps, jnp.float32)
+
+        def body(i, x):
             t = jnp.full((batch_size,), 1.0 - i * dt)
             r = jnp.full((batch_size,), 1.0 - (i + 1) * dt)
-            x = x - dt * self._u(observation, prefix_mask, kv_cache, x, t, r)
-        return x
+            return x - dt * self._u(observation, prefix_mask, kv_cache, x, t, r)
+
+        return jax.lax.fori_loop(0, jnp.asarray(num_steps, jnp.int32), body, noise)
 
     def sample_actions_ode(
         self,
@@ -439,9 +441,10 @@ class Pi0AlphaFlow(Pi0):
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
         prefix_mask, kv_cache = self._prefix_forward(observation)
 
-        dt = 1.0 / num_steps
-        x = noise
-        for i in range(num_steps):
+        dt = 1.0 / jnp.asarray(num_steps, jnp.float32)
+
+        def body(i, x):
             t = jnp.full((batch_size,), 1.0 - i * dt)
-            x = x - dt * self._u(observation, prefix_mask, kv_cache, x, t, t)
-        return x
+            return x - dt * self._u(observation, prefix_mask, kv_cache, x, t, t)
+
+        return jax.lax.fori_loop(0, jnp.asarray(num_steps, jnp.int32), body, noise)
