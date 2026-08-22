@@ -25,10 +25,11 @@ ROLLOUT_ROOT=/scratch/jellyho/acrft/rollout_v3
 export HF_LEROBOT_HOME=$ROLLOUT_ROOT
 REPO="jellyho/rc_${FILTER}_${TASK}"
 
-if [ -f "$ROLLOUT_ROOT/$REPO/meta/info.json" ]; then
+if [ -f "$ROLLOUT_ROOT/$REPO/conversion_summary.json" ]; then
   echo "=== [1/2] dataset $REPO already built, reusing ==="
 else
   echo "=== [1/2] build dataset $REPO (filter=$FILTER) ==="
+  rm -rf "$ROLLOUT_ROOT/$REPO"   # drop any half-written dataset before rebuilding
   .venv/bin/python examples/robocasa/convert_rollouts.py \
       --task "$TASK" --filter "$FILTER" --repo-id "$REPO" --root "$ROLLOUT_ROOT" 2>&1 | tail -12 \
       || { echo "CONVERT FAILED $TASK"; exit 1; }
@@ -40,6 +41,7 @@ uv run scripts/train.py pi05_robocasa_b1 \
     --exp-name "$EXP" \
     --data.repo-id "$REPO" \
     --num-train-steps "$STEPS" \
+    --overwrite \
     --checkpoint-base-dir /scratch/jellyho/acrft/checkpoints/b1 2>&1 | tail -20
 
 echo "B1_DONE ${TASK} ${FILTER}"
