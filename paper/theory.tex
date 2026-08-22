@@ -103,6 +103,21 @@ horizons was identified in the online setting by ExRL~\citep{exrl}, whose remedy
 semi-Markov backup. Our critic trains on \eqref{eq:smdp-backup} directly, so commitments of
 different lengths compete on equal terms; every result below assumes this bookkeeping.
 
+\begin{remark}[What correcting the bookkeeping does and does not buy]
+\label{rem:scope}
+Proposition~\ref{prop:bookkeeping} says that a duration-blind comparison of commitments is
+ill-posed, not that repairing it raises success. The two are separate claims, and the second does
+not follow. In a state-domain replication of this family, changing only the quantity the selector
+compares moved the mean committed length substantially while leaving success unchanged, so the
+committed length is not by itself a causal path to performance there. We therefore claim only what
+the proposition supports, that the semi-Markov backup makes commitments comparable at all, and we
+report commitment length and success as separate measurements rather than treating one as evidence
+for the other. A corollary for practice is that once targets follow \eqref{eq:smdp-backup}, the
+prefix values are already on a common scale and need no further normalization; rescaling them by
+$\gamma^{-k}$ or subtracting a per-length baseline changes which commitment is selected without a
+corresponding change in outcome.
+\end{remark}
+
 \begin{remark}[The direction of the distortion is not a property of the task]
 \label{rem:sign}
 Proposition~\ref{prop:bookkeeping} assumes nonnegative rewards, under which landing values are
