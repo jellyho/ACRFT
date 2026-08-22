@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH -J b1sft
 #SBATCH -p gigabyte_a6000
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH -c 12
-#SBATCH --mem=100G
+#SBATCH --mem=160G
 #SBATCH -t 24:00:00
 #SBATCH -o /scratch/jellyho/acrft/probes/b1_%j.out
 # Baseline ladder rung B1: convert one task's collection under the requested filter, then continue
@@ -19,7 +19,10 @@ FILTER=${2:-success}
 STEPS=${3:-10000}
 unset LD_LIBRARY_PATH
 cd /home/jellyho/ACRFT/ACRFT
-export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 WANDB_MODE=offline
+# pi0.5 is 3B parameters: bf16 weights plus fp32 AdamW moments and master weights do not fit in one
+# 48 GB A6000 (the first attempt died allocating 0.5 GB during train-state init). Sharding the
+# parameters and optimizer over two GPUs with FSDP leaves headroom; the nodes carry eight each.
+export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.92 WANDB_MODE=offline
 # torchcodec needs system FFmpeg, which these nodes lack once LD_LIBRARY_PATH is unset (and it must
 # be unset, or miniconda's libcrypto breaks the eval python). pyav ships its own FFmpeg, so it
 # decodes the rollout videos everywhere -- the same fix openpi already applies in the critic loader.
@@ -45,6 +48,7 @@ uv run scripts/train.py pi05_robocasa_b1 \
     --exp-name "$EXP" \
     --data.repo-id "$REPO" \
     --num-train-steps "$STEPS" \
+    --fsdp-devices 2 \
     --overwrite \
     --checkpoint-base-dir /scratch/jellyho/acrft/checkpoints/b1 2>&1 | tail -20
 
