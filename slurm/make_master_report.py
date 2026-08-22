@@ -2076,8 +2076,8 @@ k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 
 미해결</b>이고, 태스크별 best k의 정확한 값도 확정이 아니다. 확정적인 것은 5태스크에 걸쳐 <b>일관된 패턴</b>
 (k=1 최악, 내부 정점 다수, best k 불일치)이다. 워커C의 폭 실측(<span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>:
 짝지은 차의 시드 SD 0.092–0.127)을 우리 판정에도 적용해, 본 방법 평가는 <b>다중 시드</b>로 간다.
-그리고 k=4 × PickPlaceCounterToMicrowave 한 칸은 서버 웹소켓 끊김(인프라)으로 실패해 재실행 중이며,
-도착하면 이 표가 자동 갱신된다.</p>
+그리고 k=4 × PickPlaceCounterToMicrowave 한 칸은 서버 웹소켓 끊김(인프라)으로 처음에 실패했고,
+재실행해 0.05로 채워져 <b>격자 30칸이 모두 찼다</b>(결론은 바뀌지 않는다 — 그 태스크의 best는 여전히 k=12).</p>
 
 <p><b>추가 한계 (2026-08-22, 워커C <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>를 읽고
 자기 교정).</b> 우리 고정-k arm은 <b>실행 시점에만</b> 길이를 고정한다 — 체크포인트는 전체 청크 실행을 전제로
@@ -5245,8 +5245,9 @@ k=16. This table is that baseline.</p>
 a cell are therefore <b>unresolved</b>, and the exact per-task best k is not settled. What is settled is the
 <b>pattern across five tasks</b> (k=1 worst, interior peaks common, best k inconsistent). Applying worker C's
 measured spread (<span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>: seed SD 0.092–0.127 on paired
-differences), the method evaluation itself will be <b>multi-seed</b>. One cell (k=4 × PickPlaceCounterToMicrowave)
-failed on a server websocket drop (infrastructure) and is re-running; this table updates itself when it lands.</p>
+differences), the method evaluation itself will be <b>multi-seed</b>. One cell (k=4 × PickPlaceCounterToMicrowave) first failed on a
+server websocket drop (infrastructure); the re-run filled it at 0.05, so <b>all 30 grid cells are now
+populated</b> and the conclusions are unchanged (that task's best is still k=12).</p>
 
 <p><b>Further limitation (2026-08-22, self-correction after reading worker C's
 <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>).</b> Our fixed-k arms fix the length <b>at
