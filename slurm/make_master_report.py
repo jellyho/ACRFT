@@ -3111,10 +3111,87 @@ epistemic을 재는 것은 원리적으로 고분산이며(분해 노트의 자�
 """,
 )
 
+
+def _gate_rows():
+    """Recompute the 1-step-gate table from the raw results JSONs on every build."""
+    root = pathlib.Path(__file__).parent.parent / ".scratch"
+    out = {}
+    for tag, d in (("160k", "eval_onestep_160k"), ("200k", "eval_onestep_200k")):
+        f = root / d / "results.json"
+        if f.exists():
+            out[tag] = json.loads(f.read_text())["metrics"]
+    if not out:
+        return "<tr><td colspan='4'>results.json missing</td></tr>", ""
+    rows = []
+    names = [
+        ("af_1step", "α-Flow 1-step"),
+        ("af_2step", "α-Flow 2-step"),
+        ("af_10step", "α-Flow 10-step"),
+        ("bc_10step", "BC 베이스라인 10-step"),
+    ]
+    for k, label in names:
+        cells = "".join(f"<td>{out[t][f'mse_gt/{k}']:.6f}</td>" if t in out else "<td>—</td>" for t in ("160k", "200k"))
+        rows.append(f"<tr><td>{label}</td>{cells}</tr>")
+    g = next(iter(out.values()))["gt_action_var"]
+    extra = ""
+    if "200k" in out:
+        m = out["200k"]
+        extra = (
+            f"self-gap(1↔10) {m['self_gap/af_1_vs_10']:.6f} · self-gap(2↔10) {m['self_gap/af_2_vs_10']:.6f} · "
+            f"GT 액션 분산 {g:.3f} (200k 기준)"
+        )
+    return "".join(rows), extra
+
+
+_GATE_ROWS, _GATE_EXTRA = _gate_rows()
+
+entry(
+    "08-22",
+    "alphaflow-1step-gate",
+    "1-step 게이트 통과 — α-Flow 200k 완주와 원스텝 무손실 판정",
+    "완결",
+    f"""
+<p><b>왜.</b> <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span>의 존재 이유는 offline RL의
+actor 업데이트를 forward 1회로 만드는 것이었고, 그 전제는 "원스텝화가 액션 품질을 깎지 않는다"였다.
+200k run이 완주했으므로(wandb <code>c4vy84yy</code>: α 1.0→0.005 전 커리큘럼 무사고, delta² 0.052→0.0026,
+중간에 /data5 디스크 포화로 attempt1이 사망해 /data1로 체크포인트를 옮겨 재주행) 그 게이트를 판정한다.</p>
+
+<p><b>어떻게.</b> held-out 6 에피소드 × 6 프레임(총 36)에서, 각 정책이 <b>자기 norm stats로 unnormalize한
+로봇 공간</b> 30-스텝 청크의 demo-MSE를 잰다(프레임당 동일 노이즈로 분산 통제; 스크립트
+<code>eval_onestep_bc.py</code>, 표는 results.json에서 게시 때마다 재계산).</p>
+
+<table class='num'><tr><th>변형</th><th>demo-MSE @160k</th><th>@200k (최종)</th></tr>
+{_GATE_ROWS}</table>
+<p class='sub'>{_GATE_EXTRA}</p>
+
+<p><b>판정 — 원스텝화는 무손실이며, 오히려 이득이다.</b> 최종 체크포인트에서 1-step(0.00096)이 같은
+모델의 10-step(0.00153)보다 낫고, 스텝 수에 대해 단조다(1&lt;2&lt;10). floor(α=5e-3) 구간 40k가 1-step을
+더 조였다(160k 0.00107→200k 0.00096, 10-step은 미세 악화) — 큰-점프 타깃을 직접 최적화한 효과.
+자기일관성 갭은 액션 분산의 0.1% 수준. <b>RL 스택의 actor 자리에 이 1-step 정책을 그대로 쓸 수 있다.</b></p>
+
+<p><b>BC 대비 수치의 한계 (명시).</b> BC 베이스라인(0.00267)보다 ~2.8× 낮지만 이것은 확정 주장이
+아니다 — BC는 s300 성공-only 70k 스텝, α-Flow는 s347 전체 200k 스텝으로 <b>method-only-diff가 아니고</b>,
+demo-MSE는 성공률의 프록시일 뿐이다. 확정은 "동일 모델 내 1-step ≥ 10-step"까지.</p>
+
+<p><b>다음.</b> 이 1-step 정책이 FQL/QC-FQL 스택(<span class='xref' data-eid='adaptive-exec-map'>계열 지도</span>의
+빈칸: 오프라인 + 선택·개선 동시)의 actor로 들어간다 — distill 타깃이 10-step ODE에서 1-step forward로
+바뀌면서 actor 학습의 teacher 비용이 사라진다. per-prefix 크리틱과의 결합 실험이 다음 사이클.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "alphaflow-1step-gate": {
+        "date": "2026-08-22 11:30",
+        "who": "워커B",
+        "where": "B200 200k run(c4vy84yy, /data1 ckpt) + L40S offline eval · held-out 6에피소드×6프레임",
+        "what": "1-step 게이트 판정 — 로봇 공간 demo-MSE에서 1-step(0.00096) < 10-step(0.00153) < BC(0.00267), 자기일관성 갭 0.1%",
+        "how": "eval_onestep_bc.py: 정책별 자기-stats unnormalize, 프레임당 동일 노이즈, 160k/200k 두 체크포인트, 표는 JSON 재계산",
+        "why": "offline RL actor를 forward 1회로 만드는 전제(원스텝 무손실)의 판정 — 통과, floor 구간이 오히려 1-step을 개선",
+        "links": ["alphaflow-pi05", "adaptive-exec-map", "three-forces"],
+    },
     "p2-uncertainty-meas": {
         "date": "2026-08-20 09:40",
         "who": "워커B (밤샘 이론 프로그램 후속 측정)",
@@ -3720,6 +3797,43 @@ classical half; Zhang (executed-length lower bound) the modern half; ExRL/DEHP (
 learning) the empirical half — this series attempts to join them into one <b>offline, value-based,
 improvement-coupled</b> frame. What remains: measuring P1–P5 and completing the knife-edge v2
 proofs.</p>
+""",
+)
+
+en(
+    "alphaflow-1step-gate",
+    "The one-step gate passes — the alpha-Flow 200k run completes, and one-step sampling is lossless",
+    f"""
+<p><b>Why.</b> The whole point of <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span> was to make
+the offline-RL actor update cost ONE forward, on the premise that one-step conversion does not
+degrade action quality. With the 200k run complete (wandb <code>c4vy84yy</code>: the full curriculum
+α 1.0→0.005 without incident, delta² 0.052→0.0026; attempt 1 died to a /data5 disk-full during
+checkpointing and the run was restarted with checkpoints on /data1), we judge that gate.</p>
+
+<p><b>How.</b> On 36 held-out frames (6 episodes × 6), we measure demo-MSE of the 30-step chunk in
+<b>robot space, each policy unnormalizing with its own stats</b> (same per-frame noise across
+variants; script <code>eval_onestep_bc.py</code>; the table is recomputed from results.json at every
+publish).</p>
+
+<table class='num'><tr><th>variant</th><th>demo-MSE @160k</th><th>@200k (final)</th></tr>
+{_GATE_ROWS}</table>
+<p class='sub'>{_GATE_EXTRA}</p>
+
+<p><b>Verdict — one-step conversion is lossless, in fact a gain.</b> At the final checkpoint,
+1-step (0.00096) beats the same model's 10-step (0.00153), monotonically in step count (1&lt;2&lt;10).
+The 40k floor phase (α=5e-3) tightened 1-step further (160k 0.00107 → 200k 0.00096, while 10-step
+slipped slightly) — the effect of optimizing the big-jump target directly. The self-consistency gap
+is ~0.1% of action variance. <b>This 1-step policy can serve as the RL stack's actor as-is.</b></p>
+
+<p><b>The BC comparison's limits (stated).</b> ~2.8× below the BC baseline (0.00267), but that is not
+a confirmed claim — the baseline trained on s300 success-only for 70k steps vs α-Flow's s347
+all-episodes 200k, so it is <b>not a method-only diff</b>, and demo-MSE is a proxy for success rate.
+What is confirmed: within the same model, 1-step ≥ 10-step.</p>
+
+<p><b>Next.</b> This 1-step policy slots into the FQL/QC-FQL stack as the actor (the empty cell of
+<span class='xref' data-eid='adaptive-exec-map'>the family map</span>: offline + selection-and-improvement
+together) — the distillation target changes from a 10-step ODE to a single forward, removing the
+teacher cost of actor training. Coupling it with the per-prefix critic is the next cycle.</p>
 """,
 )
 
