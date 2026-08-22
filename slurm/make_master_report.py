@@ -2079,6 +2079,21 @@ k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 
 그리고 k=4 × PickPlaceCounterToMicrowave 한 칸은 서버 웹소켓 끊김(인프라)으로 실패해 재실행 중이며,
 도착하면 이 표가 자동 갱신된다.</p>
 
+<p><b>추가 한계 (2026-08-22, 워커C <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>를 읽고
+자기 교정).</b> 우리 고정-k arm은 <b>실행 시점에만</b> 길이를 고정한다 — 체크포인트는 전체 청크 실행을 전제로
+학습됐다. 워커C는 같은 질문을 더 깨끗하게 설계했다: 후보 집합을 하나로 줄여(<code>prefix_candidates</code>)
+<b>고정 arm이 적응 arm과 같은 코드 경로를 지나고 actor까지 그 길이로 학습</b>되게 했다. 실행에서만 고정하면
+"적응하도록 학습된 정책을 강제로 못 하게 한" 불일치를 재게 되고, 그건 다른 질문이다(그쪽 0819_soft가 그
+효과를 +0.284/+0.269로 따로 쟀다). 공식 체크포인트는 재학습이 불가능해 우리 M4에서는 불가피했지만,
+<b>우리 방법을 평가할 때는 후보 집합 제한 방식</b>으로 고정 기준선을 만들어야 공정하다. 이 한계는 M4의 결론
+(best-fixed-k가 태스크마다 다르다·k=1 최악)에는 영향이 적지만, 절대 수치를 "고정 정책의 최선"으로 읽으면
+안 된다는 뜻이다.</p>
+
+<p><b>상보적 결과.</b> 같은 날 워커C는 OGBench에서 <b>적응이 최고 고정을 넘는다</b>(task2 +0.233, 3/3 —
+그쪽 시드 폭 0.092의 2.5배)를 통제 비교로 보였다. 우리 M4는 VLA에서 <b>필요조건</b>(어떤 상수도 다 못 맞춘다),
+그쪽은 state 도메인에서 <b>충분조건</b>(학습된 적응이 실제로 넘는다)을 채운 셈이다. 우리 스택에서 후자를
+보이는 것이 CFAC의 RoboCasa 이식(M6·M7)의 과제다.</p>
+
 <p class='sub'><b>재현.</b> <code>probes/run_ksweep.sh K [Task,...]</code>(K별 sbatch 6건 + 실패 칸 재실행),
 집계·figure <code>probes/ksweep_collect.py</code>, 결과 JSON <code>probes/ksweep_results.json</code> 커밋.
 <b>다음</b>: M3(BoN N-스윕, serve_bon_policy 재사용) → 크리틱 도착 후 M1·M2 → CFAC의 RoboCasa 이식(M6·M7).</p>""",
@@ -5225,6 +5240,23 @@ a cell are therefore <b>unresolved</b>, and the exact per-task best k is not set
 measured spread (<span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>: seed SD 0.092–0.127 on paired
 differences), the method evaluation itself will be <b>multi-seed</b>. One cell (k=4 × PickPlaceCounterToMicrowave)
 failed on a server websocket drop (infrastructure) and is re-running; this table updates itself when it lands.</p>
+
+<p><b>Further limitation (2026-08-22, self-correction after reading worker C's
+<span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>).</b> Our fixed-k arms fix the length <b>at
+execution time only</b>; the checkpoint was trained for full-chunk execution. Worker C designed the same question
+more cleanly: restricting the candidate set to a single length (<code>prefix_candidates</code>) makes the fixed arm
+traverse the <b>same code path</b> as the adaptive arm and trains the actor at that length too. Fixing only at
+execution measures the mismatch of a policy trained to adapt but forbidden from doing so, which is a different
+question (their 0819_soft measured that effect separately at +0.284/+0.269). Retraining the official checkpoint was
+not possible here, but <b>our own method must be compared against fixed baselines built by candidate restriction</b>.
+The limitation barely touches M4's conclusions (best k differs by task; k=1 worst), but the absolute numbers must
+not be read as "the best a fixed policy can do".</p>
+
+<p><b>Complementary result.</b> On the same day, worker C showed on OGBench that <b>adaptivity beats the best fixed
+length</b> (task2 +0.233, 3/3 — 2.5× their measured seed spread of 0.092) in a controlled comparison. Our M4
+supplies the <b>necessary condition</b> on a VLA (no constant fits every task); theirs supplies the <b>sufficient
+side</b> in a state domain (a learned adaptive rule actually beats it). Showing the latter on our stack is the job
+of porting CFAC to RoboCasa (M6, M7).</p>
 
 <p class='sub'><b>Reproduce.</b> <code>probes/run_ksweep.sh K [Task,...]</code> (six per-K sbatches plus the failed
 cell), aggregation and figure <code>probes/ksweep_collect.py</code>, results JSON

@@ -1,0 +1,143 @@
+% Method section (v1, 2026-08-22). Depends on paper/theory.tex (appendix) for the propositions it
+% cites. Style: no em-dashes, no prose colons, no numbers, professional register.
+% Assumed preamble: amsmath, algorithm/algorithmic (or algorithm2e), natbib.
+
+\section{Method}
+\label{sec:method}
+
+We fine-tune a pretrained vision-language-action model on its own demonstrations, entirely offline,
+so that it improves along two dimensions at once: the actions inside a chunk, and how much of that
+chunk to execute before querying again. The method has three parts. A critic assigns a value to
+every prefix of a chunk, trained so that commitments of different lengths are comparable
+(Section~\ref{sec:method:critic}). The policy is improved against that critic on the full chunk
+(Section~\ref{sec:method:actor}). At deployment the same critic chooses how long to commit, with no
+sampling and no ranking of candidates (Section~\ref{sec:method:deploy}).
+
+\subsection{Setup and notation}
+\label{sec:method:setup}
+
+A pretrained policy $\pi_\theta$ maps an observation $o$ to a chunk of $H$ actions. Writing
+$c=a_{1:H}$ for a chunk and $c_{1:k}$ for its first $k$ actions, executing $k$ actions from state
+$s$ and then querying the policy again is a temporally extended action of duration $k$. We keep the
+backbone frozen and attach a critic to its representations, so fine-tuning changes the action
+head and the commitment rule rather than the perceptual model.
+
+Because commitments have different durations, values must be compared with semi-Markov
+bookkeeping~\citep{sutton1999options, bradtke1994smdp},
+\begin{equation}
+\label{eq:method-smdp}
+Q^{\pi,\kappa}(x, c, k) \;=\; \mathbb E\Big[\textstyle\sum_{j<k}\gamma^{j} r_j \;+\; \gamma^{k}\,
+V^{\pi,\kappa}(x_k)\Big],
+\end{equation}
+where $\kappa$ is the commitment rule and $x$ denotes the critic's input, defined next. Charging a
+single discount per decision instead of per elapsed step distorts values by a term that grows with
+$k$ and whose sign follows the reward convention, so the induced preference over commitments is an
+artifact of where the value scale places its zero rather than a property of the task
+(Proposition~\ref{prop:bookkeeping} and Remark~\ref{rem:sign}).
+
+\subsection{A critic that prices commitment fairly}
+\label{sec:method:critic}
+
+Three properties of demonstration data make a naive chunk critic misprice commitment, and each is
+addressed by a specific choice rather than by a loss term.
+
+\paragraph{History as input.}
+Human demonstrations are not Markovian in the observation. A teleoperator holds a plan across a
+stretch of motion and acts from it while the scene alone no longer reveals it, which is exactly what
+makes a committed execution informative. A critic conditioned on the instantaneous observation has
+no room to represent that information, so it cannot distinguish continuing a plan from resuming
+one. We therefore condition on $x_t=(o_t, a_{t-m:t-1})$, the observation together with the actions
+already executed since the last query. This is a change of input, not of objective, and it is what
+Remark~\ref{rem:confound} requires when the latent lies in the past.
+
+\paragraph{Interventional composition.}
+The value of a $k$-step commitment must not be estimated by regressing outcomes on the executed
+chunk. In closed-loop demonstrations, an event revealed inside the window causes both the recorded
+actions and the outcome, so such a regression conditions on the demonstrator's foreknowledge and
+credits the open-loop executor with information it will not have. Composing one-step backups is
+necessary but not sufficient, since bootstrapping each transition from its own recorded successor
+preserves the same correlation. We therefore compose the backup while resampling the successor
+among transitions at the same decision point, holding the evaluated tail fixed,
+\begin{equation}
+\label{eq:method-interv}
+y_k(x_t, c) \;=\; r_t \;+\; \gamma\, \mathbb E_{x' \sim \mathcal{D}(\cdot \mid x_t)}
+\big[\, Q_{\bar\phi}(x', c_{2:k}, k-1) \,\big],
+\qquad k > 1,
+\end{equation}
+where $\mathcal D(\cdot\mid x_t)$ is the empirical distribution of successors at decision points
+matching $x_t$ and $\bar\phi$ are target parameters. The target then estimates
+$Q(x,\mathrm{do}(c_{1:k}))$, which is what open-loop execution faces. Under open-loop consistent
+data the two coincide~\citep{dqc}; the intervention is what buys that independence when the data is
+closed loop.
+
+\paragraph{An honestly priced requery.}
+The leaf of the recursion is the value of querying the policy again, and it must be the value of
+the policy that will actually resume control. Bootstrapping from demonstration returns instead
+credits the requery with the demonstrator's competence, an optimism that enters with weight
+$\gamma^{k}$ and therefore biases the choice toward short commitments regardless of the reward
+convention (Proposition~\ref{prop:optimism}). We use the deployed policy's own expectation,
+\begin{equation}
+\label{eq:method-leaf}
+y_1(x_t, c) \;=\; r_t \;+\; \gamma\, \mathbb E_{x'}\,\mathbb E_{c'\sim\pi_\theta(\cdot\mid o')}
+\big[\, Q_{\bar\phi}\big(x', c', \kappa(x', c')\big) \,\big],
+\end{equation}
+so the critic is a fixed point of the process that will run, not of an idealized one. Targets stay
+within the support of the data in the sense that the chunks scored during training are the recorded
+ones; only the leaf involves the current policy, one step deeper, where the state is more
+informative.
+
+The critic is a causal transformer over the chunk on frozen backbone features, emitting all $H$
+prefix values in one pass, and is trained by regression on
+$\{y_k\}_{k=1}^{H}$ from \eqref{eq:method-interv} and \eqref{eq:method-leaf} with a target network.
+The state baseline used below shares the trunk with no head of its own only if an ablation supports
+it; we treat this as a measured choice rather than a design commitment.
+
+\subsection{Improvement on the full chunk}
+\label{sec:method:actor}
+
+Selection cannot lengthen commitments. If the policy is frozen and only the commitment rule is
+tuned, the option values are fixed and the deployed behavior is a deterministic functional of the
+initial policy; and improving only the selected short prefixes leaves the full-chunk value
+unchanged, which is the quantity that lower bounds deployed value
+(Lemma~\ref{lem:fullchunk} and Remark~\ref{rem:frozen}). We therefore improve the policy against
+the same critic on the \emph{full} chunk, by advantage-weighted regression on the demonstrations,
+\begin{equation}
+\label{eq:method-actor}
+\max_\theta\; \mathbb E_{(x, c)\sim\mathcal D}\Big[\,
+w(x,c)\,\log \pi_\theta(c \mid o)\Big],
+\qquad
+w(x,c)=\exp\!\big(\beta^{-1}\big[Q_\phi(x, c, H)-V_\phi(x)\big]\big),
+\end{equation}
+with $V_\phi(x)=\mathbb E_{c'\sim\pi_\theta}[Q_\phi(x,c',H)]$. Weighting the recorded chunks keeps
+the update inside the demonstrations, so the critic is never maximized over chunks it has not
+scored, which is the failure mode that makes deterministic policy-gradient extraction unstable
+offline. Nothing here is sampled and ranked at deployment; the sampling that occurs during training
+is compiled into the policy.
+
+\subsection{Deployment}
+\label{sec:method:deploy}
+
+At each query the policy emits one chunk, the critic scores its $H$ prefixes in the same forward
+pass, and the system executes the longest prefix whose value is within $\epsilon$ of the best,
+\begin{equation}
+\label{eq:method-kappa}
+\kappa(x, c) \;=\; \max\Big\{\,k \;:\; Q_\phi(x, c, k) \;\ge\; \max_{k'} Q_\phi(x, c, k') - \epsilon
+\,\Big\}.
+\end{equation}
+The tie-breaking direction matters. Values of neighbouring commitments are often
+indistinguishable, and a rule that breaks ties toward short commitments requeries constantly, which
+re-injects policy error and destroys the plan continuity that made the demonstration succeed;
+breaking them toward long commitments yields the curriculum that improvement predicts, as the set
+of states where a strictly shorter commitment wins shrinks to those where reactive information
+genuinely arrives (Corollary~\ref{cor:curriculum}). The comparison tolerance $\epsilon$ is the only
+free parameter introduced by the commitment rule, and no cost term is added to the reward.
+
+\subsection{Algorithm}
+\label{sec:method:algo}
+
+Training alternates critic regression and policy improvement on a fixed offline dataset. One pass
+is: fit the critic to \eqref{eq:method-interv} and \eqref{eq:method-leaf} against the current
+policy; improve the policy with \eqref{eq:method-actor}; repeat. Only the action head and the
+critic receive gradients; the backbone stays frozen throughout. No environment interaction is used
+at any point, and the deployed system performs exactly one policy query and one critic pass per
+decision.
