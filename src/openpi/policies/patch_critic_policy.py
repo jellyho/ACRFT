@@ -96,11 +96,27 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._to_nchw = to_nchw
 
         model = policy._model
-        # num_samples/num_steps size the sampler's noise array, so they must be compile-time constants;
-        # left traced, jax.random.normal rejects the shape. (This path had never actually been run.)
-        self._extract = nnx_utils.module_jit(
-            model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
-        )
+        # num_samples/num_steps size the sampler's noise array, so they must be compile-time
+        # constants; left traced, jax.random.normal rejects the shape.
+        if hasattr(model, "extract_token_and_base_actions"):
+            # Pi0RLT: N candidates + the RL token from one backbone pass (token unused here).
+            self._extract = nnx_utils.module_jit(
+                model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
+            )
+        elif hasattr(model, "sample_n_actions"):
+            # Pi0AlphaFlow: same one-prefix-pass contract, no token. With its 1-step sampler
+            # (--flow-steps 1), BoN-N costs ~N single forwards instead of N*10.
+            _sample_n = nnx_utils.module_jit(model.sample_n_actions, static_argnames=("num_samples", "num_steps"))
+
+            def _extract(rng, obs, *, num_samples, num_steps):
+                return None, (_sample_n(rng, obs, num_samples=num_samples, num_steps=num_steps),)
+
+            self._extract = _extract
+        else:
+            raise TypeError(
+                f"{type(model).__name__} offers neither extract_token_and_base_actions (RLT) nor "
+                "sample_n_actions (alpha-Flow); the patch-critic wrapper needs one of them"
+            )
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
         # The width that actually arrives on the wire (14 for YAM), not the model's padded one

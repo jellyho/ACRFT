@@ -3664,10 +3664,549 @@ evolution으로 측정한다.</p>
 """,
 )
 
+
+entry(
+    "08-20",
+    "adaptive-exec-map",
+    "적응 실행(execution-length) 계열 전수 지도 — 신호×레짐×적응대상, 그리고 빈칸",
+    "완결",
+    """
+<p><b>왜.</b> ExRL(RSS RL4VLA 워크샵)·DEHP(arXiv:2606.11408) 정독으로 "언제 replan할 것인가"가
+2026년 상반기에 논문이 몰린 계열임이 드러났다. 밤샘 이론 프로그램(다음 엔트리들: tie의 구조적
+불안정성 → 불확실성 분해 → non-Markov 긴-청크 구간 → event-triggered 다리 → 세 힘 종합)의 첫
+단계로, 이 계열을 <b>전수 지도</b>로 그려 우리 자리(오프라인 학습 신호 + 정책 개선 동시)가 정말
+비어 있는지 확정한다.</p>
+
+<p><b>분류축.</b> ① <b>무엇을 적응</b>하나 — 실행 길이 k / 액션 자체 / latent·연산예산.
+② <b>신호</b> — 학습된 가치(Q/V) / 휴리스틱(엔트로피·일관성·attention). ③ <b>레짐</b> — 온라인 상호작용
+필요 여부. ④ <b>정책 개선</b> — base policy가 좋아지는가(동결이면 ✕).</p>
+
+<table class='num'><tr><th>방법</th><th>적응 대상</th><th>신호</th><th>레짐</th><th>정책 개선</th><th>출처 신뢰도</th></tr>
+<tr><td><b>ExRL</b> (RSS'26 RL4VLA WS)</td><td>k∈{0..H}</td><td>학습 Q(s,a₁:H,k), off-policy(replay)</td><td>온라인 ~10⁶</td><td>✕ (동결, 자인: "bounded by the action distribution of the frozen base policy")</td><td>전문 정독(PDF)</td></tr>
+<tr><td><b>DEHP</b> (2606.11408)</td><td>h∈{1..H}</td><td>학습 π_len + V(s), on-policy PPO</td><td>온라인 5×10⁸</td><td>✕ (동결)</td><td>전문 정독</td></tr>
+<tr><td><b>AQC</b> (2605.05544)</td><td>커밋 K∈{1,4,8,16}</td><td>학습 Q (offline TD)</td><td>오프라인</td><td>✕ (선택만)</td><td>전문 정독(선행 리포트)</td></tr>
+<tr><td><b>ACSAC</b> (2605.11009)</td><td>커밋 길이</td><td>학습 Q (per-prefix)</td><td>오프라인</td><td>✕</td><td>PDF 보유·부분 정독</td></tr>
+<tr><td><b>ACH</b> (2605.10044)</td><td>청크 길이 (학습 중에도)</td><td>병렬 다중-길이 Q</td><td>offline→online</td><td><b>△ 정책도 학습</b></td><td>abstract 기준</td></tr>
+<tr><td><b>EQRL</b> (2606.14375)</td><td>latent+denoise 스텝+청크길이 C</td><td><b>critic 앙상블 불일치(=epistemic!)</b> + macro-action RL, γ^L 할인</td><td>온라인 추정</td><td>✕ (동결+어댑터)</td><td>abstract 기준</td></tr>
+<tr><td><b>AutoHorizon</b> (2602.21445)</td><td>실행 지평선</td><td>action self-attention (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>PACE</b> (2606.00537)</td><td>실행 지평선</td><td>궤적의 위상-운동학 구조 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>AAC</b> (CVPR'26, 2604.04161)</td><td>청크 크기</td><td>액션 엔트로피 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>A³</b> (2605.11567)</td><td>커밋 prefix</td><td>self-speculative 검증 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>초록+HTML 확인</td></tr>
+<tr><td><b>DVAC</b> (2606.03847)</td><td>replan 시점</td><td>denoising 분산 (휴리스틱)</td><td>무학습</td><td>✕</td><td>제목/초록 기준</td></tr>
+<tr><td>BID·SGAC·TAS·MoH·HiPolicy</td><td>청크 선택/융합</td><td>일관성·유사도·엔트로피·캐시</td><td>무학습~경량</td><td>✕</td><td>DEHP related-work 경유</td></tr>
+<tr><td><b>TempoRL</b> (ICML'21)</td><td>행동 반복 길이(skip)</td><td>학습 skip-Q (액션 조건!)</td><td>온라인</td><td>△(정책 동시 학습)</td><td>초록+블로그 정독</td></tr>
+<tr><td><b>Metelli PFQI</b> (ICML'20)</td><td>persistence k (고정 선택)</td><td>학습 Q_k + <b>이론 상계</b></td><td>배치(오프라인)</td><td>✕</td><td>초록 정독·이론 확인 예정</td></tr>
+<tr><td>FiGAR·AP-PI·SDAR</td><td>반복 길이</td><td>학습(액션 비조건 등)</td><td>온라인</td><td>△</td><td>인용 경유</td></tr></table>
+
+<p><b>관찰 셋.</b> ① VLA 청크 계열에서 <b>학습된 신호는 전부 온라인</b>(ExRL·DEHP·EQRL·ACH)이고,
+<b>오프라인/test-time은 전부 휴리스틱</b>(AutoHorizon·PACE·AAC·A³·DVAC·BID…) — "학습 신호 ×
+오프라인" 칸에 서 있는 것은 AQC/ACSAC와 우리 per-prefix ARQ critic뿐이다. ② VLA 계열은 (ACH 제외)
+<b>전원이 선택-only</b> — base policy는 동결이고, ExRL은 그 천장을 스스로 명시한다. 선택과 <b>정책
+개선의 동시 수행</b>은 계열 전체의 공백이며, 이것이 <span class='xref' data-eid='chunking-theory'>chunking-theory</span>
+Lemma B("선택만으로는 커밋 길이가 자라지 않는다")가 겨냥하는 자리다. ③ 유일하게 이론 상계를 가진
+것은 10년 전 계열(Metelli PFQI: persistence의 성능손실을 동역학 정칙성으로 상계) — VLA 세대는 이론
+없이 경험으로 재발견 중이다. 우리 이론 엔트리들이 이 둘을 잇는다.</p>
+
+<p><b>주장 강도 경계 (자기 교정).</b> "k-의존 편향을 아무도 안 짚었다"고 쓰면 안 된다 — 할인 부기의
+k-편향은 ExRL이 식별하고 SMDP 백업으로 해결했다 ("a standard one-step backup ... can bias the
+critic toward shortcut choices"). 우리 고유 축은 <b>closed-loop teleop의 hindsight leakage</b>
+(DQC arXiv:2512.10926)로, 부기를 올바로 해도 남고 오프라인에서 k가 길수록 커지는 낙관 편향이다 —
+두 편향을 항상 구분해 쓴다.</p>
+
+<p><b>다음.</b> 이 지도가 확정한 두 공백(오프라인 학습 신호, 선택+개선 동시)을 이론으로 채우는
+엔트리들이 이어진다: tie의 구조적 불안정성 → aleatoric/epistemic 분해 → non-Markov 긴-청크 구간 →
+event-triggered 제어 다리 → 세 힘 종합.</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "tie-knife-edge",
+    "완벽의 칼날 — 이론적 동률(tie)은 구조적으로 불안정하다 (정식화 v1)",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='chunking-theory'>chunking-theory</span>의 Theorem 2는 결정론·완전관측의
+극한에서 \\(\\Delta_{\\mathrm{react}}=0\\) — 즉 <b>모든 커밋 길이 k가 동률(tie)</b>이 됨을 보였다. 그렇다면
+adaptive chunking은 왜 실제로 이득을 내는가? 이 노트는 그 동률이 <b>칼날 위의 특이점</b>임을 정식화한다:
+세 종류의 ε-섭동(환경 확률성 · 정책 비일관성 · 관측 앨리어싱) 각각이 동률을 <b>서로 다른 방향으로</b>
+깨뜨리고, 따라서 일반적(generic) 환경에서 상태의존 커밋 맵 \\(\\kappa^*(s)\\)는 비자명해진다. 밤샘 이론
+프로그램 2/6.</p>
+
+<p><b>설정.</b> 기저 MDP \\(M=(\\mathcal S,\\mathcal A,T,r,\\gamma)\\), 청크 정책 \\(\\pi\\)(길이 H), 선택자
+\\(\\kappa:\\mathcal S\\to\\{1..H\\}\\). \\(Q^\\pi_k(s)\\) = s에서 청크의 첫 k스텝을 open-loop 실행 후 재질의했을 때의
+가치, \\(\\varphi_k(s):=Q^\\pi_k(s)-Q^\\pi_H(s)\\) = "k에서 재계획하는 것의 상대 이득".</p>
+
+<p><b>명제 K1 (동률의 기제 — 재계획이 무를 것이 없다).</b> (i) T 결정론, (ii) 정책이 <b>재계획-일관</b>
+(재질의가 이전 청크의 꼬리를 재생산: \\(\\mu_\\pi(s_{t+k})_{1:H-k}=\\) 이전 청크의 \\(k{+}1..H\\)), (iii) 관측이
+상태를 분리하면, 모든 s,k에서 \\(\\varphi_k(s)=0\\). <i>증명 스케치.</i> 재계획이 만들어내는 유일한 것은
+"새 정보에 따른 경로 수정"인데, (i)이 새 정보를, (ii)가 수정을, (iii)이 정보 손실을 각각 제거한다 —
+실행 경로가 k와 무관하게 동일해진다. ∎ (chunking-theory Thm 2의 재서술; tie는 우연이 아니라 세 가지
+소거의 합작이다.)</p>
+
+<p><b>명제 K2 (확률성은 짧은 k로 깬다 — 회수의 가치).</b> 도달 가능한 분기 상태 \\(s_b\\)가 있어 다음-상태
+실현에 따라 최적 연속이 확률 p로 달라지고 그 가치 격차가 g라면, 분기 직후 재계획은
+\\(\\gamma^{t_b}\\,p\\,g>0\\) 만큼 엄격 이득 — \\(\\varphi_k\\)는 분기를 청크 안에 가두는 k에서 엄격 음수가 된다.
+<i>기제는 정보의 가치(VoI)</i>: 관측이 결정을 바꿀 때에만, 그리고 그때마다 재질의는 엄격히 이득이다.
+이 항은 <b>회수 불가</b>(정책 개선으로 소거 안 됨) — aleatoric floor의 정체다. 고전적 정량화:
+Metelli et al. (ICML'20, arXiv:2002.06836) Thm 4.1은 persistence 비용을
+\\(\\tfrac{\\gamma(1-\\gamma^{k-1})}{(1-\\gamma)(1-\\gamma^k)}\\,\\lVert d^\\pi\\rVert\\) 로 상계한다 — d는 "정책이 할 일"과
+"지속이 하는 일"의 불일치이고, 우리 분기항은 그 하계 짝이다.</p>
+
+<p><b>명제 K3 (정책 오차도 짧은 k로 깨나, 흡수 가능).</b> 재계획 분포와 청크 연속의 스텝당 TV-괴리를
+\\(\\varepsilon_\\pi\\)라 하면 compounding(Ross–Bagnell)으로 \\(\\varphi\\)의 이 성분은 k에 대해 증가하며 짧은 k를
+민다. 그러나 \\(\\pi\\to\\pi^*\\)에서 \\(\\varepsilon_\\pi\\to0\\): <b>정책 개선이 이 항을 흡수</b>하고, 남는 것은 K2뿐 —
+평균 커밋 길이가 aleatoric floor까지 단조 증가하는 curriculum(chunking-theory III.7)의 다른 얼굴이다.
+주목: Metelli Thm 4.2의 상계에는 정책 자체의 액션 분산
+\\(\\sigma_p^p=\\sup_s\\int\\!\\!\\int d_{\\mathcal A}(a,a')^p\\,\\pi(da|s)\\pi(da'|s)\\) 가 <b>명시적으로</b> 들어 있다 —
+"정책 불확실성이 지속(커밋) 비용을 키운다"는 우리 주장의 2020년형 선례.</p>
+
+<p><b>명제 K4 (앨리어싱은 긴 k로 깬다 — 유일하게 부호가 반대).</b> 관측 채널 \\(O\\)가 상태를 뭉개면
+재계획은 <b>가블링된(garbled) 정보 위에서의 재추론</b>이다. Blackwell의 정리에 의해 가블링된 채널 위의
+결정은 약하게 나쁘고, 뭉개진 두 상태의 올바른 연속이 다르면 엄격히 나쁘다 — 반면 이전의 분리
+가능한 상태에서 발사된 청크는 그 정보를 open-loop로 <b>운반</b>한다. 따라서 재계획이 모드를 오가며
+평균내는(dithering) 상태에서는 \\(\\varphi_k>0\\) — <b>긴 커밋이 엄격 우위인 구간이 존재</b>한다. (2-상태
+구성과 imitation의 copycat 문헌 접속은 다음 엔트리에서 완결.)</p>
+
+<p><b>정리 K5 (칼날, 잠정 서술).</b> 동률 \\(\\varphi\\equiv0\\) ⟺ (도달 가능한 분기 없음) ∧ (재계획-일관) ∧
+(실행 구간 앨리어싱 없음). 세 조건 중 하나라도 ε만큼 깨지면 해당 상태 근방에서 \\(\\varphi\\)의 부호가
+결정되며(K2·K3은 −, K4는 +), 방향이 <b>상태별로 다르므로</b> 일반적 환경의 \\(\\kappa^*(s)\\)는 비상수다.
+즉: <b>adaptive chunking은 동률의 예외가 아니라, 동률이 adaptive의 measure-zero 특이점이다.</b>
+잠정 표기 이유: "generic"의 정확한 위상(어떤 섭동 공간에서 open-dense인가)은 다음 버전에서 조인다.</p>
+
+<p><b>따름 (배포 규칙의 정당화).</b> 이상점 근방에서는 모든 k가 ε-동률이므로, return-최적 ±ε 집합
+안에서 <b>가장 긴 k</b>를 고르는 사전식(lexicographic) 규칙이 자연스럽다 — 추가 보상 조작 없이 연산
+효율을 회수하고, 이상점에서 멀어지면 어차피 부호가 결정을 대신한다. (chunking-theory III.7의 규칙이
+이 정리의 따름이 된다.)</p>
+
+<p><b>선행과의 관계.</b> 이 노트의 주장은 전부 <b>참값(true value)</b>에 관한 것이다 — 추정(estimation)의
+k-편향은 별개 축이다: 할인 부기의 편향은 ExRL이 SMDP 백업으로 해결했고, closed-loop teleop의
+hindsight leakage(DQC)는 부기를 올바로 해도 남는 우리 미해결 축이다
+(<span class='xref' data-eid='adaptive-exec-map'>계열 지도</span>의 주장 강도 경계 참조).</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "uncertainty-split",
+    "불확실성의 두 얼굴 — aleatoric/epistemic 분해가 adaptive chunking을 유도한다 (측정 계획 포함)",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='tie-knife-edge'>칼날 정식화</span>는 동률을 깨는 세 힘 중 둘이
+불확실성임을 보였다: 환경 확률성(K2, 회수 불가)과 정책 오차(K3, 개선이 흡수). 이 노트는 그 둘이
+바로 <b>aleatoric / epistemic</b> 분해(Depeweg et al., ICML'18, arXiv:1710.07283; Clements et al.,
+arXiv:1905.09638)이고, 우리 분포형 앙상블 크리틱이 <b>추가 학습 없이 두 량을 상태×커밋길이 격자로
+측정할 수 있음</b>을 보인다. 밤샘 이론 프로그램 3/6.</p>
+
+<p><b>분해 (총분산 법칙).</b> 앙상블 멤버 \\(m=1..K\\)가 각각 return 분포 \\(Z_m(s,a_{1:k})\\)을 내면
+\\[ \\underbrace{\\mathrm{Var}[Z]}_{\\text{총}} \\;=\\;
+\\underbrace{\\tfrac1K\\textstyle\\sum_m \\mathrm{Var}[Z_m]}_{u_{\\mathrm{alea}}\\;(\\text{멤버 내})} \\;+\\;
+\\underbrace{\\mathrm{Var}_m\\big[\\mathbb E[Z_m]\\big]}_{u_{\\mathrm{epis}}\\;(\\text{멤버 간})} \\]
+— 멤버 내 분산은 데이터가 아무리 많아도 남는 환경/return의 산포(aleatoric), 멤버 간 불일치는
+데이터·학습이 줄이는 무지(epistemic). 우리 <code>PatchCriticEnsemble</code>은 <b>이미 이 구조다</b>:
+K개의 HL-Gauss 분포 헤드가 per-prefix로 있으니, 체크포인트에서 forward만 하면
+\\(u_{\\mathrm{alea}}(s,k)\\), \\(u_{\\mathrm{epis}}(s,k)\\) 두 장(field)이 공짜로 나온다.</p>
+
+<p><b>이론 접속 — 세 예측.</b>
+① <b>κ*는 aleatoric을 따라간다</b>: K2의 분기항은 \\(u_{\\mathrm{alea}}\\)가 큰 상태에서 발동하므로, 참값
+기준 최적 커밋은 \\(u_{\\mathrm{alea}}(s,\\cdot)\\) 높은 곳에서 짧아야 한다 — DEHP·ExRL이 정성적으로 관측한
+"정밀 구간=짧게"의 정체가 이것이라는 가설.
+② <b>학습이 진행되면 epistemic만 줄어든다</b>: K3의 흡수는 \\(u_{\\mathrm{epis}}\\downarrow\\)로 나타나고
+\\(u_{\\mathrm{alea}}\\)는 불변 — curriculum(평균 커밋 길이의 단조 증가)의 <b>측정 가능한 서명</b>이다.
+③ <b>라우팅은 둘을 구분해야 한다</b>: EQRL(arXiv:2606.14375)은 앙상블 불일치(=epistemic만)로 연산을
+라우팅하는데, 분해 관점에선 절반이다 — 짧은 커밋(재계획)은 aleatoric이, 추가 연산·데이터 수집은
+epistemic이 각각 정당화한다. 둘을 합산 신호로 쓰면 "고칠 수 있는 무지"에 재계획을 낭비하고
+"고칠 수 없는 산포"에 연산을 낭비한다.</p>
+
+<p><b>정직한 주의 둘.</b> (a) 학습된 return 분포의 멤버 내 분산은 순수 env 확률성 외에 <b>행동 정책의
+산포와 return 다봉성</b>을 포함한다(teleop 데모의 스타일 변이가 aleatoric으로 잡힘) — Metelli Thm 4.2의
+\\(\\sigma_p\\)(정책 산포)가 지속 비용에 들어가는 것과 정합적이지만, "env 확률성"과의 동일시는 과잉이다.
+(b) 우리 배포 앙상블은 K=2라 \\(u_{\\mathrm{epis}}\\) 추정이 약하다 — <code>ARQCritic.head_ensemble</code>
+(공유 trunk + K개 독립 헤드)로 K≥8을 거의 공짜로 얻는 경로가 이미 코드에 있다.</p>
+
+<p><b>측정 계획 (바로 실행 가능).</b> 마침 같은 크리틱의 <b>20k 체크포인트(g5_pi05)와 120k 이어-학습
+(cont, 진행 중)</b>이 있다: 동일한 6개 에피소드(가치 비디오로 렌더한 ep320/79/23/214/5/141)를 따라
+두 량을 계산해 ①②를 직접 검증한다 — 예측이 맞다면 20k→120k에서 \\(u_{\\mathrm{epis}}\\) 곡선만 내려앉고
+\\(u_{\\mathrm{alea}}\\)는 유지되며, 실패 에피소드의 \\(u_{\\mathrm{alea}}\\) 프로파일이 성공과 다른 위상(접촉·정렬
+구간 피크)을 보여야 한다. 렌더러(<code>render_yam_value_video.py</code>)에 불확실성 패널 하나를 더하면
+비디오로도 보인다. 이 측정은 후속 엔트리로 게시한다.</p>
+
+<p><b>선행과의 관계.</b> 분해 자체는 표준(Depeweg; Clements; arXiv:2206.01558)이고, 우리의 기여 후보는
+그것을 <b>커밋 길이 축에 편 것</b> — \\(u(s,k)\\) 격자와 κ*의 연결, 그리고 "재계획은 aleatoric에,
+개선·연산은 epistemic에"라는 라우팅 원리다. 흡수 가능성(②)은
+<span class='xref' data-eid='chunking-theory'>chunking-theory</span> III.7 curriculum의 측정판이다.</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "nonmarkov-longer",
+    "긴 커밋이 이기는 두 개의 방— 안정성(Zhang)과 정보(Blackwell/copycat), 그리고 K3의 부호 정정",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='tie-knife-edge'>칼날 정식화</span>의 K4는 "긴 커밋이 엄격 우위인
+구간의 존재"를 앨리어싱으로 예고했다. 이 노트는 그 존재를 <b>두 개의 독립 기제</b>로 세운다 — 하나는
+방금 원문으로 확인한 Zhang et al.(arXiv:2507.09061)의 <b>안정성 기제</b>(Markovian 전문가에서도 성립!),
+다른 하나는 부분관측의 <b>정보 기제</b>(Blackwell 가블링 + copycat 문헌). 그 과정에서 K3(정책 오차 →
+짧은 k)의 부호가 <b>레짐 의존</b>임을 정직하게 정정한다. 밤샘 이론 프로그램 4/6.</p>
+
+<p><b>방 A — 안정성: 잦은 재계획이 지수 폭발을 만든다 (Zhang et al., 원문 확인).</b>
+그들의 Prop 3.1: 동역학이 open-loop \\((C_{\\mathrm{ISS}},\\rho)\\)-EISS(수축)이고 정책·모의동역학 쌍이
+EISS라면, 청크화된 정책이 참 동역학 위에서도 안정성을 상속하는데 — 조건이 <b>실행 청크 길이의
+하계</b>다: \\[ \\ell \\;>\\; \\frac{\\log\\mathrm{poly}(L_\\pi, C_{\\mathrm{ISS}})}{\\log(1/\\rho)}. \\]
+핵심 반전(원문): "<i>even on synthetic globally stable dynamics, frequent feedback can cause
+exponential compounding error, which action-chunking mitigates</i>" — 그리고 이 요구는 예측 길이가
+아니라 <b>executed</b> 길이에 걸린다(같은 정책을 receding-horizon으로 돌리면 불안정할 수 있음).
+기제: 재계획은 매 스텝 <b>학습 오차를 피드백 루프에 재주입</b>하고, 커밋은 환경의 수축(ρ)이 그 오차를
+흡수하게 둔다. 이것은 앨리어싱 없이, unimodal·Markov 전문가에서도 성립한다.</p>
+
+<p><b>K3의 부호 정정 (v1의 자기 교정).</b> 칼날 노트의 K3은 "정책 오차 → 재계획 유리(짧은 k)"로
+썼으나, 방 A는 반대 부호의 레짐을 보인다. 정확한 서술: 정책 오차 \\(\\varepsilon_\\pi\\)의 미는 방향은
+<b>재계획이 수정인가 재주입인가</b>에 달려 있다 — (i) 재계획 분포가 on-support 근처의 신뢰할 만한
+수정일 때(전문가 근방, 오차가 상태 추정이 아니라 실행에서 옴) 짧은 k가 유리(K3 원형);
+(ii) 환경이 수축적이고 오차가 정책의 출력 자체에 있을 때, 재계획은 오차의 재여기(re-excitation)이며
+Zhang 하계만큼 긴 k가 유리. 어느 레짐인지는 \\(\\rho\\)(환경 수축률)와 오차의 원천이 정하고, 두 경우 모두
+\\(\\varepsilon_\\pi\\to0\\)이면 효과가 소멸한다 — <b>흡수 가능성은 유지</b>되나, 흡수 전 curriculum의 방향이
+상태·레짐별로 다를 수 있다는 것이 정정의 내용이다.</p>
+
+<p><b>방 B — 정보: 재계획은 가블링된 채널 위의 재추론이다.</b> 2-상태 구성: 상태 \\(x_A,x_B\\)가 같은
+관측 o로 뭉개지고 올바른 연속이 서로 다르다고 하자(예: 가려진 물체의 좌/우). 이전의 분리 가능한
+상태 \\(s_0\\)에서 발사된 청크는 올바른 가지를 open-loop로 운반하지만, o에서 재계획하는 정책은
+Blackwell의 정리에 의해 약하게(가지가 다르면 엄격히) 나쁘다 — 매 재계획마다 두 모드를 오가며
+평균내는 <b>dithering</b>이 최악 사례다. imitation 문헌이 같은 병리의 다른 얼굴을 이미 안다:
+copycat/causal confusion(arXiv:1905.11979; Fighting Copycat, NeurIPS'20)은 부분관측에서 per-step
+재추론이 지름길(직전 행동 복사)로 붕괴함을 보였고, 청크 커밋은 그 재추론 자체를 제거한다. Zhang도
+챙겨 적는다: 청크의 통념적 근거 1번이 "robustness to non-Markovian / partial observability quirks" —
+우리는 그것을 가블링 논증으로 정식화하는 중이다.</p>
+
+<p><b>종합 — 긴-커밋 우위 구간의 존재 (서술).</b> (A) \\(\\rho<1\\)이고 정책 오차가 유한하며 분기가 없는
+구간, 또는 (B) 실행 구간에 앨리어싱이 있고 launch 상태가 분리 가능한 구간에서는 \\(\\varphi_k(s)>0\\)
+(긴 커밋 엄격 우위)이다. (A)는 Zhang Prop 3.1의 하계로 정량, (B)는 2-상태 구성으로 존재 증명.
+반대편 압력(aleatoric 분기)은 <span class='xref' data-eid='uncertainty-split'>불확실성 분해</span>의
+\\(u_{\\mathrm{alea}}\\) 격자가 잰다 — κ*(s)는 이 두 압력의 국소 균형점이다.</p>
+
+<p><b>남는 일.</b> ① 2-상태 구성의 수치 검증(장난감 POMDP, 완결 증명 포함) — 후속 엔트리.
+② 방 A/B의 상대 크기를 YAM에서 재는 프록시(재계획 dithering = 연속 청크 간 발산 vs 커밋 후 오차).
+③ 칼날 노트 v2에 K3 정정 반영.</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "event-triggered-bridge",
+    "제어이론의 다리 — event-triggered control은 adaptive chunking의 40년 선배다",
+    "완결",
+    """
+<p><b>왜.</b> "언제 다시 계획하나"는 로봇 학습이 처음 만난 질문이 아니다 — 제어이론이
+<b>event-triggered / self-triggered control</b>(ETC/STC)이라는 이름으로 수십 년 다뤄온 질문이다
+(Heemels–Johansson–Tabuada 튜토리얼). 이 노트는 그 사전을 우리 문제에 개방한다: 개념 대응표,
+가져올 수 있는 보장, 그리고 무엇이 옮겨지지 <b>않는지</b>. 밤샘 이론 프로그램 5/6.</p>
+
+<table class='num'><tr><th>제어이론 (ETC/STC)</th><th>adaptive chunking (우리)</th></tr>
+<tr><td>제어 업데이트(측정→새 제어 계산)</td><td>재계획(관측→새 청크 질의)</td></tr>
+<tr><td>inter-event time (이벤트 간격)</td><td>커밋 길이 k</td></tr>
+<tr><td>트리거 조건 \\(\\lVert e(t)\\rVert>\\sigma\\lVert x(t)\\rVert\\) (오차가 임계 초과 시 업데이트)</td><td>가치 트리거: per-prefix \\(Q_k\\)가 꺾이는 지점에서 재질의 (κ*의 원형)</td></tr>
+<tr><td>STC: 현재 상태로 <b>다음 업데이트 시각을 미리 계산</b></td><td>상태의존 커밋 맵 κ(s) — 문자 그대로 동일한 객체</td></tr>
+<tr><td><b>MIET</b>(최소 이벤트 간격) 보장, Zeno 배제</td><td>커밋 길이의 보장 하계, "매 스텝 재계획" 병리의 배제 (ExRL의 k=0 루프가 Zeno의 학습판)</td></tr>
+<tr><td>외란 크기 ↔ 이벤트 빈도 (외란 클수록 자주)</td><td>aleatoric \\(u_{\\mathrm{alea}}\\) ↔ 짧은 k (<span class='xref' data-eid='uncertainty-split'>분해 노트</span> 예측 ①)</td></tr>
+<tr><td>모델 불일치 ↔ 보수적 트리거</td><td>epistemic \\(u_{\\mathrm{epis}}\\) ↔ 학습이 흡수 (예측 ②)</td></tr>
+<tr><td>통신·연산 절약 vs 성능 트레이드오프</td><td>추론 비용 vs return 트레이드오프 (사전식 규칙의 동기)</td></tr></table>
+
+<p><b>가져올 것 둘.</b> ① <b>MIET 정리의 형태</b>: Lipschitz 동역학 + 잘 설계된 트리거면 이벤트 간격이
+양의 하계를 가진다(예: designable MIET, arXiv:2002.00058) — Zhang의 실행길이 하계
+(<span class='xref' data-eid='nonmarkov-longer'>두 개의 방</span>)와 같은 방향의, 더 오래된 정량 보장이다.
+"짧은 커밋의 병리"는 학습계가 재발견하기 전에 제어계가 Zeno라는 이름으로 배제해 뒀다.
+② <b>트리거의 문법</b>: ETC의 트리거는 Lyapunov 함수의 감소가 위협받을 때 발화한다 — 우리 크리틱의
+per-prefix \\(Q_k(s)\\)는 정확히 그 자리에 서는 <b>학습된 가치 증명서</b>다. "\\(Q_{k+g}-Q_k\\)가 임계 이하로
+꺾이면 거기서 끊어라"는 배포 규칙은 Lyapunov 트리거의 return-극대화 일반화로 읽힌다.</p>
+
+<p><b>옮겨지지 않는 것 (정직한 경계).</b> ETC의 보장은 (i) 안정화(regulation) 목적, (ii) 알려진/부분
+알려진 동역학, (iii) 설계된(학습 아닌) 트리거에 대한 것이다. return 극대화·미지 동역학·학습된
+트리거로의 이식은 <b>프로그램이지 정리가 아니며</b>, 그 간극이 정확히 우리 이론 시리즈가 채우는
+자리다. 또한 ETC↔RL 다리 자체는 신규가 아니다 — cyber-physical 문맥의 event-triggered RL이 있고
+(예: Learning When to Act via Run-Time Assurance, arXiv:2605.12561; ET-MPC+DRL, arXiv:2208.10302),
+우리가 새로 놓는 것은 <b>VLA action-chunking 문맥으로의 수입</b>과 가치-트리거·불확실성 사상이다.</p>
+
+<p><b>얻는 관점.</b> adaptive chunking 계열(<span class='xref' data-eid='adaptive-exec-map'>지도</span>)의
+휴리스틱 신호들(엔트로피·일관성·attention)은 ETC 렌즈로 보면 전부 <b>대리 트리거</b>들이다 — 참
+트리거(가치 감소의 위협)를 각자 다른 프록시로 근사한 것. 학습된 per-prefix 가치로 트리거를 직접
+세우는 것이 원리적으로 우월한 이유가 여기서 한 줄로 정리된다: <b>트리거가 최적화 목표와 같은 통화로
+말한다.</b></p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "three-forces",
+    "네 힘의 균형 — adaptive chunking 이론 종합과 검증 가능한 예측 (밤샘 프로그램 결산)",
+    "완결",
+    """
+<p><b>왜.</b> 밤샘 이론 프로그램의 결산이다. 출발 질문(사용자): 이론적 완벽에서 생기는 k-동률이
+실제로는 왜 안 일어나는가, 불확실성의 분해가 어떻게 adaptive chunking을 유도하고 정책 개선과
+non-Markov 긴-청크 선호까지 설명하는가. 다섯 개의 노트(<span class='xref' data-eid='adaptive-exec-map'>지도</span> ·
+<span class='xref' data-eid='tie-knife-edge'>칼날</span> · <span class='xref' data-eid='uncertainty-split'>분해</span> ·
+<span class='xref' data-eid='nonmarkov-longer'>두 개의 방</span> · <span class='xref' data-eid='event-triggered-bridge'>제어 다리</span>)를
+하나의 그림으로 접는다. 시작은 세 힘이었으나 Zhang 정독이 <b>네 번째 힘</b>을 추가했다.</p>
+
+<p><b>네 힘.</b> 커밋 길이 k에 작용하는 압력은:</p>
+<table class='num'><tr><th>힘</th><th>방향</th><th>원천</th><th>운명</th></tr>
+<tr><td>① 분기 (aleatoric)</td><td>k ↓</td><td>환경 확률성 — 재질의 = 회수(VoI)</td><td><b>회수 불가</b> — floor</td></tr>
+<tr><td>② 정책 오차 (epistemic)</td><td>레짐 의존 (수정이면 ↓, 재주입이면 ↑)</td><td>학습 미완 — Metelli σ_p</td><td><b>개선이 흡수</b> → curriculum</td></tr>
+<tr><td>③ 안정성 (Zhang)</td><td>k ↑ (하계!)</td><td>수축 환경 + 잦은 replan의 오차 재주입</td><td>ε_π→0이면 완화되나 하계 형태는 유지</td></tr>
+<tr><td>④ 정보 (non-Markov)</td><td>k ↑</td><td>앨리어싱 — replan은 가블링 위 재추론(Blackwell/copycat)</td><td>관측이 좋아지지 않는 한 잔존</td></tr></table>
+
+{img(P / "31_three_forces.png", "preferred commitment phase diagram + curriculum (schematic)")}
+<p class='sub'>왼쪽: (aleatoric 압력, 긴-커밋 압력) 평면의 선호 k* — <b>개념도(schematic)이지 측정이 아니다</b>.
+원점의 별이 칼날 동률; 대각선 근방이 κ*(s)가 진짜로 상태의존적인 경합 대역. 오른쪽: 이론이 예측하는
+curriculum — 학습이 epistemic만 흡수하므로 평균 k*는 aleatoric floor로 단조 수렴, floor 자체는 불변.</p>
+
+<p><b>한 문단 종합.</b> 이상 극한의 동률은 세 소거(분기·수정·정보손실)의 합작인 칼날이다(K1). 실제
+환경은 네 힘이 그 칼날을 밀어낸다: 분기는 짧게(①), 앨리어싱과 수축-환경의 오차 재주입은 길게(③④),
+정책 오차는 레짐에 따라 양쪽으로(②) — 그리고 ②만이 학습으로 사라진다. 따라서 (i) κ*(s)는 일반적으로
+비상수이고(adaptive chunking의 유도), (ii) 학습이 진행되면 평균 커밋은 aleatoric floor까지 자라며
+(curriculum = 정책 개선의 서명), (iii) floor 위에 남는 짧은-커밋 구간은 환경의 분기 구조 그 자체다.
+"선택만 하는" 계열(<span class='xref' data-eid='adaptive-exec-map'>지도</span>의 전원)은 ②를 흡수할 수단이 없어
+①~④의 초기 배치에 갇힌다 — 선택과 개선을 함께 해야 하는 이유가 네 힘 그림에서 직접 나온다.</p>
+
+<p><b>검증 가능한 예측 (사전 등록 후보).</b></p>
+<table class='num'><tr><th>#</th><th>예측</th><th>측정</th><th>기각 조건</th></tr>
+<tr><td>P1</td><td>κ*가 \\(u_{\\mathrm{alea}}\\)와 국소 반상관</td><td>g5_pi05 크리틱의 per-prefix argmax vs 앙상블 분해, 6 에피소드</td><td>상관 부호가 양이거나 0</td></tr>
+<tr><td>P2</td><td>20k→120k에서 \\(u_{\\mathrm{epis}}\\)만 감소</td><td>같은 프레임에서 두 체크포인트 분해 비교 (cont 완료 후)</td><td>\\(u_{\\mathrm{alea}}\\)도 같은 비율로 줄면 분해 무의미</td></tr>
+<tr><td>P3</td><td>정책 개선 arm에서만 평균 k* 증가</td><td>chunking-theory III.7의 인과 실험(개선 on/off arm)과 동일</td><td>off arm에서도 증가</td></tr>
+<tr><td>P4</td><td>receding-horizon(k=1)이 긴 커밋보다 나쁜 구간 존재 (Zhang 재현)</td><td>YAM/RoboCasa에서 고정-k 스윕의 비단조성</td><td>k=1이 전역 최적</td></tr>
+<tr><td>P5</td><td>재계획 dithering(연속 청크 발산)이 앨리어싱 지표와 동행</td><td>연속 질의 청크 간 거리 vs 가림/접촉 이벤트</td><td>무상관</td></tr></table>
+
+<p><b>계보 한 줄.</b> Metelli(persistence 상계)와 ETC(MIET·Zeno)가 고전적 반쪽, Zhang(실행길이 하계)이
+현대적 반쪽, ExRL/DEHP(온라인 선택 학습)가 경험적 반쪽 — 우리 시리즈는 이 셋을 <b>오프라인·가치기반·
+개선 결합</b>의 한 틀로 접합하는 시도이며, 남은 것은 P1~P5의 측정과 칼날 v2의 증명 완결이다.</p>
+""",
+)
+
+
+def _p2_rows():
+    """Recompute the P2 table from the raw measurement JSON on every build (never hand-copied)."""
+    import math
+
+    import numpy as _np  # noqa: ICN001 (np is taken at module level in some builds)
+
+    src = pathlib.Path(__file__).parent.parent / ".scratch/p2_uncertainty/p2_split.json"
+    if not src.exists():
+        return "<tr><td colspan='6'>p2_split.json missing</td></tr>", ""
+    d = json.loads(src.read_text())
+    rows, lnA, lnE = [], [], []
+    for e in ["320", "79", "23", "214", "5", "141"]:
+        a0 = _np.median(_np.asarray(d["20k"][e]["u_alea"])[:, -1])
+        a1 = _np.median(_np.asarray(d["120k"][e]["u_alea"])[:, -1])
+        e0 = _np.median(_np.asarray(d["20k"][e]["u_epis"])[:, -1])
+        e1 = _np.median(_np.asarray(d["120k"][e]["u_epis"])[:, -1])
+        ra, re = a1 / a0, e1 / e0
+        lnA.append(math.log(ra))
+        lnE.append(math.log(re))
+        succ = "성공" if d["20k"][e]["success"] else "<b>실패</b>"
+        rows.append(
+            f"<tr><td>ep{e}</td><td>{succ}</td><td>{a0:,.0f} → {a1:,.0f}</td><td>×{ra:.2f}</td>"
+            f"<td>{e0:,.0f} → {e1:,.0f}</td><td>×{re:.2f}</td></tr>"
+        )
+    ga, ge = math.exp(_np.mean(lnA)), math.exp(_np.mean(lnE))
+    summary = f"기하평균: u_alea ×{ga:.2f} ({(ga - 1) * 100:+.0f}%) · u_epis ×{ge:.2f} ({(ge - 1) * 100:+.0f}%)"
+    return "".join(rows), summary
+
+
+_P2_ROWS, _P2_SUMMARY = _p2_rows()
+
+entry(
+    "08-20",
+    "p2-uncertainty-meas",
+    "P2 측정 — 학습은 epistemic만 줄이는가 (20k vs 120k): 방향 일치, 강한 형태는 미지지",
+    "완결",
+    f"""
+<p><b>왜.</b> <span class='xref' data-eid='uncertainty-split'>불확실성 분해 노트</span>의 예측 ②(사전 등록:
+"학습이 진행되면 u_epis만 감소, u_alea는 불변; u_alea가 같은 비율로 줄면 분해 무의미")를 첫 실측한다.
+같은 크리틱(g5_pi05)의 20k 체크포인트와 +100k 이어-학습(120k) 체크포인트로, 가치 비디오와 동일한
+6개 에피소드의 전 프레임(stride 8)에서 K=2 앙상블의 HL-Gauss 분포를 분해했다
+(u_alea=멤버 내 분산 평균, u_epis=멤버 간 평균의 분산; full-prefix 기준, 스크립트
+<code>measure_uncertainty_split.py</code>, 원본 JSON에서 게시 때마다 재계산).</p>
+
+<table class='num'><tr><th>에피소드</th><th>결과</th><th>u_alea (분산)</th><th>비율</th><th>u_epis</th><th>비율</th></tr>
+{_P2_ROWS}</table>
+<p class='sub'>{_P2_SUMMARY}</p>
+
+{{img32}}
+
+<p><b>판정 — 방향 일치, 강한 형태 미지지.</b> 기하평균으로 u_epis가 u_alea보다 더 줄었다(−39% vs −24%)
+— 부호는 예측과 맞다. 그러나 사전 등록한 강한 형태는 <b>지지되지 않는다</b>: u_alea도 같은 자릿수로
+움직였고(기각 조건의 절반 발동), 에피소드 분산이 커서 6개 중 2개(ep23 +15%, ep141 ×2.01)에서는
+u_epis가 오히려 늘었다. 정직한 라벨은 <b>미결·약지지</b>다. 지배적 교란은 K=2 — 두 멤버의 불일치로
+epistemic을 재는 것은 원리적으로 고분산이며(분해 노트의 자기 경고), <code>head_ensemble</code> K≥8
+재측정이 판정의 전제다.</p>
+
+<p><b>부수 발견 (다음 가설감).</b> 성공/실패가 u_alea에서 갈렸다: 성공 3편은 u_alea가 내려가고
+(×0.52·×1.00·×0.60 — 예측 가능한 구간의 분포가 조여짐), 실패 3편 중 2편은 유지·상승했다
+(×1.41·×1.06 — 학습이 실패 구간의 산포를 더 정직하게 표현). 최단 즉시중단 실패 ep141만 양쪽 모두
+반대 방향의 outlier인데, 353프레임짜리 특이 에피소드라 별도 조사감이다. 이 성공/실패 비대칭은 분해
+노트의 "행동정책 산포가 u_alea에 섞인다"는 경고와 정합적이며, u_alea의 정체(환경 확률성 vs return
+다봉성)를 가르는 다음 측정을 정의한다.</p>
+
+<p><b>재현.</b> 스크립트·JSON·figure 모두 리포에 있다. 같은 6 에피소드의 120k "after" 가치 비디오는
+별도 업로드(갤러리 <code>videos/yam_value</code>)로 잇는다.</p>
+""",
+)
+
+
+def _gate_rows():
+    """Recompute the 1-step-gate table from the raw results JSONs on every build."""
+    root = pathlib.Path(__file__).parent.parent / ".scratch"
+    out = {}
+    for tag, d in (("160k", "eval_onestep_160k"), ("200k", "eval_onestep_200k")):
+        f = root / d / "results.json"
+        if f.exists():
+            out[tag] = json.loads(f.read_text())["metrics"]
+    if not out:
+        return "<tr><td colspan='4'>results.json missing</td></tr>", ""
+    rows = []
+    names = [
+        ("af_1step", "α-Flow 1-step"),
+        ("af_2step", "α-Flow 2-step"),
+        ("af_10step", "α-Flow 10-step"),
+        ("bc_10step", "BC 베이스라인 10-step"),
+    ]
+    for k, label in names:
+        cells = "".join(f"<td>{out[t][f'mse_gt/{k}']:.6f}</td>" if t in out else "<td>—</td>" for t in ("160k", "200k"))
+        rows.append(f"<tr><td>{label}</td>{cells}</tr>")
+    g = next(iter(out.values()))["gt_action_var"]
+    extra = ""
+    if "200k" in out:
+        m = out["200k"]
+        extra = (
+            f"self-gap(1↔10) {m['self_gap/af_1_vs_10']:.6f} · self-gap(2↔10) {m['self_gap/af_2_vs_10']:.6f} · "
+            f"GT 액션 분산 {g:.3f} (200k 기준)"
+        )
+    return "".join(rows), extra
+
+
+_GATE_ROWS, _GATE_EXTRA = _gate_rows()
+
+entry(
+    "08-22",
+    "alphaflow-1step-gate",
+    "1-step 게이트 통과 — α-Flow 200k 완주와 원스텝 무손실 판정",
+    "완결",
+    f"""
+<p><b>왜.</b> <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span>의 존재 이유는 offline RL의
+actor 업데이트를 forward 1회로 만드는 것이었고, 그 전제는 "원스텝화가 액션 품질을 깎지 않는다"였다.
+200k run이 완주했으므로(wandb <code>c4vy84yy</code>: α 1.0→0.005 전 커리큘럼 무사고, delta² 0.052→0.0026,
+중간에 /data5 디스크 포화로 attempt1이 사망해 /data1로 체크포인트를 옮겨 재주행) 그 게이트를 판정한다.</p>
+
+<p><b>어떻게.</b> held-out 6 에피소드 × 6 프레임(총 36)에서, 각 정책이 <b>자기 norm stats로 unnormalize한
+로봇 공간</b> 30-스텝 청크의 demo-MSE를 잰다(프레임당 동일 노이즈로 분산 통제; 스크립트
+<code>eval_onestep_bc.py</code>, 표는 results.json에서 게시 때마다 재계산).</p>
+
+<table class='num'><tr><th>변형</th><th>demo-MSE @160k</th><th>@200k (최종)</th></tr>
+{_GATE_ROWS}</table>
+<p class='sub'>{_GATE_EXTRA}</p>
+
+<p><b>판정 — 원스텝화는 무손실이며, 오히려 이득이다.</b> 최종 체크포인트에서 1-step(0.00096)이 같은
+모델의 10-step(0.00153)보다 낫고, 스텝 수에 대해 단조다(1&lt;2&lt;10). floor(α=5e-3) 구간 40k가 1-step을
+더 조였다(160k 0.00107→200k 0.00096, 10-step은 미세 악화) — 큰-점프 타깃을 직접 최적화한 효과.
+자기일관성 갭은 액션 분산의 0.1% 수준. <b>RL 스택의 actor 자리에 이 1-step 정책을 그대로 쓸 수 있다.</b></p>
+
+<p><b>BC 대비 수치의 한계 (명시).</b> BC 베이스라인(0.00267)보다 ~2.8× 낮지만 이것은 확정 주장이
+아니다 — BC는 s300 성공-only 70k 스텝, α-Flow는 s347 전체 200k 스텝으로 <b>method-only-diff가 아니고</b>,
+demo-MSE는 성공률의 프록시일 뿐이다. 확정은 "동일 모델 내 1-step ≥ 10-step"까지.</p>
+
+<p><b>다음.</b> 이 1-step 정책이 FQL/QC-FQL 스택(<span class='xref' data-eid='adaptive-exec-map'>계열 지도</span>의
+빈칸: 오프라인 + 선택·개선 동시)의 actor로 들어간다 — distill 타깃이 10-step ODE에서 1-step forward로
+바뀌면서 actor 학습의 teacher 비용이 사라진다. per-prefix 크리틱과의 결합 실험이 다음 사이클.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "alphaflow-1step-gate": {
+        "date": "2026-08-22 11:30",
+        "who": "워커B",
+        "where": "B200 200k run(c4vy84yy, /data1 ckpt) + L40S offline eval · held-out 6에피소드×6프레임",
+        "what": "1-step 게이트 판정 — 로봇 공간 demo-MSE에서 1-step(0.00096) < 10-step(0.00153) < BC(0.00267), 자기일관성 갭 0.1%",
+        "how": "eval_onestep_bc.py: 정책별 자기-stats unnormalize, 프레임당 동일 노이즈, 160k/200k 두 체크포인트, 표는 JSON 재계산",
+        "why": "offline RL actor를 forward 1회로 만드는 전제(원스텝 무손실)의 판정 — 통과, floor 구간이 오히려 1-step을 개선",
+        "links": ["alphaflow-pi05", "adaptive-exec-map", "three-forces"],
+    },
+    "p2-uncertainty-meas": {
+        "date": "2026-08-20 09:40",
+        "who": "워커B (밤샘 이론 프로그램 후속 측정)",
+        "where": "g5_pi05 20k vs +100k cont(120k) 체크포인트 · yam_s347 캐시 · 6 에피소드(stride 8)",
+        "what": "예측 P2 첫 실측 — u_alea/u_epis 중앙값 변화율: 방향 일치(epis −39% > alea −24%), 강한 형태 미지지(미결·약지지)",
+        "how": "measure_uncertainty_split.py (K=2 HL-Gauss 분해, full-prefix), fig_32 오버레이, 표는 JSON 재계산",
+        "why": "사전 등록 예측의 정직한 판정 + K≥8 재측정 필요성 확정 + 성공/실패 u_alea 비대칭 발견",
+        "links": ["uncertainty-split", "three-forces", "tie-knife-edge"],
+    },
+    "three-forces": {
+        "date": "2026-08-20 06:30",
+        "who": "워커B (밤샘 이론 프로그램 6/6 — 결산)",
+        "where": "이론 종합 (다섯 노트 + Zhang/Metelli/ETC 원문)",
+        "what": "커밋 길이에 작용하는 네 힘(분기↓·정책오차 레짐의존·안정성↑·정보↑)의 종합, 위상도(개념도)와 사전 등록 후보 예측 P1~P5",
+        "how": "다섯 엔트리의 정리·명제를 한 표로 접합, schematic figure(스크립트 재생성 가능), 예측마다 기각 조건 명기",
+        "why": "사용자 지시의 결산 — tie 비발생·불확실성 유도·정책 개선·non-Markov 긴-청크를 하나의 검증 가능한 프로그램으로",
+        "links": [
+            "adaptive-exec-map",
+            "tie-knife-edge",
+            "uncertainty-split",
+            "nonmarkov-longer",
+            "event-triggered-bridge",
+            "chunking-theory",
+        ],
+    },
+    "event-triggered-bridge": {
+        "date": "2026-08-20 05:40",
+        "who": "워커B (밤샘 이론 프로그램 5/6)",
+        "where": "이론 노트 (ETC/STC 문헌: Heemels 튜토리얼·MIET 2002.00058·ET-RL 2605.12561 등)",
+        "what": "event/self-triggered control ↔ adaptive chunking 개념 대응표 — MIET=커밋 하계, Zeno=병적 재계획, 가치 트리거=κ*의 원형, 외란/모델오차=aleatoric/epistemic",
+        "how": "대응표 + 가져올 보장 2건(MIET 형태, 트리거 문법) + 옮겨지지 않는 경계 명시 (ET-RL 선행 존재 인정, VLA 문맥 수입만 신규 주장)",
+        "why": "사용자 지시 — adaptive chunking 유도의 이론적 뒷받침에 제어이론의 기성 정리군을 동원",
+        "links": ["nonmarkov-longer", "uncertainty-split", "tie-knife-edge", "adaptive-exec-map"],
+    },
+    "nonmarkov-longer": {
+        "date": "2026-08-20 05:00",
+        "who": "워커B (밤샘 이론 프로그램 4/6)",
+        "where": "이론 노트 (Zhang arXiv:2507.09061 v3 원문 정독 — Prop 3.1 실행길이 하계 확보)",
+        "what": "긴 커밋이 엄격 우위인 구간의 두 독립 기제 — 안정성(잦은 replan=오차 재주입, Markov에서도)과 정보(Blackwell 가블링/copycat) — 및 K3 부호의 레짐 의존성 정정",
+        "how": "Zhang Prop 3.1(EISS·executed-length 하계) 인용 + 2-상태 가블링 구성 스케치 + copycat 문헌 접속 + 자기 교정 명기",
+        "why": "사용자 지시 — non-Markovianity로 longer chunk가 선호되는 구간의 이론적 존재 증명 (+예상 밖의 Markov 기제 추가)",
+        "links": ["tie-knife-edge", "uncertainty-split", "adaptive-exec-map", "chunking-theory"],
+    },
+    "uncertainty-split": {
+        "date": "2026-08-20 04:10",
+        "who": "워커B (밤샘 이론 프로그램 3/6)",
+        "where": "이론 노트 + PatchCriticEnsemble 구조 (측정은 g5_pi05 20k vs cont 120k 체크포인트 예정)",
+        "what": "총분산 법칙으로 aleatoric(멤버 내)/epistemic(멤버 간)을 상태×커밋길이 격자로 정의, 세 예측(κ*-정렬·서명·라우팅 분리) 도출",
+        "how": "Depeweg/Clements 분해를 K개 HL-Gauss per-prefix 앙상블에 사상 + K2/K3 접속 + 정직한 한계 2건 명기",
+        "why": "사용자 지시 — env/policy 불확실성 분리가 adaptive chunking을 유도하고 정책 개선이 epistemic을 흡수함의 이론화",
+        "links": ["tie-knife-edge", "adaptive-exec-map", "chunking-theory", "critic-heads"],
+    },
+    "tie-knife-edge": {
+        "date": "2026-08-20 03:30",
+        "who": "워커B (밤샘 이론 프로그램 2/6)",
+        "where": "이론 노트 (chunking-theory Thm 2 위에서; Metelli ICML'20 원문 정리 4.1/4.2 확인)",
+        "what": "이상 극한의 k-동률이 칼날임을 정식화 — 확률성(−)·정책오차(−, 흡수 가능)·앨리어싱(+)의 세 섭동이 부호를 결정",
+        "how": "명제 K1–K4 + 정리 K5(잠정) 스케치: VoI 논증, Ross–Bagnell compounding, Blackwell 가블링, Metelli 상계 접속",
+        "why": "사용자 지시 — 'tie가 실제로 안 일어나는' 이유의 이론적 뒷받침 (adaptive chunking 유도의 근거)",
+        "links": ["chunking-theory", "chunking-easy", "adaptive-exec-map", "aqc-ablation"],
+    },
+    "adaptive-exec-map": {
+        "date": "2026-08-20 02:40",
+        "who": "워커B (밤샘 이론 프로그램 1/6)",
+        "where": "arXiv + 업로드 PDF(ExRL) + DEHP·ExRL 전문 정독",
+        "what": "'언제 replan하나' 계열 17+편 전수 지도 — 적응대상×신호×레짐×정책개선 4축 분류와 빈칸 확정",
+        "how": "정독(ExRL·DEHP·AQC·ACSAC)+초록 검증(ACH·EQRL·AutoHorizon·PACE·AAC·A³)+인용 경유(BID·SGAC 등), 출처 신뢰도 명기",
+        "why": "사용자 지시 — tie 비발생·불확실성 분해·non-Markov 이론화의 전제로 계열 지형과 우리 슬롯 확정",
+        "links": ["papers-tier1", "chunking-theory", "chunking-easy", "aqc-ablation", "alphaflow-pi05"],
+    },
     "chunking-theory": {
         "date": "2026-08-19 02:30",
         "who": "워커B(문헌 정독·정리) + 사용자(스토리라인·반론 제기)",
@@ -4251,6 +4790,430 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "three-forces",
+    "The balance of four forces — synthesis of the adaptive-chunking theory, with testable predictions",
+    """
+<p><b>Why.</b> The close of the overnight theory program. The opening question (from the user): why
+does the k-tie of theoretical perfection fail to occur in practice, and how does the uncertainty
+split induce adaptive chunking, policy improvement, and the non-Markov preference for longer
+chunks? Five notes (<span class='xref' data-eid='adaptive-exec-map'>map</span> ·
+<span class='xref' data-eid='tie-knife-edge'>knife-edge</span> · <span class='xref' data-eid='uncertainty-split'>split</span> ·
+<span class='xref' data-eid='nonmarkov-longer'>two rooms</span> · <span class='xref' data-eid='event-triggered-bridge'>control bridge</span>)
+fold into one picture. We began with three forces; reading Zhang added a <b>fourth</b>.</p>
+
+<p><b>The four forces</b> acting on the commitment length k:</p>
+<table class='num'><tr><th>force</th><th>direction</th><th>origin</th><th>fate</th></tr>
+<tr><td>① branching (aleatoric)</td><td>k ↓</td><td>environment stochasticity — a requery is recourse (VoI)</td><td><b>irrecoverable</b> — the floor</td></tr>
+<tr><td>② policy error (epistemic)</td><td>regime-dependent (↓ if correction, ↑ if re-injection)</td><td>unfinished learning — Metelli's σ_p</td><td><b>absorbed by improvement</b> → the curriculum</td></tr>
+<tr><td>③ stability (Zhang)</td><td>k ↑ (a lower bound!)</td><td>contracting dynamics + error re-injection by frequent replans</td><td>relieved as ε_π→0, but the bound's form remains</td></tr>
+<tr><td>④ information (non-Markov)</td><td>k ↑</td><td>aliasing — replanning is re-inference on a garbled channel (Blackwell/copycat)</td><td>persists unless observability improves</td></tr></table>
+
+{img(P / "31_three_forces.png", "preferred commitment phase diagram + curriculum (schematic)")}
+<p class='sub'>Left: preferred k* on the (aleatoric pressure, long pressure) plane — <b>a schematic, not a
+measurement</b>. The star at the origin is the knife-edge tie; the band near the diagonal is where
+κ*(s) is genuinely state-dependent. Right: the predicted curriculum — training absorbs only the
+epistemic part, so mean k* converges monotonically to the aleatoric floor, which itself never moves.</p>
+
+<p><b>One-paragraph synthesis.</b> The ideal-limit tie is a knife edge made by three erasures
+(branching, correction, information loss — K1). Real environments push it off with four forces:
+branching pushes short (①), aliasing and contracting-dynamics re-injection push long (③④), and
+policy error pushes either way by regime (②) — and only ② vanishes with learning. Hence (i) κ*(s)
+is generically nonconstant (adaptive chunking is induced), (ii) as training proceeds the mean
+commitment grows to the aleatoric floor (the curriculum = the signature of policy improvement), and
+(iii) the short-commit regions remaining above the floor are the environment's branching structure
+itself. Selection-only methods (everyone on <span class='xref' data-eid='adaptive-exec-map'>the map</span>)
+have no means of absorbing ② and stay pinned to the initial configuration of ①–④ — why selection
+and improvement must be done together falls straight out of the four-force picture.</p>
+
+<p><b>Testable predictions (preregistration candidates).</b></p>
+<table class='num'><tr><th>#</th><th>prediction</th><th>measurement</th><th>refuted if</th></tr>
+<tr><td>P1</td><td>κ* locally anti-correlates with \\(u_{\\mathrm{alea}}\\)</td><td>per-prefix argmax vs ensemble split on the g5_pi05 critic, 6 episodes</td><td>correlation positive or zero</td></tr>
+<tr><td>P2</td><td>only \\(u_{\\mathrm{epis}}\\) drops from 20k→120k</td><td>the two checkpoints decomposed on the same frames (after cont finishes)</td><td>\\(u_{\\mathrm{alea}}\\) drops at the same rate</td></tr>
+<tr><td>P3</td><td>mean k* grows only in the improvement arm</td><td>the on/off causal experiment of chunking-theory III.7</td><td>growth in the off arm too</td></tr>
+<tr><td>P4</td><td>regions exist where receding horizon (k=1) underperforms long commitment (Zhang replication)</td><td>non-monotonicity of the fixed-k sweep on YAM/RoboCasa</td><td>k=1 globally optimal</td></tr>
+<tr><td>P5</td><td>replanning dithering (divergence of consecutive chunks) co-occurs with aliasing markers</td><td>distance between consecutively queried chunks vs occlusion/contact events</td><td>no correlation</td></tr></table>
+
+<p><b>The lineage in one line.</b> Metelli (persistence upper bounds) and ETC (MIET, Zeno) are the
+classical half; Zhang (executed-length lower bound) the modern half; ExRL/DEHP (online selection
+learning) the empirical half — this series attempts to join them into one <b>offline, value-based,
+improvement-coupled</b> frame. What remains: measuring P1–P5 and completing the knife-edge v2
+proofs.</p>
+""",
+)
+
+en(
+    "alphaflow-1step-gate",
+    "The one-step gate passes — the alpha-Flow 200k run completes, and one-step sampling is lossless",
+    f"""
+<p><b>Why.</b> The whole point of <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span> was to make
+the offline-RL actor update cost ONE forward, on the premise that one-step conversion does not
+degrade action quality. With the 200k run complete (wandb <code>c4vy84yy</code>: the full curriculum
+α 1.0→0.005 without incident, delta² 0.052→0.0026; attempt 1 died to a /data5 disk-full during
+checkpointing and the run was restarted with checkpoints on /data1), we judge that gate.</p>
+
+<p><b>How.</b> On 36 held-out frames (6 episodes × 6), we measure demo-MSE of the 30-step chunk in
+<b>robot space, each policy unnormalizing with its own stats</b> (same per-frame noise across
+variants; script <code>eval_onestep_bc.py</code>; the table is recomputed from results.json at every
+publish).</p>
+
+<table class='num'><tr><th>variant</th><th>demo-MSE @160k</th><th>@200k (final)</th></tr>
+{_GATE_ROWS}</table>
+<p class='sub'>{_GATE_EXTRA}</p>
+
+<p><b>Verdict — one-step conversion is lossless, in fact a gain.</b> At the final checkpoint,
+1-step (0.00096) beats the same model's 10-step (0.00153), monotonically in step count (1&lt;2&lt;10).
+The 40k floor phase (α=5e-3) tightened 1-step further (160k 0.00107 → 200k 0.00096, while 10-step
+slipped slightly) — the effect of optimizing the big-jump target directly. The self-consistency gap
+is ~0.1% of action variance. <b>This 1-step policy can serve as the RL stack's actor as-is.</b></p>
+
+<p><b>The BC comparison's limits (stated).</b> ~2.8× below the BC baseline (0.00267), but that is not
+a confirmed claim — the baseline trained on s300 success-only for 70k steps vs α-Flow's s347
+all-episodes 200k, so it is <b>not a method-only diff</b>, and demo-MSE is a proxy for success rate.
+What is confirmed: within the same model, 1-step ≥ 10-step.</p>
+
+<p><b>Next.</b> This 1-step policy slots into the FQL/QC-FQL stack as the actor (the empty cell of
+<span class='xref' data-eid='adaptive-exec-map'>the family map</span>: offline + selection-and-improvement
+together) — the distillation target changes from a 10-step ODE to a single forward, removing the
+teacher cost of actor training. Coupling it with the per-prefix critic is the next cycle.</p>
+""",
+)
+
+en(
+    "p2-uncertainty-meas",
+    "Measuring P2 — does training shrink only the epistemic part (20k vs 120k)? Direction agrees; the strong form is unsupported",
+    f"""
+<p><b>Why.</b> First measurement of prediction ② of the
+<span class='xref' data-eid='uncertainty-split'>uncertainty-split note</span> (preregistered: "training
+shrinks only u_epis, u_alea stays; if u_alea drops at the same rate the decomposition is
+meaningless"). Using the same critic at 20k (g5_pi05) and after a +100k continuation (120k), we
+decomposed the K=2 ensemble's HL-Gauss distributions on every frame (stride 8) of the six episodes
+already rendered as value videos (u_alea = mean within-member variance, u_epis = variance of member
+means; full prefix; script <code>measure_uncertainty_split.py</code>; the table is recomputed from
+the raw JSON on every publish).</p>
+
+<table class='num'><tr><th>episode</th><th>outcome</th><th>u_alea (variance)</th><th>ratio</th><th>u_epis</th><th>ratio</th></tr>
+{_P2_ROWS}</table>
+<p class='sub'>{_P2_SUMMARY}</p>
+
+{{img32}}
+
+<p><b>Verdict — direction agrees; the strong form is unsupported.</b> By geometric mean u_epis fell
+more than u_alea (−39% vs −24%) — the sign matches the prediction. But the preregistered strong form
+is <b>not supported</b>: u_alea moved by the same order (half of the refutation condition fires), and
+per-episode variance is large — in 2 of 6 episodes (ep23 +15%, ep141 ×2.01) u_epis actually rose.
+The honest label is <b>inconclusive, weakly supportive</b>. The dominant confound is K=2: measuring
+epistemic uncertainty as the disagreement of two members is intrinsically high-variance (the split
+note's own warning), so a <code>head_ensemble</code> K≥8 re-measurement is the precondition for a
+real verdict.</p>
+
+<p><b>Side finding (next hypothesis).</b> Success and failure separated in u_alea: the three
+successes tightened (×0.52, ×1.00, ×0.60 — the distribution sharpens where returns are predictable)
+while two of three failures held or grew (×1.41, ×1.06 — training represents the dispersion of
+failure segments more honestly). Only ep141, the shortest instant-abort failure (353 frames), is an
+outlier in both quantities and needs its own look. This success/failure asymmetry is consistent with
+the split note's caveat that behavior-policy dispersion contaminates u_alea, and it defines the next
+measurement, separating environment stochasticity from return multimodality inside u_alea.</p>
+
+<p><b>Reproduction.</b> Script, JSON, and figure are all in the repo. The 120k "after" value videos
+of the same six episodes follow as a separate upload (gallery <code>videos/yam_value</code>).</p>
+""",
+)
+
+en(
+    "event-triggered-bridge",
+    "The bridge from control theory — event-triggered control is adaptive chunking's 40-year-old ancestor",
+    """
+<p><b>Why.</b> "When to replan" is not a question robot learning met first — control theory has
+worked it for decades as <b>event-triggered / self-triggered control</b> (ETC/STC;
+Heemels–Johansson–Tabuada tutorial). This note opens that dictionary for our problem: the
+correspondence table, the guarantees we can import, and what does <b>not</b> transfer. Overnight
+theory program 5/6.</p>
+
+<table class='num'><tr><th>control theory (ETC/STC)</th><th>adaptive chunking (ours)</th></tr>
+<tr><td>control update (measure → recompute control)</td><td>replan (observe → query a new chunk)</td></tr>
+<tr><td>inter-event time</td><td>commitment length k</td></tr>
+<tr><td>trigger \\(\\lVert e(t)\\rVert>\\sigma\\lVert x(t)\\rVert\\) (update when error crosses a threshold)</td><td>value trigger: requery where per-prefix \\(Q_k\\) bends (the prototype of κ*)</td></tr>
+<tr><td>STC: from the current state, <b>precompute the next update time</b></td><td>the state-dependent commitment map κ(s) — literally the same object</td></tr>
+<tr><td><b>MIET</b> (minimum inter-event time) guarantees; Zeno exclusion</td><td>guaranteed lower bounds on commitment; excluding the replan-every-step pathology (ExRL's k=0 loop is Zeno's learned incarnation)</td></tr>
+<tr><td>disturbance magnitude ↔ event frequency</td><td>aleatoric \\(u_{\\mathrm{alea}}\\) ↔ short k (<span class='xref' data-eid='uncertainty-split'>the split</span>, prediction ①)</td></tr>
+<tr><td>model mismatch ↔ conservative triggering</td><td>epistemic \\(u_{\\mathrm{epis}}\\) ↔ absorbed by training (prediction ②)</td></tr>
+<tr><td>communication/compute savings vs performance</td><td>inference cost vs return (the motivation for the lexicographic rule)</td></tr></table>
+
+<p><b>Two things to import.</b> ① <b>The shape of MIET theorems</b>: with Lipschitz dynamics and a
+well-designed trigger, inter-event times have a positive lower bound (e.g., designable MIET,
+arXiv:2002.00058) — the same direction as Zhang's executed-length lower bound
+(<span class='xref' data-eid='nonmarkov-longer'>two rooms</span>), only decades older. The pathology of
+too-short commitment was excluded by control theory under the name Zeno before learning
+rediscovered it. ② <b>The grammar of triggers</b>: an ETC trigger fires when the Lyapunov decrease is
+threatened — our critic's per-prefix \\(Q_k(s)\\) is a <b>learned value certificate</b> standing in
+exactly that slot. The deployment rule "cut where \\(Q_{k+g}-Q_k\\) bends below threshold" reads as
+the return-maximizing generalization of a Lyapunov trigger.</p>
+
+<p><b>What does not transfer (honest boundary).</b> ETC guarantees concern (i) stabilization
+objectives, (ii) known or partially known dynamics, (iii) designed (not learned) triggers.
+Porting them to return maximization, unknown dynamics, and learned triggers is <b>a program, not a
+theorem</b> — and that gap is precisely what this theory series fills. Nor is the ETC↔RL bridge
+itself new — event-triggered RL exists in cyber-physical contexts (e.g., Learning When to Act via
+Run-Time Assurance, arXiv:2605.12561; ET-MPC+DRL, arXiv:2208.10302); what we newly lay is the
+<b>import into the VLA action-chunking context</b> with the value-trigger and uncertainty mappings.</p>
+
+<p><b>The view gained.</b> Through the ETC lens, the heuristic signals of the adaptive-execution
+family (<span class='xref' data-eid='adaptive-exec-map'>the map</span>) — entropy, consistency,
+attention — are all <b>surrogate triggers</b>: different proxies for the true trigger (threatened value
+decrease). Why a trigger built directly on learned per-prefix value is in-principle superior now
+fits in one line: <b>the trigger speaks the same currency as the objective.</b></p>
+""",
+)
+
+en(
+    "nonmarkov-longer",
+    "Two rooms where long commitment wins — stability (Zhang) and information (Blackwell/copycat), plus a sign correction to K3",
+    """
+<p><b>Why.</b> K4 of the <span class='xref' data-eid='tie-knife-edge'>knife-edge note</span> promised regions
+where longer commitment strictly wins, via aliasing. This note establishes that existence through
+<b>two independent mechanisms</b> — the <b>stability mechanism</b> of Zhang et al.
+(arXiv:2507.09061), just verified against the original (and holding even with Markovian experts!),
+and the <b>information mechanism</b> of partial observability (Blackwell garbling + the copycat
+literature). Along the way we honestly correct K3's sign (policy error → short k) as
+<b>regime-dependent</b>. Overnight theory program 4/6.</p>
+
+<p><b>Room A — stability: frequent replanning creates exponential blow-up (Zhang, verified).</b>
+Their Prop 3.1: if the dynamics are open-loop \\((C_{\\mathrm{ISS}},\\rho)\\)-EISS (contracting) and the
+policy–model pair is EISS, the chunked policy inherits stability on the true dynamics — with the
+condition being a <b>lower bound on the executed chunk length</b>:
+\\[ \\ell \\;>\\; \\frac{\\log\\mathrm{poly}(L_\\pi, C_{\\mathrm{ISS}})}{\\log(1/\\rho)}. \\]
+The key reversal, in their words: "<i>even on synthetic globally stable dynamics, frequent feedback
+can cause exponential compounding error, which action-chunking mitigates</i>" — and the requirement
+binds the <b>executed</b> length, not the predicted one (the same policy run receding-horizon can be
+unstable). Mechanism: replanning re-injects the learned error into the feedback loop every step;
+committing lets the environment's contraction (ρ) absorb it. No aliasing needed — this holds with
+unimodal, Markovian experts.</p>
+
+<p><b>The K3 sign correction (self-correction of v1).</b> The knife-edge note's K3 said "policy error
+→ replanning helps (short k)"; Room A exhibits the opposite-sign regime. The precise statement:
+which way \\(\\varepsilon_\\pi\\) pushes depends on whether <b>replanning is a correction or a
+re-injection</b> — (i) when the replan distribution is a trustworthy on-support correction (near the
+expert; the error lies in execution, not state estimation), short k wins (original K3); (ii) when
+the environment contracts and the error lives in the policy's own output, replanning re-excites the
+error and k at least Zhang's bound wins. Which regime holds is set by ρ and the error's origin; in
+both, the effect vanishes as \\(\\varepsilon_\\pi\\to0\\) — <b>absorbability survives</b>, but the direction
+of the pre-absorption curriculum can differ by state and regime. That is the content of the
+correction.</p>
+
+<p><b>Room B — information: replanning is re-inference on a garbled channel.</b> Two-state
+construction: states \\(x_A,x_B\\) merge into one observation o while demanding different
+continuations (e.g., an occluded object left vs right). A chunk launched from an earlier separable
+state \\(s_0\\) carries the correct branch open-loop; a policy replanning at o is weakly worse by
+Blackwell's theorem — strictly worse when the branches differ — with the worst case being
+<b>dithering</b>, averaging between modes at every requery. The imitation literature knows another
+face of the same pathology: copycat / causal confusion (arXiv:1905.11979; Fighting Copycat,
+NeurIPS'20) shows per-step re-inference under partial observability collapses onto a shortcut
+(copying the previous action); chunk commitment removes the re-inference altogether. Zhang lists it
+too — the folk rationale #1 for chunking is "robustness to non-Markovian / partial observability
+quirks"; we are formalizing it as the garbling argument.</p>
+
+<p><b>Synthesis — existence of long-commitment regions (statement).</b> In regions where (A) ρ&lt;1,
+the policy error is finite, and there is no branching, or (B) the executed segment is aliased while
+the launch state is separable, \\(\\varphi_k(s)>0\\): longer commitment strictly wins. (A) is
+quantitative via Zhang's lower bound; (B) is an existence proof via the two-state construction. The
+opposing pressure (aleatoric branching) is measured by the \\(u_{\\mathrm{alea}}\\) grid of
+<span class='xref' data-eid='uncertainty-split'>the uncertainty split</span> — κ*(s) is the local
+balance point of these two pressures.</p>
+
+<p><b>Remaining.</b> ① Numerical validation of the two-state construction (toy POMDP with a complete
+proof) — follow-up entry. ② A YAM proxy for the relative size of rooms A/B (replanning dithering =
+divergence between consecutive chunks vs post-commit error). ③ Fold the K3 correction into
+knife-edge v2.</p>
+""",
+)
+
+en(
+    "uncertainty-split",
+    "Two faces of uncertainty — the aleatoric/epistemic split induces adaptive chunking (with a measurement plan)",
+    """
+<p><b>Why.</b> The <span class='xref' data-eid='tie-knife-edge'>knife-edge formalization</span> showed two of
+the three tie-breaking forces are uncertainties: environment stochasticity (K2, irrecoverable) and
+policy error (K3, absorbed by improvement). This note identifies them with the standard
+<b>aleatoric / epistemic</b> decomposition (Depeweg et al., ICML'18, arXiv:1710.07283; Clements et
+al., arXiv:1905.09638) and shows our distributional ensemble critic can <b>measure both, on a
+state × commitment-length grid, with no extra training</b>. Overnight theory program 3/6.</p>
+
+<p><b>The decomposition (law of total variance).</b> With ensemble members \\(m=1..K\\) each predicting
+a return distribution \\(Z_m(s,a_{1:k})\\):
+\\[ \\underbrace{\\mathrm{Var}[Z]}_{\\text{total}} \\;=\\;
+\\underbrace{\\tfrac1K\\textstyle\\sum_m \\mathrm{Var}[Z_m]}_{u_{\\mathrm{alea}}\\;(\\text{within-member})} \\;+\\;
+\\underbrace{\\mathrm{Var}_m\\big[\\mathbb E[Z_m]\\big]}_{u_{\\mathrm{epis}}\\;(\\text{across-member})} \\]
+Within-member spread survives infinite data (aleatoric); across-member disagreement is the
+ignorance that data and training remove (epistemic). Our <code>PatchCriticEnsemble</code>
+<b>already has this shape</b>: K HL-Gauss distributional heads, per prefix — a forward pass over a
+checkpoint yields the two fields \\(u_{\\mathrm{alea}}(s,k)\\), \\(u_{\\mathrm{epis}}(s,k)\\) for free.</p>
+
+<p><b>Theory hooks — three predictions.</b>
+① <b>κ* tracks the aleatoric field</b>: K2's branching term fires where \\(u_{\\mathrm{alea}}\\) is high, so
+the true-value-optimal commitment shortens there — our hypothesis for what DEHP/ExRL observed
+qualitatively as "fine-grained phases → short".
+② <b>Training shrinks only the epistemic part</b>: K3's absorption appears as \\(u_{\\mathrm{epis}}\\downarrow\\)
+with \\(u_{\\mathrm{alea}}\\) unchanged — a <b>measurable signature</b> of the curriculum (mean commitment
+length rising monotonically).
+③ <b>Routing must separate the two</b>: EQRL (arXiv:2606.14375) routes computation by ensemble
+disagreement (= epistemic only) — half the story, in decomposition terms. Short commitment
+(replanning) is justified by aleatoric uncertainty; extra compute and data collection by epistemic.
+A merged signal wastes replanning on fixable ignorance and compute on unfixable spread.</p>
+
+<p><b>Two honest caveats.</b> (a) A learned return distribution's within-member variance includes the
+<b>behavior policy's dispersion and return multimodality</b>, not just env stochasticity (teleop style
+variation shows up as aleatoric) — consistent with Metelli Thm 4.2's \\(\\sigma_p\\) (policy dispersion)
+entering the persistence cost, but identifying it with pure env noise would overclaim. (b) Our
+deployed ensemble is K=2, a weak epistemic estimate — <code>ARQCritic.head_ensemble</code> (shared
+trunk + K independent heads) already provides a nearly-free path to K≥8.</p>
+
+<p><b>Measurement plan (immediately runnable).</b> We happen to hold the same critic at <b>20k
+(g5_pi05) and a 120k continuation (in progress)</b>: compute both fields along the six episodes
+already rendered as value videos (ep320/79/23/214/5/141) and test ①② directly — if right, only the
+\\(u_{\\mathrm{epis}}\\) curve drops from 20k→120k while \\(u_{\\mathrm{alea}}\\) persists, and failure episodes
+show a distinct \\(u_{\\mathrm{alea}}\\) phase profile (contact/alignment peaks). One extra panel in
+<code>render_yam_value_video.py</code> makes it visible in video. The measurement will be posted as a
+follow-up entry.</p>
+
+<p><b>Relation to prior work.</b> The decomposition itself is standard (Depeweg; Clements;
+arXiv:2206.01558); our candidate contribution is <b>unrolling it along the commitment axis</b> — the
+\\(u(s,k)\\) grid, its link to κ*, and the routing principle "replanning for aleatoric, improvement and
+compute for epistemic". Prediction ② is the measurable version of
+<span class='xref' data-eid='chunking-theory'>chunking-theory</span> III.7's curriculum.</p>
+""",
+)
+
+en(
+    "tie-knife-edge",
+    "The knife-edge of perfection — the theoretical tie is structurally unstable (formalization v1)",
+    """
+<p><b>Why.</b> <span class='xref' data-eid='chunking-theory'>chunking-theory</span>'s Theorem 2 shows that in
+the deterministic, fully observed limit \\(\\Delta_{\\mathrm{react}}=0\\): <b>every commitment length k
+ties</b>. So why does adaptive chunking help in practice? This note formalizes that tie as a
+<b>knife-edge singularity</b>: three kinds of ε-perturbation (environment stochasticity, policy
+inconsistency, observation aliasing) each break the tie <b>in different directions</b>, so a generic
+environment has a nontrivial state-dependent commitment map \\(\\kappa^*(s)\\). Overnight theory
+program 2/6.</p>
+
+<p><b>Setup.</b> Base MDP \\(M=(\\mathcal S,\\mathcal A,T,r,\\gamma)\\), chunk policy \\(\\pi\\) (length H),
+selector \\(\\kappa:\\mathcal S\\to\\{1..H\\}\\). \\(Q^\\pi_k(s)\\) = value of executing the chunk's first k steps
+open-loop from s, then requerying; \\(\\varphi_k(s):=Q^\\pi_k(s)-Q^\\pi_H(s)\\) = the relative gain of
+replanning at k.</p>
+
+<p><b>Proposition K1 (the tie's mechanism — replanning has nothing to undo).</b> If (i) T is
+deterministic, (ii) the policy is <b>replan-consistent</b> (a requery reproduces the previous chunk's
+tail), and (iii) observations separate states, then \\(\\varphi_k(s)=0\\) for all s, k. <i>Sketch.</i> The
+only thing replanning can produce is a correction based on new information; (i) removes the new
+information, (ii) removes the correction, (iii) removes the information loss — the executed path
+becomes k-independent. ∎ (A restatement of chunking-theory Thm 2: the tie is not an accident but
+the conjunction of three erasures.)</p>
+
+<p><b>Proposition K2 (stochasticity breaks the tie toward short k — the value of recourse).</b> If a
+reachable branch state \\(s_b\\) exists where the optimal continuation differs across next-state
+realizations with probability p and value gap g, replanning right after the branch strictly gains
+\\(\\gamma^{t_b}\\,p\\,g>0\\) — \\(\\varphi_k\\) is strictly negative for any k that buries the branch inside the
+chunk. The mechanism is the <i>value of information</i>: a requery strictly helps exactly when the
+observation changes the decision. This term is <b>irrecoverable</b> (no policy improvement removes
+it) — it is the aleatoric floor. The classical quantitative side: Metelli et al. (ICML'20,
+arXiv:2002.06836) Thm 4.1 bounds the persistence cost by
+\\(\\tfrac{\\gamma(1-\\gamma^{k-1})}{(1-\\gamma)(1-\\gamma^k)}\\,\\lVert d^\\pi\\rVert\\), where d is the discrepancy
+between what the policy would do and what persistence does; our branching term is its lower-bound
+counterpart.</p>
+
+<p><b>Proposition K3 (policy error also breaks toward short k — but absorbably).</b> Let
+\\(\\varepsilon_\\pi\\) be the per-step TV gap between the replan distribution and the chunk's
+continuation. By Ross–Bagnell compounding this component of \\(\\varphi\\) grows with k and pushes
+toward short commitment; but \\(\\varepsilon_\\pi\\to0\\) as \\(\\pi\\to\\pi^*\\): <b>policy improvement absorbs
+this term</b>, leaving only K2 — the other face of the curriculum (mean commitment length rising to
+the aleatoric floor, chunking-theory III.7). Notably, Metelli Thm 4.2's bound contains the policy's
+own action dispersion \\(\\sigma_p^p=\\sup_s\\int\\!\\!\\int d_{\\mathcal A}(a,a')^p\\,\\pi(da|s)\\pi(da'|s)\\)
+<b>explicitly</b> — a 2020 precedent for "policy uncertainty raises the cost of committing".</p>
+
+<p><b>Proposition K4 (aliasing breaks the tie toward LONG k — the only sign flip).</b> If the
+observation channel \\(O\\) merges states, replanning is <b>re-inference on garbled information</b>. By
+Blackwell's theorem decisions on a garbled channel are weakly worse — strictly worse when the
+merged states demand different continuations — whereas a chunk launched from an earlier,
+separable state <b>carries</b> that information open-loop. In states where replanning dithers between
+modes, \\(\\varphi_k>0\\): <b>regions exist where longer commitment strictly wins</b>. (The two-state
+construction and the copycat-literature connection are completed in the next entry.)</p>
+
+<p><b>Theorem K5 (the knife-edge; provisional statement).</b> The tie \\(\\varphi\\equiv0\\) ⟺ (no
+reachable branching) ∧ (replan-consistency) ∧ (no aliasing along executed segments). If any
+condition fails by ε, the sign of \\(\\varphi\\) near the affected states is determined (K2, K3: −;
+K4: +), and since the direction varies by state, the generic \\(\\kappa^*(s)\\) is nonconstant. That is:
+<b>adaptive chunking is not an exception to the tie; the tie is adaptive chunking's measure-zero
+singularity.</b> Provisional because the precise topology of "generic" (open-dense in which
+perturbation space) is tightened in the next version.</p>
+
+<p><b>Corollary (justifying the deployment rule).</b> Near the ideal point all k are ε-tied, so the
+lexicographic rule — the longest k within the return-optimal ±ε set — is the natural tie-break: it
+recovers compute without touching return, and away from the ideal point the sign decides anyway.
+(chunking-theory III.7's rule becomes a corollary of this theorem.)</p>
+
+<p><b>Relation to prior work.</b> Everything here concerns <b>true values</b> — estimation-side
+k-biases are a separate axis: the discount-bookkeeping bias was solved by ExRL's SMDP backup, and
+the hindsight leakage of closed-loop teleop (DQC) survives correct bookkeeping and remains our
+open, unmeasured axis (see the claim-strength guard in
+<span class='xref' data-eid='adaptive-exec-map'>the family map</span>).</p>
+""",
+)
+
+en(
+    "adaptive-exec-map",
+    "A complete map of the adaptive-execution family — signal × regime × what-adapts, and the empty cells",
+    """
+<p><b>Why.</b> Reading ExRL (RSS RL4VLA workshop) and DEHP (arXiv:2606.11408) in full revealed that
+"when to replan" became a crowded family in early 2026. As step 1/6 of tonight's theory program
+(structural instability of the tie → uncertainty decomposition → non-Markov long-chunk regions →
+the event-triggered-control bridge → three-forces synthesis), this entry draws the complete map and
+confirms whether our slot (offline learned signal + simultaneous policy improvement) is truly empty.</p>
+
+<p><b>Axes.</b> ① <b>what adapts</b> — execution length k / the actions themselves / latents &
+compute budget. ② <b>signal</b> — learned value (Q/V) vs heuristic (entropy, consistency,
+attention). ③ <b>regime</b> — does it need online interaction. ④ <b>policy improvement</b> — does
+the base policy get better (frozen = ✕).</p>
+
+<table class='num'><tr><th>method</th><th>adapts</th><th>signal</th><th>regime</th><th>improves policy</th><th>source confidence</th></tr>
+<tr><td><b>ExRL</b> (RSS'26 RL4VLA WS)</td><td>k∈{0..H}</td><td>learned Q(s,a₁:H,k), off-policy (replay)</td><td>online ~10⁶</td><td>✕ (frozen; self-admitted: "bounded by the action distribution of the frozen base policy")</td><td>full read (PDF)</td></tr>
+<tr><td><b>DEHP</b> (2606.11408)</td><td>h∈{1..H}</td><td>learned π_len + V(s), on-policy PPO</td><td>online 5×10⁸</td><td>✕ (frozen)</td><td>full read</td></tr>
+<tr><td><b>AQC</b> (2605.05544)</td><td>commit K∈{1,4,8,16}</td><td>learned Q (offline TD)</td><td>offline</td><td>✕ (selection only)</td><td>full read (earlier report)</td></tr>
+<tr><td><b>ACSAC</b> (2605.11009)</td><td>commitment length</td><td>learned per-prefix Q</td><td>offline</td><td>✕</td><td>PDF held, partial read</td></tr>
+<tr><td><b>ACH</b> (2605.10044)</td><td>chunk length (during training too)</td><td>parallel multi-length Q</td><td>offline→online</td><td><b>△ trains the policy</b></td><td>abstract</td></tr>
+<tr><td><b>EQRL</b> (2606.14375)</td><td>latent + denoise steps + chunk length C</td><td><b>critic-ensemble disagreement (= epistemic!)</b> + macro-action RL, γ^L</td><td>online (likely)</td><td>✕ (frozen + adaptor)</td><td>abstract</td></tr>
+<tr><td><b>AutoHorizon</b> (2602.21445)</td><td>execution horizon</td><td>action self-attention (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>PACE</b> (2606.00537)</td><td>execution horizon</td><td>phase-kinematic trajectory structure (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>AAC</b> (CVPR'26, 2604.04161)</td><td>chunk size</td><td>action entropy (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>A³</b> (2605.11567)</td><td>committed prefix</td><td>self-speculative verification (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract + HTML</td></tr>
+<tr><td><b>DVAC</b> (2606.03847)</td><td>replan timing</td><td>denoising variance (heuristic)</td><td>training-free</td><td>✕</td><td>title/abstract</td></tr>
+<tr><td>BID · SGAC · TAS · MoH · HiPolicy</td><td>chunk selection/fusion</td><td>consistency, similarity, entropy, caching</td><td>training-free to light</td><td>✕</td><td>via DEHP related work</td></tr>
+<tr><td><b>TempoRL</b> (ICML'21)</td><td>action-repeat length (skip)</td><td>learned skip-Q (action-conditioned!)</td><td>online</td><td>△ (policy co-trained)</td><td>abstract + blog</td></tr>
+<tr><td><b>Metelli PFQI</b> (ICML'20)</td><td>persistence k (fixed pick)</td><td>learned Q_k + <b>theoretical bounds</b></td><td>batch (offline)</td><td>✕</td><td>abstract; theory check pending</td></tr>
+<tr><td>FiGAR · AP-PI · SDAR</td><td>repeat length</td><td>learned (action-unconditioned etc.)</td><td>online</td><td>△</td><td>via citation</td></tr></table>
+
+<p><b>Three observations.</b> ① Within the VLA-chunk family, <b>every learned signal is online</b>
+(ExRL, DEHP, EQRL, ACH) and <b>every offline/test-time method is heuristic</b> (AutoHorizon, PACE,
+AAC, A³, DVAC, BID…) — the "learned signal × offline" cell holds only AQC/ACSAC and our per-prefix
+ARQ critic. ② The VLA family is (ACH aside) <b>selection-only across the board</b> — the base policy
+stays frozen, and ExRL states that ceiling itself. Doing selection <b>and</b> policy improvement at
+once is a family-wide gap — exactly what <span class='xref' data-eid='chunking-theory'>chunking-theory</span>'s
+Lemma B ("selection alone cannot grow the commitment length") targets. ③ The only member with
+theoretical bounds is the decade-old lineage (Metelli's PFQI: persistence loss bounded via dynamics
+regularity) — the VLA generation is rediscovering it empirically, without theory. Tonight's theory
+entries connect the two.</p>
+
+<p><b>Claim-strength guard (self-correction).</b> We must not write "nobody addressed k-dependent
+bias" — the discount-bookkeeping bias in k was identified and fixed by ExRL's SMDP backup ("a
+standard one-step backup ... can bias the critic toward shortcut choices"). Our distinct axis is the
+<b>hindsight leakage of closed-loop teleop data</b> (DQC arXiv:2512.10926): an optimism bias that
+survives correct bookkeeping and grows with k offline. The two must always be kept separate.</p>
+
+<p><b>Next.</b> The theory entries that fill the two confirmed gaps (offline learned signal;
+selection + improvement together): structural instability of the tie → aleatoric/epistemic
+decomposition → non-Markov long-chunk regions → the event-triggered bridge → three-forces synthesis.</p>
+""",
+)
+
 en(
     "alphaflow-pi05",
     "α-Flow π0.5 — turning the VLA into a few/one-step generator (implementation + curriculum verification)",

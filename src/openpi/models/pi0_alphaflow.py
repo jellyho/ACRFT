@@ -412,14 +412,49 @@ class Pi0AlphaFlow(Pi0):
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
         prefix_mask, kv_cache = self._prefix_forward(observation)
 
-        num_steps = int(num_steps)
-        dt = 1.0 / num_steps
-        x = noise
-        for i in range(num_steps):
+        # trace-compatible (num_steps may be a tracer when the caller jits sample_kwargs, as
+        # Policy.infer does) -- a fori_loop, not a Python loop.
+        dt = 1.0 / jnp.asarray(num_steps, jnp.float32)
+
+        def body(i, x):
             t = jnp.full((batch_size,), 1.0 - i * dt)
             r = jnp.full((batch_size,), 1.0 - (i + 1) * dt)
-            x = x - dt * self._u(observation, prefix_mask, kv_cache, x, t, r)
-        return x
+            return x - dt * self._u(observation, prefix_mask, kv_cache, x, t, r)
+
+        return jax.lax.fori_loop(0, jnp.asarray(num_steps, jnp.int32), body, noise)
+
+    def sample_n_actions(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        num_samples: int,
+        num_steps: int = 1,
+    ) -> at.Float[at.Array, "n ah ad"]:
+        """N candidate chunks from ONE prefix pass -- the alpha-Flow analogue of Pi0RLT's
+        ``extract_token_and_base_actions``, for value-guided (best-of-N / adaptive-commit) serving.
+
+        The expensive VLM prefix runs once (batch 1); its KV cache and mask are tiled across the
+        N noise draws, which then cost N suffix forwards each of `num_steps` (default 1 -- with the
+        one-step gate passed, BoN-16 costs about 1.6 pi05 draws instead of 16). Model-space output
+        [N, H, action_dim]; the caller unnormalizes/scores.
+        """
+        observation = _model.preprocess_observation(None, observation, train=False)
+        if observation.state.shape[0] != 1:
+            raise ValueError("sample_n_actions expects a batch-1 observation (one live frame)")
+        prefix_mask, kv_cache = self._prefix_forward(observation)
+        kv_n = jax.tree.map(lambda x: jnp.repeat(x, num_samples, axis=1), kv_cache)  # KVCache is [layers, BATCH, ...]
+        mask_n = jnp.repeat(prefix_mask, num_samples, axis=0)
+        noise = jax.random.normal(rng, (num_samples, self.action_horizon, self.action_dim))
+
+        dt = 1.0 / jnp.asarray(num_steps, jnp.float32)
+
+        def body(i, x):
+            t = jnp.full((num_samples,), 1.0 - i * dt)
+            r = jnp.full((num_samples,), 1.0 - (i + 1) * dt)
+            return x - dt * self._u(observation, mask_n, kv_n, x, t, r)
+
+        return jax.lax.fori_loop(0, jnp.asarray(num_steps, jnp.int32), body, noise)
 
     def sample_actions_ode(
         self,
@@ -439,9 +474,10 @@ class Pi0AlphaFlow(Pi0):
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
         prefix_mask, kv_cache = self._prefix_forward(observation)
 
-        dt = 1.0 / num_steps
-        x = noise
-        for i in range(num_steps):
+        dt = 1.0 / jnp.asarray(num_steps, jnp.float32)
+
+        def body(i, x):
             t = jnp.full((batch_size,), 1.0 - i * dt)
-            x = x - dt * self._u(observation, prefix_mask, kv_cache, x, t, t)
-        return x
+            return x - dt * self._u(observation, prefix_mask, kv_cache, x, t, t)
+
+        return jax.lax.fori_loop(0, jnp.asarray(num_steps, jnp.int32), body, noise)
