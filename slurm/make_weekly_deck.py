@@ -103,7 +103,8 @@ def main():
 *{box-sizing:border-box}
 body{
   margin:0; background:var(--paper); color:var(--ink);
-  font-family:Charter,"Bitstream Charter","Iowan Old Style",Georgia,"Times New Roman",serif;
+  font-family:Charter,"Bitstream Charter","Iowan Old Style",Georgia,"Times New Roman",
+    "Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic","Nanum Gothic",serif;
   font-size:17px; line-height:1.62;
 }
 .wrap{max-width:72rem;margin:0 auto;padding:0 clamp(1rem,4vw,3rem) 6rem}
@@ -195,6 +196,13 @@ footer{padding:2.5rem 0;color:var(--muted);font-size:.85rem}
   </table></div>
   <p class="note"><b>한 줄로.</b> 반응이 가치 있는 상태가 곧 청크 회귀가 거짓말하는 상태다. 같은 창-내 공개가
   반응의 가치와 교란을 동시에 만들기 때문에, naive 크리틱은 <b>정확히 반응해야 할 곳에서</b> 커밋을 부풀린다.</p>
+
+  <h3>알고리즘 자체</h3>
+  <p>위 세 처방이 실제로 무엇을 계산하는가. 크리틱은 <b>한 번의 forward로 모든 prefix 값</b>을 내고(그래서
+  커밋 길이를 전부 채점해도 질의는 한 번), 타깃은 <b>후속상태를 재샘플하고 tail은 고정</b>해 만든다(개입).
+  학습은 크리틱 회귀와 <b>full chunk</b>에 대한 advantage 가중을 번갈아 하고, 배포는 정책 1회 + 크리틱 1회로
+  <b>ε 이내 최장 k</b>를 실행한다.</p>
+  {figure(FIGS / "cfac_algo.png", "① 크리틱 구조 ② prefix 타깃을 만드는 법과 그중 결정적인 한 가지 변경 ③ 오프라인 학습 루프 ④ 배포 시 결정 규칙.", "the CFAC algorithm in four panels")}
   {figure(FIGS / "toy_cfac_viz.png", "같은 장면에서 두 크리틱이 무엇을 실행했는가. 아래 가운데 패널이 기제다: 분기점 입구에서 같은 청크를 놓고 물었을 때 naive는 긴 커밋에 최고점을 주고 CFAC는 k=1에 준다.", "matched rollout comparison of naive and CFAC")}
 </section>
 
@@ -274,7 +282,13 @@ footer{padding:2.5rem 0;color:var(--muted);font-size:.85rem}
 </div>
 """
 
-    out = f"<title>주간 보고 · {html.escape(a.week)}</title>\n<style>{css}</style>\n{body}"
+    out = (
+        "<!doctype html>\n<html lang='ko'>\n<head>\n"
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>주간 발표 (2/2) · {html.escape(a.week)}</title>\n"
+        f"<style>{css}</style>\n</head>\n<body>\n{body}\n</body>\n</html>\n"
+    )
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(out)
     print("wrote", a.out, f"({len(out) // 1024} KB)")
