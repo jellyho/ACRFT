@@ -28,8 +28,11 @@ VLM backbone (prefix KV not stop-gradient'd, backbone params join the critic opt
 the backbone a frozen feature extractor; warmup lets the value signal shape it only while the target
 is the trustworthy MC return; always is full value backprop (B200-sized memory).
 
-Data: --synthetic runs a shape/consistency smoke on random transitions (no data needed). The RoboCasa
-DEAS-protocol transition loader is wired once the merged pretrain dataset + reward labels are ready.
+Data: --synthetic runs a shape/consistency smoke on random transitions (no data needed). Without it,
+trains on the real 347-episode YAM chunk-transition set (scripts/yam_fql_data.py: house patch-critic
+reward conventions -- cost_to_goal, gamma 0.99964, failure homing truncation + terminal anchor). The
+backup over a chunk is SMDP-style: y = R_chunk + gamma^H (1-done) Qbar(s_{t+H}, a'), so the discount
+applied to the bootstrap is gamma**action_horizon, not gamma.
 """
 
 from __future__ import annotations
@@ -81,6 +84,19 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--steps", type=int, default=100)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/fql"))
+    # ---- real-data (YAM) path: scripts/yam_fql_data.py conventions ----
+    ap.add_argument("--yam-repo-id", default="jellyho/yam_lego_taxi")
+    ap.add_argument("--yam-root", default="/data5/jellyho/yam_v2/lerobot")
+    ap.add_argument("--outcomes", default="/data5/jellyho/ACRFT/openpi/.scratch/yam_outcomes_347.jsonl")
+    ap.add_argument("--homing-onsets", default="/data5/jellyho/ACRFT/openpi/.scratch/yam_homing_onsets.json")
+    ap.add_argument("--h-goal", type=int, default=3)
+    ap.add_argument("--failure-reward", type=float, default=None, help="failure terminal anchor; default v_min")
+    ap.add_argument("--num-workers", type=int, default=8)
+    ap.add_argument("--save-every", type=int, default=10000)
+    ap.add_argument("--wandb", action="store_true")
+    ap.add_argument("--wandb-project", default="yam-rlt")
+    ap.add_argument("--wandb-entity", default="RSS-PFT_RLLAB")
+    ap.add_argument("--wandb-name", default=None)
     a = ap.parse_args()
 
     import flax.nnx as nnx
@@ -170,7 +186,9 @@ def main():
             zr = jax.random.normal(rng, act.shape)
             a_next = jax.lax.stop_gradient(model.actor(nobs, zr, kv_n, pm_n))  # a' ~ mu_omega(s', z')
             qn = hl.from_logits(jax.lax.stop_gradient(target_model.critic_logits(nobs, a_next, kv_n, pm_n)))
-            y = rew + a.discount * (1.0 - done) * qn
+            # SMDP chunk backup: rew is the discounted H-step sum, the successor is H steps away,
+            # so the bootstrap carries gamma**H (a plain gamma here would over-bootstrap ~H/gamma x).
+            y = rew + (a.discount**a.action_horizon) * (1.0 - done) * qn
             floor_frac = jnp.zeros(())
             if a.mc_floor:
                 # the observed discounted return from s is a certificate: a bootstrapped target below it
@@ -281,28 +299,74 @@ def main():
         mc = jax.random.uniform(k[2], (a.batch,), minval=a.v_min, maxval=a.v_max)
         return obs, act, rew, nobs, done, mc
 
+    data_iter = None
     if not a.synthetic:
-        raise NotImplementedError(
-            "RoboCasa DEAS transition loader not wired yet (waiting on the merged pretrain dataset + reward "
-            "labels). Run with --synthetic for the training-step smoke."
+        if a.init_base is None:
+            raise ValueError("real-data training needs --init-base (frozen flow expert + its norm stats)")
+        from yam_fql_data import YamFQLTransitions  # scripts/ is on sys.path when run as a script
+        from yam_fql_data import make_loader  # scripts/ is on sys.path when run as a script
+
+        ds = YamFQLTransitions(
+            repo_id=a.yam_repo_id,
+            root=a.yam_root,
+            horizon=a.action_horizon,
+            bc_assets_dir=str(pathlib.Path(a.init_base).parent / "assets"),
+            outcomes_path=a.outcomes,
+            homing_path=a.homing_onsets,
+            h_goal=a.h_goal,
+            discount=a.discount,
+            failure_reward=a.failure_reward,
         )
+        print(f"YAM transitions: {len(ds)} base frames, v_min {ds.v_min:.1f}", flush=True)
+        data_iter = make_loader(ds, batch_size=a.batch, num_workers=a.num_workers)
+
+    run = None
+    if a.wandb:
+        import wandb
+
+        run = wandb.init(
+            project=a.wandb_project,
+            entity=a.wandb_entity,
+            name=a.wandb_name,
+            group="fql-yam",
+            config={k: str(v) for k, v in vars(a).items()},
+        )
+        print(f"wandb: {run.url}", flush=True)
+
+    def save(step_i):
+        # trainable experts + EMA target only; the frozen base is reproducible from --init-base
+        import orbax.checkpoint as ocp
+
+        path = (a.out / f"{step_i}").absolute()
+        state = {
+            "actor": params.filter(actor_filter).to_pure_dict(),
+            "critic": params.filter(critic_filter).to_pure_dict(),
+            "target_critic": target_critic.to_pure_dict(),
+        }
+        with ocp.StandardCheckpointer() as ckptr:
+            ckptr.save(path, state, force=True)
+        print(f"saved {path}", flush=True)
 
     rng = jax.random.key(0)
     t0 = time.time()
     for s in range(a.steps):
         rng, kb, ks = jax.random.split(rng, 3)
-        batch = synthetic_batch(kb)
+        batch = synthetic_batch(kb) if a.synthetic else next(data_iter)
         step = step_warmup if (step_warmup is not None and s < a.critic_warmup_steps) else step_ac
         params, target_critic, opt_c, opt_a, info = step(params, target_critic, opt_c, opt_a, batch, ks)
         if s % 10 == 0 or s == a.steps - 1:
             i = {k: float(v) for k, v in info.items()}
+            if run is not None:
+                run.log({**i, "stage": 1 if (step is step_warmup) else 2}, step=s)
             print(
                 f"step {s:5d}  l_critic {i['l_critic']:.4f}  l_actor {i['l_actor']:.4f}  "
                 f"q_mean {i['q_mean']:.3f}  l_distill {i['l_distill']:.4f}  q_pi {i['q_pi']:.3f}  "
                 f"({(s + 1) / (time.time() - t0):.2f} it/s)",
                 flush=True,
             )
-    print("FQL train-step smoke OK.", flush=True)
+        if not a.synthetic and ((s + 1) % a.save_every == 0 or s == a.steps - 1):
+            save(s + 1)
+    print("FQL training done." if not a.synthetic else "FQL train-step smoke OK.", flush=True)
 
 
 if __name__ == "__main__":
