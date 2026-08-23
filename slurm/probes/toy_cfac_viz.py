@@ -200,6 +200,10 @@ def main():
 
     ax = fig.add_subplot(gs[1, 2])
     ax.axis("off")
+    # the closing note is written from the panels themselves, so it can never claim more than the
+    # episode on screen actually shows
+    kc = probe.get("C", {}).get("k", [None, None])
+    kj = probe.get("J", {}).get("k", [None, None])
     ax.text(
         0.0,
         1.0,
@@ -210,11 +214,12 @@ def main():
         "it away and the Markov policy guesses.\n\n"
         "Junction: the event is revealed one step in. Committing across\n"
         "the dashed line acts before the information arrives.\n\n"
-        "The bottom-left profile is where the two critics agree, and the\n"
-        "bottom-middle one is where they do not: the confounded critic\n"
-        "still ranks long commitments highest at the junction, because\n"
-        "in the demonstrations the person already knew the event when\n"
-        "choosing those actions.",
+        "On this episode, asked about the same corridor entry the naive\n"
+        f"critic picks k={kc[0]} and CFAC picks k={kc[1]}; at the junction entry\n"
+        f"they pick k={kj[0]} and k={kj[1]}. The gap is the confound: in the\n"
+        "demonstrations the person already knew the event when choosing\n"
+        "those actions, so a chunk-conditioned value credits an executor\n"
+        "with knowledge it will not have.",
         va="top",
         ha="left",
         fontsize=7.2,

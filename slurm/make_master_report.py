@@ -2020,6 +2020,53 @@ blind 부기의 커밋 선호는 과제에 대해 잘 정의되지 않는 양이
 실제 게시 시각(09:06 KST)으로 바로잡았다.</p>""",
 )
 
+# ============================================== 08-23 주간 발표 (2/2)
+entry(
+    "08-23",
+    "weekly-cfac-0823",
+    "📽️ 주간 발표 (2/2) — CFAC 제안·toy 검증, M4 기준선, B1 파이프라인",
+    "완결",
+    """
+<p class='sub'>이번 주 발표의 후반부. 앞편(<span class='xref' data-eid='weekly-2026-08-23'>α-Flow·이론·FQL</span>)과
+겹치지 않는 갈래를 다룬다 — <b>커밋 길이를 크리틱이 공정하게 평가하게 만드는 방법(CFAC)</b>, 그 toy 검증,
+실로봇 쪽의 <b>정직한 기준선</b>, 그리고 B1 파이프라인. 전체 덱:
+<a href="./weekly/weekly_2026-08-23_cfac.html" target="_blank">weekly_2026-08-23_cfac.html 열기</a>.</p>
+
+<h3>① 태스크부터 그림으로</h3>
+<p>발표에서 결과 plot만 보여주면 설명이 안 된다. 그래서 자료를 세 겹으로 만들었다 — <b>태스크 스토리보드</b>,
+<b>정보 타임라인</b>, <b>기제 그림</b>(롤아웃·커밋 타임라인·prefix 값 프로파일). 아래가 첫 겹이다.</p>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/toy_cfac_story.png", "the toy task as a storyboard")
+    + """
+<p>복도에서는 표지판이 입구에만 떴다 사라지고(과거 잠재), 분기점에서는 한 스텝 뒤에 신호가 켜진다(미래 잠재).
+아랫줄이 요점이다: <b>어떤 고정 규칙도 두 구간을 함께 맞출 수 없다</b>.</p>
+
+<h3>② 기제 — 두 크리틱이 같은 장면에서 무엇을 했나</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/toy_cfac_viz.png", "matched rollouts and prefix-value profiles")
+    + """
+<p>아래 두 패널이 핵심이다. <b>같은 상태·같은 청크</b>를 두 크리틱에게 물었을 때, 복도 입구에서는 naive의
+값이 k에 따라 <b>내려가고</b>(짧게 끊자) CFAC은 <b>올라간다</b>(끝까지 가자). 분기점 입구에서는 반대로 naive가
+더 긴 커밋에 정점을 두고 CFAC이 k=1을 고른다. 이 차이가 전체 성능 차이의 기제다.</p>
+
+<h3>③ 결과와 실로봇 기준선</h3>
+<p>연속 환경 6시드에서 CFAC−naive <b>+1.86 (6/6)</b>, 성분을 하나씩 빼면 −0.76(개입)·−0.97(히스토리),
+joint는 <b>수제 오라클과 동률</b>(+0.037, 5/6). 커리큘럼은 변형 환경에서 평균 커밋 3.04→3.49(+0.446, 6/6).
+실로봇 쪽 <span class='xref' data-eid='m4-ksweep'>M4</span>는 최적 상수가 태스크마다 8/12/16으로 갈리고,
+<b>최고 상수가 기본값 대비 평균 +0.14</b>임을 확정했다 — 앞으로 적응 비교는 여기에 대고 잰다.</p>
+
+<h3>④ 이번 주에 틀린 것들</h3>
+<p>발표에서 가장 값진 슬라이드다. <b>빌려온 밴드</b>(다른 비교의 시드 SD를 자로 씀 → 실재 효과를 잡음으로 판정),
+<b>제출본을 건너뛴 비교</b>(내가 게시한 교차분석이 이 오류로 정정됨), <b>검증하지 않은 자동 표</b>(키 타입
+불일치로 30칸이 빈 채 게시). 셋 다 결론을 바꿨고, 그래서 논문 method에 <b>평가 프로토콜</b> 절로 못박았다:
+기준선은 최고 상수, 모든 arm은 한 제출본 안, 밴드는 그 비교 자신의 시드에서.</p>
+
+<p class='sub'><b>재현.</b> 그림 <code>probes/toy_cfac_story_fig.py</code> ·
+<code>toy_cfac_setup_fig.py</code> · <code>toy_cfac_viz.py</code> · <code>toy_cfac_nn_fig.py</code> ·
+<code>ksweep_collect.py</code>, 덱 조립 <code>slurm/make_weekly_deck.py</code>(그림은 파일에서, 수치는 결과
+JSON에서 재계산 — 손으로 옮긴 숫자 없음).</p>""",
+)
+
 # ============================================== 08-23 적응 마진 = 흡수되지 않은 정책 오차
 entry(
     "08-23",
@@ -3752,6 +3799,15 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "weekly-cfac-0823": {
+        "date": "2026-08-23 22:10",
+        "who": "워커B(이 갈래)",
+        "where": "Space weekly/weekly_2026-08-23_cfac.html + hub_figs",
+        "what": "주간 발표 (2/2) — CFAC 제안·toy 검증·M4 기준선·B1 파이프라인, 배경/기제/결과 3겹 시각화",
+        "how": "그림은 전부 스크립트 생성, 수치는 결과 JSON에서 재계산, 덱은 make_weekly_deck.py가 조립",
+        "why": "사용자 규칙 — 실험은 매주 발표 형식으로 보고하고 배경까지 시각화해 둔다",
+        "links": ["cfac", "cfac-nn", "m4-ksweep", "theory-preexp", "adapt-margin-epis"],
     },
     "adapt-margin-epis": {
         "date": "2026-08-23 16:10",
