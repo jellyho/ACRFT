@@ -214,8 +214,11 @@ def main():
         a_omega = model.actor(obs, z, kv, pm)
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
         qpi = hl.from_logits(model.critic_logits(obs, a_omega, kv, pm))  # grad only to actor (filter)
-        l_q = -jnp.mean(qpi)
-        return l_q + a.alpha * l_distill, {"l_distill": l_distill, "q_pi": -l_q}
+        # official FQL normalizes the Q term by sg(E|Q|) so alpha is scale-free; without it our
+        # |Q| ~ 1e3 value scale makes alpha=10 distillation negligible and the actor bolts OOD
+        # (observed: l_distill 0.002 -> 2.35 within 10 steps of stage 2).
+        l_q = -jnp.mean(qpi) / jax.lax.stop_gradient(jnp.mean(jnp.abs(qpi)) + 1e-6)
+        return l_q + a.alpha * l_distill, {"l_distill": l_distill, "q_pi": jnp.mean(qpi)}
 
     def warmup_actor_loss_fn(model, batch, rng):
         """Stage 1 actor: distillation ONLY (the critic is not trustworthy yet, so no Q term)."""
