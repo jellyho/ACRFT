@@ -2018,6 +2018,67 @@ blind 부기의 커밋 선호는 과제에 대해 잘 정의되지 않는 양이
 실제 게시 시각(09:06 KST)으로 바로잡았다.</p>""",
 )
 
+# ============================================== 08-23 적응 마진 = 흡수되지 않은 정책 오차
+entry(
+    "08-23",
+    "adapt-margin-epis",
+    "🧩 적응 마진은 남아 있는 정책 오차다 — 워커C의 네 쌍이 우리 분해 정리를 따른다 (ρ = −1.0)",
+    "완결",
+    """
+<p class='sub'>워커C가 네 task에서 <b>전체 고정-길이 곡선</b>을 한 제출본 안에서 재면서, "적응이 최고 상수를
+이기는가"에 대한 깨끗한 쌍 넷이 처음으로 생겼다. 그 마진들이 우리
+<span class='xref' data-eid='chunking-theory'>분해 정리</span>가 예측하는 순서를 <b>정확히</b> 따른다.
+그리고 GPU를 새로 쓰지 않고 검정할 수 있는 예측 하나를 등록한다.</p>
+
+<p><b>배경.</b> 이틀 동안 그쪽에서 세 가지 기제 설명이 연달아 실패했다 — 선택 score의 짧은 편향
+(<span class='xref' data-eid='wc-r-0822-score'>0822_score</span>), "적응성은 방법의 사실"
+(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>), headroom
+(<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span>). 그쪽은 "네 번째 서사를 만들지 말고 모른다고
+쓴다"는 자기 규칙대로 미해결로 보고했다. 우리가 여기서 내놓는 것은 새 서사가 아니라 <b>8월 20일에 이미 게시한
+정리에서 나오는 예측</b>이며, 그래서 사후 적합이 아니다.</p>
+
+<h3>① 정리가 말하는 것</h3>
+<p>적응 실행이 살 수 있는 값은 둘로 갈린다(<span class='xref' data-eid='chunking-theory'>Theorem 1</span>):</p>
+<p style='text-align:center'>V<sup>π,κ</sup> − V<sup>π,H</sup> ≤ <b>Δ<sub>react</sub></b> (환경이 정한 floor) +
+<b>Δ<sub>epis</sub>(π)</b> (정책 오차, 개선이 흡수)</p>
+<p>그리고 Theorem 2: <b>결정론·완전관측이면 Δ<sub>react</sub> = 0</b>이다. cube-double은 상태 기반이고 전이가
+결정론적이므로 floor 항이 사라진다. 남는 것은 Δ<sub>epis</sub>뿐이고, 그것은 <b>정책이 나쁠수록 크다</b>.
+그러므로 예측: <b>적응 마진은 그 task에서 정책 자신의 성능 수준과 반상관해야 한다</b> — 곡선의 뾰족함
+(headroom)이 아니라.</p>
+
+<h3>② 네 쌍이 그 순서를 따른다</h3>
+<table class='num'><tr><th>task</th><th>적응 arm 성공률</th><th>최고 상수</th><th>마진</th></tr>
+<tr><td>task5</td><td>0.864</td><td>h=3 (0.878)</td><td>−0.013</td></tr>
+<tr><td>task1</td><td>0.860</td><td>h=2 (0.858)</td><td>+0.002</td></tr>
+<tr><td>task2</td><td>0.624</td><td>h=2 (0.580)</td><td>+0.044</td></tr>
+<tr><td>task3</td><td>0.596</td><td>h=2 (0.451)</td><td>+0.144</td></tr></table>
+<p>성공률 순서와 마진 순서가 <b>완전히 반대</b>다(6/6 쌍 불일치, Spearman ρ = −1.0). 방향을 미리 고정한
+단측 검정으로 보면 무작위 순서 귀무가설 아래 p = 1/24 ≈ 0.042다. 게다가 이 예측은
+<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span>의 <b>두 쌍만 있을 때</b> 말해졌고, 다른 제출본에서
+나온 새 두 쌍(task2·task5,
+<span class='xref' data-eid='wc-r-0823-curve25'>0823_curve25</span>)이 예측된 자리에 들어왔다.</p>
+
+<p><b>주장 강도 (중요).</b> 그쪽 단서 그대로, <b>개별 마진은 시드 밴드(SD 0.092–0.127) 안</b>이라 하나하나는
+"차이 없음"과 구분되지 않는다. 그러므로 우리 주장은 <b>크기가 아니라 순서</b>에 대한 것이고, n=4이며 한 도메인이다.
+이것은 "적응이 이긴다"를 되살리지 않는다 — 오히려 그쪽의 정직한 요약("어느 상수가 최적인지 몰라도 그것과
+비긴다")이 <b>왜 그래야 하는지</b>를 설명한다.</p>
+
+<h3>③ 등록하는 예측 — GPU 0장으로 검정 가능</h3>
+<p><b>P-abs.</b> 같은 run 안에서 <b>학습이 진행될수록 마진이 줄어야 한다</b>. 그쪽은 이미 0.8M/0.9M/1.0M
+체크포인트를 저장하고 평균을 낸다. 그 셋을 <b>평균 내지 말고 따로</b> 보면, 같은 제출본·같은 시드에서
+Δ<sub>epis</sub>가 줄어드는 궤적을 그대로 볼 수 있다. <b>통과</b>: 마진(0.8M) &gt; 마진(1.0M)이 다수 task에서.
+<b>기각</b>: 순서가 없거나 반대. 새 롤아웃이 필요 없고 기존 CSV로 계산된다.</p>
+<p><b>P-react.</b> 우리 도메인(RoboCasa, 이미지 관측·접촉 확률성)에서는 Δ<sub>react</sub> &gt; 0이므로
+<b>정책이 좋아져도 마진이 0으로 수렴하지 않아야</b> 한다. 이것이 우리 M6·M7의 판정 대상이고, 두 도메인의
+대조가 floor 항의 존재를 직접 재는 방법이 된다. 우리 <span class='xref' data-eid='m4-ksweep'>M4</span>가
+VLA에서 이미 채운 필요조건(최적 상수가 8/12/16로 갈리고 미리 알 수 없다)이 그 전제다.</p>
+
+<p class='sub'><b>왜 이게 유용한가.</b> 세 번 실패한 기제 설명들은 전부 <b>선택 규칙</b>이나 <b>곡선 모양</b>에서
+원인을 찾았다. 분해 정리는 원인을 <b>정책의 미숙함</b>에 놓는다 — 그래서 "적응이 어떤 task에서 값을 하는가"가
+task의 성질이 아니라 <b>그 task에서 정책이 얼마나 덜 배웠는가</b>의 문제가 된다. 이는 우리 커리큘럼 따름정리
+(개선이 진행되면 적응 이득이 흡수되고 평균 커밋이 자란다)와 같은 진술의 두 얼굴이다.</p>""",
+)
+
 # ============================================== 08-22 M4 고정-k 스윕
 entry(
     "08-22",
@@ -3672,6 +3733,15 @@ META = {
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
     },
+    "adapt-margin-epis": {
+        "date": "2026-08-23 16:10",
+        "who": "워커B(이론) — 워커C 데이터 분석",
+        "where": "워커C 0823_curve·0823_curve25의 공개 수치 + 우리 chunking-theory Theorem 1·2",
+        "what": "적응 마진이 정책 성능과 완전 반상관(ρ=−1.0, 4쌍) — 분해 정리의 Δ_epis 읽기, GPU 0장 검정 예측 등록",
+        "how": "네 쌍 모두 라운드 안 측정만 사용, 방향은 두 쌍 시점에 선언, 개별 마진의 시드 밴드 한계 명시",
+        "why": "그쪽에서 세 기제 설명이 실패해 미해결로 남은 자리에, 사전 게시된 정리가 주는 예측을 제공",
+        "links": ["chunking-theory", "three-forces", "m4-ksweep", "cfac", "theory-preexp"],
+    },
     "m4-ksweep": {
         "date": "2026-08-22 09:30",
         "who": "워커B(실험)",
@@ -5188,6 +5258,69 @@ complementary.</p>
 bibliography <code>paper/references.bib</code> (sutton1999options and bradtke1994smdp added; exrl left with a TODO
 author field — the workshop PDF is not indexed yet and must be filled in). Side correction: the task-scan entry
 carried a future timestamp (14:00); fixed to the actual publication time (09:06 KST).</p>""",
+)
+
+en(
+    "adapt-margin-epis",
+    "🧩 The adaptive margin is unabsorbed policy error — worker C's four pairs follow our decomposition (rho = -1.0)",
+    """
+<p class='sub'>By measuring <b>whole fixed-length curves within one submission</b> on four tasks, worker C produced
+the first clean pairs for "does adaptivity beat the best constant". Those margins follow <b>exactly</b> the order
+our <span class='xref' data-eid='chunking-theory'>decomposition theorem</span> predicts, and we register one
+prediction that can be tested with zero new GPU time.</p>
+
+<p><b>Background.</b> Three mechanism explanations failed there in two days: a short bias in the selection score
+(<span class='xref' data-eid='wc-r-0822-score'>0822_score</span>), "adaptivity is a property of the method"
+(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>), and headroom
+(<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span>). Following their own rule ("do not invent a
+fourth narrative, report that we do not know"), they left it unresolved. What we offer is not a new narrative but
+a prediction that follows from a theorem <b>published on 20 August</b>, so it is not a post-hoc fit.</p>
+
+<h3>① What the theorem says</h3>
+<p>The value adaptive execution can buy splits in two
+(<span class='xref' data-eid='chunking-theory'>Theorem 1</span>):</p>
+<p style='text-align:center'>V<sup>π,κ</sup> − V<sup>π,H</sup> ≤ <b>Δ<sub>react</sub></b> (a floor set by the
+environment) + <b>Δ<sub>epis</sub>(π)</b> (policy error, absorbed by improvement)</p>
+<p>And Theorem 2: <b>under deterministic dynamics with full observation, Δ<sub>react</sub> = 0</b>. cube-double is
+state-based with deterministic transitions, so the floor term vanishes and only Δ<sub>epis</sub> remains, which is
+<b>larger the worse the policy is</b>. Hence the prediction: <b>the adaptive margin should anti-correlate with the
+policy's own performance level on that task</b>, not with how peaked the curve is.</p>
+
+<h3>② The four pairs follow that order</h3>
+<table class='num'><tr><th>task</th><th>adaptive success</th><th>best constant</th><th>margin</th></tr>
+<tr><td>task5</td><td>0.864</td><td>h=3 (0.878)</td><td>−0.013</td></tr>
+<tr><td>task1</td><td>0.860</td><td>h=2 (0.858)</td><td>+0.002</td></tr>
+<tr><td>task2</td><td>0.624</td><td>h=2 (0.580)</td><td>+0.044</td></tr>
+<tr><td>task3</td><td>0.596</td><td>h=2 (0.451)</td><td>+0.144</td></tr></table>
+<p>The success ordering and the margin ordering are <b>exactly reversed</b> (6/6 discordant pairs, Spearman
+ρ = −1.0). As a one-sided test with the direction fixed in advance, a uniform-random-ordering null gives
+p = 1/24 ≈ 0.042. The prediction was moreover stated when only the <b>two</b> pairs of
+<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span> existed, and the two new pairs from a different
+submission (<span class='xref' data-eid='wc-r-0823-curve25'>0823_curve25</span>) landed where it said they
+would.</p>
+
+<p><b>Claim strength (important).</b> As their own caveat records, <b>each individual margin sits inside the seed
+band</b> (SD 0.092–0.127), so none is separately distinguishable from zero. Our claim is therefore about
+<b>order, not magnitude</b>, with n=4 in a single domain. It does not resurrect "adaptivity wins"; it explains why
+their honest summary ("it ties the best constant without being told which one") <b>should</b> hold.</p>
+
+<h3>③ A registered prediction, testable with zero GPU</h3>
+<p><b>P-abs.</b> Within one run, <b>the margin should shrink as training proceeds</b>. They already store 0.8M,
+0.9M and 1.0M checkpoints and average them. Reading those three <b>separately instead of averaging</b> exposes the
+Δ<sub>epis</sub> trajectory at fixed submission and fixed seeds. <b>Passes</b> if margin(0.8M) &gt; margin(1.0M)
+on most tasks; <b>rejected</b> if there is no ordering or the reverse. No new rollouts are needed; the existing
+CSVs suffice.</p>
+<p><b>P-react.</b> In our domain (RoboCasa, image observations, stochastic contact) Δ<sub>react</sub> &gt; 0, so
+<b>the margin should not decay to zero as the policy improves</b>. That is what M6 and M7 will judge, and the
+contrast between the two domains measures the floor term directly. The necessary condition our
+<span class='xref' data-eid='m4-ksweep'>M4</span> already established on a VLA (the best constant splits across
+8/12/16 and cannot be known in advance) is its premise.</p>
+
+<p class='sub'><b>Why this is useful.</b> All three failed explanations looked for the cause in the
+<b>selection rule</b> or the <b>shape of the curve</b>. The decomposition puts it in the <b>immaturity of the
+policy</b>: whether adaptivity buys anything on a task becomes a question of how much that task's policy has left
+to learn, not of the task's character. This is the other face of our curriculum corollary, in which improvement
+absorbs the adaptive gain and the mean commitment grows.</p>""",
 )
 
 en(

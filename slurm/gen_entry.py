@@ -16,6 +16,7 @@ TAGS = {
     "cfac": ["이론", "방법제안", "toy"],
     "cfac-nn": ["구현", "검증", "toy"],
     "m4-ksweep": ["사전등록", "기준선", "고정k"],
+    "adapt-margin-epis": ["이론", "교차분석", "예측"],
     "theory-preexp": ["이론", "사전등록", "논문"],
 }
 # mindmap column (worker A's phase taxonomy) per eid — the client-side mindmap groups by this
@@ -72,6 +73,7 @@ PHASE_MAP = {
     "cfac": "진단·방법",
     "cfac-nn": "진단·방법",
     "m4-ksweep": "판정·종합",
+    "adapt-margin-epis": "논문·교차",
 }
 
 
