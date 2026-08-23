@@ -138,6 +138,25 @@ genuinely arrives (Corollary~\ref{cor:curriculum}). Apart from the menu, the com
 $\epsilon$ is the only free parameter the commitment rule introduces, and no cost term is added to
 the reward.
 
+\subsection{Evaluation protocol}
+\label{sec:method:protocol}
+
+Two measurement rules follow from the way commitment comparisons fail, and we state them because
+they change what the numbers mean rather than merely how they are computed.
+
+First, the baseline is the \emph{best} constant commitment, not the default full chunk. The best
+constant differs across tasks and cannot be known in advance, so comparing against the default
+credits an adaptive rule with what a better constant already provides. We therefore measure the
+whole fixed-length curve and report the margin against its maximum.
+
+Second, every arm of a comparison is trained and evaluated within one submission, and the
+uncertainty band comes from that comparison's own seeds. Run-to-run differences between separately
+launched jobs can exceed seed variation, so a curve assembled from several submissions is not a
+curve; and the seed spread of one comparison is not the ruler for another, since a band borrowed
+from an unrelated contrast can make a real effect look like noise. Margins are reported as paired
+per-seed differences with the sign count, and commitment length and success are reported as
+separate measurements (Remark~\ref{rem:scope}).
+
 \subsection{Algorithm}
 \label{sec:method:algo}
 
