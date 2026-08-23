@@ -163,11 +163,13 @@ footer{padding:2.5rem 0;color:var(--muted);font-size:.85rem}
     body = f"""
 <div class="wrap">
 <header class="top">
-  <div class="eyebrow">주간 보고 · {html.escape(a.week)}</div>
+  <div class="eyebrow">주간 발표 (2/2) · {html.escape(a.week)}</div>
   <h1>커밋을 최적화 차원으로: 이론, 방법, 그리고 이번 주에 틀린 것들</h1>
   <p class="lede">VLA를 오프라인 RL로 개선하는 연구에서, 이번 주에는 <b>얼마나 오래 커밋할지</b>를
   크리틱이 공정하게 평가하게 만드는 방법(CFAC)을 세우고 toy 두 개로 검증했으며, 실로봇 쪽에서는
   적응 실행을 비교할 <b>정직한 기준선</b>을 확정했다.</p>
+  <p class="lede" style="font-size:.95rem;margin-top:.8rem">같은 주의 앞편(α-Flow 원스텝 게이트·이론
+  프로그램·FQL)은 <b>주간 발표 (1/2)</b>에 있다. 두 편은 다른 갈래를 다루며 서로를 전제하지 않는다.</p>
 </header>
 
 <section>
@@ -176,7 +178,9 @@ footer{padding:2.5rem 0;color:var(--muted);font-size:.85rem}
   <p>VLA는 청크(연속된 여러 행동)를 한 번에 내놓고 그중 일부를 실행한 뒤 다시 질의한다. 얼마나 실행할지는
   보통 고정 상수인데, 사람 데모를 보면 그 값이 상황마다 달라야 한다. 사람은 어떤 구간에서는 <b>계획을 기억한 채
   밀고 가고</b>(관측에 없는 정보를 행동이 운반한다), 어떤 구간에서는 <b>정보가 도착하기를 기다렸다 반응한다</b>.</p>
-  <p>이 두 상황을 최소 형태로 담은 환경이 아래다. 결과를 보기 전에, 무엇이 언제 보이는지부터 봐야 한다.</p>
+  <p>이 두 상황을 최소 형태로 담은 환경이 아래다. 먼저 <b>무슨 일이 일어나는지</b>, 그 다음 <b>무엇이 언제
+  보이는지</b>.</p>
+  {figure(FIGS / "toy_cfac_story.png", "에피소드 한 편을 네 순간으로. 복도에서는 표지판이 입구에만 떠 있다가 사라지고, 분기점에서는 한 스텝 뒤에야 신호가 켜진다. 아랫줄은 세 전략이 각각 어디서 이기고 지는가 — 어떤 고정 규칙도 두 구간을 함께 맞출 수 없다.", "storyboard of the toy task")}
   {figure(FIGS / "toy_cfac_setup.png", "한 에피소드의 정보 타임라인. 복도에서는 목표 방향이 입구에만 보이고(과거 잠재), 분기점에서는 첫 스텝 뒤에 도착한다(미래 잠재). 데모를 한 사람은 기억하지만, Markov 정책은 현재 관측만 본다.", "information timeline of the toy environment")}
 </section>
 
