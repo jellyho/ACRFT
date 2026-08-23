@@ -170,3 +170,36 @@ action_chunk = policy.infer(obs)["actions"]   # 지연시간만 ~10× 줄어든�
 (`z → chunk, 미분 가능 1-forward`)을 그대로 충족한다 — distill 타깃도 이 1-step forward로 대체 가능
 (teacher ODE 비용 소멸). 결합 실험은 다음 사이클.
 \n
+
+### D. 다중 샘플링 (`num_samples`) — 그대로 적용
+
+`MultiSamplePolicy`는 모델 무관이라 α-Flow에도 그대로 붙는다 — 클라이언트가 관측에
+`{"num_samples": N}`을 실으면 `action_samples`(per-step, 실행 청크가 후보 0)로 N개가 돌아온다.
+α-Flow에선 **샘플당 forward 1회**라 이 경로가 실용적이 된다: N=16이 π0.5 한 번 뽑는 비용의 ~1.6배.
+
+```bash
+uv run python scripts/serve_policy.py policy:checkpoint \
+  --policy.config pi05_yam_lego_taxi_alphaflow --policy.dir <ckpt> --num-samples 16
+```
+
+### E. 패치-크리틱 BoN / adaptive-commit 서빙 — 어댑터로 적용
+
+`serve_patch_critic.py`(BoN/adaptive 배포)는 원래 Pi0RLT 전용 `extract_token_and_base_actions`
+(N 후보를 한 backbone pass로)를 요구했다. α-Flow에 같은 계약의
+**`sample_n_actions`**(prefix KV 1회 계산 → N 노이즈를 1-step expert로, KVCache의 batch axis=1에 tile)를
+추가했고, `PatchCriticPolicy`가 모델에 따라 자동 선택한다(크리틱은 토큰을 안 쓰므로 무손실).
+검증: 후보 0이 단일-샘플 경로와 **비트 일치**.
+
+```bash
+# α-Flow 1-step × patch-critic BoN/adaptive — BoN-16이 π0.5 draw ~1.6개 비용
+uv run python scripts/serve_patch_critic.py \
+  --config pi05_yam_lego_taxi_alphaflow \
+  --checkpoint /data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000 \
+  --critic .scratch/patch_critic_yam_s347_g5_pi05_cont \
+  --mode adaptive --flow-steps 1 --port 8000
+# 클라이언트: 관측에 {"critic_select": True, "num_samples": 16} — 기존 계약 그대로
+```
+
+주의: 크리틱 input_spec이 pi05-normalized joint delta = 샘플러 출력 그 자체이므로 변환이 없다
+(`--flow-steps 1`이 α-Flow의 정상 모드; 10을 주면 mean-velocity 세분 샘플링).
+
