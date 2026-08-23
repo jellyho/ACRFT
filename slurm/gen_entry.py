@@ -18,6 +18,7 @@ TAGS = {
     "m4-ksweep": ["사전등록", "기준선", "고정k"],
     "adapt-margin-epis": ["이론", "교차분석", "예측"],
     "weekly-cfac-0823": ["주간발표", "시각화"],
+    "cfac-easy": ["설명", "입문"],
     "theory-preexp": ["이론", "사전등록", "논문"],
 }
 # mindmap column (worker A's phase taxonomy) per eid — the client-side mindmap groups by this
@@ -76,6 +77,7 @@ PHASE_MAP = {
     "m4-ksweep": "판정·종합",
     "adapt-margin-epis": "논문·교차",
     "weekly-cfac-0823": "판정·종합",
+    "cfac-easy": "진단·방법",
 }
 
 
