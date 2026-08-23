@@ -109,3 +109,64 @@ MeanFlow의 adaptive weight 때문에 보고되는 loss는 `‖Δ‖²/(‖Δ‖
 - `fm_ratio=0.5` 상수는 공식 main run들(B/2, XL/2)의 값이다; cfg-B/2는 0.25를 썼다.
 - 원스텝 변환이 액션 품질을 깎는지는 **BC-only 성공률로 먼저 검증**해야 한다. RL을 얹기 전에
   `pi05_yam_lego_taxi_alphaflow`의 1-step 정책이 현행 `pi05_yam_lego_taxi`(10-step)와 붙어야 한다.
+
+## Deploy — 학습된 α-Flow 체크포인트 서빙/사용 예시
+
+학습 산출물(200k run)은 `/data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000`
+(orbax; `assets/`에 norm stats 동봉). **`sample_actions`의 기본이 `num_steps=1`이라, 기존 π0.5 서빙
+경로에 그대로 꽂으면 자동으로 1-step 추론**이 된다 — 클라이언트는 아무것도 몰라도 된다.
+
+### A. Python API (오프라인 평가·스크립트)
+
+```python
+import numpy as np
+from openpi.policies import policy_config
+from openpi.training import config as train_config
+
+ckpt = "/data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000"
+cfg = train_config.get_config("pi05_yam_lego_taxi_alphaflow")
+
+# 기본 = 1-step (게이트 판정 기준 demo-MSE 0.00096 — 같은 모델 10-step보다 낫다)
+policy = policy_config.create_trained_policy(cfg, ckpt)
+
+# few-step이 필요하면 (2-step이 self-gap 최소):
+# policy = policy_config.create_trained_policy(cfg, ckpt, sample_kwargs={"num_steps": 2})
+
+obs = {
+    "observation/image":       agentview_hwc_uint8,     # [H,W,3] uint8
+    "observation/wrist_image": wrist_left_hwc_uint8,
+    "observation/image_right": wrist_right_hwc_uint8,
+    "observation/state":       state_42d.astype(np.float32),
+    "prompt": "put the lego block into the taxi",
+}
+chunk = policy.infer(obs)["actions"]   # [30, 14] 로봇 공간 (자체 norm stats로 unnormalize됨)
+```
+
+주의: `num_steps`는 jit 아래에서 tracer로 전달되므로 커스텀 호출 시 정수 리터럴이든 배열이든 모두
+동작한다(`lax.fori_loop`, bac7ac4). π0.5-동등 대조군이 필요하면 모델의 `sample_actions_ode(num_steps=10)`
+— 같은 가중치를 r=t로 읽는 원래 ODE다.
+
+### B. WebSocket 서빙 (실로봇/원격 클라이언트)
+
+```bash
+# 서버 (GPU 노드, SLURM로)
+uv run python scripts/serve_policy.py \
+  policy:checkpoint \
+  --policy.config pi05_yam_lego_taxi_alphaflow \
+  --policy.dir /data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000
+# serve_policy는 sample_kwargs를 넘기지 않으므로 α-Flow 기본값 = 1-step 추론.
+```
+
+```python
+# 클라이언트 (openpi-client) — 기존 π0.5 클라이언트 코드와 완전 동일
+from openpi_client import websocket_client_policy
+policy = websocket_client_policy.WebsocketClientPolicy(host="...", port=8000)
+action_chunk = policy.infer(obs)["actions"]   # 지연시간만 ~10× 줄어든다
+```
+
+### C. RL 스택에서 (FQL actor 자리)
+
+`Pi0AlphaFlow.sample_actions(rng, obs, num_steps=1, noise=z)` 가 FQL의 one-step actor 계약
+(`z → chunk, 미분 가능 1-forward`)을 그대로 충족한다 — distill 타깃도 이 1-step forward로 대체 가능
+(teacher ODE 비용 소멸). 결합 실험은 다음 사이클.
+\n
