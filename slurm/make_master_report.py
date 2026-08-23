@@ -2025,6 +2025,24 @@ entry(
     "🧩 적응 마진은 남아 있는 정책 오차다 — 워커C의 네 쌍이 우리 분해 정리를 따른다 (ρ = −1.0)",
     "완결",
     """
+<div class='callout warn'><span class='k'>정정 (2026-08-23 18:00, 게시 2시간 뒤)</span>
+<p><b>이 엔트리의 근거가 약해졌다. 두 가지가 동시에 드러났다.</b></p>
+<p><b>(1) 내가 인용한 시드 밴드가 틀렸다.</b> 아래 "개별 마진은 시드 밴드(SD 0.092–0.127) 안"이라고 썼는데,
+그 밴드는 <span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>이 <b>다른 비교</b>(HL-Gauss 대 기준선)에서
+잰 것이다. <span class='xref' data-eid='wc-r-0823-power'>0823_power</span>가 적응 대 고정2 <b>자신의</b> 시드 SD를
+재니 0.26–0.29로 두세 배다. 즉 "밴드 안"은 효과가 작다는 뜻이 아니라 <b>n=3에서는 검정력이 없었다</b>는 뜻이었다.
+시드 SD는 비교마다 다르며, 한 라운드의 SD를 다른 비교의 자로 쓰면 실재하는 효과를 잡음으로 판정하게 된다 —
+내가 그 오류를 그대로 반복했다.</p>
+<p><b>(2) 순서 자체가 8시드에서 뒤집힌다.</b> 같은 두 task를 시드 8개로 다시 재니 task3이 <b>성공률도 더 높고
+(0.621 대 0.552) 마진도 더 크다(+0.246 대 +0.131)</b>. 아래 표의 ρ = −1.0은 n=3 추정치들로 계산됐고, 그 값들은
+제출본을 건너뛰며 움직였다. 다시 말해 <b>이 브랜치가 반복해 걸려온 바로 그 함정(제출본을 건너뛴 비교)에
+내 분석도 걸렸다</b>. 네 task를 <b>한 제출본에서 충분한 시드로</b> 잰 데이터는 아직 아무도 갖고 있지 않다.</p>
+<p><b>살아남는 것.</b> 분해 정리 자체(Δ_react + Δ_epis)와 결정론 극한의 예측은 그대로다 — 다만 그 검정은
+<b>task 간 순서가 아니라 P-abs</b>(같은 run 안에서 학습이 진행될수록 마진이 줄어드는가)여야 한다. 그것은 한
+비교·한 제출본 안이라 위 두 함정을 모두 피한다. 그리고 <span class='xref' data-eid='wc-r-0823-power'>0823_power</span>가
+task3에서 +0.246, 8/8, p=0.004를 얻었으므로 <b>"적응이 최고 상수를 이긴다"가 처음으로 유의하게 성립했다</b> —
+그쪽의 "비긴다"도 함께 정정됐다. 아래 본문은 게시 시점 그대로 두고 이 블록만 덧붙인다.</p></div>
+
 <p class='sub'>워커C가 네 task에서 <b>전체 고정-길이 곡선</b>을 한 제출본 안에서 재면서, "적응이 최고 상수를
 이기는가"에 대한 깨끗한 쌍 넷이 처음으로 생겼다. 그 마진들이 우리
 <span class='xref' data-eid='chunking-theory'>분해 정리</span>가 예측하는 순서를 <b>정확히</b> 따른다.
@@ -5264,6 +5282,27 @@ en(
     "adapt-margin-epis",
     "🧩 The adaptive margin is unabsorbed policy error — worker C's four pairs follow our decomposition (rho = -1.0)",
     """
+<div class='callout warn'><span class='k'>Correction (2026-08-23 18:00, two hours after posting)</span>
+<p><b>This entry's evidence has weakened; two things surfaced at once.</b></p>
+<p><b>(1) The seed band I quoted was the wrong ruler.</b> Below I wrote that each margin sits inside a band of
+SD 0.092–0.127, but that band was measured by <span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span> on a
+<b>different comparison</b> (HL-Gauss versus baseline). <span class='xref' data-eid='wc-r-0823-power'>0823_power</span>
+measured the seed SD of adaptive versus fixed-2 <b>itself</b> and found 0.26–0.29, two to three times larger. So
+"inside the band" did not mean the effect was small, it meant <b>n=3 had no power</b>. Seed SD is
+comparison-specific, and using one round's SD as the ruler for another judges real effects as noise. I repeated
+exactly that error.</p>
+<p><b>(2) The ordering itself reverses at eight seeds.</b> Re-measured with eight seeds, task3 has both the
+<b>higher success (0.621 vs 0.552) and the larger margin (+0.246 vs +0.131)</b>. The ρ = −1.0 below was computed
+from n=3 estimates that have since moved across submissions. In other words <b>my analysis fell into the very trap
+this branch keeps hitting</b>: comparisons that skip across submissions. Nobody yet has all four tasks measured in
+one submission with adequate seeds.</p>
+<p><b>What survives.</b> The decomposition itself (Δ_react + Δ_epis) and its deterministic-limit prediction stand;
+what changes is that the test must be <b>P-abs</b> (does the margin shrink within one run as training proceeds)
+rather than a cross-task ordering, because P-abs lives inside a single comparison and a single submission and so
+avoids both traps. And since <span class='xref' data-eid='wc-r-0823-power'>0823_power</span> found +0.246, 8/8,
+p=0.004 on task3, <b>"adaptivity beats the best constant" now holds significantly for the first time</b>, which
+also corrects their own "it ties". The body below is left as published.</p></div>
+
 <p class='sub'>By measuring <b>whole fixed-length curves within one submission</b> on four tasks, worker C produced
 the first clean pairs for "does adaptivity beat the best constant". Those margins follow <b>exactly</b> the order
 our <span class='xref' data-eid='chunking-theory'>decomposition theorem</span> predicts, and we register one
