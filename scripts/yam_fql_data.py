@@ -180,8 +180,15 @@ def make_loader(dataset, *, batch_size, num_workers, seed=0):
         generator=torch.Generator().manual_seed(seed),
     )
 
+    def _to_np(v):
+        # collate keeps nested dicts (e.g. image: {cam: tensor}); floats go to f32 for the jit
+        if isinstance(v, dict):
+            return {k: _to_np(x) for k, x in v.items()}
+        arr = np.asarray(v)
+        return arr.astype(np.float32) if arr.dtype == np.float64 else arr
+
     def _split(batch, prefix):
-        sub = {k[len(prefix) :]: np.asarray(v) for k, v in batch.items() if k.startswith(prefix)}
+        sub = {k[len(prefix) :]: _to_np(v) for k, v in batch.items() if k.startswith(prefix)}
         return _model.Observation.from_dict(sub)
 
     def gen():
