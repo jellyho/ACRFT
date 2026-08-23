@@ -1781,12 +1781,14 @@ def _ksweep_table(lang="ko"):
     ks = d["ks"]
     rows = []
     for t, r in d["per_task"].items():
+        # json stores the integer commitment lengths as string keys; look them up as written
+        sr = {int(kk): v for kk, v in r["sr"].items()}
         cells = []
         for k in ks:
-            if k not in r["sr"]:
+            if k not in sr:
                 cells.append("<td>" + ("재실행 중" if lang == "ko" else "re-running") + "</td>")
                 continue
-            v = r["sr"][k]
+            v = sr[k]
             mark = " class='good'" if k == r["best_k"] else ""
             cells.append(f"<td{mark}>{v:.2f}</td>")
         rows.append(f"<tr><td>{t}</td>" + "".join(cells) + f"<td><b>{r['best_k']}</b></td></tr>")
