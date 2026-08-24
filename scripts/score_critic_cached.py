@@ -182,6 +182,8 @@ def main():
             "deep": float(ds.mean()),
             "n": len(vs),
             "kbest": kbest,
+            "vfirst": float(svs[0]),
+            "vmean": float(svs.mean()),
             "slope": slope_rec,
         }
         (succ_stats if is_succ else fail_stats).append(rec)
@@ -201,6 +203,7 @@ def main():
             slope = f"{np.nanmean(col(rs, 'slope')):5.2f}" if name == "success" else "  n/a"
             print(
                 f"  {name:8s}: k*={col(rs, 'kbest').mean():5.1f}  Vslope={slope}  "
+                f"V(s0)={col(rs, 'vfirst').mean():8.1f}  "
                 f"first {col(rs, 'first').mean():9.1f}  last {col(rs, 'last').mean():9.1f} "
                 f" mean {col(rs, 'mean').mean():9.1f}  min {col(rs, 'min').mean():9.1f} "
                 f" deep-atom mass {col(rs, 'deep').mean():.3f}"
