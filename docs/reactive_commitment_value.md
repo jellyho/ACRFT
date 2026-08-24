@@ -234,3 +234,63 @@ injects `I_plan`; a state value sees only `I_now`; their difference is the value
 would discard. The learning recipe is therefore: a state value `V(o)` and a committed value
 `Q_syn(o, a_{1:k})`, both by 1-step synthetic backup (never chunk-return regression), and the selector
 reads `A = Q_commit − V_react`.
+
+---
+
+## 7. Positioning vs concurrent work, and the short-context prescription
+
+Two concurrent papers (Aug 2026) make the non-Markovian-expert thesis that our force decomposition
+rests on, so we cite rather than claim it, and sharpen where our contribution actually is.
+
+- **Zeng, Agarwal, Bati, Lee, Ancha, Tedrake, "Revisiting Open-Loop Execution in Robotics" (2608.15938).**
+  Central claim, matching ours: long open-loop execution primarily compensates a *short-context policy*
+  imitating a *non-Markovian expert*; expert non-Markovianity shapes the success-horizon curve more
+  strongly than compounding errors. Prescription, opposite to adaptive chunking: **increase the
+  policy's context length** and the benefit of long execution vanishes — the most reactive closed-loop
+  policy wins.
+- **Lazzati, Stachowicz, Chen, Metelli, Wagenmaker, Levine, "Why Does Action Chunking Improve BC
+  Performance?" (2608.02547).** Rejects temporal-consistency / horizon-reduction / representation
+  hypotheses. Chunking's benefit = non-Markovian delays + reduced compounding error, and these are
+  captured by a **delayed policy** `π(a_t | o_{t-k})` (condition on a past observation) and by an
+  **implicit ensemble** of `k` delayed policies `{π(a_t | o_{t-i})}`. Explicit ensembles of delayed
+  policies exceed chunking.
+
+**What is preempted, and what is not.** The proposition "non-Markovianity sets the optimal chunk
+length" is now published, concurrent — we cite it. Both papers are about the **policy** (how a BC model
+imitates a non-Markovian expert). Neither touches **value estimation**: the belief-shift leak
+(Lemma 1), the synthetic backup that pins it (Theorem 4), and the reactive advantage as a
+value-of-information (Theorem 5) are about the **critic**, and are absent from both. Our
+`I(s;chunk|o) = Q_reg − Q_syn = reactive-map` is a property of the *value estimator's* bias, not of the
+policy's expressivity. Paper 2's `ΔL_val` (the validation-loss gap between a chunked and a Markovian
+policy, its non-Markovianity metric) is the **policy-side twin** of our critic-side `Q_reg − Q_syn`;
+cross-checking the two maps is a concrete validation.
+
+**The short-context prescription (why adaptive chunking survives the context-length result).** Take
+the VLA as short-context by fiat (compute and latency make long context impractical for a deployed
+generative policy). Then the papers' fix — a long-context reactive policy — is off the table, and
+carrying information forward (commitment) is forced. The move that keeps this principled is an
+**asymmetry the papers do not use**: the *critic* need not share the policy's context budget. The
+policy (a frozen VLA) proposes chunks short-context; the *critic*, trained offline with no latency
+constraint, may condition on history (or, cheaply, on a delayed observation `o_{t-Δ}`) and decide the
+commitment length from `A = Q_commit − V_react`. Memory lives in the critic; acting stays in the
+policy. A long-context policy still leaves the value function's belief-shift leak unaddressed
+(Theorem 4 is about the estimator, not the policy), so the critic-side contribution is orthogonal to
+the context-length result. This is the design of Section 8.
+
+## 8. Learning it on a frozen short-context VLA (delayed-observation critic)
+
+Concretely, for the YAM patch-critic:
+
+1. **`V_react(o)` — a chunk-free state value by 1-step synthetic backup.** No chunk conditioning, no MC
+   return; `V(o_t) ← r_t + γ V(o_{t+1})` on the cache's real transitions. Theorem 4 makes this the
+   honest observation-belief value; it is what our current PatchV is NOT (it is fit to the chunk-
+   conditioned, leaky Q, so it inherits the leak — the `V(s0)` gap of 986).
+2. **`Q_commit(o, h_Δ, a_{1:k})` — history-aware, synthetic backup.** Condition the committed value on a
+   *delayed observation* `o_{t-Δ}` (or a short stack), which carries `I_plan` the current frame lacks —
+   the cheap history of Lazzati et al. Build the window by 1-step synthetic backups through the
+   observed intermediate frames, bootstrap `V_react` at the boundary.
+3. **Selector** `A(k) = Q_commit − V_react`, commit the longest `k` with `A ≥ −ε`. No re-plan cost.
+4. **Diagnostic (measure_reactive_map).** `Q_reg − Q_syn` per frame is the leak = `I(s;chunk|o)` =
+   reactive-map. Predict: large at contact/alignment (aleatoric peak, from uncertainty-split) and at
+   the first frame (intent hidden), small in free-space transport. Cross-check against paper 2's
+   `ΔL_val` computed on the same episodes.
