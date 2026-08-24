@@ -41,11 +41,17 @@ PROPRIO_SETS = {
 }
 
 
-def compare(a: dict, b: dict, *, tol: float = 1e-5) -> list[str]:
-    """How two sets of norm stats disagree (empty list = same numbers).
+def compare(a: dict, b: dict, *, tol: float = 3e-2) -> list[str]:
+    """How two sets of norm stats MEANINGFULLY disagree (empty list = numerically equivalent).
 
     Only the keys and statistics present in BOTH are compared: the critic stores what it uses, the
     served policy may carry more, and a key one side simply does not have is not a disagreement.
+
+    The tolerance is on the normalized scale: stats recomputed on the same dataset at different times
+    (a different success-subset, sampling) differ by <1% of the range, which must PASS, while a stale or
+    wrong-convention stat (e.g. the alpha-flow v1 case, ~37% narrow) must FAIL. 3e-2 sits between: it
+    catches staleness without rejecting a benign recompute. This is a numeric check; provenance
+    (dataset/episodes/frames) is the exact-identity check and lives with the stats file.
     """
     out = []
     for key in sorted(set(a) & set(b)):
