@@ -41,6 +41,13 @@ def main():
     )
     ap.add_argument("--stride", type=int, default=10, help="frames to skip when scoring an episode")
     ap.add_argument("--batch", type=int, default=512)
+    ap.add_argument(
+        "--out",
+        type=pathlib.Path,
+        default=None,
+        help="write per-episode records + aggregates to this JSON. The house rule is that report tables "
+        "are recomputed from source JSON rather than transcribed, and stdout cannot be audited.",
+    )
     a = ap.parse_args()
 
     import flax.serialization
@@ -181,6 +188,7 @@ def main():
             "last": float(vs[-1]),
             "deep": float(ds.mean()),
             "n": len(vs),
+            "outcome": "success" if is_succ else "failure",
             "kbest": kbest,
             "vfirst": float(svs[0]),
             "vmean": float(svs.mean()),
@@ -209,6 +217,70 @@ def main():
                 f" deep-atom mass {col(rs, 'deep').mean():.3f}"
             )
     print(f"  (v_min = {cc['v_min']:.1f}; 'deep-atom mass' = probability below 0.72*v_min)")
+
+    if a.out is not None:
+
+        def agg(rs, k, *, nan=False):
+            if not rs:
+                return None
+            v = col(rs, k)
+            return float(np.nanmean(v) if nan else v.mean())
+
+        # V(s0) is the sharp diagnostic: both classes start from visually identical frames, so a gap
+        # here is hindsight leakage rather than prediction. Record the behaviour-policy value the two
+        # SHOULD share, so a reader can size the gap without recomputing it.
+        p_succ = len(succ_stats) / max(1, len(succ_stats) + len(fail_stats))
+        out = {
+            "critic": str(a.critic),
+            "critic_name": a.critic.name,
+            "cache": str(a.cache),
+            "stride": a.stride,
+            "truncate_homing": a.truncate_homing,
+            "config": {
+                k: cc.get(k)
+                for k in (
+                    "steps",
+                    "saved_at_step",
+                    "batch",
+                    "macro_group_size",
+                    "expectile",
+                    "discount",
+                    "v_min",
+                    "lr",
+                    "h_goal",
+                    "mc_floor",
+                    "num_critics",
+                    "horizon",
+                    "git",
+                    "loader",
+                )
+            },
+            "input_spec": isp,
+            "counts": {"success": len(succ_stats), "failure": len(fail_stats)},
+            "auc": {
+                "mean": roc_auc(col(succ_stats, "mean"), col(fail_stats, "mean")),
+                "max": roc_auc(col(succ_stats, "max"), col(fail_stats, "max")),
+                "last": roc_auc(col(succ_stats, "last"), col(fail_stats, "last")),
+            },
+            "aggregates": {
+                name: {
+                    "kbest": agg(rs, "kbest"),
+                    "vslope": agg(rs, "slope", nan=True),
+                    "vfirst": agg(rs, "vfirst"),
+                    "first": agg(rs, "first"),
+                    "last": agg(rs, "last"),
+                    "mean": agg(rs, "mean"),
+                    "min": agg(rs, "min"),
+                    "deep": agg(rs, "deep"),
+                }
+                for name, rs in (("success", succ_stats), ("failure", fail_stats))
+            },
+            "p_success": p_succ,
+            "episodes": sorted(succ_stats + fail_stats, key=lambda r: r["ep"]),
+        }
+        a.out.parent.mkdir(parents=True, exist_ok=True)
+        a.out.write_text(json.dumps(out, indent=2))
+        print(f"  wrote {a.out}  ({len(out['episodes'])} episode records)")
 
 
 if __name__ == "__main__":
