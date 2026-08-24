@@ -75,6 +75,12 @@ class DataConfig:
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
     norm_stats: dict[str, _transforms.NormStats] | None = None
+    # Optional provenance.json contents found next to norm_stats.json: which dataset (repo_id,
+    # total_episodes/frames) the stats were computed on. Checked against the live dataset at
+    # loader construction -- stale stats from an older dataset generation fail loudly instead of
+    # silently normalizing with the wrong quantiles (the alpha-Flow 08-23 incident: right asset
+    # name, 08-03 content, action q99 ~37% off).
+    norm_stats_provenance: dict | None = None
 
     # Used to adopt the inputs from a dataset specific format to a common format
     # which is expected by the data transforms.
@@ -200,6 +206,9 @@ class DataConfigFactory(abc.ABC):
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            norm_stats_provenance=self._load_norm_stats_provenance(
+                epath.Path(self.assets.assets_dir or assets_dirs), asset_id
+            ),
             use_quantile_norm=(model_config.model_type != ModelType.PI0) and not self.force_mean_std_norm,
         )
 
@@ -214,6 +223,17 @@ class DataConfigFactory(abc.ABC):
         except FileNotFoundError:
             logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
         return None
+
+    def _load_norm_stats_provenance(self, assets_dir: epath.Path, asset_id: str | None) -> dict | None:
+        if asset_id is None:
+            return None
+        p = assets_dir / asset_id / "provenance.json"
+        try:
+            import json
+
+            return json.loads(p.read_text())
+        except (FileNotFoundError, ValueError):
+            return None
 
 
 @dataclasses.dataclass(frozen=True)
