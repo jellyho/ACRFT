@@ -11,7 +11,7 @@ Everything here is CPU/GPU work on the cluster — **submit through SLURM** (`sr
 ## 1. What the stack is
 
 ```
-robot client ──websocket──► serve_patch_critic.py
+robot client ──websocket──► serve_policy.py --critic
                               ├─ base VLA (pi05)            sample N chunks in ONE backbone pass
                               └─ patch-critic (frozen DINOv2 + ARQ heads)   score them
                                    └─ mode=bon       → return the argmax-Q chunk (full H)
@@ -49,7 +49,7 @@ Each folder holds `params.msgpack` (Q ensemble), `v_params.msgpack` (state-value
 srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
   bash -lc 'cd /data5/jellyho/ACRFT/openpi && \
     XLA_PYTHON_CLIENT_PREALLOCATE=false MUJOCO_GL=egl \
-    uv run --no-sync python scripts/serve_patch_critic.py \
+    uv run --no-sync python scripts/serve_policy.py --critic \
       --config pi05_yam_lego_taxi \
       --checkpoint checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000 \
       --critic /data5/jellyho/critics/yam/g5_s347 \
@@ -59,6 +59,40 @@ srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
 Wait for `Serving ... listening on 0.0.0.0:8000`. The base checkpoint above is the s300 run; swap in
 whichever step you are evaluating, and **record it in the report** — a value comparison is only valid
 between method-only-diff checkpoints.
+
+### In-process, without a server
+
+The same wrapper can be built directly — this is exactly the path the deploy test exercises, so it is
+the quickest way to check a new checkpoint actually loads and infers:
+
+```python
+from huggingface_hub import snapshot_download
+from openpi.policies import policy_config
+from openpi.policies.patch_critic_policy import PatchCriticSelectPolicy
+from openpi.training import config as _config
+
+snapshot_download("jellyho/patch_critic_yam_lego_taxi", repo_type="model",
+                  allow_patterns="fixed_pi05_s347/*", local_dir="/data5/jellyho/critics/yam")
+
+policy = policy_config.create_trained_policy(
+    _config.get_config("pi05_yam_lego_taxi_rlt"),
+    "checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000",
+)
+wrapped = PatchCriticSelectPolicy(
+    policy, "/data5/jellyho/critics/yam/fixed_pi05_s347", mode="bon", default_samples=8,
+)
+
+out = wrapped.infer(obs)   # 3 camera images + observation/state + prompt
+out["actions"]             # (30, 14)  selected chunk
+out["critic_scores"]       # (30, N)   value of each candidate
+out["critic_choice"]       # (30, 1)   which candidate won
+```
+
+The runnable version is `.scratch/deploy_test.py`: it downloads into a directory where the repo's
+asset paths do **not** resolve, which is what proves the checkpoint is self-contained.
+
+`--mode adaptive` needs a checkpoint with more than one prefix, so it cannot be used with a
+`macro_group_size = 30` critic.
 
 ## 4. Client contract
 

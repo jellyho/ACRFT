@@ -32,7 +32,27 @@ def main():
     for d in a.critic:
         cfg = json.loads((d / "config.json").read_text())
         if "input_spec" in cfg:
-            print(f"{d}: already has input_spec (normalization={cfg['input_spec'].get('normalization')}) -- skipped")
+            sp = cfg["input_spec"]
+            # A pi05-space checkpoint written before the stats were embedded still points at a path.
+            # Copy the numbers in so the checkpoint is self-contained, and record their digest.
+            if sp.get("normalization") == "pi05" and not (d / "pi05_norm_stats.json").exists():
+                from openpi.patch_critic import preproc as critic_preproc
+
+                src = pathlib.Path(sp["norm_stats"])
+                if not src.exists():
+                    print(f"{d}: pi05 spec points at missing {src} -- cannot embed, skipped")
+                    continue
+                pre = critic_preproc.Pi05Preproc.build(src, sp["joint_delta_reference"])
+                if a.dry_run:
+                    print(f"{d}: would embed pi05_norm_stats.json from {src} (digest {pre.digest()})")
+                    continue
+                (d / "pi05_norm_stats.json").write_text(json.dumps(pre.embedded()))
+                sp["norm_stats_file"] = "pi05_norm_stats.json"
+                sp["norm_stats_digest"] = pre.digest()
+                (d / "config.json").write_text(json.dumps(cfg, indent=2))
+                print(f"{d}: embedded pi05_norm_stats.json from {src} (digest {pre.digest()})")
+                continue
+            print(f"{d}: already has input_spec (normalization={sp.get('normalization')}) -- skipped")
             continue
         spec = critic_spec.input_spec(meta, horizon=int(cfg["horizon"]))
         spec["cache"] = str(a.cache)

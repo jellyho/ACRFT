@@ -1044,6 +1044,43 @@ _CONFIGS = [
         save_interval=10_000,
         action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     ),
+    # Baseline ladder rung B1: success-filtered fine-tuning of the OFFICIAL RoboCasa-365 pi05 on its
+    # OWN rollouts. The dataset is built by examples/robocasa/convert_rollouts.py from a collection
+    # that recorded successes and failures alike, so B1 (--filter success), B2 (weighted) and the
+    # unfiltered control all read one collection; the repo_id selects which. Set
+    # HF_LEROBOT_HOME=/scratch/jellyho/acrft/rollout_v3 so the local dataset resolves.
+    #
+    # Continuing from the released checkpoint (not pi05_base) is the point: the comparison is
+    # "does outcome-filtered imitation of its own behaviour improve the released policy", so the
+    # weights, the norm stats convention and the action order all have to match the server that
+    # produced the rollouts.
+    TrainConfig(
+        name="pi05_robocasa_b1",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id="jellyho/rc_b1_PickPlaceSinkToCounter",
+            base_config=DataConfig(prompt_from_task=True),
+            force_mean_std_norm=True,  # the released checkpoint's norm_stats carry no quantiles
+            # Reuse the RELEASED checkpoint's normalization rather than computing new stats from the
+            # rollouts. Recomputing would renormalize states and actions under weights trained with
+            # the old statistics, which silently corrupts the policy we are trying to continue.
+            assets=AssetsConfig(
+                assets_dir="/scratch/jellyho/acrft/assets/official",
+                asset_id="robocasa365_official",
+            ),
+        ),
+        batch_size=32,
+        # short, low-LR continuation: the run must not relearn the task, only re-weight what the
+        # policy already does. A long schedule here would confound "filtering helped" with
+        # "more training helped".
+        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=200, peak_lr=1e-5, decay_steps=10_000, decay_lr=1e-5),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/scratch/jellyho/acrft/checkpoints/robocasa365_official/pi05_pretrain_human300/multitask_learning/75000/params"
+        ),
+        num_train_steps=10_000,
+        save_interval=2_000,
+        action_dist_interval=0,
+    ),
     # Serving config for the OFFICIAL RoboCasa 365 pi05 release (robocasa/robocasa365_checkpoints,
     # pi05_pretrain_human300/multitask_learning/75000). Same architecture as pi05_robocasa but that
     # checkpoint was trained with mean/std norm (its norm_stats carry no quantiles), so force it.
@@ -1469,6 +1506,46 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
 
 
 _CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
+
+
+_CONFIGS.append(
+    # Plain BC finetune of pi05 on the cable-tie YAM teleop set - no RLT bottleneck, so this is the
+    # baseline the RLT runs are compared against and the policy to deploy on the real arm.
+    #
+    # The dataset is already cleaned (rl_specialist/build_cable_tie_clean.py): 100 success episodes
+    # of the source 105, and each episode cut at the first `observation.control_mode == 4` frame,
+    # which is where the operator's homing motion (and their hand) enters the cameras. So
+    # success_only is left off here - there is nothing left to filter.
+    #
+    # repo_id resolves under HF_LEROBOT_HOME; point that at
+    # /NHNHOME/WORKSPACE/gwanwoo/rl_specialist/cache/huggingface/lerobot to use the local copy, or
+    # override with --data.repo-id Gwanwoo/lerobot_cable_tie_100_clean to pull from the Hub.
+    TrainConfig(
+        name="pi05_yam_cable_tie",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            # 30 frames at 30 fps = a one-second chunk, matching the YAM RLT configs.
+            action_horizon=30,
+            discrete_state_input=False,
+        ),
+        data=LeRobotYAMDataConfig(
+            repo_id="rl_specialist/lerobot_cable_tie_100_clean",
+            delta_mode="joint",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
+        # There is no launcher script for this config, so the lab entity is set here rather than
+        # passed on the command line the way run_train_yam.sh does it.
+        wandb_entity="RSS-PFT_RLLAB",
+    )
+)
 
 
 def _yam_rlt_config(delta_mode: str = "joint", horizon: int = 30) -> TrainConfig:

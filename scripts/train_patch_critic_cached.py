@@ -61,6 +61,14 @@ def main():
     )
     ap.add_argument("--norm-stats", type=pathlib.Path, default=None, help="norm_stats.json (required for pi05)")
     ap.add_argument(
+        "--proprio-dims",
+        choices=sorted(critic_preproc.PROPRIO_SETS),
+        default="pos",
+        help="which proprio channels the critic sees. pos (default): joint positions + grippers only, "
+        "matching what ALOHA/Libero/DROID feed. all: every channel including velocity and effort -- "
+        "extra sensors the baselines do not get, and effort in particular leaks grasp success.",
+    )
+    ap.add_argument(
         "--preload",
         action="store_true",
         help="materialize the feature/state/action memmaps into RAM (needs ~feature-cache GB of --mem; "
@@ -73,17 +81,29 @@ def main():
     H = a.horizon
 
     meta = json.loads((a.cache / "meta.json").read_text())
-    N, npatch, emb, sd, ad = meta["N"], meta["npatch"], meta["emb"], meta["sd"], meta["ad"]
+    N, npatch, emb, sd_raw, ad = meta["N"], meta["npatch"], meta["emb"], meta["sd"], meta["ad"]
+    sd = sd_raw  # network proprio width; --proprio-dims may narrow it below
     # fields _save() expects (it was written for the clip trainer)
     a.backbone = meta["backbone"]
     a.clip_len = 0  # not applicable to the cached path
     a.repo_id = f"cache:{a.cache.name}"
+    a.loader = "critic_cached"  # this run read the feature cache, not the clip loader
     # the input contract + the reference distribution, saved with every checkpoint (see critic_spec)
     spec = critic_spec.input_spec(meta, horizon=H)
     spec["cache"] = str(a.cache)
     spec["n_episodes"] = len(meta["episodes"])
+    pidx = critic_preproc.PROPRIO_SETS[a.proprio_dims]
+    if pidx is not None:
+        pidx = np.asarray(pidx)
+        if int(pidx.max()) >= sd_raw:
+            raise SystemExit(f"--proprio-dims {a.proprio_dims} needs state dim > {int(pidx.max())}, cache has {sd_raw}")
+        sd = len(pidx)  # what the network actually sees
+    spec["proprio_dims"] = a.proprio_dims
+    spec["proprio_indices"] = None if pidx is None else pidx.tolist()
+    spec["proprio_dim"] = sd
     stats = critic_spec.norm_stats(a.cache, meta)
     pre = None
+    embedded = None
     if a.input_mode == "pi05":
         if a.norm_stats is None:
             raise SystemExit("--input-mode pi05 needs --norm-stats (the base checkpoint's norm_stats.json)")
@@ -91,9 +111,10 @@ def main():
 
         pre = critic_preproc.Pi05Preproc.build(a.norm_stats, yam_policy.joint_delta_reference())
         spec.update(pre.spec(a.norm_stats))
+        embedded = pre.embedded()
         print(f"input mode: pi05 preprocessing (joint delta + quantile norm) from {a.norm_stats}", flush=True)
     feats = np.memmap(a.cache / "features.dat", np.float16, "r", shape=(N, npatch, emb))
-    states = np.memmap(a.cache / "state.dat", np.float32, "r", shape=(N, sd))
+    states = np.memmap(a.cache / "state.dat", np.float32, "r", shape=(N, sd_raw))
     actions = np.memmap(a.cache / "action.dat", np.float32, "r", shape=(N, ad))
     if a.preload:
         import time as _t
@@ -257,11 +278,13 @@ def main():
         gch = g0[:, None] + np.clip(hpos, 0, full[:, None] - 1)
         chunk = np.asarray(actions[gch.reshape(-1)]).reshape(a.batch, H, ad)
         s_cur_raw = np.asarray(states[gcur])
-        s_nxt_raw = np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd)
+        s_nxt_raw = np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd_raw)
         if pre is not None:
             # delta is taken against the chunk's BASE frame, exactly as the base VLA does
-            chunk = pre.actions(chunk, s_cur_raw)
+            chunk = pre.actions(chunk, s_cur_raw)  # delta needs the FULL state (ref hits idx 21..27)
             s_cur_raw, s_nxt_raw = pre.state(s_cur_raw), pre.state(s_nxt_raw)
+        if pidx is not None:
+            s_cur_raw, s_nxt_raw = s_cur_raw[..., pidx], s_nxt_raw[..., pidx]
         chunk[hpos >= full[:, None]] = 0.0  # pad AFTER preprocessing so padding stays exactly zero
         # transfer features as float16 (half the PCIe traffic); the model upcasts to f32 on-device.
         pcur = jnp.asarray(np.asarray(feats[gcur]))
@@ -296,8 +319,8 @@ def main():
                 flush=True,
             )
         if a.save_every and (s + 1) % a.save_every == 0:
-            _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats)
-    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats)
+            _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
+    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
     if wb is not None:
         wb.finish()
 

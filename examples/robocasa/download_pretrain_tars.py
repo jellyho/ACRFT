@@ -22,6 +22,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("/data5/jellyho/robocasa365_pretrain"))
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--tasks", default=None, help="Comma-separated task names; if set, download only these.")
     a = ap.parse_args()
     api = HfApi()
 
@@ -33,6 +34,12 @@ def main():
             it.path
             for it in api.list_repo_tree(REPO, path_in_repo=f"pretrain/{split}", repo_type="dataset", recursive=False)
         )
+    if a.tasks:
+        want = {t.strip() for t in a.tasks.split(",")}
+        tasks = [t for t in tasks if t.split("/")[-1] in want]
+        missing = want - {t.split("/")[-1] for t in tasks}
+        if missing:
+            print(f"  ! not in repo: {sorted(missing)}", flush=True)
     print(f"{len(tasks)} pretrain tasks", flush=True)
 
     def resolve_tar(task_path):
