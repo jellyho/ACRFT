@@ -265,6 +265,28 @@ policy's expressivity. Paper 2's `ΔL_val` (the validation-loss gap between a ch
 policy, its non-Markovianity metric) is the **policy-side twin** of our critic-side `Q_reg − Q_syn`;
 cross-checking the two maps is a concrete validation.
 
+**Empirical anchor (Park, "The Behavioral Cloning Mystery", seohong.me/blog, 2026).** A controlled
+sim (scripted-spline demos, *infinite* data) grounds the non-Markovian story on the policy side and,
+usefully, warns us. (i) Even in a fully Markovian environment the *dataset* is non-Markovian from
+temporal correlations, so a closed-loop Markovian policy learns a "Markovianized" behavior and suffers
+severe test-time distribution shift -- the policy-side twin of our belief-shift leak, and infinite data
+does **not** fix it (so it is expressivity, not scarcity). (ii) A history-conditioned policy
+`π(a_t | s_{t-24:t})` gets **lower** training loss but **worse** rollout than a no-history one -- direct
+elimination evidence against "just make the policy long-context," which supports putting memory in the
+critic instead. (iii) Validation flow loss fails to predict rollout while action MSE tracks it better,
+matching our demo-MSE gate.
+
+But (ii) is also a **caveat for us**, stated honestly. The history-conditioned policy fails because it
+overfits *spurious* temporal correlations (the copycat / causal-confusion shortcut: conditioning on
+recent history lets the policy copy its own past, a correlation that breaks under its self-induced
+rollout distribution). A delayed-observation *critic* is not automatically immune: if its `Q_commit`
+leans on temporal correlation rather than on genuine hidden **state** (the plan's `z` carried through an
+occlusion), then `A` overfits the demo distribution and mis-selects at deployment. The framework's
+defense is that the delayed observation must carry the *latent the observation lost* (Theorem 2's
+occlusion), not an arbitrary action-history shortcut -- and this is testable: the reactive-map should
+track genuine occlusion/aleatoric structure (uncertainty-split), not arbitrary temporal correlation. So
+Park's result both motivates the critic-side design and names its failure mode.
+
 **The short-context prescription (why adaptive chunking survives the context-length result).** Take
 the VLA as short-context by fiat (compute and latency make long context impractical for a deployed
 generative policy). Then the papers' fix — a long-context reactive policy — is off the table, and
