@@ -22,6 +22,7 @@ exec uv run --no-sync python scripts/train_fql.py \
   --action-dim 32 --action-horizon 30 \
   --discount 0.99964 --v-min -2777.78 --v-max 0.0 --num-atoms 101 \
   --batch 32 --steps 100000 --critic-warmup-steps 10000 --critic-backbone never \
+  --train-flow-bc --flow-lr 5e-5 \
   --num-workers 12 --save-every 10000 \
-  --out /data1/jellyho/acrft_ckpts/fql_yam/run1 \
-  --wandb --wandb-name fql_yam_100k_run1
+  --out /data1/jellyho/acrft_ckpts/fql_yam/run2 \
+  --wandb --wandb-name fql_yam_100k_run2_flowbc

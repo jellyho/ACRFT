@@ -75,6 +75,14 @@ def main():
         help="when the critic gradient may flow into the VLM backbone",
     )
     ap.add_argument("--flow-ode-steps", type=int, default=10)
+    ap.add_argument(
+        "--train-flow-bc",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="keep training the flow expert with its flow-matching BC loss (official FQL trains it "
+        "concurrently; off = frozen pretrained teacher)",
+    )
+    ap.add_argument("--flow-lr", type=float, default=5e-5, help="flow expert lr (BC finetune used 5e-5)")
     # expert variants: real by default; 'dummy' everywhere gives a CPU-runnable trainer smoke
     ap.add_argument("--paligemma-variant", default="gemma_2b")
     ap.add_argument("--flow-variant", default="gemma_300m")
@@ -161,6 +169,13 @@ def main():
     critic_train_filter = critic_bb_filter if a.critic_backbone != "never" else critic_filter
     opt_c = tx_c.init(params.filter(critic_train_filter))
     opt_a = tx_a.init(params.filter(actor_filter))
+    # flow expert (gemma "_1") + its projections/time-MLP -- trained only under --train-flow-bc
+    flow_filter = nnx.Any(
+        nnx_utils.PathRegex(".*llm.*_1.*"),
+        nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)).*"),
+    )
+    tx_f = optax.adam(a.flow_lr)
+    opt_f = tx_f.init(params.filter(flow_filter)) if a.train_flow_bc else ()
 
     # The VLM prefix (SigLIP x3 cams + 2b attention) is by far the most expensive forward, and it is
     # FROZEN -- so each loss computes it ONCE per observation (stop-gradient) and every expert call
@@ -230,6 +245,20 @@ def main():
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
         return a.alpha * l_distill, {"l_distill": l_distill, "q_pi": jnp.zeros(())}
 
+    def flow_bc_loss_fn(model, batch, rng):
+        """pi05 flow matching on the data chunk -- the BC objective, continued (moving teacher)."""
+        obs, act = batch[0], batch[1]
+        kv, pm = _kv(model, obs)
+        b = act.shape[0]
+        rt, rn = jax.random.split(rng)
+        tau = jax.random.beta(rt, 1.5, 1, (b,)) * 0.999 + 0.001
+        noise = jax.random.normal(rn, act.shape)
+        te = tau[:, None, None]
+        x_t = te * noise + (1 - te) * act
+        u_t = noise - act
+        v_t = model.flow_velocity(x_t, tau, kv, pm)
+        return jnp.mean(jnp.square(v_t - u_t)), {}
+
     # donate params/targets/opt states: without donation the jit holds input AND output copies of
     # the 3.15B-param state (~25GB just in weights), which is what OOM'd the L40S even after the
     # prefix-KV sharing fix. Donation makes the update in-place.
@@ -238,9 +267,9 @@ def main():
     # critic optimizer state; whether the backbone part of that gradient is nonzero is decided by
     # bb_grad (stop-gradient on the prefix KV), not by reshaping trees between phases.
     def _make_step(*, warmup: bool, bb_grad: bool):
-        @functools.partial(jax.jit, donate_argnums=(0, 1, 2, 3))
-        def step(params, target_critic, opt_c, opt_a, batch, rng):
-            rc, ra = jax.random.split(rng)
+        @functools.partial(jax.jit, donate_argnums=(0, 1, 2, 3, 4))
+        def step(params, target_critic, opt_c, opt_a, opt_f, batch, rng):
+            rc, ra, rf = jax.random.split(rng, 3)
             model = nnx.merge(graphdef, params)
             if warmup:
                 (lc, ci), gc = nnx.value_and_grad(
@@ -265,13 +294,30 @@ def main():
             pa = params.filter(actor_filter)
             ua, opt_a_new = tx_a.update(ga, opt_a, pa)
             nnx.update(model, optax.apply_updates(pa, ua))
+            fi = {}
+            opt_f_new = opt_f
+            if a.train_flow_bc:
+                (lf, _), gf = nnx.value_and_grad(flow_bc_loss_fn, argnums=nnx.DiffState(0, flow_filter), has_aux=True)(
+                    model, batch, rf
+                )
+                pf = params.filter(flow_filter)
+                uf, opt_f_new = tx_f.update(gf, opt_f, pf)
+                nnx.update(model, optax.apply_updates(pf, uf))
+                fi = {"l_flow_bc": lf}
             params_new = nnx.state(model)
             target_critic_new = jax.tree.map(
                 lambda t, p: a.target_tau * p + (1 - a.target_tau) * t,
                 target_critic,
                 params_new.filter(critic_filter),
             )
-            return params_new, target_critic_new, opt_c_new, opt_a_new, {"l_critic": lc, "l_actor": la, **ci, **ai}
+            return (
+                params_new,
+                target_critic_new,
+                opt_c_new,
+                opt_a_new,
+                opt_f_new,
+                {"l_critic": lc, "l_actor": la, **ci, **ai, **fi},
+            )
 
         return step
 
@@ -346,6 +392,8 @@ def main():
             "critic": params.filter(critic_filter).to_pure_dict(),
             "target_critic": target_critic.to_pure_dict(),
         }
+        if a.train_flow_bc:  # the teacher moved off its init checkpoint, so it must travel too
+            state["flow"] = params.filter(flow_filter).to_pure_dict()
         with ocp.StandardCheckpointer() as ckptr:
             ckptr.save(path, state, force=True)
         print(f"saved {path}", flush=True)
@@ -356,7 +404,7 @@ def main():
         rng, kb, ks = jax.random.split(rng, 3)
         batch = synthetic_batch(kb) if a.synthetic else next(data_iter)
         step = step_warmup if (step_warmup is not None and s < a.critic_warmup_steps) else step_ac
-        params, target_critic, opt_c, opt_a, info = step(params, target_critic, opt_c, opt_a, batch, ks)
+        params, target_critic, opt_c, opt_a, opt_f, info = step(params, target_critic, opt_c, opt_a, opt_f, batch, ks)
         if s % 10 == 0 or s == a.steps - 1:
             i = {k: float(v) for k, v in info.items()}
             if run is not None:
