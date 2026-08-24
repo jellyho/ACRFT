@@ -306,7 +306,7 @@ srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
   bash -lc 'cd /path/to/ACRFT && XLA_PYTHON_CLIENT_PREALLOCATE=false \
     uv run --no-sync python scripts/serve_policy.py --critic \
       --config pi05_yam_lego_taxi_rlt \
-      --checkpoint checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000 \
+      --checkpoint checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/125000 \
       --critic /data5/jellyho/critics/yam/fixed_pi05_s347 \
       --mode bon --num-samples 8 --port 8000'
 ```

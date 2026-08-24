@@ -51,7 +51,7 @@ srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
     XLA_PYTHON_CLIENT_PREALLOCATE=false MUJOCO_GL=egl \
     uv run --no-sync python scripts/serve_policy.py --critic \
       --config pi05_yam_lego_taxi \
-      --checkpoint checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000 \
+      --checkpoint checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/125000 \  # any saved BC step; HF backup: jellyho/pi05_yam_lego_taxi_h30_s300
       --critic /data5/jellyho/critics/yam/g5_s347 \
       --mode adaptive --num-samples 8 --port 8000'
 ```
@@ -75,8 +75,8 @@ snapshot_download("jellyho/patch_critic_yam_lego_taxi", repo_type="model",
                   allow_patterns="fixed_pi05_s347/*", local_dir="/data5/jellyho/critics/yam")
 
 policy = policy_config.create_trained_policy(
-    _config.get_config("pi05_yam_lego_taxi_rlt"),
-    "checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000",
+    _config.get_config("pi05_yam_lego_taxi"),  # BC config (the deploy default going forward)
+    "checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/125000",
 )
 wrapped = PatchCriticSelectPolicy(
     policy, "/data5/jellyho/critics/yam/fixed_pi05_s347", mode="bon", default_samples=8,
