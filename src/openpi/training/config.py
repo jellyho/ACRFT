@@ -1607,7 +1607,9 @@ _CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none"))
 _CONFIGS.append(_yam_rlt_config("joint", horizon=60))  # 2-second chunk ablation
 
 
-def _yam_bc_config(delta_mode: str = "joint", horizon: int = 30, fsdp_devices: int = 1) -> TrainConfig:
+def _yam_bc_config(
+    delta_mode: str = "joint", horizon: int = 30, fsdp_devices: int = 1, num_train_steps: int = 100_000
+) -> TrainConfig:
     """Plain pi05 BC finetune on the YAM bimanual dataset -- NO RLT bottleneck.
 
     The RLT token only existed to feed a sim probe / adaptive-chunk critic; we now train a SEPARATE
@@ -1628,18 +1630,25 @@ def _yam_bc_config(delta_mode: str = "joint", horizon: int = 30, fsdp_devices: i
         batch_size=32,
         fsdp_devices=fsdp_devices,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=num_train_steps, decay_lr=5e-5
         ),
         weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
             "gs://openpi-assets/checkpoints/pi05_base/params"
         ),
-        num_train_steps=100_000,
-        save_interval=10_000,
+        num_train_steps=num_train_steps,
+        save_interval=25_000,
+        # Default keep_period is 5_000, which divides every saved step, so nothing is ever pruned: a
+        # 500k run would hold 20 checkpoints at 42 GB each. Keep the 100k milestones plus the latest.
+        keep_period=100_000,
         action_dist_interval=0,
     )
 
 
-_CONFIGS.extend(_yam_bc_config(_m) for _m in ("joint", "none"))
+_CONFIGS.extend(_yam_bc_config(_m, num_train_steps=500_000) for _m in ("joint", "none"))
+# Chunk-length ablation for the BC policy. The adaptive-chunking work needs a base policy whose chunk
+# is long enough that stopping early is a real choice; at horizon 30 the longest commitment the critic
+# can score is one second.
+_CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=500_000))
 
 
 def _yam_alphaflow_config(

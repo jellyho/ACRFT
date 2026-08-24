@@ -156,6 +156,63 @@ def gen_demos(rng, n_ep):
     }
 
 
+@torch.no_grad()
+def gen_self_rollouts(rng_seed, pi, n_ep, exec_k=H):
+    """Roll the current policy out and record what it did, in the same schema as gen_demos.
+
+    The point is provenance, not performance: these actions were chosen without seeing the event
+    that arrives inside the window, so a chunk-conditioned value fitted on them is not confounded.
+    Human demonstrations do not have that property, which is what the interventional pairing was
+    working around.
+    """
+    rng = np.random.default_rng(rng_seed)
+    env = PlanReach(rng)
+    obs_l, hi_l, act_l, rew_l, obs2_l, h2_l, done_l, ch_l = [], [], [], [], [], [], [], []
+    for _ in range(n_ep):
+        o = env.reset()
+        hist, ep = [], []
+        while True:
+            seg, step = env._seg_step()
+            if step == 0:
+                hist = []
+            ot = torch.as_tensor(o, dtype=torch.float32).unsqueeze(0)
+            chunk = pi.sample(ot).view(H, ADIM).numpy()
+            for j in range(min(exec_k, T - env.t)):
+                a = np.clip(chunk[j], -1, 1).astype(np.float32)
+                hf = hist_feat(hist)
+                o2, r, done = env.step(a)
+                hist = [] if env.t % H == 0 else [*hist, a]
+                ep.append((o, hf, a, r, o2, hist_feat(hist), done))
+                o = o2
+                if done:
+                    break
+            if len(ep) and ep[-1][6]:
+                break
+        acts = [e[2] for e in ep]
+        for i, (o_, hf, a, r, o2, hf2, d) in enumerate(ep):
+            chunk_i = acts[i : i + H]
+            chunk_i = chunk_i + [np.zeros(ADIM, np.float32)] * (H - len(chunk_i))
+            obs_l.append(o_)
+            hi_l.append(hf)
+            act_l.append(a)
+            rew_l.append(r)
+            obs2_l.append(o2 if o2 is not None else np.zeros(OBS_DIM, np.float32))
+            h2_l.append(hf2)
+            done_l.append(float(d))
+            ch_l.append(np.concatenate(chunk_i))
+    t = lambda x, dt=torch.float32: torch.as_tensor(np.asarray(x), dtype=dt)  # noqa: E731
+    return {
+        "o": t(obs_l),
+        "h": t(hi_l),
+        "a": t(act_l),
+        "r": t(rew_l),
+        "o2": t(obs2_l),
+        "h2": t(h2_l),
+        "d": t(done_l),
+        "ch": t(ch_l),
+    }
+
+
 # ------------------------------------------------------------------ networks
 class ChunkPolicy(nn.Module):
     """Markov chunk policy (the VLA analogue): obs -> H actions."""

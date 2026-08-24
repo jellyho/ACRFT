@@ -33,18 +33,53 @@ def main():
     ap.add_argument("--cache", type=pathlib.Path, required=True)
     ap.add_argument("--outcomes", required=True)
     ap.add_argument("--homing-onsets", type=pathlib.Path, default=None)
+    ap.add_argument(
+        "--truncate-homing",
+        choices=["all", "failure", "none"],
+        default="all",
+        help="must match how the critic was trained (see its config.json input_spec)",
+    )
     ap.add_argument("--stride", type=int, default=10, help="frames to skip when scoring an episode")
     ap.add_argument("--batch", type=int, default=512)
+    ap.add_argument(
+        "--out",
+        type=pathlib.Path,
+        default=None,
+        help="write per-episode records + aggregates to this JSON. The house rule is that report tables "
+        "are recomputed from source JSON rather than transcribed, and stdout cannot be audited.",
+    )
     a = ap.parse_args()
 
     import flax.serialization
     import jax
     import jax.numpy as jnp
 
+    from openpi.patch_critic import preproc as critic_preproc
+    from openpi.patch_critic import spec as critic_spec
     from openpi.patch_critic.critic import HLGauss
     from openpi.patch_critic.critic import PatchCriticEnsemble
 
-    cc = json.loads((a.critic / "config.json").read_text())
+    cc, _ = critic_spec.load(a.critic)
+    # Scoring MUST reproduce the critic's training inputs. Reading them off its own input_spec is the
+    # only way that stays true as the preprocessing changes: feeding a pi05-space critic raw absolute
+    # actions produces confident, meaningless numbers rather than an error.
+    isp = cc.get("input_spec", {})
+    pre = None
+    if isp.get("normalization") == "pi05":
+        ns = a.critic / isp.get("norm_stats_file", "pi05_norm_stats.json")
+        pre = critic_preproc.Pi05Preproc(
+            ref=np.asarray(isp["joint_delta_reference"], np.int64),
+            stats=critic_preproc.load_norm_stats(ns if ns.exists() else isp["norm_stats"]),
+            use_quantiles=bool(isp["use_quantiles"]),
+            delta=isp["delta_mode"] == "joint",
+        )
+    pidx = isp.get("proprio_indices")
+    pidx = None if pidx is None else np.asarray(pidx, np.int64)
+    print(
+        f"input space: {isp.get('normalization', 'raw')}  proprio={isp.get('proprio_dims', 'all')}"
+        f"  homing={isp.get('truncate_homing', a.truncate_homing)}",
+        flush=True,
+    )
     meta = json.loads((a.cache / "meta.json").read_text())
     N, npatch, emb, sd, ad = meta["N"], meta["npatch"], meta["emb"], meta["sd"], meta["ad"]
     H, gsz, atoms = cc["horizon"], cc["macro_group_size"], cc["num_atoms"]
@@ -68,12 +103,21 @@ def main():
     hl = HLGauss(cc["v_min"], cc["v_max"], atoms)
     centers = jnp.asarray(hl.centers)
 
+    from openpi.patch_critic.critic import PatchV
+
+    v_net = PatchV(num_atoms=atoms)
+    v_params = flax.serialization.msgpack_restore((a.critic / "v_params.msgpack").read_bytes())
+
     @jax.jit
     def value(p, chunk, s):
-        out = net.apply(params, p.astype(jnp.float32), chunk, s)  # [K,B,P,atoms]
-        v = jnp.sum(jax.nn.softmax(out[:, :, -1, :], -1) * centers, -1)  # full-horizon prefix
-        deep = jnp.sum(jax.nn.softmax(out[:, :, -1, :], -1) * (centers < 0.72 * cc["v_min"]), -1)
-        return jnp.min(v, 0), jnp.mean(deep, 0)  # ensemble-min value, deep-atom mass
+        pf = p.astype(jnp.float32)
+        out = net.apply(params, pf, chunk, s)  # [K,B,P,atoms]
+        prob = jax.nn.softmax(out, -1)
+        qpref = jnp.mean(jnp.sum(prob * centers, -1), 0)  # [B,P] per-prefix value
+        v = jnp.min(jnp.sum(prob[:, :, -1, :] * centers, -1), 0)  # ensemble-min at k=H
+        deep = jnp.mean(jnp.sum(prob[:, :, -1, :] * (centers < 0.72 * cc["v_min"]), -1), 0)
+        vs = jnp.sum(jax.nn.softmax(v_net.apply(v_params, pf, s), -1) * centers, -1)  # state value
+        return v, deep, qpref, vs
 
     succ_stats, fail_stats = [], []
     ar = np.arange(H)
@@ -88,7 +132,11 @@ def main():
         full, off = info["full_len"], info["offset"]
         is_succ = outc[e] == "success"
         eff = full
-        if not is_succ and homing is not None and str(e) in homing:
+        if (
+            homing is not None
+            and str(e) in homing
+            and (a.truncate_homing == "all" or (a.truncate_homing == "failure" and not is_succ))
+        ):
             eff = int(homing[str(e)]["homing_onset"])
         pos = np.arange(0, max(1, eff), a.stride)
         # An episode is CONTIGUOUS in the cache, so read its block once (sequential) and subsample in
@@ -96,17 +144,41 @@ def main():
         ep_feats = np.asarray(feats[off : off + full])
         ep_states = np.asarray(states[off : off + full])
         ep_actions = np.asarray(actions[off : off + full])
-        vs, ds = [], []
+        vs, ds, qps, svs = [], [], [], []
         for i in range(0, len(pos), a.batch):
             p = pos[i : i + a.batch]
             hp = p[:, None] + ar[None]
-            ch = ep_actions[np.clip(hp, 0, full - 1).reshape(-1)].reshape(len(p), H, ad)
-            ch[hp >= full] = 0.0
-            v, d = value(jnp.asarray(ep_feats[p]), jnp.asarray(ch), jnp.asarray(ep_states[p]))
+            # Clamp to eff (not full) and HOLD the last valid action -- the training convention. No
+            # zero-fill: in the normalized space the zero vector is not a "no motion" action.
+            ch = ep_actions[np.clip(hp, 0, eff - 1).reshape(-1)].reshape(len(p), H, ad)
+            st = ep_states[p]
+            if pre is not None:
+                ch = pre.actions(ch, st)
+                st = pre.state(st)
+            if pidx is not None:
+                st = st[..., pidx]
+            v, d, qp, sv = value(jnp.asarray(ep_feats[p]), jnp.asarray(ch), jnp.asarray(st))
             vs.append(np.asarray(v))
             ds.append(np.asarray(d))
+            qps.append(np.asarray(qp))
+            svs.append(np.asarray(sv))
         vs = np.concatenate(vs)
         ds = np.concatenate(ds)
+        qps, svs = np.concatenate(qps), np.concatenate(svs)
+        # Which commitment length the selector would pick, and how well the learned state value tracks
+        # the TRUE cost_to_goal slope. All prefixes tie exactly under a correct V (Bellman consistency),
+        # so a short-biased argmax is a symptom of V under-rising, not of the selector.
+        kbest = float(np.mean((np.argmax(qps, axis=1) + 1) * gsz))
+        # Only defined for SUCCESSES: cost_to_goal has no goal to count down to on a failure, whose
+        # true value is the floor throughout, so the reference slope there is ~0 and the ratio is noise.
+        slope_rec = float("nan")
+        if is_succ:
+            n_to_goal = np.maximum(0.0, (eff - cc["h_goal"]) - pos.astype(np.float64))
+            v_true = -(1.0 - cc["discount"] ** n_to_goal) / (1.0 - cc["discount"])
+            d_learn, d_true = np.diff(svs.astype(np.float64)), np.diff(v_true)
+            ok = np.abs(d_true) > 1e-9
+            if ok.any():
+                slope_rec = float(np.mean(d_learn[ok] / d_true[ok]))
         rec = {
             "ep": e,
             "mean": float(vs.mean()),
@@ -116,6 +188,11 @@ def main():
             "last": float(vs[-1]),
             "deep": float(ds.mean()),
             "n": len(vs),
+            "outcome": "success" if is_succ else "failure",
+            "kbest": kbest,
+            "vfirst": float(svs[0]),
+            "vmean": float(svs.mean()),
+            "slope": slope_rec,
         }
         (succ_stats if is_succ else fail_stats).append(rec)
         _done += 1
@@ -126,17 +203,84 @@ def main():
         return np.array([r[k] for r in rs])
 
     print(f"critic {a.critic.name}  |  {len(succ_stats)} success / {len(fail_stats)} fail episodes")
-    print(f"  AUC(mean value) = {roc_auc(col(succ_stats,'mean'), col(fail_stats,'mean')):.4f}")
-    print(f"  AUC(max value)  = {roc_auc(col(succ_stats,'max'),  col(fail_stats,'max')):.4f}")
-    print(f"  AUC(last value) = {roc_auc(col(succ_stats,'last'), col(fail_stats,'last')):.4f}")
+    print(f"  AUC(mean value) = {roc_auc(col(succ_stats, 'mean'), col(fail_stats, 'mean')):.4f}")
+    print(f"  AUC(max value)  = {roc_auc(col(succ_stats, 'max'), col(fail_stats, 'max')):.4f}")
+    print(f"  AUC(last value) = {roc_auc(col(succ_stats, 'last'), col(fail_stats, 'last')):.4f}")
     for name, rs in (("success", succ_stats), ("fail", fail_stats)):
         if rs:
+            slope = f"{np.nanmean(col(rs, 'slope')):5.2f}" if name == "success" else "  n/a"
             print(
-                f"  {name:8s}: first {col(rs,'first').mean():9.1f}  last {col(rs,'last').mean():9.1f} "
-                f" mean {col(rs,'mean').mean():9.1f}  min {col(rs,'min').mean():9.1f} "
-                f" deep-atom mass {col(rs,'deep').mean():.3f}"
+                f"  {name:8s}: k*={col(rs, 'kbest').mean():5.1f}  Vslope={slope}  "
+                f"V(s0)={col(rs, 'vfirst').mean():8.1f}  "
+                f"first {col(rs, 'first').mean():9.1f}  last {col(rs, 'last').mean():9.1f} "
+                f" mean {col(rs, 'mean').mean():9.1f}  min {col(rs, 'min').mean():9.1f} "
+                f" deep-atom mass {col(rs, 'deep').mean():.3f}"
             )
     print(f"  (v_min = {cc['v_min']:.1f}; 'deep-atom mass' = probability below 0.72*v_min)")
+
+    if a.out is not None:
+
+        def agg(rs, k, *, nan=False):
+            if not rs:
+                return None
+            v = col(rs, k)
+            return float(np.nanmean(v) if nan else v.mean())
+
+        # V(s0) is the sharp diagnostic: both classes start from visually identical frames, so a gap
+        # here is hindsight leakage rather than prediction. Record the behaviour-policy value the two
+        # SHOULD share, so a reader can size the gap without recomputing it.
+        p_succ = len(succ_stats) / max(1, len(succ_stats) + len(fail_stats))
+        out = {
+            "critic": str(a.critic),
+            "critic_name": a.critic.name,
+            "cache": str(a.cache),
+            "stride": a.stride,
+            "truncate_homing": a.truncate_homing,
+            "config": {
+                k: cc.get(k)
+                for k in (
+                    "steps",
+                    "saved_at_step",
+                    "batch",
+                    "macro_group_size",
+                    "expectile",
+                    "discount",
+                    "v_min",
+                    "lr",
+                    "h_goal",
+                    "mc_floor",
+                    "num_critics",
+                    "horizon",
+                    "git",
+                    "loader",
+                )
+            },
+            "input_spec": isp,
+            "counts": {"success": len(succ_stats), "failure": len(fail_stats)},
+            "auc": {
+                "mean": roc_auc(col(succ_stats, "mean"), col(fail_stats, "mean")),
+                "max": roc_auc(col(succ_stats, "max"), col(fail_stats, "max")),
+                "last": roc_auc(col(succ_stats, "last"), col(fail_stats, "last")),
+            },
+            "aggregates": {
+                name: {
+                    "kbest": agg(rs, "kbest"),
+                    "vslope": agg(rs, "slope", nan=True),
+                    "vfirst": agg(rs, "vfirst"),
+                    "first": agg(rs, "first"),
+                    "last": agg(rs, "last"),
+                    "mean": agg(rs, "mean"),
+                    "min": agg(rs, "min"),
+                    "deep": agg(rs, "deep"),
+                }
+                for name, rs in (("success", succ_stats), ("failure", fail_stats))
+            },
+            "p_success": p_succ,
+            "episodes": sorted(succ_stats + fail_stats, key=lambda r: r["ep"]),
+        }
+        a.out.parent.mkdir(parents=True, exist_ok=True)
+        a.out.write_text(json.dumps(out, indent=2))
+        print(f"  wrote {a.out}  ({len(out['episodes'])} episode records)")
 
 
 if __name__ == "__main__":

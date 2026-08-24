@@ -402,13 +402,21 @@ def _git_stamp():
 
 
 def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=None, embedded=None):
+    """Write a checkpoint. Periodic saves go to <out>/step_NNNNNN so a run leaves a step-budget curve
+    instead of overwriting itself; the last one is also written to <out> so the run has a stable
+    'final' path."""
     import flax.serialization
     import jax
 
+    out = a.out
+    step = getattr(a, "_step", None)
+    if step is not None and step != getattr(a, "steps", None):
+        out = a.out / f"step_{step:06d}"
     a.out.mkdir(parents=True, exist_ok=True)
-    (a.out / "params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(params)))
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(params)))
     # also persist the value net so --init-params can warm-start BOTH Q and V on a later continuation.
-    (a.out / "v_params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(v_params)))
+    (out / "v_params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(v_params)))
     cfg = {
         "horizon": a.horizon,
         "macro_group_size": a.macro_group_size,
@@ -429,6 +437,10 @@ def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=
         "clip_len": a.clip_len,
         "source": a.repo_id,
         "loader": getattr(a, "loader", "critic_clip"),
+        # how long this ran: without it a checkpoint cannot be dated except by finding its log
+        "steps": a.steps,
+        "saved_at_step": getattr(a, "_step", None),
+        "batch": getattr(a, "batch", None),
         "git": _git_stamp(),
     }
     # The INPUT CONTRACT. Without this the only record of "what scale does this critic eat" lives in two
@@ -436,13 +448,13 @@ def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=
     # critic trained on normalized inputs would be served raw and fail SILENTLY. Serving validates it.
     if spec is not None:
         cfg["input_spec"] = spec
-    (a.out / "config.json").write_text(json.dumps(cfg, indent=2))
+    (out / "config.json").write_text(json.dumps(cfg, indent=2))
     if stats is not None:
-        (a.out / "norm_stats.json").write_text(json.dumps(stats, indent=2))
+        (out / "norm_stats.json").write_text(json.dumps(stats, indent=2))
     if embedded is not None:
         # the base VLA's stats, copied IN so the checkpoint is portable (a path is not)
-        (a.out / "pi05_norm_stats.json").write_text(json.dumps(embedded))
-    print(f"saved -> {a.out}", flush=True)
+        (out / "pi05_norm_stats.json").write_text(json.dumps(embedded))
+    print(f"saved -> {out}", flush=True)
 
 
 if __name__ == "__main__":
