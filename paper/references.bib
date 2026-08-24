@@ -2,29 +2,33 @@
 % Keys match the inline [key] markers in the hub entry. All metadata pulled from the arXiv API.
 
 % ---------- VLA / chunked policies ----------
-@article{rt2,
+@inproceedings{rt2,
   title   = {RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control},
   author  = {Brohan, Anthony and Brown, Noah and Carbajal, Justice and Chebotar, Yevgen and Chen, Xi and Choromanski, Krzysztof and Ding, Tianli and Driess, Danny and Dubey, Avinava and Finn, Chelsea and Florence, Pete and Fu, Chuyuan and Gonzalez Arenas, Montse and Gopalakrishnan, Keerthana and Han, Kehang and Hausman, Karol and Herzog, Alexander and Hsu, Jasmine and Ichter, Brian and Irpan, Alex and Joshi, Nikhil and Julian, Ryan and Kalashnikov, Dmitry and Kuang, Yuheng and Leal, Isabel and Lee, Lisa and Lee, Tsang-Wei Edward and Levine, Sergey and Lu, Yao and Michalewski, Henryk and Mordatch, Igor and Pertsch, Karl and Rao, Kanishka and Reymann, Krista and Ryoo, Michael and Salazar, Grecia and Sanketi, Pannag and Sermanet, Pierre and Singh, Jaspiar and Singh, Anikait and Soricut, Radu and Tran, Huong and Vanhoucke, Vincent and Vuong, Quan and Wahid, Ayzaan and Welker, Stefan and Wohlhart, Paul and Wu, Jialin and Xia, Fei and Xiao, Ted and Xu, Peng and Xu, Sichun and Yu, Tianhe and Zitkovich, Brianna},
-  journal = {arXiv preprint arXiv:2307.15818},
-  year    = {2023}
+  booktitle = {Conference on Robot Learning (CoRL)},
+  year      = {2023},
+  note      = {arXiv:2307.15818}
 }
-@article{openvla,
+@inproceedings{openvla,
   title   = {OpenVLA: An Open-Source Vision-Language-Action Model},
   author  = {Kim, Moo Jin and Pertsch, Karl and Karamcheti, Siddharth and Xiao, Ted and Balakrishna, Ashwin and Nair, Suraj and Rafailov, Rafael and Foster, Ethan and Lam, Grace and Sanketi, Pannag and Vuong, Quan and Kollar, Thomas and Burchfiel, Benjamin and Tedrake, Russ and Sadigh, Dorsa and Levine, Sergey and Liang, Percy and Finn, Chelsea},
-  journal = {arXiv preprint arXiv:2406.09246},
-  year    = {2024}
+  booktitle = {Conference on Robot Learning (CoRL)},
+  year      = {2024},
+  note      = {arXiv:2406.09246}
 }
-@article{act,
+@inproceedings{act,
   title   = {Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware},
   author  = {Zhao, Tony Z. and Kumar, Vikash and Levine, Sergey and Finn, Chelsea},
-  journal = {arXiv preprint arXiv:2304.13705},
-  year    = {2023}
+  booktitle = {Robotics: Science and Systems (RSS)},
+  year      = {2023},
+  note      = {arXiv:2304.13705}
 }
-@article{pi0,
+@inproceedings{pi0,
   title   = {$\pi_0$: A Vision-Language-Action Flow Model for General Robot Control},
   author  = {Black, Kevin and Brown, Noah and Driess, Danny and Esmail, Adnan and Equi, Michael and Finn, Chelsea and Fusai, Niccolo and Groom, Lachy and Hausman, Karol and Ichter, Brian and Jakubczak, Szymon and Jones, Tim and Ke, Liyiming and Levine, Sergey and Li-Bell, Adrian and Mothukuri, Mohith and Nair, Suraj and Pertsch, Karl and Shi, Lucy Xiaoyang and Tanner, James and Vuong, Quan and Walling, Anna and Wang, Haohuan and Zhilinsky, Ury},
-  journal = {arXiv preprint arXiv:2410.24164},
-  year    = {2024}
+  booktitle = {Robotics: Science and Systems (RSS)},
+  year      = {2025},
+  note      = {arXiv:2410.24164}
 }
 
 % ---------- VLA post-training that reshapes imitation ----------
@@ -34,11 +38,12 @@
   journal = {arXiv preprint arXiv:2511.14759},
   year    = {2025}
 }
-@article{arfm,
+@inproceedings{arfm,
   title   = {Balancing Signal and Variance: Adaptive Offline RL Post-Training for VLA Flow Models},
   author  = {Zhang, Hongyin and Zhang, Shiyuan and Jin, Junxi and Zeng, Qixin and Qiao, Yifan and Lu, Hongchao and Wang, Donglin},
-  journal = {arXiv preprint arXiv:2509.04063},
-  year    = {2025}
+  booktitle = {AAAI Conference on Artificial Intelligence (AAAI)},
+  year      = {2026},
+  note      = {arXiv:2509.04063}
 }
 @article{arm,
   title   = {ARM: Advantage Reward Modeling for Long-Horizon Manipulation},
@@ -204,4 +209,94 @@
   author  = {{GigaBrain Team} and Wang, Boyuan and Li, Bohan and Ni, Chaojun and Huang, Guan and Zhao, Guosheng and Li, Hao and Li, Jie and Lv, Jindi and Liu, Jingyu and Feng, Lv and Yu, Mingming and Li, Peng and Deng, Qiuping and Liu, Tianze and Zhou, Xinyu and Chen, Xinze and Wang, Xiaofeng and Wang, Yang and Li, Yifan and Nie, Yifei and Li, Yilong and Zhou, Yukun and Ye, Yun and Liu, Zhichao and Zhu, Zheng},
   journal = {arXiv preprint arXiv:2602.12099},
   year    = {2026}
+}
+
+% ---------- added 2026-08-19: intro final ----------
+@article{dqc,
+  title   = {Decoupled Q-Chunking},
+  author  = {Li, Qiyang and Park, Seohong and Levine, Sergey},
+  journal = {arXiv preprint arXiv:2512.10926},
+  year    = {2025}
+}
+@inproceedings{park2024bottleneck,
+  title     = {Is Value Learning Really the Main Bottleneck in Offline RL?},
+  author    = {Park, Seohong and Frans, Kevin and Levine, Sergey and Kumar, Aviral},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2024},
+  note      = {arXiv:2406.09329}
+}
+
+% ---------- human motor control (adaptive commitment analogy) ----------
+@article{woodworth1899,
+  title   = {The Accuracy of Voluntary Movement},
+  author  = {Woodworth, Robert S.},
+  journal = {Psychological Review: Monograph Supplements},
+  volume  = {3},
+  number  = {3},
+  year    = {1899}
+}
+@article{todorov2002,
+  title   = {Optimal Feedback Control as a Theory of Motor Coordination},
+  author  = {Todorov, Emanuel and Jordan, Michael I.},
+  journal = {Nature Neuroscience},
+  volume  = {5},
+  number  = {11},
+  pages   = {1226--1235},
+  year    = {2002}
+}
+@article{gawthrop2011,
+  title   = {Intermittent Control: A Computational Theory of Human Control},
+  author  = {Gawthrop, Peter and Loram, Ian and Lakie, Martin and Gollee, Henrik},
+  journal = {Biological Cybernetics},
+  volume  = {104},
+  number  = {1-2},
+  pages   = {31--51},
+  year    = {2011}
+}
+
+% ---------- offline RL promise / stitching (correct citations for P3) ----------
+@article{levine2020offline,
+  title   = {Offline Reinforcement Learning: Tutorial, Review, and Perspectives on Open Problems},
+  author  = {Levine, Sergey and Kumar, Aviral and Tucker, George and Fu, Justin},
+  journal = {arXiv preprint arXiv:2005.01643},
+  year    = {2020}
+}
+@article{fu2020d4rl,
+  title   = {D4RL: Datasets for Deep Data-Driven Reinforcement Learning},
+  author  = {Fu, Justin and Kumar, Aviral and Nachum, Ofir and Tucker, George and Levine, Sergey},
+  journal = {arXiv preprint arXiv:2004.07219},
+  year    = {2020}
+}
+
+@article{dehp,
+  title   = {Dynamic Execution Horizon Prediction for Chunk-based Robot Policies},
+  author  = {Zhao, Yuchi and Bogdanovic, Miroslav and Sohal, Arjun and Tao, Liyu and Darvish, Kourosh and Aspuru-Guzik, Al{\'a}n and Shkurti, Florian and Garg, Animesh},
+  journal = {arXiv preprint arXiv:2606.11408},
+  year    = {2026}
+}
+
+% ---------- semi-MDP / options (appendix bookkeeping) ----------
+@article{sutton1999options,
+  title   = {Between {MDP}s and Semi-{MDP}s: A Framework for Temporal Abstraction in Reinforcement Learning},
+  author  = {Sutton, Richard S. and Precup, Doina and Singh, Satinder},
+  journal = {Artificial Intelligence},
+  volume  = {112},
+  number  = {1-2},
+  pages   = {181--211},
+  year    = {1999}
+}
+@inproceedings{bradtke1994smdp,
+  title     = {Reinforcement Learning Methods for Continuous-Time {M}arkov Decision Problems},
+  author    = {Bradtke, Steven J. and Duff, Michael O.},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {1994}
+}
+% TODO(exrl): authors/title from the workshop PDF (not indexed publicly yet).
+% Verified so far: RSS 2026 RL4VLA workshop; learned Q(s, a_{1:H}, k) with SMDP backup,
+% online off-policy, frozen base policy (self-stated support ceiling).
+@inproceedings{exrl,
+  title     = {ExRL: Reinforcement Learning of Execution Horizons for Vision-Language-Action Policies},
+  author    = {{ExRL authors (TODO from PDF)}},
+  booktitle = {RSS Workshop on Reinforcement Learning for Vision-Language-Action Models (RL4VLA)},
+  year      = {2026}
 }

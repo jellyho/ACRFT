@@ -108,6 +108,21 @@ uv run scripts/serve_policy.py --port 8000 policy:checkpoint \
 
 ---
 
+## Looking at a rollout
+
+A deployed rollout is a dataset; `misc/` turns one into a video — the candidate chunks the policy
+proposed, which one the critic picked, how far ahead it committed, and the value it was scored on,
+overlaid on the three cameras.
+
+```bash
+misc/yam-misc render-gui        # pick a dataset and an episode, press Render
+misc/yam-misc render-samples --repo-id lerobot_rollout/<name> --root ~/lerobot_rollout --episode 0
+```
+
+Self-contained: it carries its own copy of the arm's kinematics and the rig's agentview extrinsics,
+so it needs nothing from the robot repo. See [misc/README.md](misc/README.md) — including which of
+those files are snapshots to re-copy after a recalibration.
+
 ## Stage 1 — RLT training
 
 `examples/robocasa/run_train_rlt.sh <Task> [<Task> ...] [flags]` wraps `scripts/train.py`. It
@@ -206,6 +221,14 @@ uv run scripts/serve_policy.py \
     --policy.config pi05_yam_lego_taxi_rlt \
     --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000
 
+uv run scripts/serve_policy.py \
+    --num-samples 16 \
+    --port 8000 \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_rlt \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000
+
+
 # same checkpoint family, absolute joint targets
 uv run scripts/serve_policy.py \
     --port 8000 \
@@ -281,11 +304,19 @@ PY
 
 srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
   bash -lc 'cd /path/to/ACRFT && XLA_PYTHON_CLIENT_PREALLOCATE=false \
-    uv run --no-sync python scripts/serve_patch_critic.py \
+    uv run --no-sync python scripts/serve_policy.py --critic \
       --config pi05_yam_lego_taxi_rlt \
       --checkpoint checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000 \
       --critic /data5/jellyho/critics/yam/fixed_pi05_s347 \
       --mode bon --num-samples 8 --port 8000'
+```
+
+```bash
+uv run python scripts/serve_policy.py --critic \
+      --config pi05_yam_lego_taxi_rlt \
+      --checkpoint ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000 \
+      --critic ~/hf_utils_downloads/patch_critic_yam_lego_taxi/fixed_pi05_s347 \
+      --mode bon --num-samples 8 --port 8000
 ```
 
 Or build the wrapper in-process, which is the fastest way to check a new critic loads and infers:

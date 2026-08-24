@@ -92,7 +92,9 @@ members = ["packages/*"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["docker", "third_party", "src/openpi/models_pytorch/transformers_replace/*"]
+# misc/ is analysis tooling carried over from the robot repo, written to its lint rules;
+# excluded rather than rewritten so it stays diffable against where it came from.
+extend-exclude = ["docker", "third_party", "src/openpi/models_pytorch/transformers_replace/*", "misc"]
 
 [tool.ruff.lint]
 # https://docs.astral.sh/ruff/rules/

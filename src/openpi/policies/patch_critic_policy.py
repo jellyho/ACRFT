@@ -25,6 +25,7 @@ import numpy as np
 from typing_extensions import override
 
 from openpi.models import model as _model
+from openpi.policies import policy as _policy_mod
 from openpi.policies.policy import BasePolicy
 from openpi.policies.policy import Policy
 from openpi.shared import nnx_utils
@@ -95,13 +96,34 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._to_nchw = to_nchw
 
         model = policy._model
-        # num_samples/num_steps size the sampler's noise array, so they must be compile-time constants;
-        # left traced, jax.random.normal rejects the shape. (This path had never actually been run.)
-        self._extract = nnx_utils.module_jit(
-            model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
-        )
+        # num_samples/num_steps size the sampler's noise array, so they must be compile-time
+        # constants; left traced, jax.random.normal rejects the shape.
+        if hasattr(model, "extract_token_and_base_actions"):
+            # Pi0RLT: N candidates + the RL token from one backbone pass (token unused here).
+            self._extract = nnx_utils.module_jit(
+                model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
+            )
+        elif hasattr(model, "sample_n_actions"):
+            # Pi0AlphaFlow: same one-prefix-pass contract, no token. With its 1-step sampler
+            # (--flow-steps 1), BoN-N costs ~N single forwards instead of N*10.
+            _sample_n = nnx_utils.module_jit(model.sample_n_actions, static_argnames=("num_samples", "num_steps"))
+
+            def _extract(rng, obs, *, num_samples, num_steps):
+                return None, (_sample_n(rng, obs, num_samples=num_samples, num_steps=num_steps),)
+
+            self._extract = _extract
+        else:
+            raise TypeError(
+                f"{type(model).__name__} offers neither extract_token_and_base_actions (RLT) nor "
+                "sample_n_actions (alpha-Flow); the patch-critic wrapper needs one of them"
+            )
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
+        # The width that actually arrives on the wire (14 for YAM), not the model's padded one
+        # (32 for pi05) -- what the declared candidate columns have to match.
+        self._robot_action_dim = _policy_mod.probe_robot_action_dim(
+            policy, model_action_dim=self._model_action_dim, action_horizon=self._action_horizon
+        )
 
         from openpi.patch_critic import spec as critic_spec
 
@@ -262,30 +284,41 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._rng, sample_rng = jax.random.split(self._rng)
         _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
         chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
+        # ROBOT-space chunks: what gets executed, and what the client records. Always through the
+        # policy's own output transform, fed the NORMALIZED state -- Unnormalize runs first in that
+        # transform and converts it to real units before JointAbsoluteActions adds it
+        # (actions[..., i] += state[..., ref[i]]). Handing it the raw state un-normalizes an
+        # already-physical value a second time and displaces every candidate identically, which is
+        # how a critic run ended up commanding 1.6 rad from the arm while a plain rollout of the
+        # same checkpoint tracked it within 0.17.
+        robot_actions = np.asarray(
+            self._pol._output_transform(
+                {
+                    "state": np.broadcast_to(norm_state, (chunks_model.shape[0], norm_state.shape[0])).copy(),
+                    "actions": chunks_model,
+                }
+            )["actions"],
+            np.float32,
+        )
+
+        # What the CRITIC is scored on is a separate question from what the robot executes: the two
+        # coincide only for a critic trained in robot units. Conflating them returned the critic's
+        # own input as the action -- for a pi05-space critic that is a normalized joint DELTA, which
+        # lands in a plausible numeric range and is meaningless as a joint target.
         if self._pre is not None:
             # Shared preprocessing: the sampler already emits normalized joint deltas, which is
             # precisely what the critic was trained on. No conversion, so nothing to get wrong.
             scored_actions = chunks_model[..., : self._critic_action_dim]
             scored_state = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
         else:
-            # Legacy raw-units critic. The output transform un-normalizes AND undoes the joint-delta
-            # parameterisation, and the latter needs the REAL state (JointAbsoluteActions does
-            # actions[..., i] += state[..., ref[i]]). This passed zeros, which silently left the
-            # chunks as DELTAS while the critic was trained on ABSOLUTE joint targets -- no error,
-            # just meaningless values. Broadcast the live state over the N candidates.
-            scored_actions = np.asarray(
-                self._pol._output_transform(
-                    {
-                        "state": np.broadcast_to(state, (chunks_model.shape[0], state.shape[0])).copy(),
-                        "actions": chunks_model,
-                    }
-                )["actions"],
-                np.float32,
-            )
+            # Legacy raw-units critic: it was trained on absolute joint targets, so it scores the
+            # same array the robot will execute, against the raw state those units live in.
+            scored_actions = robot_actions
             scored_state = state if self._proprio_idx is None else state[self._proprio_idx]
-        decoded = np.asarray(scored_actions, np.float32)  # [N, H, A] in the critic's own space
+        scored = np.asarray(scored_actions, np.float32)  # [N, H, *] in the CRITIC's space
+        decoded = robot_actions  # [N, H, A] in ROBOT space -- executed and recorded
 
-        pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(decoded)))  # [N, mh]
+        pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(scored)))  # [N, mh]
         best = int(np.argmax(pv[:, -1]))  # argmax full-chunk value
         if self._mode == "adaptive":
             kbest = int(np.argmax(pv[best]))  # highest-value commitment prefix (macro-group index)
@@ -297,15 +330,62 @@ class PatchCriticSelectPolicy(BasePolicy):
 
         out = {
             "actions": chosen,
-            "action_samples": np.swapaxes(decoded, 0, 1),  # (H, N, A)
+            # (X, N, A), not (H, N, A): the broker slices an extra by the reply's OWN chunk length,
+            # and in adaptive mode only X of the H steps are being executed. A full-horizon array
+            # would have a leading axis nothing matches, so it would be passed through whole and
+            # then dropped by the recorder as the wrong shape -- silently, every frame.
+            "action_samples": np.swapaxes(decoded, 0, 1)[:x],
             "critic_scores": np.broadcast_to(pv[:, -1], (x, pv.shape[0])).copy(),  # (X, N)
             "critic_choice": np.full((x, 1), best, np.float32),  # (X, 1)
         }
+        # How the commitment was carved up, always sent: one float each, and without them a
+        # recording cannot say where the macro-group boundaries were or how much of the winning
+        # chunk was actually committed. Both are per-REPLAN facts (the decision is made once);
+        # they ride per-step because that is the only layout the broker slices and the recorder
+        # records, so a replan's frames repeat them.
+        out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
+        out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
+        if self._mode == "adaptive":
+            # Only adaptive drops part of what the model proposed: `action_samples` above is the
+            # EXECUTED prefix, so the un-executed tail exists nowhere else. In `bon` the executed
+            # chunk IS the full horizon, so this would be a duplicate column.
+            out["action_samples_full"] = np.broadcast_to(
+                np.swapaxes(decoded, 0, 1)[None], (x, decoded.shape[1], decoded.shape[0], decoded.shape[2])
+            ).copy()
         if want_hud:
             out["critic_grid"] = np.broadcast_to(pv, (x, *pv.shape)).copy()  # (X, N, mh)
-            out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
-            out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         return out
+
+    def extra_features(self, num_samples: int | None = None) -> dict:
+        """The per-step arrays this policy sends, for the handshake.
+
+        Nothing is recorded that is not declared here: the client turns exactly these into dataset
+        columns and drops anything else. Without it a value-guided rollout looks completely
+        ordinary on disk -- no candidates, no scores, no record of what the critic chose -- which
+        is what happened to the first `bon8` runs.
+
+        Shapes are PER STEP; the chunk axis is deliberately absent, because the chunk length is
+        adaptive and is read off each reply (see the note on `action_samples` in `infer`).
+        """
+        n = int(num_samples or self._default_samples)
+        declared = {
+            "action_samples": [n, self._robot_action_dim],
+            "critic_scores": [n],
+            "critic_choice": [1],
+            # Where the macro-group boundaries fell, and which group the commitment stopped at.
+            "critic_macro": [1],
+            "critic_best_prefix": [1],
+        }
+        if self._mode == "adaptive":
+            # The full horizon the model proposed, of which only a prefix was executed (see infer).
+            declared["action_samples_full"] = [self._action_horizon, n, self._robot_action_dim]
+        return declared
+
+    @property
+    def robot_action_dim(self) -> int:
+        """The robot-space width recovered at construction, so a caller need not re-probe it
+        (this wrapper has no output transform of its own to probe through)."""
+        return self._robot_action_dim
 
     #: Picks among its own candidates -- see CriticSelectPolicy.selects_candidates.
     selects_candidates = True

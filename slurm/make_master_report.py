@@ -1732,6 +1732,1008 @@ binding constraint=coverage와 정합.</p>
 <code>plot_cmp.py</code>. 결과 JSON 커밋. DEAS 코드 <code>github.com/csmile-1006/DEAS-Isaac-GR00T</code> 정독.</p>""",
 )
 
+# ============================================== 08-20 다태스크 SR 스캔
+entry(
+    "08-20",
+    "task-scan",
+    "다태스크 SR 스캔 — 공식 RoboCasa-365 pi05로 베이스라인 사다리의 무대 선정",
+    "완결",
+    """
+<p class='sub'>베이스라인 사다리(성공-필터 SFT → 가중 SFT → Q-필터 → chunked RL)의 무대를 정하기 위해,
+<b>공식 robocasa365 pi05</b>(pretrain_human300/75000, 워커A의 serve 수정: mean/std norm + env action order)를
+atomic/pick-place 14태스크에서 평가했다. 태스크당 20 trial, seed 3000 고정(동일 장면 관례), 서버 1회 기동 +
+클라이언트 순회. 목적은 <b>SFT baseline 30–60% 밴드</b>(개선 여지 有, 천장 無) 태스크 선별.</p>
+
+<h3>결과 (20 trial/태스크, 단일 시드 — 선별용 잠정치)</h3>
+<table class='num'><tr><th>태스크</th><th>SR</th><th>판정</th></tr>
+<tr><td>CloseDrawer</td><td>0.90</td><td>천장 — 제외</td></tr>
+<tr><td>PickPlaceCounterToSink</td><td>0.75</td><td>높음 — 보조</td></tr>
+<tr><td><b>PickPlaceSinkToCounter</b></td><td><b>0.60</b></td><td><b>선정</b> (밴드 상단)</td></tr>
+<tr><td><b>CoffeeServeMug</b></td><td><b>0.40</b></td><td><b>선정</b></td></tr>
+<tr><td><b>OpenDrawer</b></td><td><b>0.30</b></td><td><b>선정</b> (워커A ~44%와 정합)</td></tr>
+<tr><td><b>TurnOnStove</b></td><td><b>0.20</b></td><td><b>선정</b> (하단)</td></tr>
+<tr><td><b>PickPlaceCounterToMicrowave</b></td><td><b>0.20</b></td><td><b>선정</b> (하단, DEAS 태스크)</td></tr>
+<tr><td>PickPlaceMicrowaveToCounter</td><td>0.15</td><td>예비</td></tr>
+<tr><td>CoffeeSetupMug</td><td>0.10</td><td>예비 (DEAS 태스크)</td></tr>
+<tr><td>TurnOnSinkFaucet</td><td>0.05</td><td>과난 — 제외</td></tr>
+<tr><td>TurnOffStove / StartCoffeeMachine</td><td>0.00</td><td>과난 — 제외</td></tr>
+<tr><td>OpenDoor / CloseDoor</td><td>—</td><td>env 이름 불일치로 실패 (OpenSingleDoor류 재시도 예정)</td></tr></table>
+
+<h3>판정·다음</h3>
+<p><b>선정 5태스크</b>: PickPlaceSinkToCounter(0.60) · CoffeeServeMug(0.40) · OpenDrawer(0.30) ·
+TurnOnStove(0.20) · PickPlaceCounterToMicrowave(0.20) — 0.2~0.6 스펙트럼으로 개선 여지와 신호가 공존.
+DEAS가 쓴 태스크 2종(CoffeeSetupMug·PnP계열)과 겹침도 확보. <b>주의</b>: 단일 시드 n=20이라 선별용이며(±0.2급 CI),
+본 실험은 run-level 다중시드로. <b>다음</b>: 이 5태스크에서 B1(성공-필터 SFT)부터 베이스라인 사다리 착수 —
+데모+롤아웃 수집 → 성공 에피소드 필터 재파인튠 vs SFT. 재현: <code>probes/run_task_scan.sh</code>
+(LD_LIBRARY_PATH unset·PYTHONPATH robocasa 필수 — 둘 다 잡은 사다리 기록 포함), 결과 JSON
+<code>gr1_eval/task_scan/&lt;Task&gt;/results.json</code>.</p>""",
+)
+
+
+def _ksweep_table(lang="ko"):
+    """M4 fixed-k sweep table, recomputed from the per-task result JSONs at build time."""
+    path = "slurm/probes/ksweep_results.json"
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return "<tr><td colspan='8'>" + ("평가 대기" if lang == "ko" else "pending") + "</td></tr>", {}
+    ks = d["ks"]
+    rows = []
+    for t, r in d["per_task"].items():
+        # json stores the integer commitment lengths as string keys; look them up as written
+        sr = {int(kk): v for kk, v in r["sr"].items()}
+        cells = []
+        for k in ks:
+            if k not in sr:
+                cells.append("<td>" + ("재실행 중" if lang == "ko" else "re-running") + "</td>")
+                continue
+            v = sr[k]
+            mark = " class='good'" if k == r["best_k"] else ""
+            cells.append(f"<td{mark}>{v:.2f}</td>")
+        rows.append(f"<tr><td>{t}</td>" + "".join(cells) + f"<td><b>{r['best_k']}</b></td></tr>")
+    return "".join(rows), d
+
+
+def _ksweep_stat(key, lang="ko"):
+    try:
+        with open("slurm/probes/ksweep_results.json") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return "평가 대기" if lang == "ko" else "pending"
+    v = d.get(key)
+    if key == "mean_best_minus_full_chunk":
+        return f"{v:+.3f}"
+    if isinstance(v, list) and len(v) == 2 and isinstance(v[0], int):
+        return f"{v[0]}/{v[1]}"
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v)
+    return str(v)
+
+
+def _cfacnn_rows(lang="ko"):
+    """Neural-CFAC toy table, recomputed from the run JSON at build time."""
+    path = "/scratch/jellyho/acrft/probes/toy_cfac_nn/results.json"
+    try:
+        with open(path) as f:
+            s = json.load(f)["summary"]
+    except (OSError, KeyError, ValueError):
+        msg = "결과 JSON 미발견 — 평가 대기" if lang == "ko" else "results JSON missing — pending"
+        return f"<tr><td colspan='4'>{msg}</td></tr>"
+    label = {
+        "bc_k1": "고정 k=1" if lang == "ko" else "fixed k=1",
+        "bc_k2": "고정 k=2" if lang == "ko" else "fixed k=2",
+        "bc_k4": "고정 k=4 (전체 청크)" if lang == "ko" else "fixed k=4 (full chunk)",
+        "naive_sel": "naive 크리틱 (청크-결과 회귀, obs 조건)"
+        if lang == "ko"
+        else "naive critic (chunk-outcome regression, obs-keyed)",
+        "cfac_neither_sel": "— 둘 다 없음" if lang == "ko" else "— neither ingredient",
+        "cfac_nohist_sel": "— 개입적 합성만" if lang == "ko" else "— interventional composition only",
+        "cfac_nointerv_sel": "— 히스토리만" if lang == "ko" else "— history only",
+        "cfac_sel": "<b>CFAC 크리틱 (선택만, 정책 동결)</b>"
+        if lang == "ko"
+        else "<b>CFAC critic (selection only, policy frozen)</b>",
+        "cfac_joint": "<b>CFAC joint (정책 개선 + 선택)</b>"
+        if lang == "ko"
+        else "<b>CFAC joint (policy improvement + selection)</b>",
+        "bc_oracle": "수제 오라클 κ*" if lang == "ko" else "hand-crafted oracle κ*",
+    }
+    rows = []
+    for arm, name in label.items():
+        m = s[arm]
+
+        def g(k, m=m):
+            return f"{m[k][0]:.3f} ± {m[k][1]:.3f}"
+
+        rows.append(f"<tr><td>{name}</td><td>{g('ret')}</td><td>{g('k_corridor')}</td><td>{g('react_rate')}</td></tr>")
+    return "".join(rows)
+
+
+def _cfacnn_paired(key, lang="ko"):
+    path = "/scratch/jellyho/acrft/probes/toy_cfac_nn/results.json"
+    try:
+        with open(path) as f:
+            v = json.load(f)["summary"]["_paired"][key]
+    except (OSError, KeyError, ValueError):
+        return "평가 대기" if lang == "ko" else "pending"
+    return f"{v[0]:+.3f} ± {v[1]:.3f} ({v[2]}/{v[3]})"
+
+
+def _cfacnn_curric(lang="ko"):
+    """Curriculum variant: mean commitment and return across improvement rounds."""
+    path = "/scratch/jellyho/acrft/probes/toy_cfac_nn_curric/results.json"
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return "<tr><td colspan='4'>" + ("평가 대기 — 실행 중" if lang == "ko" else "pending — running") + "</td></tr>"
+    ps = d["per_seed"]
+    names = {
+        "cfac_sel": "개선 전 (BC 정책)" if lang == "ko" else "before improvement (BC policy)",
+        "cfac_joint_r1": "라운드 1" if lang == "ko" else "round 1",
+        "cfac_joint_r2": "라운드 2" if lang == "ko" else "round 2",
+        "cfac_joint_r3": "라운드 3" if lang == "ko" else "round 3",
+    }
+    import statistics as st
+
+    rows = []
+    for arm, nm in names.items():
+        kc = [p[arm]["k_corridor"] for p in ps]
+        rt = [p[arm]["ret"] for p in ps]
+        rr = [p[arm]["react_rate"] for p in ps]
+        rows.append(
+            f"<tr><td>{nm}</td><td>{st.mean(kc):.3f} ± {st.pstdev(kc):.3f}</td>"
+            f"<td>{st.mean(rt):.3f} ± {st.pstdev(rt):.3f}</td><td>{st.mean(rr):.2f}</td></tr>"
+        )
+    return "".join(rows)
+
+
+def _cfac_rows(lang="ko"):
+    """CFAC toy results table, recomputed from the run's JSON at build time (no hand-copied numbers)."""
+    path = "/scratch/jellyho/acrft/probes/toy_cfac/results.json"
+    try:
+        with open(path) as f:
+            s = json.load(f)["summary"]
+    except (OSError, KeyError, ValueError):
+        msg = (
+            "결과 JSON 미발견 — 평가 대기 (probes/toy_cfac.py 재실행)"
+            if lang == "ko"
+            else "results JSON missing — pending (rerun probes/toy_cfac.py)"
+        )
+        return f"<tr><td colspan='5'>{msg}</td></tr>"
+    label = {
+        "A0_naive": "A0 naive (chunk-회귀 + data-V)" if lang == "ko" else "A0 naive (chunk-regression + data-V)",
+        "A1_hist": "A1 + history",
+        "A2_polboot": "A2 + policy bootstrap",
+        "A3_cfac": "<b>A3 CFAC (+ 합성 백업)</b>" if lang == "ko" else "<b>A3 CFAC (+ composed backup)</b>",
+        "k1": "고정 k=1" if lang == "ko" else "fixed k=1",
+        "k2": "고정 k=2" if lang == "ko" else "fixed k=2",
+        "k3": "고정 k=3" if lang == "ko" else "fixed k=3",
+        "k4": "고정 k=4" if lang == "ko" else "fixed k=4",
+        "oracle": "수제 오라클" if lang == "ko" else "hand-crafted oracle",
+    }
+    rows = []
+    for arm, name in label.items():
+        m = s[arm]
+
+        def g(k, m=m):
+            return f"{m[k][0]:.3f} ± {m[k][1]:.3f}" if m.get(k) else "—"
+
+        belief = g("belief_gap") if arm.startswith("A") else ("해당 없음" if lang == "ko" else "n/a")
+        rows.append(
+            f"<tr><td>{name}</td><td>{g('sr')}</td><td>{g('mean_k_C')}</td><td>{g('mean_k_J')}</td><td>{belief}</td></tr>"
+        )
+    return "".join(rows)
+
+
+# ============================================== 08-20 이론 논문화 + 사전실험 사전 등록
+entry(
+    "08-20",
+    "theory-preexp",
+    "📐 이론 → 논문 → 사전실험 — SMDP 부록(theory.tex)과 사전 등록 M1–M5",
+    "완결",
+    """
+<p class='sub'>밤샘 이론 프로그램을 논문 부록 <code>paper/theory.tex</code>(정리 3 · 명제 3 · 보조정리 2 ·
+따름정리 2, 전부 증명 포함)로 정식화하고, 그 이론의 반증 가능한 예측 다섯을 사전실험 M1–M5로 사전 등록한다.</p>
+
+<p>원천은 <span class='xref' data-eid='chunking-theory'>chunking-theory</span> Part III와
+<span class='xref' data-eid='three-forces'>네 힘</span>이고, intro에도 SMDP 계보 인용과 부록 포인터를 살짝
+반영했다. M1–M5는 예측·프로토콜·기각 조건을 <b>실행 전에 고정</b>하며, 이 포스트는 게시 후 수정하지 않는다.
+결과는 각각 별도 엔트리로 보고한다.</p>
+
+<h3>① 논문 배치 — 허브의 정리가 부록의 어떤 명제가 되었나</h3>
+<table class='num'><tr><th>부록 (theory.tex)</th><th>내용</th><th>원천</th></tr>
+<tr><td>식 (A.1)</td><td>가변 커밋의 <b>SMDP 백업</b> — 커밋 길이 k의 옵션 가치는
+\\(\\sum_{j&lt;k}\\gamma^j r_j + \\gamma^k V(s_k)\\). 길이가 다른 커밋을 공정 비교하는 유일한 부기</td>
+<td>options/SMDP 고전(Sutton–Precup–Singh, Bradtke–Duff) + QC(고정 k)·DEAS(이중 할인)를 그 사례로 위치 지정</td></tr>
+<tr><td>Prop 1</td><td><b>부기 편향</b>: duration-blind 백업(결정당 γ 한 번)의 왜곡 = \\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)] \\ge 0\\>
+— k에 단조 증가, <b>긴 커밋을 결과와 무관하게 부풀린다</b>(k-스텝 도달이 1-스텝 지름길처럼 보임; 성공-보상 규약
+기준 — cost-to-go면 부호 반전, 아래 ⚠️ 정정 참조). ExRL이 온라인에서 식별한 편향의 정량형</td>
+<td>신규 정식화 (ExRL 귀속 명시)</td></tr>
+<tr><td>Prop 2</td><td><b>선택 천장 + winner's curse</b>: BoN 실현값은 frozen 정책의 support 상한을 절대 못 넘고(∀N),
+believed−realized 격차는 \\(\\sigma\\sqrt{2\\ln N}\\)로 성장 — N 스케일링은 자기기만을 키운다</td>
+<td>신규 정식화 (EMaQ의 N-보간 명시)</td></tr>
+<tr><td>Lemma 1·2</td><td>샌드위치(\\(V^\\star_H \\le V^\\star_{ada} \\le V^\\star_1\\)) / <b>full-chunk 목적함수는
+배포값의 tight한 하한</b> — 짧은 prefix만 개선하면 하한이 안 움직여 커밋이 안 자란다 (선택-only 계열이 길이에 갇히는 이유)</td>
+<td>chunking-theory Lemma A·B</td></tr>
+<tr><td>Thm 1–3 + 따름 2</td><td>손실 분해(aleatoric/epistemic) · 결정론 ⇒ 반응성 가치 0 + <b>흡수</b>(적응 이득은 더 나은
+full chunk로 컴파일 가능) · floor 바운드 · <b>curriculum</b>(개선이 진행되면 평균 커밋이 환경이 정한 floor까지 증가 — replan cost 불필요)</td>
+<td>chunking-theory III.2–III.7</td></tr>
+<tr><td>Prop 3</td><td><b>누출은 baseline이 못 지운다</b>: \\(b^Q_k\\)는 k에 증가(DQC Thm 1은 Fact로 인용),
+V는 chunk 비조건이라 차감 불완전, \\(\\gamma^{-k}\\) 정규화가 잔차를 증폭</td>
+<td>chunking-theory III.8 + DQC</td></tr>
+<tr><td>worked example</td><td>복도(커밋 승: 재질의마다 ε 재샘플 위험) vs 분기점(반응 승: 1스텝 뒤 동전 공개) —
+ε∈(0,½)에서 <b>모든 고정 k가 엄격 열등</b>, 상태의존 κ만 둘 다 취함. 복도 마진은 ε→0에서 소멸(curriculum의 축소판), 분기점 이득은 잔존(floor)</td>
+<td>신규</td></tr></table>
+
+<p><b>두 편향의 분리 (핵심 규율).</b> ① <b>부기 편향</b>(Prop 1)은 추정기의 성질 — SMDP 백업 (A.1)이 정확히 제거한다.
+② <b>hindsight 누출</b>(Prop 3)은 데이터 생성 과정의 성질 — 부기를 올바로 해도 남고 k에 따라 자란다.
+전자는 백업으로, 후자는 conservative in-sample 타깃으로 — <b>도구가 다르다</b>. 귀속 규율: 부기 편향의 식별은
+ExRL, 누출 정량화는 DQC — "우리가 처음 짚었다"고 쓰지 않는다
+(<span class='xref' data-eid='adaptive-exec-map'>전수 지도</span>의 주장 강도 경계 그대로).</p>
+
+<h3>② 사전실험 M1–M5 (사전 등록 — 실행 전 고정)</h3>
+<table class='num'><tr><th>#</th><th>이론</th><th>예측</th><th>프로토콜</th><th>기각 조건</th><th>인프라·시기</th></tr>
+<tr><td><b>M1</b> 부기 A/B</td><td>Prop 1</td><td>같은 critic에 duration-blind scorer를 끼우면 k-분포가 길게 밀리고
+분기 있는 태스크에서 SR 하락</td><td>동일 critic·동일 장면, scorer만 \\(\\gamma^k\\) vs \\(\\gamma\\) 교체 —
+k 히스토그램 + 페어드 closed-loop SR (2태스크 × 3시드 × 25)</td><td>두 scorer의 k-분포·SR 구분 불가</td>
+<td>critic ckpt 재사용, scorer는 후처리 — 소규모</td></tr>
+<tr><td><b>M2</b> 누출 곡선</td><td>Prop 3 + DQC</td><td>\\(b_k := \\hat Q^k - \\)(open-loop replay 할인 MC)가 k에 단조 증가;
+\\(b^V_k\\) 차감 후에도 잔차 잔존</td><td>데모 prefix를 open-loop 재생 → 실현 리턴 vs critic 추정, k별 run-level CI
+(에피소드 계층 부트스트랩)</td><td>\\(b_k\\) 평탄 (k 무의존)</td>
+<td>robocasa 상태-리셋 지원 확인 필요 — 불가면 에피소드 시작상태 open-loop으로 대체 (리스크 명기)</td></tr>
+<tr><td><b>M3</b> BoN N-스윕</td><td>Prop 2</td><td>SR(N) 포화, believed(선택 후보의 \\(\\hat Q\\))−realized(실현 리턴)
+격차는 \\(\\sqrt{\\ln N}\\) 꼴로 성장</td><td>N ∈ {1,2,4,8,16,32}, 상위 2태스크 × 3시드 × 25 —
+serve_bon_policy에 \\(\\hat Q\\) 로깅 추가</td><td>realized가 believed와 동행 성장 (격차 무성장)</td>
+<td>serve_bon_policy 있음 — 중규모 롤아웃</td></tr>
+<tr><td><b>M4</b> 고정-k 스윕</td><td>Thm 3 (+ 네 힘 P4)</td><td>best fixed k가 태스크별로 다르고, k=1이 전역최적이
+아니며, SR(k)가 비단조</td><td>공식 pi05, k ∈ {1,2,4,8,H/2,H} × 5태스크 × 20 (선별 시드) —
+<b>best-fixed-k 기준선 확정</b> (워커C 교훈: adaptive의 비교 상대는 항상 best-fixed)</td><td>k=1이 전역최적 (Zhang 힘 부재)</td>
+<td>클라이언트 execute-horizon 옵션 확인/소패치 — M-계열 최우선</td></tr>
+<tr><td><b>M5</b> 커리큘럼 on/off</td><td>curriculum 따름정리 (+ P3)</td><td>정책 개선 arm에서만 평균 선택 k*가
+학습에 따라 증가</td><td>개선 on/off 두 arm(베이스라인 사다리 B2/B4와 결합), 동일 데이터·동일 critic — 평균 k* 궤적</td>
+<td>off arm에서도 증가 (curriculum이 개선의 서명이 아님)</td><td>베이스라인 사다리 뒤</td></tr></table>
+
+<p><b>⚠️ 정정 (2026-08-20 13:40, 게시 30분 뒤 · M1 실행 전 amendment).</b> 사용자 지적(DEHP·AQC는 <b>짧은</b> 쪽
+편향을 보고한다)으로 재검토 — Prop 1의 왜곡 \\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)]\\)의 <b>부호는 착지가치의
+부호를 따른다</b>. 성공-보상(V≥0)이면 long 인플레, cost-to-go(V≤0 — 우리 DEAS-계 critic과 floq의 [−1,0] 정규화가
+여기)이면 <b>short 인플레로 반전</b>. 따라서 M1의 예측을 "길게 밀린다"에서 <b>"V̂ 규약과 부호가 일치하는 단조
+이동"</b>으로 정정한다(기각 조건 "분포 구분 불가"는 불변, 시험 critic의 보상 규약을 결과에 명기). DEHP·AQC의
+short-편향은 별도 기제(재질의의 약우월 [DQC Lemma 8] + 보수적 타깃의 open-loop 분산 벌점 + advantage의 γ^k 스케일
+압축 [AQC의 정규화 동기])로, 올바른 부기 하에서도 작동한다 — 부록 Prop 1 뒤 Remark(sign)로 반영. ExRL 자체의 편향
+방향은 PDF 재확인 전까지 단정하지 않는다.
+<b>추가 (13:55, 사용자 반문 "규약이 아니라 MDP 전역 성질 아닌가").</b> 더 정확한 정식화 — 왜곡의 <b>존재</b>는
+전역이지만(착지가치≠0인 모든 MDP), <b>방향은 MDP의 성질이 아니다</b>: 할인 무한지평에서 보상에 상수 c를 더하면
+최적 정책은 불변인데, 올바른 백업은 모든 k에 c/(1−γ)가 균일히 더해져 순서 불변, blind 점수는
+c(1+γ−γ^k)/(1−γ)로 <b>k-의존</b>이라 c의 부호만으로 선택 방향이 뒤집힌다. 즉 방향은 값 영점(게이지)의 인공물 —
+blind 부기의 커밋 선호는 과제에 대해 잘 정의되지 않는 양이며, 문헌의 상반 보고는 한 결함의 두 부호다.
+부록 Remark를 이 게이지 형태로 강화했다.</p>
+
+<p><b>실행 순서.</b> M4(인프라 최소·정보 최대 — best-fixed 기준선은 이후 모든 adaptive 비교의 전제) → M3(serve_bon_policy
+재사용) → critic 도착 시 M1·M2 → 사다리 뒤 M5. <b>판정 규율</b>: 전부 run-level 다중시드 CI, 분류는 프로그램적으로.
+<span class='xref' data-eid='three-forces'>네 힘</span>의 P1(κ*↔불확실성 반상관)·P2(20k→120k epistemic만 감소)는 병렬
+프로그램이 이미 등록·측정 중이라 여기 중복 등록하지 않는다 — M1–M3은 <b>추정기 쪽</b>, M4–M5는 <b>실행 쪽</b> 검증으로 상보적이다.</p>
+
+<p class='sub'><b>재현.</b> 부록 <code>paper/theory.tex</code> · intro 반영 <code>paper/intro.tex</code> ·
+서지 <code>paper/references.bib</code>(sutton1999options·bradtke1994smdp 추가; exrl은 워크샵 PDF가 미색인이라
+저자란 TODO로 남김 — 채워야 함). 부수 정정: task-scan 엔트리의 date가 미래 시각(14:00)으로 잘못 찍혀 있어
+실제 게시 시각(09:06 KST)으로 바로잡았다.</p>""",
+)
+
+# ============================================== 08-24 CFAC 아주 쉬운 설명
+entry(
+    "08-24",
+    "cfac-easy",
+    "🧵 CFAC을 아주 쉽게 — 종이와 연필로 따라오는 설명",
+    "살아있음",
+    """
+<p class='sub'>사전 지식 없이 읽는 CFAC 설명. 용어는 나오는 자리에서 정의하고, 핵심은 <b>손으로 계산해볼 수
+있는 숫자 두 개</b>로 보인다. 다 읽고 나면 "왜 크리틱을 이렇게 고쳤는가"에 스스로 답할 수 있어야 한다.</p>
+
+<h3>1. 로봇이 실제로 하는 일</h3>
+<p>우리 로봇 정책(VLA)은 한 번 물어보면 <b>행동 여러 개를 한꺼번에</b> 내놓는다. 예를 들어 4개.
+이 묶음을 <b>청크</b>라 부른다. 로봇은 그중 <b>몇 개를 실행할지</b> 정한 뒤, 실행이 끝나면 다시 물어본다.
+그 개수를 <b>k</b>라 하자.</p>
+<ul>
+<li>k가 <b>크면</b>: 한 번 정한 계획을 오래 밀고 간다. 도중에 새 정보가 와도 못 쓴다.</li>
+<li>k가 <b>작으면</b>: 자주 다시 물어본다. 새 정보는 즉시 쓰지만, 물어볼 때마다 정책이 <b>다시 찍는다</b>.</li>
+</ul>
+<p>지금까지는 k를 사람이 상수로 정했다. 우리가 하려는 건 <b>상황마다 로봇이 스스로 k를 고르게</b> 하는 것이다.</p>
+
+<h3>2. 왜 상수로는 안 되는가 — 두 가지 상황</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/toy_cfac_story.png", "the toy task as a storyboard")
+    + """
+<p><b>복도</b>: 갈 방향이 <b>입구에서만</b> 보이고 곧 사라진다. 계속 밀고 가면 맞다. 중간에 다시 물어보면
+정책은 방향을 모른다(관측에 없으니까) → <b>찍는다</b>. 여기서는 <b>k가 커야</b> 한다.</p>
+<p><b>분기점</b>: 어느 쪽이 맞는지가 <b>한 스텝 뒤에</b> 정해진다. 미리 커밋하면 반은 틀린다. 한 스텝만 가고
+다시 물어보면 그때는 답이 보인다. 여기서는 <b>k가 작아야</b> 한다.</p>
+<p>같은 에피소드 안에 둘 다 들어 있으니, <b>어떤 상수도 두 곳을 함께 맞출 수 없다</b>.</p>
+
+<h3>3. 크리틱 = 점수표</h3>
+<p><b>크리틱</b>은 "이 선택을 하면 앞으로 얼마나 잘될까"를 숫자로 매기는 함수다. 우리 크리틱은 청크 하나를
+받아 <b>숫자 4개</b>를 낸다:</p>
+<div class='tblwrap'><table class='num'>
+<tr><th>출력</th><th>뜻</th></tr>
+<tr><td>Q₁</td><td>앞 <b>1개</b>만 실행하고 다시 물어봤을 때의 총점</td></tr>
+<tr><td>Q₂</td><td>앞 <b>2개</b>를 실행하고 다시 물어봤을 때의 총점</td></tr>
+<tr><td>Q₃, Q₄</td><td>같은 식으로 3개, 4개</td></tr>
+</table></div>
+<p>로봇은 이 4개 중 가장 높은 걸 고르면 된다. <b>그러니 문제는 전부 "이 4개를 어떻게 배우느냐"로 옮겨간다.</b></p>
+
+<h3>4. 점수를 배우는 법 — "미래를 빌려온다"</h3>
+<p>총점을 직접 알 수는 없다. 그래서 강화학습은 항상 이렇게 한다: <b>지금 받은 보상 + 그 다음 상태의 점수</b>.
+뒷부분을 "이미 알고 있는 점수"에서 빌려오는 것이다. 우리 경우:</p>
+<div class='tblwrap'><table class='num'>
+<tr><th>배우려는 값</th><th>= 지금 보상 +</th><th>빌려오는 것</th></tr>
+<tr><td>Q₁ (한 개 실행 후 다시 질문)</td><td>r</td><td><b>다시 물어봤을 때의 점수</b></td></tr>
+<tr><td>Q₄ (계속 실행)</td><td>r</td><td><b>같은 청크의 나머지를 계속 실행할 때의 점수</b></td></tr>
+</table></div>
+<p><b>여기서 딱 하나가 문제다.</b> "다음 상태"를 어디서 가져오느냐. 순진한 방법은 <b>그 데모 에피소드에서
+실제로 이어진 다음 상태</b>를 쓰는 것이다. 문제는 그 데모를 만든 사람이 <b>미래를 이미 보고</b> 행동했다는 점이다.</p>
+
+<h3>5. 손으로 계산해보기 — 분기점</h3>
+<p>계산이 쉽도록 할인(감가)은 무시하고, 맞으면 1점 틀리면 0점이라 하자. 분기점은 4스텝인데 <b>첫 스텝은
+점수 없음</b>(아직 답이 안 정해졌으니까), 나머지 3스텝은 답과 맞으면 각각 1점. 정답은 위/아래 반반.</p>
+<p>정책이 첫 질의에서 "위"로 찍은 청크를 냈다고 하자. 두 방식이 Q₄(끝까지 커밋)를 어떻게 계산하는가:</p>
+<div class='tblwrap'><table class='num'>
+<tr><th></th><th>Q₄ = 커밋</th><th>Q₁ = 한 스텝 뒤 다시 질문</th><th>고르는 k</th></tr>
+<tr><td><b>순진한 방식</b></td>
+<td>데모에서 "위,위,위" 뒤에 이어진 상태는 <b>항상 정답이 위</b>였다(사람이 보고 골랐으니까) → 3점</td>
+<td>한 스텝 뒤엔 답이 보이니 정책이 맞게 고른다 → 3점</td>
+<td class='bad'>3 대 3 — 구분 못 함. 동률이면 긴 쪽 → <b>커밋(틀림)</b></td></tr>
+<tr><td><b>CFAC</b></td>
+<td>다음 상태를 <b>다른 에피소드에서 다시 뽑는다</b>. 절반은 정답이 위(3점), 절반은 아래(0점) → 평균 <b>1.5점</b></td>
+<td>마찬가지로 다시 뽑아도, 한 스텝 뒤엔 답이 보이므로 → 3점</td>
+<td class='good'>3 대 1.5 → <b>반응(맞음)</b></td></tr>
+</table></div>
+<p><b>읽는 법.</b> 순진한 크리틱은 "커밋이 좋다"고 잘못 믿는 게 아니라 <b>둘을 구분하지 못한다</b>. 데이터
+안에서는 커밋한 행동이 항상 정답과 맞아떨어졌기 때문이다(사람이 답을 보고 골랐으므로). CFAC은 그 짝을
+<b>일부러 흩뜨려</b>, "그 행동을 눈감고 실행하면 절반은 틀린다"는 사실을 되살린다.</p>
+
+<h3>6. 손으로 계산해보기 — 복도</h3>
+<p>복도는 4스텝 모두 채점되고, 방향은 입구에서만 보인다. 정책은 입구에서 방향을 보고 맞는 청크를 냈다.
+복도가 끝난 뒤 일어나는 일은 두 경우가 같으니 무시하자.</p>
+<div class='tblwrap'><table class='num'>
+<tr><th></th><th>Q₄ = 커밋</th><th>Q₁ = 한 스텝 뒤 다시 질문</th><th>고르는 k</th></tr>
+<tr><td><b>순진한 방식</b></td><td>4스텝 모두 맞음 → 4점</td>
+<td>1점 + <b>데모의 남은 점수</b>를 빌려옴. 데모를 한 사람은 방향을 <b>기억</b>하므로 3점 → 합 4점</td>
+<td class='bad'>4 대 4 — 다시 구분 못 함</td></tr>
+<tr><td><b>CFAC</b></td><td>4점</td>
+<td>1점 + <b>실제로 이어받을 정책</b>의 점수를 빌려옴. 그 정책은 방향을 못 보니 절반은 틀림 → 1.5점 → 합 2.5점</td>
+<td class='good'>4 대 2.5 → <b>커밋(맞음)</b></td></tr>
+</table></div>
+<p><b>읽는 법.</b> 순진한 크리틱은 "다시 물어보면 <b>사람만큼</b> 잘하겠지"라고 가정한다. 실제로 이어받는 건
+사람이 아니라 <b>우리 정책</b>이고, 그 정책은 방향을 못 본다. 이 착각을 고치려면 빌려오는 점수를
+<b>데모가 아니라 정책</b>에서 가져와야 한다.</p>
+
+<h3>6-1. 그럼 "다른 에피소드에서 다시 뽑기"가 전부인가? — 아니다, 병이 둘이다</h3>
+<p>앞의 두 표를 나란히 놓으면 <b>서로 다른 두 가지 속임수</b>가 있었다는 게 보인다.</p>
+<div class='tblwrap'><table class='num'>
+<tr><th>어디</th><th>숨은 정보가 어디 있나</th><th>어떻게 속나</th><th>약</th></tr>
+<tr><td><b>분기점</b></td><td><b>미래</b>에 있다 (아직 안 정해짐)</td>
+<td>데모의 행동이 <b>나중에 공개될 답</b>과 짝지어져 기록됨 → 커밋이 안전해 보임</td>
+<td>다음 상태를 <b>다시 뽑기</b></td></tr>
+<tr><td><b>복도</b></td><td><b>과거</b>에 있다 (아까 보고 지나침)</td>
+<td>다시 물어보면 <b>사람만큼</b> 잘할 거라 가정 → 재질의가 공짜로 보임</td>
+<td>점수를 <b>정책에서</b> 빌려오기 + 크리틱에 <b>히스토리</b> 주기</td></tr>
+</table></div>
+<p><b>왜 복도에는 약이 두 개나 필요한가.</b> "정책에서 빌려오기"만으로는 부족하다. 복도 중간에서 정책이
+아무 방향이나 뽑았다고 하자. 크리틱이 그 청크를 채점해야 하는데, <b>관측만 보면 방향이 안 보인다</b> —
+그러니 잘 뽑은 청크와 엉뚱한 청크를 <b>구별할 수가 없다</b>. 결국 둘 다 높은 점수를 주고, 재질의는 여전히
+공짜로 보인다. 방향을 알아낼 유일한 통로가 <b>방금까지 실행한 행동</b>(히스토리)이다.</p>
+<div class='tblwrap'><table class='num'>
+<tr><th>복도에서 재질의의 점수</th><th>Q₁</th><th>Q₄</th><th>결과</th></tr>
+<tr><td>데모에서 빌려옴 (순진)</td><td>1 + 3 = 4</td><td>4</td><td class='bad'>동률 — 못 고름</td></tr>
+<tr><td>정책에서 빌려오되 <b>히스토리 없음</b></td><td>1 + 3 = 4<br><span class='sub'>엉뚱한 청크인지 판별 불가</span></td><td>4</td><td class='bad'>여전히 동률</td></tr>
+<tr><td>정책에서 빌려오고 <b>히스토리 있음</b></td><td>1 + 1.5 = 2.5<br><span class='sub'>히스토리와 어긋나는 청크는 낮게</span></td><td>4</td><td class='good'>커밋 — 맞음</td></tr>
+</table></div>
+<p>즉 두 약은 <b>같이 있어야</b> 복도를 고친다. 실제로 우리 실험에서도 하나만 빼면 무너졌다 — 개입을 빼면
+−0.76, 히스토리를 빼면 −0.97(6시드, 짝지은 차). 반대로 분기점은 히스토리로는 안 고쳐진다. 거기서 숨은 정보는
+<b>아직 일어나지 않았으므로</b>, 과거를 아무리 잘 봐도 알 수 없기 때문이다.</p>
+
+<h3>6-2. "나머지(tail)"가 무슨 뜻인가</h3>
+<p>Q₄를 배울 때 "한 스텝 실행하고 <b>같은 청크의 나머지</b>를 계속 실행한 값을 빌려온다"고 했다. 청크가
+(a₁, a₂, a₃, a₄)라면 <b>나머지</b>는 (a₂, a₃, a₄)다. 그래서 이런 사슬이 된다:</p>
+<div class='tblwrap'><table class='num'>
+<tr><th>배우는 값</th><th>= 지금 보상 +</th><th>빌려오는 값</th></tr>
+<tr><td>Q₄(a₁,a₂,a₃,a₄)</td><td>a₁의 보상</td><td>Q₃(a₂,a₃,a₄) — 다음 상태에서</td></tr>
+<tr><td>Q₃(a₂,a₃,a₄)</td><td>a₂의 보상</td><td>Q₂(a₃,a₄)</td></tr>
+<tr><td>Q₂(a₃,a₄)</td><td>a₃의 보상</td><td>Q₁(a₄)</td></tr>
+<tr><td>Q₁(a₄)</td><td>a₄의 보상</td><td><b>다시 물어봤을 때</b>의 값 (여기서 사슬이 끝난다)</td></tr>
+</table></div>
+<p>한 칸씩 밀면서 "계속 밀고 갔을 때"를 조립하는 것이다. 그리고 <b>이 사슬의 각 칸에서 다음 상태를 다시
+뽑는다</b>. 사슬 끝(Q₁)에서만 "다시 물어보기"의 값이 들어가는데, 그것을 <b>정책</b>에서 가져오는 것이 두
+번째 약이다.</p>
+
+<h3>7. 그래서 고친 것 세 가지</h3>
+<div class='tblwrap'><table class='num'>
+<tr><th>고침</th><th>한 줄</th><th>어디를 구하나</th></tr>
+<tr><td>다음 상태를 <b>다른 에피소드에서 다시 뽑기</b></td>
+<td>행동과 미래의 짝을 끊어, 눈감고 실행할 때 실제로 마주치는 것을 재현</td><td>분기점</td></tr>
+<tr><td>빌려오는 점수를 <b>정책에서</b> 가져오기</td>
+<td>다시 물어보는 것이 공짜가 아니라는 사실을 값에 반영</td><td>복도</td></tr>
+<tr><td>크리틱에 <b>방금까지 한 행동</b>도 입력</td>
+<td>"무엇을 하던 중이었나"를 알아야 이어받은 행동이 어긋났는지 판별 가능</td><td>복도</td></tr>
+</table></div>
+<p>여기에 하나 더: 길이가 다른 선택을 비교하려면 <b>시간 할인을 길이만큼</b> 매겨야 한다(k스텝 커밋이면
+γ<sup>k</sup>). 안 그러면 "오래 걸린 성공"이 "한 번에 된 성공"처럼 보인다.</p>
+
+<h3>8. 정책은 어떻게 좋아지나</h3>
+<p>크리틱은 점수만 매긴다. 정책이 좋아지려면 <b>좋은 점수를 받은 행동 쪽으로 정책을 당겨야</b> 한다.
+방법은 단순하다 — 데이터에 있는 청크마다 "평균보다 얼마나 좋았나"를 계산해 <b>가중치</b>로 쓰고, 그 가중치로
+정책을 그 청크 쪽으로 학습시킨다. 두 가지가 중요하다:</p>
+<ul>
+<li><b>데이터에 있는 행동에만</b> 가중치를 건다. 크리틱이 한 번도 본 적 없는 행동을 좋다고 우기다 망가지는
+것이 오프라인 학습의 대표적 실패인데, 이 방식은 그 문을 닫는다.</li>
+<li>가중치를 <b>전체 청크(k=4)</b> 점수로 계산한다. 앞 한두 개만 좋게 만들면 "끝까지 밀고 갔을 때의 점수"가
+안 오르고, 그러면 커밋이 영영 길어지지 않는다.</li>
+</ul>
+
+<h3>9. 실제로 로봇이 도는 모습</h3>
+<p>결정할 때마다 <b>정책에 한 번 물어보고</b>(청크 1개), <b>크리틱을 한 번 돌려</b>(점수 4개 동시에),
+가장 높은 점수와 <b>거의 같은 것 중 가장 긴 k</b>를 실행한다. 후보를 여러 개 뽑아 고르는 일은 없다 — 그래서
+느려지지 않는다. 동률일 때 <b>긴 쪽</b>을 고르는 이유는, 짧은 쪽으로 기울면 계속 다시 묻게 되어 매번 새로
+찍고 계획이 끊기기 때문이다.</p>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/cfac_algo.png", "the CFAC algorithm in four panels")
+    + """
+
+<h3>10. 한 문단 요약</h3>
+<p>로봇은 행동 묶음을 받아 <b>몇 개를 실행할지</b> 정해야 하는데, 그 판단을 데이터에서 배우려 하면 두 군데서
+속는다. 하나는 <b>사람이 미래를 보고 고른 행동</b>을 그대로 채점해 "커밋해도 안전하다"고 믿는 것이고, 다른
+하나는 <b>다시 물어보면 사람만큼 잘하겠지</b>라고 믿는 것이다. CFAC은 전자를 <b>다음 상태를 다시 뽑아</b>,
+후자를 <b>정책에서 점수를 빌려와</b> 고친다. 그러면 크리틱이 복도에서는 길게, 분기점에서는 짧게 — <b>스스로</b>
+고른다. 그리고 같은 크리틱으로 정책까지 당겨서, 고르는 것에 그치지 않고 <b>행동 자체가 좋아지게</b> 한다.</p>
+
+<p class='sub'>더 정확한 서술(수식·타깃·의사코드)은 <span class='xref' data-eid='weekly-cfac-0823'>주간 발표
+(2/2)</span>의 "알고리즘 상세" 절에, 이론적 근거는 <span class='xref' data-eid='cfac'>CFAC 제안</span>과
+<span class='xref' data-eid='cfac-nn'>함수근사 검증</span>에 있다. 이 글은 이해가 막히는 지점이 나올 때마다
+갱신한다(살아있는 문서).</p>""",
+)
+
+# ============================================== 08-23 주간 발표 (2/2)
+entry(
+    "08-23",
+    "weekly-cfac-0823",
+    "📽️ 주간 발표 (2/2) — CFAC 제안·toy 검증, M4 기준선, B1 파이프라인",
+    "완결",
+    """
+<p class='sub'>이번 주 발표의 후반부. 앞편(<span class='xref' data-eid='weekly-2026-08-23'>α-Flow·이론·FQL</span>)과
+겹치지 않는 갈래를 다룬다 — <b>커밋 길이를 크리틱이 공정하게 평가하게 만드는 방법(CFAC)</b>, 그 toy 검증,
+실로봇 쪽의 <b>정직한 기준선</b>, 그리고 B1 파이프라인. 전체 덱:
+<a href="./weekly/weekly_2026-08-23_cfac.html" target="_blank">weekly_2026-08-23_cfac.html 열기</a>.</p>
+
+<h3>① 태스크부터 그림으로</h3>
+<p>발표에서 결과 plot만 보여주면 설명이 안 된다. 그래서 자료를 세 겹으로 만들었다 — <b>태스크 스토리보드</b>,
+<b>정보 타임라인</b>, <b>기제 그림</b>(롤아웃·커밋 타임라인·prefix 값 프로파일). 아래가 첫 겹이다.</p>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/toy_cfac_story.png", "the toy task as a storyboard")
+    + """
+<p>복도에서는 표지판이 입구에만 떴다 사라지고(과거 잠재), 분기점에서는 한 스텝 뒤에 신호가 켜진다(미래 잠재).
+아랫줄이 요점이다: <b>어떤 고정 규칙도 두 구간을 함께 맞출 수 없다</b>.</p>
+
+<h3>② 알고리즘 자체 — 무엇을 계산하는가</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/cfac_algo.png", "the CFAC algorithm in four panels")
+    + """
+<p><b>크리틱</b>은 관측+히스토리를 키로 삼아 청크를 causal하게 훑으며 <b>한 번의 forward로 모든 prefix 값</b>을
+낸다(커밋 길이를 전부 채점해도 질의는 한 번). <b>타깃</b>은 naive처럼 자기 후속상태로 부트스트랩하지 않고,
+<b>같은 결정 지점의 다른 에피소드에서 후속상태를 재샘플하고 tail은 고정</b>한다 — 이것이 do(a₁:ₖ) 개입이며
+창 안에서 공개되는 사건을 주변분포로 넣는다. <b>학습</b>은 크리틱 회귀와 <b>full chunk</b>에 대한 advantage
+가중을 번갈아 하고(짧은 prefix만 개선하면 배포값 하한이 안 움직인다), <b>배포</b>는 정책 1회 + 크리틱 1회로
+ε 이내 최장 k를 실행한다.</p>
+
+
+<h3>②-1 알고리즘 상세 — 무엇을 어떤 순서로 계산하는가</h3>
+
+<p><b>준비물.</b> 데이터셋은 데모 궤적 (o_t, a_t, r_t)이다. 여기서 두 가지를 만든다.
+<b>결정 키</b> h_t = (o_t, 마지막 질의 이후 실행한 행동들) — 관측만이 아니라 "지금 무엇을 하던 중이었나"를
+담는다. <b>기록된 청크</b> c_t = (a_t, a_{t+1}, …, a_{t+H−1}) — 그 시점부터의 연속 행동 H개.</p>
+
+<p><b>크리틱의 입출력.</b> Q<sub>φ</sub>(h, c) → 숫자 H개. k번째 숫자는 <b>"c의 앞 k개를 개루프로 실행한 뒤
+다시 질의했을 때의 가치"</b>다. causal 구조라 k번째 출력은 c의 앞 k개만 본다. 한 번의 forward로 H개가
+동시에 나오므로, 커밋 길이 후보를 전부 채점해도 비용은 질의 1회다.</p>
+
+<p><b>타깃 (핵심).</b> 시점 t의 기록된 청크 c에 대해 k별 타깃을 이렇게 만든다.</p>
+<table class='num'><tr><th>k</th><th>타깃</th><th>읽기</th></tr>
+<tr><td>k = 1</td><td>y₁ = r_t + γ · <b>V<sub>π</sub>(h′)</b></td>
+<td>한 스텝 실행하고 <b>다시 질의</b>했을 때의 값. V<sub>π</sub>(h′) = E<sub>c′~π(o′)</sub>[Q(h′, c′, κ)] —
+<b>실제로 이어받을 정책</b>으로 계산한다(데모의 실력이 아니라)</td></tr>
+<tr><td>k ≥ 2</td><td>y_k = r_t + γ · Q<sub>φ̄</sub>(h′, <b>tail(c)</b>, k−1)</td>
+<td>한 스텝 실행하고 <b>같은 청크의 나머지</b>를 계속 실행했을 때의 값. tail(c)는 c를 한 칸 민 것</td></tr></table>
+
+<p><b>여기서 h′를 무엇으로 쓰느냐가 전부다.</b> naive는 <b>그 에피소드 자신의 다음 상태</b>를 쓴다. 그런데
+데모의 tail은 사람이 <b>그 다음 상태에서 공개된 사건을 보고</b> 고른 것이라, 둘을 짝지으면 "tail이 사건과
+맞는" 경우만 학습된다 — 개루프 실행자는 그 사건을 모르는데도 아는 것처럼 값이 매겨진다. CFAC은 h′를
+<b>같은 결정 지점(같은 구간·같은 스텝)의 다른 에피소드에서 재샘플</b>하고 tail은 그대로 둔다. 그러면 사건이
+주변분포로 들어가 <b>tail이 맞는 경우와 어긋나는 경우가 섞여</b> 평균된다. 이것이 Q(h, do(a₁:ₖ))이다.</p>
+
+<p><b>왜 두 성분이 각각 필요한지, 한 문장씩.</b></p>
+<ul>
+<li><b>히스토리 조건화는 복도를 구한다.</b> 복도 중간에서 재질의하면 정책은 방향을 모르고 아무거나 낸다.
+크리틱이 h′(방금까지 어느 방향으로 가고 있었는지)를 보면 그 무작위 청크가 <b>어긋난다</b>는 것을 알아채
+V<sub>π</sub>(h′)를 낮게 준다 → y₁이 낮아지고 <b>긴 커밋이 이긴다</b>. 관측만 보면 그 판별이 불가능해
+재질의가 멀쩡해 보인다.</li>
+<li><b>개입적 재샘플은 분기점을 구한다.</b> 분기점에서 긴 커밋의 값 y_k(k≥2)는 tail을 <b>여러 사건 실현</b>에
+대해 채점한 평균이 되어 내려간다. 반면 y₁은 "한 스텝 뒤 <b>사건이 보이는</b> 상태에서 정책이 다시 고른다"는
+값이라 높다 → <b>짧은 커밋이 이긴다</b>.</li>
+</ul>
+
+<p><b>정책 업데이트.</b> 크리틱이 고정된 동안, 기록된 청크에 가중치를 걸어 정책을 그쪽으로 민다:
+w = exp([Q(h, c, H) − V(h)] / β), 손실은 w · ‖π<sub>θ</sub>(o) − c‖². 가중치를 <b>full chunk(k=H)</b> 값으로
+계산하는 것이 중요하다 — 짧은 prefix만 개선하면 배포값의 하한(Lemma B)이 안 올라가 커밋이 자라지 않는다.
+그리고 <b>데이터에 있는 청크에만</b> 가중치를 걸므로, 크리틱이 한 번도 채점해본 적 없는 행동을 최대화하다
+발산하는 오프라인 RL의 전형적 실패를 피한다.</p>
+
+<p><b>배포.</b> 결정마다 정책에 한 번 질의해 청크 하나를 받고, 크리틱 한 번으로 prefix 값 H개를 받은 뒤,
+최대값의 ε 이내인 것 중 <b>가장 긴 k</b>를 실행한다. 후보를 여러 개 뽑아 고르는 일(best-of-N)은 없다.
+동률을 <b>긴 쪽</b>으로 깨는 이유: 짧은 쪽으로 깨면 계속 재질의하게 되어 정책 오차가 재주입되고, 청크가
+운반하던 계획이 매번 버려진다.</p>
+
+<p><b>의사코드.</b></p>
+<pre style="background:#f6f5f0;padding:.9rem 1rem;border-radius:8px;font-size:.82rem;overflow-x:auto;line-height:1.5">
+# 학습 (오프라인, 환경 상호작용 없음)
+repeat:
+    # (1) 크리틱
+    for batch of transitions (h, c, r, h'_own) sampled from the dataset:
+        h' = resample_successor(same decision point as h)   # 개입: 자기 후속상태 대신
+        c' ~ pi(o')                                          # 이어받을 정책의 청크
+        V  = Q_target(h', c')[kappa(h', c')]                 # 재질의의 정직한 가격
+        y[1] = r + gamma * V
+        for k in 2..H:
+            y[k] = r + gamma * Q_target(h', shift(c))[k-1]   # 같은 tail을 재샘플된 후속에 대고
+        minimize || Q(h, c) - y ||^2
+
+    # (2) 정책 (full chunk에 대해)
+    A = Q(h, c)[H] - E_{c'~pi(o)}[ Q(h, c')[H] ]
+    w = exp(clip(A / beta))
+    minimize w * || pi(o) - c ||^2       # 기록된 청크 쪽으로
+
+# 배포
+at each decision:
+    c = pi(o)                 # 정책 질의 1회
+    q = Q(h, c)               # 크리틱 pass 1회 → prefix 값 H개
+    k = max{ k : q[k] >= max(q) - eps }
+    execute c[1..k], then query again
+</pre>
+
+<h3>③ 기제 — 두 크리틱이 같은 장면에서 무엇을 했나</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/toy_cfac_viz.png", "matched rollouts and prefix-value profiles")
+    + """
+<p>아래 두 패널이 핵심이다. <b>같은 상태·같은 청크</b>를 두 크리틱에게 물었을 때, 복도 입구에서는 naive의
+값이 k에 따라 <b>내려가고</b>(짧게 끊자) CFAC은 <b>올라간다</b>(끝까지 가자). 분기점 입구에서는 반대로 naive가
+더 긴 커밋에 정점을 두고 CFAC이 k=1을 고른다. 이 차이가 전체 성능 차이의 기제다.</p>
+
+<h3>④ 결과와 실로봇 기준선</h3>
+<p>연속 환경 6시드에서 CFAC−naive <b>+1.86 (6/6)</b>, 성분을 하나씩 빼면 −0.76(개입)·−0.97(히스토리),
+joint는 <b>수제 오라클과 동률</b>(+0.037, 5/6). 커리큘럼은 변형 환경에서 평균 커밋 3.04→3.49(+0.446, 6/6).
+실로봇 쪽 <span class='xref' data-eid='m4-ksweep'>M4</span>는 최적 상수가 태스크마다 8/12/16으로 갈리고,
+<b>최고 상수가 기본값 대비 평균 +0.14</b>임을 확정했다 — 앞으로 적응 비교는 여기에 대고 잰다.</p>
+
+<h3>⑤ 이번 주에 틀린 것들</h3>
+<p>발표에서 가장 값진 슬라이드다. <b>빌려온 밴드</b>(다른 비교의 시드 SD를 자로 씀 → 실재 효과를 잡음으로 판정),
+<b>제출본을 건너뛴 비교</b>(내가 게시한 교차분석이 이 오류로 정정됨), <b>검증하지 않은 자동 표</b>(키 타입
+불일치로 30칸이 빈 채 게시). 셋 다 결론을 바꿨고, 그래서 논문 method에 <b>평가 프로토콜</b> 절로 못박았다:
+기준선은 최고 상수, 모든 arm은 한 제출본 안, 밴드는 그 비교 자신의 시드에서.</p>
+
+<p class='sub'><b>재현.</b> 그림 <code>probes/toy_cfac_story_fig.py</code> ·
+<code>toy_cfac_setup_fig.py</code> · <code>toy_cfac_viz.py</code> · <code>toy_cfac_nn_fig.py</code> ·
+<code>ksweep_collect.py</code>, 덱 조립 <code>slurm/make_weekly_deck.py</code>(그림은 파일에서, 수치는 결과
+JSON에서 재계산 — 손으로 옮긴 숫자 없음).</p>""",
+)
+
+# ============================================== 08-23 적응 마진 = 흡수되지 않은 정책 오차
+entry(
+    "08-23",
+    "adapt-margin-epis",
+    "🧩 적응 마진은 남아 있는 정책 오차다 — 워커C의 네 쌍이 우리 분해 정리를 따른다 (ρ = −1.0)",
+    "완결",
+    """
+<div class='callout warn'><span class='k'>정정 (2026-08-23 18:00, 게시 2시간 뒤)</span>
+<p><b>이 엔트리의 근거가 약해졌다. 두 가지가 동시에 드러났다.</b></p>
+<p><b>(1) 내가 인용한 시드 밴드가 틀렸다.</b> 아래 "개별 마진은 시드 밴드(SD 0.092–0.127) 안"이라고 썼는데,
+그 밴드는 <span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>이 <b>다른 비교</b>(HL-Gauss 대 기준선)에서
+잰 것이다. <span class='xref' data-eid='wc-r-0823-power'>0823_power</span>가 적응 대 고정2 <b>자신의</b> 시드 SD를
+재니 0.26–0.29로 두세 배다. 즉 "밴드 안"은 효과가 작다는 뜻이 아니라 <b>n=3에서는 검정력이 없었다</b>는 뜻이었다.
+시드 SD는 비교마다 다르며, 한 라운드의 SD를 다른 비교의 자로 쓰면 실재하는 효과를 잡음으로 판정하게 된다 —
+내가 그 오류를 그대로 반복했다.</p>
+<p><b>(2) 순서 자체가 8시드에서 뒤집힌다.</b> 같은 두 task를 시드 8개로 다시 재니 task3이 <b>성공률도 더 높고
+(0.621 대 0.552) 마진도 더 크다(+0.246 대 +0.131)</b>. 아래 표의 ρ = −1.0은 n=3 추정치들로 계산됐고, 그 값들은
+제출본을 건너뛰며 움직였다. 다시 말해 <b>이 브랜치가 반복해 걸려온 바로 그 함정(제출본을 건너뛴 비교)에
+내 분석도 걸렸다</b>. 네 task를 <b>한 제출본에서 충분한 시드로</b> 잰 데이터는 아직 아무도 갖고 있지 않다.</p>
+<p><b>살아남는 것.</b> 분해 정리 자체(Δ_react + Δ_epis)와 결정론 극한의 예측은 그대로다 — 다만 그 검정은
+<b>task 간 순서가 아니라 P-abs</b>(같은 run 안에서 학습이 진행될수록 마진이 줄어드는가)여야 한다. 그것은 한
+비교·한 제출본 안이라 위 두 함정을 모두 피한다. 그리고 <span class='xref' data-eid='wc-r-0823-power'>0823_power</span>가
+task3에서 +0.246, 8/8, p=0.004를 얻었으므로 <b>"적응이 최고 상수를 이긴다"가 처음으로 유의하게 성립했다</b> —
+그쪽의 "비긴다"도 함께 정정됐다. 아래 본문은 게시 시점 그대로 두고 이 블록만 덧붙인다.</p></div>
+
+<p class='sub'>워커C가 네 task에서 <b>전체 고정-길이 곡선</b>을 한 제출본 안에서 재면서, "적응이 최고 상수를
+이기는가"에 대한 깨끗한 쌍 넷이 처음으로 생겼다. 그 마진들이 우리
+<span class='xref' data-eid='chunking-theory'>분해 정리</span>가 예측하는 순서를 <b>정확히</b> 따른다.
+그리고 GPU를 새로 쓰지 않고 검정할 수 있는 예측 하나를 등록한다.</p>
+
+<p><b>배경.</b> 이틀 동안 그쪽에서 세 가지 기제 설명이 연달아 실패했다 — 선택 score의 짧은 편향
+(<span class='xref' data-eid='wc-r-0822-score'>0822_score</span>), "적응성은 방법의 사실"
+(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>), headroom
+(<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span>). 그쪽은 "네 번째 서사를 만들지 말고 모른다고
+쓴다"는 자기 규칙대로 미해결로 보고했다. 우리가 여기서 내놓는 것은 새 서사가 아니라 <b>8월 20일에 이미 게시한
+정리에서 나오는 예측</b>이며, 그래서 사후 적합이 아니다.</p>
+
+<h3>① 정리가 말하는 것</h3>
+<p>적응 실행이 살 수 있는 값은 둘로 갈린다(<span class='xref' data-eid='chunking-theory'>Theorem 1</span>):</p>
+<p style='text-align:center'>V<sup>π,κ</sup> − V<sup>π,H</sup> ≤ <b>Δ<sub>react</sub></b> (환경이 정한 floor) +
+<b>Δ<sub>epis</sub>(π)</b> (정책 오차, 개선이 흡수)</p>
+<p>그리고 Theorem 2: <b>결정론·완전관측이면 Δ<sub>react</sub> = 0</b>이다. cube-double은 상태 기반이고 전이가
+결정론적이므로 floor 항이 사라진다. 남는 것은 Δ<sub>epis</sub>뿐이고, 그것은 <b>정책이 나쁠수록 크다</b>.
+그러므로 예측: <b>적응 마진은 그 task에서 정책 자신의 성능 수준과 반상관해야 한다</b> — 곡선의 뾰족함
+(headroom)이 아니라.</p>
+
+<h3>② 네 쌍이 그 순서를 따른다</h3>
+<table class='num'><tr><th>task</th><th>적응 arm 성공률</th><th>최고 상수</th><th>마진</th></tr>
+<tr><td>task5</td><td>0.864</td><td>h=3 (0.878)</td><td>−0.013</td></tr>
+<tr><td>task1</td><td>0.860</td><td>h=2 (0.858)</td><td>+0.002</td></tr>
+<tr><td>task2</td><td>0.624</td><td>h=2 (0.580)</td><td>+0.044</td></tr>
+<tr><td>task3</td><td>0.596</td><td>h=2 (0.451)</td><td>+0.144</td></tr></table>
+<p>성공률 순서와 마진 순서가 <b>완전히 반대</b>다(6/6 쌍 불일치, Spearman ρ = −1.0). 방향을 미리 고정한
+단측 검정으로 보면 무작위 순서 귀무가설 아래 p = 1/24 ≈ 0.042다. 게다가 이 예측은
+<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span>의 <b>두 쌍만 있을 때</b> 말해졌고, 다른 제출본에서
+나온 새 두 쌍(task2·task5,
+<span class='xref' data-eid='wc-r-0823-curve25'>0823_curve25</span>)이 예측된 자리에 들어왔다.</p>
+
+<p><b>주장 강도 (중요).</b> 그쪽 단서 그대로, <b>개별 마진은 시드 밴드(SD 0.092–0.127) 안</b>이라 하나하나는
+"차이 없음"과 구분되지 않는다. 그러므로 우리 주장은 <b>크기가 아니라 순서</b>에 대한 것이고, n=4이며 한 도메인이다.
+이것은 "적응이 이긴다"를 되살리지 않는다 — 오히려 그쪽의 정직한 요약("어느 상수가 최적인지 몰라도 그것과
+비긴다")이 <b>왜 그래야 하는지</b>를 설명한다.</p>
+
+<h3>③ 등록하는 예측 — GPU 0장으로 검정 가능</h3>
+<p><b>P-abs.</b> 같은 run 안에서 <b>학습이 진행될수록 마진이 줄어야 한다</b>. 그쪽은 이미 0.8M/0.9M/1.0M
+체크포인트를 저장하고 평균을 낸다. 그 셋을 <b>평균 내지 말고 따로</b> 보면, 같은 제출본·같은 시드에서
+Δ<sub>epis</sub>가 줄어드는 궤적을 그대로 볼 수 있다. <b>통과</b>: 마진(0.8M) &gt; 마진(1.0M)이 다수 task에서.
+<b>기각</b>: 순서가 없거나 반대. 새 롤아웃이 필요 없고 기존 CSV로 계산된다.</p>
+<p><b>P-react.</b> 우리 도메인(RoboCasa, 이미지 관측·접촉 확률성)에서는 Δ<sub>react</sub> &gt; 0이므로
+<b>정책이 좋아져도 마진이 0으로 수렴하지 않아야</b> 한다. 이것이 우리 M6·M7의 판정 대상이고, 두 도메인의
+대조가 floor 항의 존재를 직접 재는 방법이 된다. 우리 <span class='xref' data-eid='m4-ksweep'>M4</span>가
+VLA에서 이미 채운 필요조건(최적 상수가 8/12/16로 갈리고 미리 알 수 없다)이 그 전제다.</p>
+
+<p class='sub'><b>왜 이게 유용한가.</b> 세 번 실패한 기제 설명들은 전부 <b>선택 규칙</b>이나 <b>곡선 모양</b>에서
+원인을 찾았다. 분해 정리는 원인을 <b>정책의 미숙함</b>에 놓는다 — 그래서 "적응이 어떤 task에서 값을 하는가"가
+task의 성질이 아니라 <b>그 task에서 정책이 얼마나 덜 배웠는가</b>의 문제가 된다. 이는 우리 커리큘럼 따름정리
+(개선이 진행되면 적응 이득이 흡수되고 평균 커밋이 자란다)와 같은 진술의 두 얼굴이다.</p>""",
+)
+
+# ============================================== 08-22 M4 고정-k 스윕
+entry(
+    "08-22",
+    "m4-ksweep",
+    "📏 M4 고정-k 스윕 — 어느 고정 길이와 비교하느냐가 답을 정한다 (RoboCasa 5태스크 × 6길이)",
+    "완결",
+    """
+<p class='sub'>사전등록 M4(<span class='xref' data-eid='theory-preexp'>사전등록 포스트</span>) 실행 결과.
+공식 RoboCasa-365 pi05를 5태스크 × 실행길이 k∈{1,2,4,8,12,16}(청크 H=16)에서 평가했다. 목적은 두 가지 —
+① 상태의존 커밋이 원리적으로 필요한지의 <b>필요조건</b>(고정 k가 태스크마다 다른가, 비단조인가) 확인,
+② 이후 모든 adaptive 비교의 <b>정직한 기준선(best-fixed-k)</b> 확정.</p>
+
+<p><b>왜 이 실험이 먼저인가.</b> adaptive chunking 논문들이 흔히 <b>기본값 k=H</b>(전체 청크)와 비교해
+이득을 주장한다. 그런데 <b>더 나은 상수</b>만으로도 상당 부분이 설명된다면 그 이득은 방법의 것이 아니다.
+워커C가 OGBench에서 얻은 교훈(<span class='xref' data-eid='wc-r-0819-nonmarkov'>0819_nonmarkov</span>:
+"어느 고정 길이와 비교하느냐가 답을 정한다")을 우리 VLA 스택에서 <b>정량화</b>한다.</p>
+
+<h3>설정</h3>
+<p>체크포인트 <code>robocasa365_official/pi05_pretrain_human300/multitask_learning/75000</code>(워커A의 serve 수정),
+클라이언트 <code>--replan-steps k</code>로 청크의 앞 k개만 실행 후 재질의. 태스크당 20 trial, seed 3000 고정
+(<span class='xref' data-eid='task-scan'>태스크 스캔</span>과 동일 장면 관례). k별로 잡을 분리(=서버 1회 기동,
+k=1 arm이 추론 호출 16배라 벽시계를 지배). 등록 격자의 H/2가 8과 겹쳐 12로 대체.</p>
+
+<h3>결과</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/ksweep.png", "fixed-k sweep on five RoboCasa tasks")
+    + """
+<table class='num'><tr><th>태스크</th><th>k=1</th><th>k=2</th><th>k=4</th><th>k=8</th><th>k=12</th><th>k=16 (전체 청크)</th><th>best k</th></tr>
+"""
+    + _ksweep_table("ko")[0]
+    + """</table>
+<p class='sub'>초록 칸이 그 태스크의 best k. 오차막대는 이항 표준오차(n=20, 단일 시드) — 선별 등급이다.</p>
+
+<h3>판정</h3>
+<p><b>① k=1은 전역최적이 아니다 (기각 조건 미충족).</b> 매 스텝 재질의는 """
+    + _ksweep_stat("k1_is_worst", "ko")
+    + """
+태스크에서 <b>최악</b>이고, CoffeeServeMug는 0.40 → <b>0.00</b>, PickPlaceSinkToCounter는 0.55 → 0.15로
+붕괴한다. 반응성이 공짜라는 직관은 실제 VLA에서 틀렸다 — 잦은 재질의는 오차를 재주입한다(Zhang 힘).</p>
+<p><b>② 최적 고정 길이가 태스크마다 다르다.</b> best k ∈ {"""
+    + _ksweep_stat("distinct_best_k", "ko")
+    + """}로 갈리고,
+"""
+    + _ksweep_stat("interior_peaks", "ko")
+    + """ 태스크에서 <b>내부 정점</b>(비단조)이다. 단일 상수로는 어느 태스크에서든
+손해를 본다 — 상태의존 κ의 <b>필요조건</b>이 성립한다.</p>
+<p><b>③ 기준선 교체가 시급하다.</b> best-fixed-k는 기본값 k=16 대비 평균 <b>"""
+    + _ksweep_stat("mean_best_minus_full_chunk", "ko")
+    + """</b>
+(태스크별 +0.20 / 0.00 / +0.10 / +0.25 / +0.15). 즉 <b>상수 하나만 바꿔도 평균 +0.14</b>가 나온다.
+앞으로 우리의 adaptive/CFAC 결과는 <b>반드시 best-fixed-k와 비교</b>하며, k=16 대비 수치는 보고하지 않는다.
+이 표가 그 기준선이다.</p>
+
+<h3>한계 (정직하게)</h3>
+<p>칸마다 <b>단일 시드 n=20</b>이라 이항 SE가 0.5 근처에서 ±0.11이다. 따라서 <b>개별 칸의 0.1급 차이는
+미해결</b>이고, 태스크별 best k의 정확한 값도 확정이 아니다. 확정적인 것은 5태스크에 걸쳐 <b>일관된 패턴</b>
+(k=1 최악, 내부 정점 다수, best k 불일치)이다. 워커C의 폭 실측(<span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>:
+짝지은 차의 시드 SD 0.092–0.127)을 우리 판정에도 적용해, 본 방법 평가는 <b>다중 시드</b>로 간다.
+그리고 k=4 × PickPlaceCounterToMicrowave 한 칸은 서버 웹소켓 끊김(인프라)으로 처음에 실패했고,
+재실행해 0.05로 채워져 <b>격자 30칸이 모두 찼다</b>(결론은 바뀌지 않는다 — 그 태스크의 best는 여전히 k=12).</p>
+
+<p><b>추가 한계 (2026-08-22, 워커C <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>를 읽고
+자기 교정).</b> 우리 고정-k arm은 <b>실행 시점에만</b> 길이를 고정한다 — 체크포인트는 전체 청크 실행을 전제로
+학습됐다. 워커C는 같은 질문을 더 깨끗하게 설계했다: 후보 집합을 하나로 줄여(<code>prefix_candidates</code>)
+<b>고정 arm이 적응 arm과 같은 코드 경로를 지나고 actor까지 그 길이로 학습</b>되게 했다. 실행에서만 고정하면
+"적응하도록 학습된 정책을 강제로 못 하게 한" 불일치를 재게 되고, 그건 다른 질문이다(그쪽 0819_soft가 그
+효과를 +0.284/+0.269로 따로 쟀다). 공식 체크포인트는 재학습이 불가능해 우리 M4에서는 불가피했지만,
+<b>우리 방법을 평가할 때는 후보 집합 제한 방식</b>으로 고정 기준선을 만들어야 공정하다. 이 한계는 M4의 결론
+(best-fixed-k가 태스크마다 다르다·k=1 최악)에는 영향이 적지만, 절대 수치를 "고정 정책의 최선"으로 읽으면
+안 된다는 뜻이다.</p>
+
+<p><b>상보적 결과, 그리고 그 범위 (2026-08-23 재갱신).</b> 워커C는 OGBench에서 같은 질문(적응이 최고 고정을
+넘는가)을 연속 라운드로 파고 있고, 답이 세 번 움직였다: <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>
+(task2 +0.233, 3/3 — 적응이 이긴다) → <span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>(다섯 task로
+넓히니 task1·task2만, 나머지는 시드 폭 안) → <span class='xref' data-eid='wc-r-0823-nothing'>0823_nothing</span>
+(그 "나머지" 중 task3의 적응 셀이 <b>재현되지 않음</b>: 같은 설정·같은 시드에서 0.433 → 0.636). 재현 격차
++0.202는 판정 근거였던 −0.020의 <b>열 배</b>라, task3의 null은 판정이 아니라 제출본 잡음이었다.</p>
+
+<p><b>지금 확정적으로 말할 수 있는 것</b>은 좁다. 적응이 <b>어떤 task에서는 최고 고정을 크게 넘고</b>(task2 +0.233
+재현됨, task1 +0.156), 다른 task들에서의 상태는 <b>미해결</b>이다("이득이 없다"가 아니라 "근거가 없다").
+우리 M4가 채운 <b>필요조건</b>(어떤 상수도 다 못 맞춘다, k=1은 4/5에서 최악)은 그와 독립이므로 영향받지 않는다.</p>
+
+<p><b>우리 프로토콜에 대한 교훈 (자기 점검).</b> 세 번의 수정 모두 원인이 같다 — <b>제출본을 건너뛴 비교</b>.
+그쪽에서는 제출본 간 격차(+0.202)가 시드 폭(0.092–0.127)을 압도하는데, 그쪽 제출본은 <b>재학습</b>을 포함하므로
+초기화·데이터 순서 잡음이 통째로 들어간다. 우리 M4는 <b>같은 체크포인트·같은 장면 시드</b>로 평가만 하므로 그
+성분이 없지만, k별로 <b>잡을 나눠</b> 돌렸으니 서버 프로세스 차이(플로우 샘플링 난수 등)만큼의 노출은 있다.
+따라서 앞으로 <b>본 방법 판정은 한 제출본 안에서 arm을 나란히</b> 돌리고(B1의 success/all 쌍이 그 형태),
+제출본을 건너뛴 수치는 참고로만 쓴다.</p>
+
+<p class='sub'><b>재현.</b> <code>probes/run_ksweep.sh K [Task,...]</code>(K별 sbatch 6건 + 실패 칸 재실행),
+집계·figure <code>probes/ksweep_collect.py</code>, 결과 JSON <code>probes/ksweep_results.json</code> 커밋.
+<b>다음</b>: M3(BoN N-스윕, serve_bon_policy 재사용) → 크리틱 도착 후 M1·M2 → CFAC의 RoboCasa 이식(M6·M7).</p>""",
+)
+
+# ============================================== 08-21 CFAC 함수근사 검증
+entry(
+    "08-21",
+    "cfac-nn",
+    "🔬 CFAC를 실제로 돌려봤다 — 함수근사에서 작동하고, 합성만으로는 부족했다",
+    "완결",
+    """
+<p class='sub'>tabular 기제 증명(<span class='xref' data-eid='cfac'>CFAC 제안</span>)을 <b>실제 알고리즘</b>으로
+구현해 연속 환경에서 검증했다 — 신경 per-prefix 크리틱, 모델 없는 per-step TD, 정책-기대 부트스트랩,
+AWR full-chunk 개선, lexicographic selector. 결과: 작동한다(오라클 수준 도달). 그리고 <b>구현하면서 이론이
+한 번 틀렸다</b> — "합성 백업"만으로는 부족하고 <b>개입적(interventional) 짝짓기</b>가 필요하다.</p>
+
+<p><b>왜.</b> 앞 포스트의 toy는 tabular 전수 열거 + 경험 모델이었다. 논문이 주장하려면 실제로 배포할 형태
+(신경망·모델 없음·정책 개선 포함)에서 작동해야 한다. 환경도 열거 불가능한 <b>연속</b>으로 바꿨다.</p>
+
+<h3>① 구현하다 발견한 것 — 이론의 정정</h3>
+<p>첫 구현은 합성 TD를 데이터 그대로 썼다: <code>Q_k(h_t, c) ← r_t + γ Q_{k-1}(s_{t+1}^데이터, c_{2:k})</code>.
+그런데 <b>분기점 과커밋이 안 고쳐졌다</b>. 원인: 데모의 후속상태 s_{t+1}에는 그 데모가 <b>알고 고른</b> tail과
+짝지어진 사건이 들어 있다. 부기를 합성해도 tail↔사건 상관이 그대로라 교란이 살아남는다. 데이터 안에는
+"눈감고 고른 tail"이 없으니 크리틱은 그것이 나쁘다고 배울 자료가 없다.</p>
+<p>tabular 판이 작동한 진짜 이유는 <b>모델로 후속상태를 주변화</b>하면서 후보 tail은 고정한 것이었다 —
+즉 <b>do(c) 개입</b>. 모델 없이 같은 것을 하는 방법: <b>같은 결정 지점의 다른 에피소드에서 후속상태를
+재샘플</b>하고, 평가할 tail과 자기 실행 히스토리는 고정한다. 창 안에서 공개되는 외생 사건이 주변분포로
+들어가고, 후보 tail이 그 각각에 대해 채점된다.</p>
+<p><b>정정된 조항</b> (부록 A.6 Definition 반영 예정): "창-내 가치를 <b>합성</b>으로 만든다" →
+"<b>tail과 실현된 후속상태가 조건부 독립이 되도록 개입적으로 합성한다</b>". DQC의 open-loop consistency
+가정이 왜 필요한지도 같은 언어로 설명된다 — OLC 데이터에서는 그 독립이 공짜로 성립한다.</p>
+
+<h3>② 환경 · 알고리즘 · 사전등록</h3>
+<p><b>PlanReach</b>(연속): 3구간 × 4스텝, H=4, 행동 a∈R², 구간마다 목표 방향 g가 단위원에서 균등 추출.
+<b>복도</b>(구간 0·2) — g는 입구 관측에만 있고 이후 가려짐, 매 스텝 채점(과거 잠재: 커밋이 계획을 운반).
+<b>분기점</b>(구간 1) — g는 첫 스텝 <b>이후</b>에만 공개, 스텝 1–3 채점(미래 잠재: 반응이 정답).
+보상 r=exp(−2‖a−g‖²), γ=0.95. 데모는 g를 <b>기억</b>하며 노이즈 0.25로 실행 — non-Markov 데이터.
+정책은 Markov 청크 정책(VLA 대역), 전부 오프라인.</p>
+<p><b>2×2 factorial</b>(히스토리 조건화 × 개입적 합성) + naive(청크-결과 회귀) + 고정 k + 오라클 + joint,
+6시드 × 데모 800에피소드 × 평가 300에피소드. 사전등록: V1 CFAC>naive, V2 joint>선택만,
+V3 커리큘럼(개선 라운드마다 복도 커밋 증가), V4 naive 분기점 과커밋. 기각 조건 코드 docstring에 고정.</p>
+
+<h3>③ 결과</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac_nn.png",
+        "neural CFAC toy: deployment return, and what each ingredient buys",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>배포 할인수익</th><th>평균 k @ 복도 입구 (정답 4)</th><th>공개 후 재질의 비율 (정답 1.0)</th></tr>
+"""
+    + _cfacnn_rows("ko")
+    + """</table>
+
+<p><b>짝지은 판정</b> (6시드, 시드별 차의 평균 ± SD, 승수):
+CFAC−naive <b>"""
+    + _cfacnn_paired("cfac_sel-naive_sel", "ko")
+    + """</b> ·
+CFAC−(개입 없음) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nointerv_sel", "ko")
+    + """</b> ·
+CFAC−(히스토리 없음) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nohist_sel", "ko")
+    + """</b> ·
+joint−선택만 <b>"""
+    + _cfacnn_paired("cfac_joint-cfac_sel", "ko")
+    + """</b> ·
+joint−오라클 <b>"""
+    + _cfacnn_paired("cfac_joint-bc_oracle", "ko")
+    + """</b>.</p>
+
+<p><b>읽기.</b> ① <b>V1·V4 확정</b>: naive는 분기점 반응이 0.70±0.30로 흔들리고 수익 5.12, CFAC는 반응 1.00,
+수익 6.98 (+1.86, 6/6). ② <b>두 성분 모두 필요</b>: 하나만 빼도 −0.76(개입) / −0.97(히스토리)이고 둘 다 빼면
+5.74 — 특히 <b>편차가 커진다</b>(반응률 SD 0.30~0.43): 성분이 빠지면 시드에 따라 반응하기도 안 하기도 한다.
+③ <b>V2 확정하되 작다</b>: joint−선택만 +0.124(6/6) — 이 환경은 오라클 천장이 낮아 여지가 적다.
+④ <b>joint가 수제 오라클과 동률</b>(+0.037, 5/6): 학습된 κ가 손으로 짠 규칙을 재현했다.</p>
+
+<h3>④ V3(커리큘럼)은 이 환경에서 시험되지 않았다 — 기각으로 기록</h3>
+<p><b>기본 환경에서는 기각.</b> 복도 커밋이 처음부터 3.98이라 <b>자랄 여지가 없었다</b>(천장 효과).
+사전등록 문구대로 "수익은 오르는데 복도 커밋이 안 자랐다"에 해당하므로 이 환경에서 V3는 기각으로 남긴다.
+원인은 설계 결함이다: 복도 중간에 단서가 전혀 없어 재질의가 항상 파국이라, 정책 품질과 무관하게 k=4가
+최적이다.</p>
+<p><b>변형 환경에서는 확정.</b> 재질의가 파국이 아니도록 복도 중간에 <b>열화된 단서</b>(노이즈 0.6)를 두고
+데모 노이즈를 0.5로 키워 초기 정책을 나쁘게 만들면, 짧은 커밋이 처음에 유리해져 여지가 생긴다.
+결과: 평균 복도 커밋이 <b>3.04 → 3.27 → 3.39 → 3.49</b>로 자라고 수익도 6.42 → 6.72로 함께 오른다 —
+<b>Δk = +0.446 ± 0.328 (6/6 시드), Δ수익 = +0.297 ± 0.117 (6/6)</b>. 이것이 네 힘의 ②(정책 오차 흡수)가
+만드는 커리큘럼이며, <b>replan 비용 항 없이</b> return만으로 나타난다.</p>
+<p><b>정직한 단서 둘.</b> ① 시드별로 라운드 간 <b>엄격 단조는 3/6</b>이다 — 평균 궤적은 단조지만 라운드
+단위 잡음이 있다. ② 이 변형에서는 <b>개입적 짝짓기가 분리되지 않는다</b>(naive 6.46 ≈ CFAC 6.42):
+모두가 자주 재질의하는 레짐이라 분기점 교란이 결정적이지 않다. 대신 <b>히스토리가 결정적</b>이다 —
+빼면 커밋이 k=1.18로 붕괴하고 수익 5.56으로 떨어진다. 두 환경이 서로 다른 성분을 시험한 셈이고,
+따라서 <b>두 성분 모두</b> 필요하다는 결론은 두 실험의 합으로만 나온다.</p>
+<table class='num'><tr><th>단계</th><th>평균 k @ 복도 입구</th><th>배포 수익</th><th>반응률</th></tr>
+"""
+    + _cfacnn_curric("ko")
+    + """</table>
+
+<h3>⑤ 한계</h3>
+<p>toy는 기제 검증이지 성능 주장이 아니다. 개입적 짝짓기의 "같은 결정 지점" 정의가 여기서는
+(구간, 스텝)으로 자명하지만 실제 RoboCasa에서는 자명하지 않다 — 상태 유사도/학습된 모델/앙상블 중
+무엇으로 후속상태를 주변화할지가 <b>M6·M7의 실제 설계 쟁점</b>이다. 데모 노이즈 단일 값, H=4,
+2차원 행동. 재현: <code>probes/toy_cfac_nn.py --seeds 6</code> → <code>toy_cfac_nn_fig.py</code>,
+결과 JSON 커밋.</p>""",
+)
+
+# ============================================== 08-21 CFAC 제안 + toy 검증
+entry(
+    "08-21",
+    "cfac",
+    "🧭 CFAC 제안 — 크리틱이 커밋과 반응을 공정 평가하게 만들기, 그리고 toy 전예측 적중",
+    "완결",
+    """
+<p class='sub'>표준 청크 크리틱이 non-Markov 커밋과 반응성을 공정 평가하지 못하는 원인을 <b>3중 미명세</b>로
+정식화하고, 셋을 모두 제거한 새 adaptive chunking 방법 <b>CFAC</b>(Commitment-Fair Adaptive Chunking)를
+제안한다. corridor–junction toy에서 사전등록 예측 4개 전부 적중 — CFAC만 커밋/반응을 상태별로 분리한다.</p>
+
+<p>사용자 지시 — "크리틱이 데이터셋의 non-Markovian·reactiveness를 공정 평가하도록 트릭·이론을 발전시켜
+새 방법을 제안하고 toy로 실험하라." 배경: 지금의 value learning은 <b>구조적으로 짧은 실행을 선호</b>한다는
+관찰(<span class='xref' data-eid='theory-preexp'>사전등록 포스트</span>의 게이지 논증과는 별개의, 게이지
+불변 편향까지 포함해서). 원인을 명세 수준에서 셋으로 분해했다.</p>
+
+<h3>① 3중 미명세 — 크리틱이 커밋을 잘못 재는 세 가지 이유</h3>
+<table class='num'><tr><th>미명세</th><th>내용</th><th>편향 방향</th><th>치료</th></tr>
+<tr><td><b>공짜 재질의</b></td><td>부트스트랩 V가 "재질의 후 좋은 연속이 온다"고 가정 — 실제 배포는 불완전 π의
+재샘플. 낙관 δ≥0가 γ^k 가중으로 들어와 <b>k에 감소</b></td><td>short (게이지 불변!)</td>
+<td>정책-기대 부트스트랩: V(s)=E_{a~π}[Q(s,a,κ)] — 배포 과정의 고정점</td></tr>
+<tr><td><b>Markov 조건 (과거 잠재)</b></td><td>데모의 계획 z가 관측에 없으면(가림) 상태-조건 크리틱은 커밋의
+사적 정보를 표현할 공간이 없다</td><td>커밋 가치 붕괴</td><td>히스토리 조건화 (표현 교정 — backdoor 차단)</td></tr>
+<tr><td><b>청크-회귀 교란 (미래 잠재)</b></td><td>창 안에서 공개되는 사건 b가 데모 행동과 결과를 동시에 유발 —
+(s, a₁:ₖ) 조건 회귀는 "b가 우연히 맞은 에피소드"만 골라 낙관(DQC 누출의 인과 독해). 히스토리로도 못 막는다
+(결정 시점에 b는 미래)</td><td>long (nominal≫actual)</td><td><b>합성 백업</b>: 관측된 중간 상태를 지나는 1-스텝
+백업의 합성 — b가 주변분포로 정직하게 들어옴</td></tr></table>
+
+<p><b>시적 정리</b>: 반응이 가치 있는 상태 = 청크 회귀가 거짓말하는 상태다 (같은 창-내 공개가 반응 가치와
+교란을 동시에 만든다). 그래서 naive 크리틱은 정확히 반응해야 할 곳에서 커밋을 부풀린다.</p>
+
+<h3>② CFAC 정의</h3>
+<p>per-prefix causal critic에 네 조항: (i) SMDP 부기(게이지 불변), (ii) <b>히스토리 조건화</b>,
+(iii) 창-내 가치는 <b>합성 백업</b>으로(청크-결과 회귀 금지), (iv) 재질의 가지는 <b>배포 정책의 기대</b>로
+부트스트랩. selector는 ε-내-최장 k(lexicographic — 커리큘럼 장치), actor는 같은 크리틱에 대해 action·k
+양 차원 갱신(joint — toy는 critic+selector 부분을 검증). 논문 부록 A.6에 명제·정의로 수록
+(<code>paper/theory.tex</code>).</p>
+
+<h3>③ Toy — 두 잠재 위치를 분리하는 최소 환경</h3>
+<p><b>plan maze</b>: [복도, 분기점, 복도] × 4스텝, H=4, 보상은 완주 1, γ=0.95, 데모 스텝오류 4%.
+<b>복도</b> — 계획 z가 <b>입구에서만</b> 보이고 이후 가려짐; 매 스텝 정답 = z (과거 잠재: 커밋이 정보를
+운반, Markov 재질의는 50/50). <b>분기점</b> — 사건 b가 <b>첫 스텝 후에야</b> 공개; 이후 정답 = b (미래 잠재:
+커밋은 b를 추측, 반응이 정답). 정답 κ*: 복도 입구 k=4, 분기점 입구 k=1. 크리틱 4종 factorial(A0 naive →
+A1 +히스토리 → A2 +정책 부트스트랩 → A3 = CFAC 합성 백업) + 고정 k 4종 + 수제 오라클, 8시드 × 데모
+1000 에피소드 × 평가 2000 에피소드. 분류는 전부 프로그램적.</p>
+
+<p><b>사전 등록</b> (실행 전 코드 docstring에 고정): T1 A0는 누출로 "다 성공"이라 믿고 분기점도 커밋, belief−realized
+격차 최대. T2 히스토리(A1)·정책 부트스트랩(A2)로는 분기점 과커밋이 <b>안 고쳐진다</b>(미래 잠재는 조건화가 못 막음).
+T3 A3만 복도 커밋 + 분기점 반응을 분리, 오라클급 SR. T4 고정-k 스윕은 비단조. 기각: A3가 A0–A2와 분리 실패.</p>
+
+<h3>④ 결과 — 전예측 적중</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac.png",
+        "CFAC toy: deployment SR, commitment by state type, self-deception",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>배포 SR</th><th>평균 k @ 복도 입구 (정답 4)</th><th>평균 k @ 분기점 입구 (정답 1)</th><th>believed − realized</th></tr>
+"""
+    + _cfac_rows("ko")
+    + """</table>
+
+<p>읽기: <b>A0–A2는 분기점에서도 k≈3.8로 커밋</b>하고(누출이 "모든 청크가 성공했다"고 속임) 자기 예보를
++0.20 과신한다. <b>A3만 분기점 k=1.000</b>으로 꺾고, belief 격차 ≈ 0 — <b>캘리브레이션된 크리틱</b>.
+고정-k는 비단조(k2 > k3). A1≈A0, A2 소폭 개선 — 세 미명세 중 <b>합성 백업이 결정적</b>이고(T2 예측 그대로),
+이는 "히스토리만 넣으면 된다"는 손쉬운 답을 기각한다.</p>
+
+<p><b>창발 관찰 (사전등록 밖, 사후 해석임을 명시)</b>: A3(0.778)가 수제 오라클(0.642)을 넘는다. 기제는
+<b>암묵적 rejection</b> — 샘플된 청크가 나쁘면(데모 노이즈) 크리틱이 그 청크의 모든 k에 낮은 값을 주고,
+ε-내-최장 규칙이 k=1로 떨어져 <b>즉시 재샘플</b>한다. 오라클은 규칙이 고정이라 나쁜 샘플을 그대로 실행한다.
+즉 상태의존 k는 반응성 회수만이 아니라 <b>정책 오차의 흡수</b>(네 힘의 ②)를 배포 시점에 수행한다 —
+<span class='xref' data-eid='three-forces'>네 힘</span> 이론의 예측이 toy에서 저절로 나타났다.</p>
+
+<h3>⑤ 한계와 다음</h3>
+<p>한계: tabular·완전 열거 가능한 toy, 경험 모델 합성은 함수근사에서 per-step TD 합성으로 대체해야 하며,
+미관측 (h,c)는 비관 폴백(선언됨), 데모 노이즈 단일 값. toy≠VLA — 이건 <b>기제 존재 증명</b>이지 성능 주장이
+아니다. 다음: ① M6(부트스트랩 소스 A/B)·M7(히스토리 조건화)을 RoboCasa critic에 사전등록 이식,
+② CFAC actor(joint 갱신) 설계, ③ 워커C 0820_headcond의 대조군 설계(자기 marginal 고정)를 M5·본방법
+평가에 채택. 재현: <code>probes/toy_cfac.py --seeds 8</code> → <code>probes/toy_cfac_fig.py</code>,
+결과 JSON 커밋 경로 <code>/scratch/jellyho/acrft/probes/toy_cfac/results.json</code>.</p>""",
+)
+
+# ============================================== 08-19 Tier1 인트로 비교분석
+entry(
+    "08-19",
+    "tier1-intros",
+    "📄 Tier 1 여섯 편은 인트로를 어떻게 쓰는가 — 동기 서사 비교분석과 우리 인트로의 자리",
+    "완결",
+    """
+<p class='sub'>우리와 가장 가까운 VLA-RL 논문 6편(<span class='xref' data-eid='papers-tier1'>Tier 1 정독</span>)의
+<b>introduction만</b> 따로 정독해, 각자 어떤 논리 사슬로 동기화하고 어떤 공백을 주장하는지 지도를 그린다.
+목적: 우리 <span class='xref' data-eid='paper-intro'>인트로 초안</span>이 이 6개 서사와 어디서 겹치고
+어디서 갈라서는지 확정. 인용은 원문 그대로.</p>
+
+<h3>① 여섯 인트로의 논리 사슬 (한 줄 요약)</h3>
+<table class='num'><tr><th>논문</th><th>인트로 서사</th><th>주장하는 공백 (원문)</th></tr>
+<tr><td><b>CO-RFT</b></td><td>VLA 유망하나 SFT는 데이터 품질 의존·OOD 취약 → RL로 극복(LLM 성공 인용) → online은 인프라·test-time은 미미 → offline이 답 → 그런데 chunking이 간과됨</td><td>"action chunking ... has been <b>overlooked</b> in recent research"</td></tr>
+<tr><td><b>DEAS</b></td><td>offline RL이 장지평에서 붕괴 → 지평 단축이 핵심인데 GCRL은 goal 필요 → n-step은 편향 → action sequence가 유망하나 <b>과대평가</b> → QC는 과대평가·CQN-AS는 이산화 → 갭</td><td>"actors maximizing over potentially erroneous critic estimates" / "exacerbated in offline RL where distribution shift creates extrapolation errors"</td></tr>
+<tr><td><b>GR-RL</b></td><td>VLA가 정밀·장지평에서 불신뢰 → 구두끈 예시로 구체화 → 병목 둘: <b>사람 데모의 열화</b>(주저·감속) + train-inference 불일치 → 3단 파이프라인</td><td>"human demonstrators would slow down, hesitate, and introduce noisy suboptimal demonstrations"</td></tr>
+<tr><td><b>BORA</b></td><td>dexterous에서 VLA 고전 → 기술 실패 둘: denoising 체인 credit 붕괴 + critic의 배경 시각 과적합 → 실기 배포 불일치 → offline critic + online residual</td><td>"critics ... overfitting to background visual artifacts ... provide erroneous guidance"</td></tr>
+<tr><td><b>GigaBrain-0.5M*</b></td><td>VLA는 근시안적 관측 의존(반응적) → world model이 미래 예측 → RAMP 4단 → RECAP은 sparse advantage뿐이라 부족</td><td>"architectural bias toward <b>reactive control rather than prospective planning</b>"</td></tr>
+<tr><td><b>MoRE</b></td><td>MLLM 발전 → VLA로 결합 → 문제 둘: 아키텍처 부적합 + <b>IL은 suboptimal 데이터 활용 불가</b> → MoE+offline RL</td><td>"unable to leverage more easily gathered <b>sub-optimal data</b>"</td></tr>
+<tr><td><b>DEHP</b> (추가 08-20)</td><td>청킹은 표준인데 실행 지평이 고정 → 긴 지평=부드러움/짧은 지평=반응성의 트레이드오프 → <b>올바른 지평은 task phase마다 다름</b> → 동결 정책 위에 지평 head를 online RL로</td><td>"A single fixed execution horizon <b>cannot capture this variation</b> across different task phases"</td></tr></table>
+
+<h3>② 공통 패턴 — 그리고 아무도 안 하는 말</h3>
+<p><b>공통 수법</b>: 전원 P1은 "VLA 유망, 그러나"로 열고, 절반(GR-RL·MoRE·CO-RFT)이 <b>suboptimal 데모</b>를 동기의
+축으로 쓴다(우리 P2와 동일 — 이 축은 이미 표준 서사다). CO-RFT는 우리처럼 "online 불가→offline" 소거법과
+<b>LLM RL 성공 유추</b>까지 쓴다 — 우리가 LLM 유추를 뺀 것이 차별화로 작동한다.</p>
+<p><b>아무도 안 하는 말 세 가지</b> (우리 인트로의 자리):</p>
+<ul>
+<li><b>기제를 문제로 세우지 않는다</b> — 여섯 편 전부 자기 배포 방식(고정 실행·BoN·필터·residual)을 <b>가정</b>하고
+시작한다. "학습된 가치가 정책에 닿는 통로 자체가 미해결"이라는 질문(우리 질문 3)은 어느 인트로에도 없다.</li>
+<li><b>커밋 길이를 결정으로 보지 않는다</b> — CO-RFT·DEAS가 chunk를 다루지만 "얼마나 실행할지"는 전원 고정
+(우리 질문 1). DQC의 nominal-actual 간극을 동기에 쓰는 논문도 없다.</li>
+<li><b>"같은 데이터, 더 나은 VLA"의 완결 경로를 약속하지 않는다</b> — GR-RL·BORA·GigaBrain은 online/개입/월드모델
+스택이 끼고, CO-RFT만 순수 offline인데 소규모 실기에 그친다. "SFT가 이미 쓰는 그 데모만으로"라는 우리 마지막
+문장의 자리가 비어 있다.</li></ul>
+
+<p class='sub'><b>DEHP 추가 분석(08-20)</b>: 인트로 논리가 우리 둘째 축과 가장 근접한 논문이다 — "고정 지평의
+트레이드오프 → phase-의존 지평"은 우리 P2의 커밋 축 동기와 사실상 동일. 다만 그들의 동기는 <b>정책의 실행 방식</b>에서
+출발하고(스무스함 vs 반응성), 우리는 <b>데이터의 non-Markovian 구조</b>(사람 제어의 커밋/반응 교차)에서 출발한다 — 같은
+결론, 다른 뿌리라 공존 가능하나 인용·대비 필수. 차별화는 명확: DEHP는 지평만(온라인 PPO·정책 동결·state-only critic),
+우리는 <b>action×지평 결합을 순수 offline으로 직접 최적화</b>. 이들의 related work가 정리한 적응 실행 계보
+(BID·SGAC·TAS·MoH·AAC·HiPolicy)는 우리 related work에도 편입할 것.</p>
+
+<h3>③ 겹침 경보와 우리 인트로 손질 포인트</h3>
+<p>① <b>CO-RFT와의 유사 경보</b>: P1~P3 골격(SFT 한계→RL→online 소거→offline→chunk)이 우리와 가장 가깝다.
+차별화는 명확히: 그들은 "chunking을 <b>넣었다</b>(incorporate)"에서 끝나고, 우리는 "chunk가 <b>세 질문을
+강제한다</b>(granularity가 상태의존·frozen backbone 위 가치·기제 비교)"로 간다 — 인트로에서 이 대비를 한 문장
+명시할 것. ② <b>DEAS의 과대평가 서사</b>는 우리 질문 2와 겹치므로, 우리는 과대평가를 "가치학습 문제"가 아니라
+"기제에 따라 달라지는 문제"(선택은 착취·커밋은 상관 억제)로 승격해 갈라선다. ③ GR-RL의 구두끈처럼 <b>구체
+태스크 예시 하나</b>로 P2의 suboptimality를 못박는 것은 배울 점 — 우리 실기 태스크가 정해지면 반영.</p>
+<p class='sub'>이 분석으로 인트로 v5의 위치는 검증됐다: 표준 서사(P1–P2)에 올라타되, 공백 주장(세 질문·기제·완결 경로)은
+여섯 편 누구와도 충돌하지 않는 빈 칸이다. 원문 인용 출처: 각 논문 arXiv HTML 인트로 절.</p>""",
+)
+
 # ============================================== 08-19 Tier1 선행연구 정독
 entry(
     "08-19",
@@ -1798,6 +2800,19 @@ Laundry Folding·Box Packing·Espresso 등에서 <b>RECAP 대비 약 +30%</b> �
 "automatically collected mixed-quality data" 위에 RL 기반 목적(CQL 계열)으로 학습. <b>결과</b>: 6개 스킬 전반에서
 베이스라인 상회, OOD 일반화 우위. <b>간극</b>: 조작(manipulation)이 아니라 보행, chunk 개념 없음. (abstract 기준.)</p>
 
+<h3>⑦ DEHP (arXiv:2606.11408, 추가 2026-08-20) — 실행 지평만 online RL로</h3>
+<p><b>정체</b>: chunk 정책의 <b>실행 지평(execution horizon)만</b> 예측하는 경량 head를 <b>online RL(PPO)</b>로 학습
+(Zhao·Garg 그룹). 원문:</p>
+<blockquote class='sub'>"existing chunk-based methods typically use a fixed prediction horizon and, more importantly,
+a fixed execution horizon throughout the task. ... A single fixed execution horizon cannot capture this variation
+across different task phases."</blockquote>
+<p><b>방법</b>: 기반 chunk 정책은 <b>완전 동결</b>, categorical horizon head가 관측+예측 청크를 조건으로 몇 스텝 실행할지
+선택. chunk-level PPO(청크 목적=기저 MDP 리턴 증명), state-only critic, sparse 이진 보상. <b>결과</b>: 고정 지평 최적
+대비 조립·삽입에서 큰 이득(one_leg 70→95%, round_table 30→94%, needle 10→29%); 학습된 지평이 phase에 정렬(자유공간
+길게, 정밀 정렬 짧게). <b>간극</b>: ① <b>action은 전혀 최적화 안 함</b>(지평만) — 정책이 동결이라 데모 suboptimality는
+그대로, ② <b>online RL 필요</b>(PPO 롤아웃), ③ 가치가 action 공간 위에 없음(state-only critic). 참고: 이들의 related
+work에 적응 실행 계열 계보(BID·SGAC·TAS·MoH·AAC·HiPolicy)가 정리돼 있음 — 이 축이 빠르게 붐비고 있다는 신호.</p>
+
 <h3>종합 — Tier 1이 남긴 빈칸</h3>
 <table class='num'><tr><th>논문</th><th>순수 offline</th><th>직접 TD</th><th>chunk 인지</th><th>커밋 길이 결정</th><th>기제 비교</th><th>SFT 초과(VLA 스케일)</th></tr>
 <tr><td>CO-RFT</td><td>✅</td><td>✅</td><td>✅(고정)</td><td>✕</td><td>✕</td><td>✅(소규모)</td></tr>
@@ -1805,7 +2820,8 @@ Laundry Folding·Box Packing·Espresso 등에서 <b>RECAP 대비 약 +30%</b> �
 <tr><td>GR-RL</td><td>✅</td><td>✅</td><td>✕</td><td>✕</td><td>✕(필터 가정)</td><td>△(필터 경유)</td></tr>
 <tr><td>BORA</td><td>△(+online)</td><td>✅</td><td>✅(고정)</td><td>✕</td><td>✕</td><td>△(미분리)</td></tr>
 <tr><td>GigaBrain</td><td>✅(모델기반)</td><td>△</td><td>✕</td><td>✕</td><td>✕</td><td>✅(산업 스택)</td></tr>
-<tr><td>MoRE</td><td>△</td><td>✅</td><td>✕</td><td>✕</td><td>✕</td><td>△(보행)</td></tr></table>
+<tr><td>MoRE</td><td>△</td><td>✅</td><td>✕</td><td>✕</td><td>✕</td><td>△(보행)</td></tr>
+<tr><td>DEHP</td><td>✕(online)</td><td>△(state-only)</td><td>✅</td><td>✅(지평만)</td><td>✕</td><td>✕(action 불변)</td></tr></table>
 <p><b>모두가 비운 세 칸</b>: 상태의존 <b>커밋 길이 결정</b>(전원 ✕), <b>기제 비교</b>(선택/커밋/추출 — 전원 자기 기제 가정),
 그리고 <b>순수 offline + VLA 조작 스케일 + SFT 초과</b>의 동시 달성. 이 세 칸이 우리 논문의 슬롯이다.</p>
 <p class='sub'><b>인접 경보</b>: LWD(2605.00416)는 분포형 implicit value(=우리 계열)+adjoint 추출로 flow VLA를 개선하나
@@ -2894,10 +3910,549 @@ evolution으로 측정한다.</p>
 """,
 )
 
+
+entry(
+    "08-20",
+    "adaptive-exec-map",
+    "적응 실행(execution-length) 계열 전수 지도 — 신호×레짐×적응대상, 그리고 빈칸",
+    "완결",
+    """
+<p><b>왜.</b> ExRL(RSS RL4VLA 워크샵)·DEHP(arXiv:2606.11408) 정독으로 "언제 replan할 것인가"가
+2026년 상반기에 논문이 몰린 계열임이 드러났다. 밤샘 이론 프로그램(다음 엔트리들: tie의 구조적
+불안정성 → 불확실성 분해 → non-Markov 긴-청크 구간 → event-triggered 다리 → 세 힘 종합)의 첫
+단계로, 이 계열을 <b>전수 지도</b>로 그려 우리 자리(오프라인 학습 신호 + 정책 개선 동시)가 정말
+비어 있는지 확정한다.</p>
+
+<p><b>분류축.</b> ① <b>무엇을 적응</b>하나 — 실행 길이 k / 액션 자체 / latent·연산예산.
+② <b>신호</b> — 학습된 가치(Q/V) / 휴리스틱(엔트로피·일관성·attention). ③ <b>레짐</b> — 온라인 상호작용
+필요 여부. ④ <b>정책 개선</b> — base policy가 좋아지는가(동결이면 ✕).</p>
+
+<table class='num'><tr><th>방법</th><th>적응 대상</th><th>신호</th><th>레짐</th><th>정책 개선</th><th>출처 신뢰도</th></tr>
+<tr><td><b>ExRL</b> (RSS'26 RL4VLA WS)</td><td>k∈{0..H}</td><td>학습 Q(s,a₁:H,k), off-policy(replay)</td><td>온라인 ~10⁶</td><td>✕ (동결, 자인: "bounded by the action distribution of the frozen base policy")</td><td>전문 정독(PDF)</td></tr>
+<tr><td><b>DEHP</b> (2606.11408)</td><td>h∈{1..H}</td><td>학습 π_len + V(s), on-policy PPO</td><td>온라인 5×10⁸</td><td>✕ (동결)</td><td>전문 정독</td></tr>
+<tr><td><b>AQC</b> (2605.05544)</td><td>커밋 K∈{1,4,8,16}</td><td>학습 Q (offline TD)</td><td>오프라인</td><td>✕ (선택만)</td><td>전문 정독(선행 리포트)</td></tr>
+<tr><td><b>ACSAC</b> (2605.11009)</td><td>커밋 길이</td><td>학습 Q (per-prefix)</td><td>오프라인</td><td>✕</td><td>PDF 보유·부분 정독</td></tr>
+<tr><td><b>ACH</b> (2605.10044)</td><td>청크 길이 (학습 중에도)</td><td>병렬 다중-길이 Q</td><td>offline→online</td><td><b>△ 정책도 학습</b></td><td>abstract 기준</td></tr>
+<tr><td><b>EQRL</b> (2606.14375)</td><td>latent+denoise 스텝+청크길이 C</td><td><b>critic 앙상블 불일치(=epistemic!)</b> + macro-action RL, γ^L 할인</td><td>온라인 추정</td><td>✕ (동결+어댑터)</td><td>abstract 기준</td></tr>
+<tr><td><b>AutoHorizon</b> (2602.21445)</td><td>실행 지평선</td><td>action self-attention (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>PACE</b> (2606.00537)</td><td>실행 지평선</td><td>궤적의 위상-운동학 구조 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>AAC</b> (CVPR'26, 2604.04161)</td><td>청크 크기</td><td>액션 엔트로피 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>abstract 기준</td></tr>
+<tr><td><b>A³</b> (2605.11567)</td><td>커밋 prefix</td><td>self-speculative 검증 (휴리스틱)</td><td>무학습 test-time</td><td>✕</td><td>초록+HTML 확인</td></tr>
+<tr><td><b>DVAC</b> (2606.03847)</td><td>replan 시점</td><td>denoising 분산 (휴리스틱)</td><td>무학습</td><td>✕</td><td>제목/초록 기준</td></tr>
+<tr><td>BID·SGAC·TAS·MoH·HiPolicy</td><td>청크 선택/융합</td><td>일관성·유사도·엔트로피·캐시</td><td>무학습~경량</td><td>✕</td><td>DEHP related-work 경유</td></tr>
+<tr><td><b>TempoRL</b> (ICML'21)</td><td>행동 반복 길이(skip)</td><td>학습 skip-Q (액션 조건!)</td><td>온라인</td><td>△(정책 동시 학습)</td><td>초록+블로그 정독</td></tr>
+<tr><td><b>Metelli PFQI</b> (ICML'20)</td><td>persistence k (고정 선택)</td><td>학습 Q_k + <b>이론 상계</b></td><td>배치(오프라인)</td><td>✕</td><td>초록 정독·이론 확인 예정</td></tr>
+<tr><td>FiGAR·AP-PI·SDAR</td><td>반복 길이</td><td>학습(액션 비조건 등)</td><td>온라인</td><td>△</td><td>인용 경유</td></tr></table>
+
+<p><b>관찰 셋.</b> ① VLA 청크 계열에서 <b>학습된 신호는 전부 온라인</b>(ExRL·DEHP·EQRL·ACH)이고,
+<b>오프라인/test-time은 전부 휴리스틱</b>(AutoHorizon·PACE·AAC·A³·DVAC·BID…) — "학습 신호 ×
+오프라인" 칸에 서 있는 것은 AQC/ACSAC와 우리 per-prefix ARQ critic뿐이다. ② VLA 계열은 (ACH 제외)
+<b>전원이 선택-only</b> — base policy는 동결이고, ExRL은 그 천장을 스스로 명시한다. 선택과 <b>정책
+개선의 동시 수행</b>은 계열 전체의 공백이며, 이것이 <span class='xref' data-eid='chunking-theory'>chunking-theory</span>
+Lemma B("선택만으로는 커밋 길이가 자라지 않는다")가 겨냥하는 자리다. ③ 유일하게 이론 상계를 가진
+것은 10년 전 계열(Metelli PFQI: persistence의 성능손실을 동역학 정칙성으로 상계) — VLA 세대는 이론
+없이 경험으로 재발견 중이다. 우리 이론 엔트리들이 이 둘을 잇는다.</p>
+
+<p><b>주장 강도 경계 (자기 교정).</b> "k-의존 편향을 아무도 안 짚었다"고 쓰면 안 된다 — 할인 부기의
+k-편향은 ExRL이 식별하고 SMDP 백업으로 해결했다 ("a standard one-step backup ... can bias the
+critic toward shortcut choices"). 우리 고유 축은 <b>closed-loop teleop의 hindsight leakage</b>
+(DQC arXiv:2512.10926)로, 부기를 올바로 해도 남고 오프라인에서 k가 길수록 커지는 낙관 편향이다 —
+두 편향을 항상 구분해 쓴다.</p>
+
+<p><b>다음.</b> 이 지도가 확정한 두 공백(오프라인 학습 신호, 선택+개선 동시)을 이론으로 채우는
+엔트리들이 이어진다: tie의 구조적 불안정성 → aleatoric/epistemic 분해 → non-Markov 긴-청크 구간 →
+event-triggered 제어 다리 → 세 힘 종합.</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "tie-knife-edge",
+    "완벽의 칼날 — 이론적 동률(tie)은 구조적으로 불안정하다 (정식화 v1)",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='chunking-theory'>chunking-theory</span>의 Theorem 2는 결정론·완전관측의
+극한에서 \\(\\Delta_{\\mathrm{react}}=0\\) — 즉 <b>모든 커밋 길이 k가 동률(tie)</b>이 됨을 보였다. 그렇다면
+adaptive chunking은 왜 실제로 이득을 내는가? 이 노트는 그 동률이 <b>칼날 위의 특이점</b>임을 정식화한다:
+세 종류의 ε-섭동(환경 확률성 · 정책 비일관성 · 관측 앨리어싱) 각각이 동률을 <b>서로 다른 방향으로</b>
+깨뜨리고, 따라서 일반적(generic) 환경에서 상태의존 커밋 맵 \\(\\kappa^*(s)\\)는 비자명해진다. 밤샘 이론
+프로그램 2/6.</p>
+
+<p><b>설정.</b> 기저 MDP \\(M=(\\mathcal S,\\mathcal A,T,r,\\gamma)\\), 청크 정책 \\(\\pi\\)(길이 H), 선택자
+\\(\\kappa:\\mathcal S\\to\\{1..H\\}\\). \\(Q^\\pi_k(s)\\) = s에서 청크의 첫 k스텝을 open-loop 실행 후 재질의했을 때의
+가치, \\(\\varphi_k(s):=Q^\\pi_k(s)-Q^\\pi_H(s)\\) = "k에서 재계획하는 것의 상대 이득".</p>
+
+<p><b>명제 K1 (동률의 기제 — 재계획이 무를 것이 없다).</b> (i) T 결정론, (ii) 정책이 <b>재계획-일관</b>
+(재질의가 이전 청크의 꼬리를 재생산: \\(\\mu_\\pi(s_{t+k})_{1:H-k}=\\) 이전 청크의 \\(k{+}1..H\\)), (iii) 관측이
+상태를 분리하면, 모든 s,k에서 \\(\\varphi_k(s)=0\\). <i>증명 스케치.</i> 재계획이 만들어내는 유일한 것은
+"새 정보에 따른 경로 수정"인데, (i)이 새 정보를, (ii)가 수정을, (iii)이 정보 손실을 각각 제거한다 —
+실행 경로가 k와 무관하게 동일해진다. ∎ (chunking-theory Thm 2의 재서술; tie는 우연이 아니라 세 가지
+소거의 합작이다.)</p>
+
+<p><b>명제 K2 (확률성은 짧은 k로 깬다 — 회수의 가치).</b> 도달 가능한 분기 상태 \\(s_b\\)가 있어 다음-상태
+실현에 따라 최적 연속이 확률 p로 달라지고 그 가치 격차가 g라면, 분기 직후 재계획은
+\\(\\gamma^{t_b}\\,p\\,g>0\\) 만큼 엄격 이득 — \\(\\varphi_k\\)는 분기를 청크 안에 가두는 k에서 엄격 음수가 된다.
+<i>기제는 정보의 가치(VoI)</i>: 관측이 결정을 바꿀 때에만, 그리고 그때마다 재질의는 엄격히 이득이다.
+이 항은 <b>회수 불가</b>(정책 개선으로 소거 안 됨) — aleatoric floor의 정체다. 고전적 정량화:
+Metelli et al. (ICML'20, arXiv:2002.06836) Thm 4.1은 persistence 비용을
+\\(\\tfrac{\\gamma(1-\\gamma^{k-1})}{(1-\\gamma)(1-\\gamma^k)}\\,\\lVert d^\\pi\\rVert\\) 로 상계한다 — d는 "정책이 할 일"과
+"지속이 하는 일"의 불일치이고, 우리 분기항은 그 하계 짝이다.</p>
+
+<p><b>명제 K3 (정책 오차도 짧은 k로 깨나, 흡수 가능).</b> 재계획 분포와 청크 연속의 스텝당 TV-괴리를
+\\(\\varepsilon_\\pi\\)라 하면 compounding(Ross–Bagnell)으로 \\(\\varphi\\)의 이 성분은 k에 대해 증가하며 짧은 k를
+민다. 그러나 \\(\\pi\\to\\pi^*\\)에서 \\(\\varepsilon_\\pi\\to0\\): <b>정책 개선이 이 항을 흡수</b>하고, 남는 것은 K2뿐 —
+평균 커밋 길이가 aleatoric floor까지 단조 증가하는 curriculum(chunking-theory III.7)의 다른 얼굴이다.
+주목: Metelli Thm 4.2의 상계에는 정책 자체의 액션 분산
+\\(\\sigma_p^p=\\sup_s\\int\\!\\!\\int d_{\\mathcal A}(a,a')^p\\,\\pi(da|s)\\pi(da'|s)\\) 가 <b>명시적으로</b> 들어 있다 —
+"정책 불확실성이 지속(커밋) 비용을 키운다"는 우리 주장의 2020년형 선례.</p>
+
+<p><b>명제 K4 (앨리어싱은 긴 k로 깬다 — 유일하게 부호가 반대).</b> 관측 채널 \\(O\\)가 상태를 뭉개면
+재계획은 <b>가블링된(garbled) 정보 위에서의 재추론</b>이다. Blackwell의 정리에 의해 가블링된 채널 위의
+결정은 약하게 나쁘고, 뭉개진 두 상태의 올바른 연속이 다르면 엄격히 나쁘다 — 반면 이전의 분리
+가능한 상태에서 발사된 청크는 그 정보를 open-loop로 <b>운반</b>한다. 따라서 재계획이 모드를 오가며
+평균내는(dithering) 상태에서는 \\(\\varphi_k>0\\) — <b>긴 커밋이 엄격 우위인 구간이 존재</b>한다. (2-상태
+구성과 imitation의 copycat 문헌 접속은 다음 엔트리에서 완결.)</p>
+
+<p><b>정리 K5 (칼날, 잠정 서술).</b> 동률 \\(\\varphi\\equiv0\\) ⟺ (도달 가능한 분기 없음) ∧ (재계획-일관) ∧
+(실행 구간 앨리어싱 없음). 세 조건 중 하나라도 ε만큼 깨지면 해당 상태 근방에서 \\(\\varphi\\)의 부호가
+결정되며(K2·K3은 −, K4는 +), 방향이 <b>상태별로 다르므로</b> 일반적 환경의 \\(\\kappa^*(s)\\)는 비상수다.
+즉: <b>adaptive chunking은 동률의 예외가 아니라, 동률이 adaptive의 measure-zero 특이점이다.</b>
+잠정 표기 이유: "generic"의 정확한 위상(어떤 섭동 공간에서 open-dense인가)은 다음 버전에서 조인다.</p>
+
+<p><b>따름 (배포 규칙의 정당화).</b> 이상점 근방에서는 모든 k가 ε-동률이므로, return-최적 ±ε 집합
+안에서 <b>가장 긴 k</b>를 고르는 사전식(lexicographic) 규칙이 자연스럽다 — 추가 보상 조작 없이 연산
+효율을 회수하고, 이상점에서 멀어지면 어차피 부호가 결정을 대신한다. (chunking-theory III.7의 규칙이
+이 정리의 따름이 된다.)</p>
+
+<p><b>선행과의 관계.</b> 이 노트의 주장은 전부 <b>참값(true value)</b>에 관한 것이다 — 추정(estimation)의
+k-편향은 별개 축이다: 할인 부기의 편향은 ExRL이 SMDP 백업으로 해결했고, closed-loop teleop의
+hindsight leakage(DQC)는 부기를 올바로 해도 남는 우리 미해결 축이다
+(<span class='xref' data-eid='adaptive-exec-map'>계열 지도</span>의 주장 강도 경계 참조).</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "uncertainty-split",
+    "불확실성의 두 얼굴 — aleatoric/epistemic 분해가 adaptive chunking을 유도한다 (측정 계획 포함)",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='tie-knife-edge'>칼날 정식화</span>는 동률을 깨는 세 힘 중 둘이
+불확실성임을 보였다: 환경 확률성(K2, 회수 불가)과 정책 오차(K3, 개선이 흡수). 이 노트는 그 둘이
+바로 <b>aleatoric / epistemic</b> 분해(Depeweg et al., ICML'18, arXiv:1710.07283; Clements et al.,
+arXiv:1905.09638)이고, 우리 분포형 앙상블 크리틱이 <b>추가 학습 없이 두 량을 상태×커밋길이 격자로
+측정할 수 있음</b>을 보인다. 밤샘 이론 프로그램 3/6.</p>
+
+<p><b>분해 (총분산 법칙).</b> 앙상블 멤버 \\(m=1..K\\)가 각각 return 분포 \\(Z_m(s,a_{1:k})\\)을 내면
+\\[ \\underbrace{\\mathrm{Var}[Z]}_{\\text{총}} \\;=\\;
+\\underbrace{\\tfrac1K\\textstyle\\sum_m \\mathrm{Var}[Z_m]}_{u_{\\mathrm{alea}}\\;(\\text{멤버 내})} \\;+\\;
+\\underbrace{\\mathrm{Var}_m\\big[\\mathbb E[Z_m]\\big]}_{u_{\\mathrm{epis}}\\;(\\text{멤버 간})} \\]
+— 멤버 내 분산은 데이터가 아무리 많아도 남는 환경/return의 산포(aleatoric), 멤버 간 불일치는
+데이터·학습이 줄이는 무지(epistemic). 우리 <code>PatchCriticEnsemble</code>은 <b>이미 이 구조다</b>:
+K개의 HL-Gauss 분포 헤드가 per-prefix로 있으니, 체크포인트에서 forward만 하면
+\\(u_{\\mathrm{alea}}(s,k)\\), \\(u_{\\mathrm{epis}}(s,k)\\) 두 장(field)이 공짜로 나온다.</p>
+
+<p><b>이론 접속 — 세 예측.</b>
+① <b>κ*는 aleatoric을 따라간다</b>: K2의 분기항은 \\(u_{\\mathrm{alea}}\\)가 큰 상태에서 발동하므로, 참값
+기준 최적 커밋은 \\(u_{\\mathrm{alea}}(s,\\cdot)\\) 높은 곳에서 짧아야 한다 — DEHP·ExRL이 정성적으로 관측한
+"정밀 구간=짧게"의 정체가 이것이라는 가설.
+② <b>학습이 진행되면 epistemic만 줄어든다</b>: K3의 흡수는 \\(u_{\\mathrm{epis}}\\downarrow\\)로 나타나고
+\\(u_{\\mathrm{alea}}\\)는 불변 — curriculum(평균 커밋 길이의 단조 증가)의 <b>측정 가능한 서명</b>이다.
+③ <b>라우팅은 둘을 구분해야 한다</b>: EQRL(arXiv:2606.14375)은 앙상블 불일치(=epistemic만)로 연산을
+라우팅하는데, 분해 관점에선 절반이다 — 짧은 커밋(재계획)은 aleatoric이, 추가 연산·데이터 수집은
+epistemic이 각각 정당화한다. 둘을 합산 신호로 쓰면 "고칠 수 있는 무지"에 재계획을 낭비하고
+"고칠 수 없는 산포"에 연산을 낭비한다.</p>
+
+<p><b>정직한 주의 둘.</b> (a) 학습된 return 분포의 멤버 내 분산은 순수 env 확률성 외에 <b>행동 정책의
+산포와 return 다봉성</b>을 포함한다(teleop 데모의 스타일 변이가 aleatoric으로 잡힘) — Metelli Thm 4.2의
+\\(\\sigma_p\\)(정책 산포)가 지속 비용에 들어가는 것과 정합적이지만, "env 확률성"과의 동일시는 과잉이다.
+(b) 우리 배포 앙상블은 K=2라 \\(u_{\\mathrm{epis}}\\) 추정이 약하다 — <code>ARQCritic.head_ensemble</code>
+(공유 trunk + K개 독립 헤드)로 K≥8을 거의 공짜로 얻는 경로가 이미 코드에 있다.</p>
+
+<p><b>측정 계획 (바로 실행 가능).</b> 마침 같은 크리틱의 <b>20k 체크포인트(g5_pi05)와 120k 이어-학습
+(cont, 진행 중)</b>이 있다: 동일한 6개 에피소드(가치 비디오로 렌더한 ep320/79/23/214/5/141)를 따라
+두 량을 계산해 ①②를 직접 검증한다 — 예측이 맞다면 20k→120k에서 \\(u_{\\mathrm{epis}}\\) 곡선만 내려앉고
+\\(u_{\\mathrm{alea}}\\)는 유지되며, 실패 에피소드의 \\(u_{\\mathrm{alea}}\\) 프로파일이 성공과 다른 위상(접촉·정렬
+구간 피크)을 보여야 한다. 렌더러(<code>render_yam_value_video.py</code>)에 불확실성 패널 하나를 더하면
+비디오로도 보인다. 이 측정은 후속 엔트리로 게시한다.</p>
+
+<p><b>선행과의 관계.</b> 분해 자체는 표준(Depeweg; Clements; arXiv:2206.01558)이고, 우리의 기여 후보는
+그것을 <b>커밋 길이 축에 편 것</b> — \\(u(s,k)\\) 격자와 κ*의 연결, 그리고 "재계획은 aleatoric에,
+개선·연산은 epistemic에"라는 라우팅 원리다. 흡수 가능성(②)은
+<span class='xref' data-eid='chunking-theory'>chunking-theory</span> III.7 curriculum의 측정판이다.</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "nonmarkov-longer",
+    "긴 커밋이 이기는 두 개의 방— 안정성(Zhang)과 정보(Blackwell/copycat), 그리고 K3의 부호 정정",
+    "진행 중",
+    """
+<p><b>왜.</b> <span class='xref' data-eid='tie-knife-edge'>칼날 정식화</span>의 K4는 "긴 커밋이 엄격 우위인
+구간의 존재"를 앨리어싱으로 예고했다. 이 노트는 그 존재를 <b>두 개의 독립 기제</b>로 세운다 — 하나는
+방금 원문으로 확인한 Zhang et al.(arXiv:2507.09061)의 <b>안정성 기제</b>(Markovian 전문가에서도 성립!),
+다른 하나는 부분관측의 <b>정보 기제</b>(Blackwell 가블링 + copycat 문헌). 그 과정에서 K3(정책 오차 →
+짧은 k)의 부호가 <b>레짐 의존</b>임을 정직하게 정정한다. 밤샘 이론 프로그램 4/6.</p>
+
+<p><b>방 A — 안정성: 잦은 재계획이 지수 폭발을 만든다 (Zhang et al., 원문 확인).</b>
+그들의 Prop 3.1: 동역학이 open-loop \\((C_{\\mathrm{ISS}},\\rho)\\)-EISS(수축)이고 정책·모의동역학 쌍이
+EISS라면, 청크화된 정책이 참 동역학 위에서도 안정성을 상속하는데 — 조건이 <b>실행 청크 길이의
+하계</b>다: \\[ \\ell \\;>\\; \\frac{\\log\\mathrm{poly}(L_\\pi, C_{\\mathrm{ISS}})}{\\log(1/\\rho)}. \\]
+핵심 반전(원문): "<i>even on synthetic globally stable dynamics, frequent feedback can cause
+exponential compounding error, which action-chunking mitigates</i>" — 그리고 이 요구는 예측 길이가
+아니라 <b>executed</b> 길이에 걸린다(같은 정책을 receding-horizon으로 돌리면 불안정할 수 있음).
+기제: 재계획은 매 스텝 <b>학습 오차를 피드백 루프에 재주입</b>하고, 커밋은 환경의 수축(ρ)이 그 오차를
+흡수하게 둔다. 이것은 앨리어싱 없이, unimodal·Markov 전문가에서도 성립한다.</p>
+
+<p><b>K3의 부호 정정 (v1의 자기 교정).</b> 칼날 노트의 K3은 "정책 오차 → 재계획 유리(짧은 k)"로
+썼으나, 방 A는 반대 부호의 레짐을 보인다. 정확한 서술: 정책 오차 \\(\\varepsilon_\\pi\\)의 미는 방향은
+<b>재계획이 수정인가 재주입인가</b>에 달려 있다 — (i) 재계획 분포가 on-support 근처의 신뢰할 만한
+수정일 때(전문가 근방, 오차가 상태 추정이 아니라 실행에서 옴) 짧은 k가 유리(K3 원형);
+(ii) 환경이 수축적이고 오차가 정책의 출력 자체에 있을 때, 재계획은 오차의 재여기(re-excitation)이며
+Zhang 하계만큼 긴 k가 유리. 어느 레짐인지는 \\(\\rho\\)(환경 수축률)와 오차의 원천이 정하고, 두 경우 모두
+\\(\\varepsilon_\\pi\\to0\\)이면 효과가 소멸한다 — <b>흡수 가능성은 유지</b>되나, 흡수 전 curriculum의 방향이
+상태·레짐별로 다를 수 있다는 것이 정정의 내용이다.</p>
+
+<p><b>방 B — 정보: 재계획은 가블링된 채널 위의 재추론이다.</b> 2-상태 구성: 상태 \\(x_A,x_B\\)가 같은
+관측 o로 뭉개지고 올바른 연속이 서로 다르다고 하자(예: 가려진 물체의 좌/우). 이전의 분리 가능한
+상태 \\(s_0\\)에서 발사된 청크는 올바른 가지를 open-loop로 운반하지만, o에서 재계획하는 정책은
+Blackwell의 정리에 의해 약하게(가지가 다르면 엄격히) 나쁘다 — 매 재계획마다 두 모드를 오가며
+평균내는 <b>dithering</b>이 최악 사례다. imitation 문헌이 같은 병리의 다른 얼굴을 이미 안다:
+copycat/causal confusion(arXiv:1905.11979; Fighting Copycat, NeurIPS'20)은 부분관측에서 per-step
+재추론이 지름길(직전 행동 복사)로 붕괴함을 보였고, 청크 커밋은 그 재추론 자체를 제거한다. Zhang도
+챙겨 적는다: 청크의 통념적 근거 1번이 "robustness to non-Markovian / partial observability quirks" —
+우리는 그것을 가블링 논증으로 정식화하는 중이다.</p>
+
+<p><b>종합 — 긴-커밋 우위 구간의 존재 (서술).</b> (A) \\(\\rho<1\\)이고 정책 오차가 유한하며 분기가 없는
+구간, 또는 (B) 실행 구간에 앨리어싱이 있고 launch 상태가 분리 가능한 구간에서는 \\(\\varphi_k(s)>0\\)
+(긴 커밋 엄격 우위)이다. (A)는 Zhang Prop 3.1의 하계로 정량, (B)는 2-상태 구성으로 존재 증명.
+반대편 압력(aleatoric 분기)은 <span class='xref' data-eid='uncertainty-split'>불확실성 분해</span>의
+\\(u_{\\mathrm{alea}}\\) 격자가 잰다 — κ*(s)는 이 두 압력의 국소 균형점이다.</p>
+
+<p><b>남는 일.</b> ① 2-상태 구성의 수치 검증(장난감 POMDP, 완결 증명 포함) — 후속 엔트리.
+② 방 A/B의 상대 크기를 YAM에서 재는 프록시(재계획 dithering = 연속 청크 간 발산 vs 커밋 후 오차).
+③ 칼날 노트 v2에 K3 정정 반영.</p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "event-triggered-bridge",
+    "제어이론의 다리 — event-triggered control은 adaptive chunking의 40년 선배다",
+    "완결",
+    """
+<p><b>왜.</b> "언제 다시 계획하나"는 로봇 학습이 처음 만난 질문이 아니다 — 제어이론이
+<b>event-triggered / self-triggered control</b>(ETC/STC)이라는 이름으로 수십 년 다뤄온 질문이다
+(Heemels–Johansson–Tabuada 튜토리얼). 이 노트는 그 사전을 우리 문제에 개방한다: 개념 대응표,
+가져올 수 있는 보장, 그리고 무엇이 옮겨지지 <b>않는지</b>. 밤샘 이론 프로그램 5/6.</p>
+
+<table class='num'><tr><th>제어이론 (ETC/STC)</th><th>adaptive chunking (우리)</th></tr>
+<tr><td>제어 업데이트(측정→새 제어 계산)</td><td>재계획(관측→새 청크 질의)</td></tr>
+<tr><td>inter-event time (이벤트 간격)</td><td>커밋 길이 k</td></tr>
+<tr><td>트리거 조건 \\(\\lVert e(t)\\rVert>\\sigma\\lVert x(t)\\rVert\\) (오차가 임계 초과 시 업데이트)</td><td>가치 트리거: per-prefix \\(Q_k\\)가 꺾이는 지점에서 재질의 (κ*의 원형)</td></tr>
+<tr><td>STC: 현재 상태로 <b>다음 업데이트 시각을 미리 계산</b></td><td>상태의존 커밋 맵 κ(s) — 문자 그대로 동일한 객체</td></tr>
+<tr><td><b>MIET</b>(최소 이벤트 간격) 보장, Zeno 배제</td><td>커밋 길이의 보장 하계, "매 스텝 재계획" 병리의 배제 (ExRL의 k=0 루프가 Zeno의 학습판)</td></tr>
+<tr><td>외란 크기 ↔ 이벤트 빈도 (외란 클수록 자주)</td><td>aleatoric \\(u_{\\mathrm{alea}}\\) ↔ 짧은 k (<span class='xref' data-eid='uncertainty-split'>분해 노트</span> 예측 ①)</td></tr>
+<tr><td>모델 불일치 ↔ 보수적 트리거</td><td>epistemic \\(u_{\\mathrm{epis}}\\) ↔ 학습이 흡수 (예측 ②)</td></tr>
+<tr><td>통신·연산 절약 vs 성능 트레이드오프</td><td>추론 비용 vs return 트레이드오프 (사전식 규칙의 동기)</td></tr></table>
+
+<p><b>가져올 것 둘.</b> ① <b>MIET 정리의 형태</b>: Lipschitz 동역학 + 잘 설계된 트리거면 이벤트 간격이
+양의 하계를 가진다(예: designable MIET, arXiv:2002.00058) — Zhang의 실행길이 하계
+(<span class='xref' data-eid='nonmarkov-longer'>두 개의 방</span>)와 같은 방향의, 더 오래된 정량 보장이다.
+"짧은 커밋의 병리"는 학습계가 재발견하기 전에 제어계가 Zeno라는 이름으로 배제해 뒀다.
+② <b>트리거의 문법</b>: ETC의 트리거는 Lyapunov 함수의 감소가 위협받을 때 발화한다 — 우리 크리틱의
+per-prefix \\(Q_k(s)\\)는 정확히 그 자리에 서는 <b>학습된 가치 증명서</b>다. "\\(Q_{k+g}-Q_k\\)가 임계 이하로
+꺾이면 거기서 끊어라"는 배포 규칙은 Lyapunov 트리거의 return-극대화 일반화로 읽힌다.</p>
+
+<p><b>옮겨지지 않는 것 (정직한 경계).</b> ETC의 보장은 (i) 안정화(regulation) 목적, (ii) 알려진/부분
+알려진 동역학, (iii) 설계된(학습 아닌) 트리거에 대한 것이다. return 극대화·미지 동역학·학습된
+트리거로의 이식은 <b>프로그램이지 정리가 아니며</b>, 그 간극이 정확히 우리 이론 시리즈가 채우는
+자리다. 또한 ETC↔RL 다리 자체는 신규가 아니다 — cyber-physical 문맥의 event-triggered RL이 있고
+(예: Learning When to Act via Run-Time Assurance, arXiv:2605.12561; ET-MPC+DRL, arXiv:2208.10302),
+우리가 새로 놓는 것은 <b>VLA action-chunking 문맥으로의 수입</b>과 가치-트리거·불확실성 사상이다.</p>
+
+<p><b>얻는 관점.</b> adaptive chunking 계열(<span class='xref' data-eid='adaptive-exec-map'>지도</span>)의
+휴리스틱 신호들(엔트로피·일관성·attention)은 ETC 렌즈로 보면 전부 <b>대리 트리거</b>들이다 — 참
+트리거(가치 감소의 위협)를 각자 다른 프록시로 근사한 것. 학습된 per-prefix 가치로 트리거를 직접
+세우는 것이 원리적으로 우월한 이유가 여기서 한 줄로 정리된다: <b>트리거가 최적화 목표와 같은 통화로
+말한다.</b></p>
+""",
+)
+
+
+entry(
+    "08-20",
+    "three-forces",
+    "네 힘의 균형 — adaptive chunking 이론 종합과 검증 가능한 예측 (밤샘 프로그램 결산)",
+    "완결",
+    """
+<p><b>왜.</b> 밤샘 이론 프로그램의 결산이다. 출발 질문(사용자): 이론적 완벽에서 생기는 k-동률이
+실제로는 왜 안 일어나는가, 불확실성의 분해가 어떻게 adaptive chunking을 유도하고 정책 개선과
+non-Markov 긴-청크 선호까지 설명하는가. 다섯 개의 노트(<span class='xref' data-eid='adaptive-exec-map'>지도</span> ·
+<span class='xref' data-eid='tie-knife-edge'>칼날</span> · <span class='xref' data-eid='uncertainty-split'>분해</span> ·
+<span class='xref' data-eid='nonmarkov-longer'>두 개의 방</span> · <span class='xref' data-eid='event-triggered-bridge'>제어 다리</span>)를
+하나의 그림으로 접는다. 시작은 세 힘이었으나 Zhang 정독이 <b>네 번째 힘</b>을 추가했다.</p>
+
+<p><b>네 힘.</b> 커밋 길이 k에 작용하는 압력은:</p>
+<table class='num'><tr><th>힘</th><th>방향</th><th>원천</th><th>운명</th></tr>
+<tr><td>① 분기 (aleatoric)</td><td>k ↓</td><td>환경 확률성 — 재질의 = 회수(VoI)</td><td><b>회수 불가</b> — floor</td></tr>
+<tr><td>② 정책 오차 (epistemic)</td><td>레짐 의존 (수정이면 ↓, 재주입이면 ↑)</td><td>학습 미완 — Metelli σ_p</td><td><b>개선이 흡수</b> → curriculum</td></tr>
+<tr><td>③ 안정성 (Zhang)</td><td>k ↑ (하계!)</td><td>수축 환경 + 잦은 replan의 오차 재주입</td><td>ε_π→0이면 완화되나 하계 형태는 유지</td></tr>
+<tr><td>④ 정보 (non-Markov)</td><td>k ↑</td><td>앨리어싱 — replan은 가블링 위 재추론(Blackwell/copycat)</td><td>관측이 좋아지지 않는 한 잔존</td></tr></table>
+
+{img(P / "31_three_forces.png", "preferred commitment phase diagram + curriculum (schematic)")}
+<p class='sub'>왼쪽: (aleatoric 압력, 긴-커밋 압력) 평면의 선호 k* — <b>개념도(schematic)이지 측정이 아니다</b>.
+원점의 별이 칼날 동률; 대각선 근방이 κ*(s)가 진짜로 상태의존적인 경합 대역. 오른쪽: 이론이 예측하는
+curriculum — 학습이 epistemic만 흡수하므로 평균 k*는 aleatoric floor로 단조 수렴, floor 자체는 불변.</p>
+
+<p><b>한 문단 종합.</b> 이상 극한의 동률은 세 소거(분기·수정·정보손실)의 합작인 칼날이다(K1). 실제
+환경은 네 힘이 그 칼날을 밀어낸다: 분기는 짧게(①), 앨리어싱과 수축-환경의 오차 재주입은 길게(③④),
+정책 오차는 레짐에 따라 양쪽으로(②) — 그리고 ②만이 학습으로 사라진다. 따라서 (i) κ*(s)는 일반적으로
+비상수이고(adaptive chunking의 유도), (ii) 학습이 진행되면 평균 커밋은 aleatoric floor까지 자라며
+(curriculum = 정책 개선의 서명), (iii) floor 위에 남는 짧은-커밋 구간은 환경의 분기 구조 그 자체다.
+"선택만 하는" 계열(<span class='xref' data-eid='adaptive-exec-map'>지도</span>의 전원)은 ②를 흡수할 수단이 없어
+①~④의 초기 배치에 갇힌다 — 선택과 개선을 함께 해야 하는 이유가 네 힘 그림에서 직접 나온다.</p>
+
+<p><b>검증 가능한 예측 (사전 등록 후보).</b></p>
+<table class='num'><tr><th>#</th><th>예측</th><th>측정</th><th>기각 조건</th></tr>
+<tr><td>P1</td><td>κ*가 \\(u_{\\mathrm{alea}}\\)와 국소 반상관</td><td>g5_pi05 크리틱의 per-prefix argmax vs 앙상블 분해, 6 에피소드</td><td>상관 부호가 양이거나 0</td></tr>
+<tr><td>P2</td><td>20k→120k에서 \\(u_{\\mathrm{epis}}\\)만 감소</td><td>같은 프레임에서 두 체크포인트 분해 비교 (cont 완료 후)</td><td>\\(u_{\\mathrm{alea}}\\)도 같은 비율로 줄면 분해 무의미</td></tr>
+<tr><td>P3</td><td>정책 개선 arm에서만 평균 k* 증가</td><td>chunking-theory III.7의 인과 실험(개선 on/off arm)과 동일</td><td>off arm에서도 증가</td></tr>
+<tr><td>P4</td><td>receding-horizon(k=1)이 긴 커밋보다 나쁜 구간 존재 (Zhang 재현)</td><td>YAM/RoboCasa에서 고정-k 스윕의 비단조성</td><td>k=1이 전역 최적</td></tr>
+<tr><td>P5</td><td>재계획 dithering(연속 청크 발산)이 앨리어싱 지표와 동행</td><td>연속 질의 청크 간 거리 vs 가림/접촉 이벤트</td><td>무상관</td></tr></table>
+
+<p><b>계보 한 줄.</b> Metelli(persistence 상계)와 ETC(MIET·Zeno)가 고전적 반쪽, Zhang(실행길이 하계)이
+현대적 반쪽, ExRL/DEHP(온라인 선택 학습)가 경험적 반쪽 — 우리 시리즈는 이 셋을 <b>오프라인·가치기반·
+개선 결합</b>의 한 틀로 접합하는 시도이며, 남은 것은 P1~P5의 측정과 칼날 v2의 증명 완결이다.</p>
+""",
+)
+
+
+def _p2_rows():
+    """Recompute the P2 table from the raw measurement JSON on every build (never hand-copied)."""
+    import math
+
+    import numpy as _np  # noqa: ICN001 (np is taken at module level in some builds)
+
+    src = pathlib.Path(__file__).parent.parent / ".scratch/p2_uncertainty/p2_split.json"
+    if not src.exists():
+        return "<tr><td colspan='6'>p2_split.json missing</td></tr>", ""
+    d = json.loads(src.read_text())
+    rows, lnA, lnE = [], [], []
+    for e in ["320", "79", "23", "214", "5", "141"]:
+        a0 = _np.median(_np.asarray(d["20k"][e]["u_alea"])[:, -1])
+        a1 = _np.median(_np.asarray(d["120k"][e]["u_alea"])[:, -1])
+        e0 = _np.median(_np.asarray(d["20k"][e]["u_epis"])[:, -1])
+        e1 = _np.median(_np.asarray(d["120k"][e]["u_epis"])[:, -1])
+        ra, re = a1 / a0, e1 / e0
+        lnA.append(math.log(ra))
+        lnE.append(math.log(re))
+        succ = "성공" if d["20k"][e]["success"] else "<b>실패</b>"
+        rows.append(
+            f"<tr><td>ep{e}</td><td>{succ}</td><td>{a0:,.0f} → {a1:,.0f}</td><td>×{ra:.2f}</td>"
+            f"<td>{e0:,.0f} → {e1:,.0f}</td><td>×{re:.2f}</td></tr>"
+        )
+    ga, ge = math.exp(_np.mean(lnA)), math.exp(_np.mean(lnE))
+    summary = f"기하평균: u_alea ×{ga:.2f} ({(ga - 1) * 100:+.0f}%) · u_epis ×{ge:.2f} ({(ge - 1) * 100:+.0f}%)"
+    return "".join(rows), summary
+
+
+_P2_ROWS, _P2_SUMMARY = _p2_rows()
+
+entry(
+    "08-20",
+    "p2-uncertainty-meas",
+    "P2 측정 — 학습은 epistemic만 줄이는가 (20k vs 120k): 방향 일치, 강한 형태는 미지지",
+    "완결",
+    f"""
+<p><b>왜.</b> <span class='xref' data-eid='uncertainty-split'>불확실성 분해 노트</span>의 예측 ②(사전 등록:
+"학습이 진행되면 u_epis만 감소, u_alea는 불변; u_alea가 같은 비율로 줄면 분해 무의미")를 첫 실측한다.
+같은 크리틱(g5_pi05)의 20k 체크포인트와 +100k 이어-학습(120k) 체크포인트로, 가치 비디오와 동일한
+6개 에피소드의 전 프레임(stride 8)에서 K=2 앙상블의 HL-Gauss 분포를 분해했다
+(u_alea=멤버 내 분산 평균, u_epis=멤버 간 평균의 분산; full-prefix 기준, 스크립트
+<code>measure_uncertainty_split.py</code>, 원본 JSON에서 게시 때마다 재계산).</p>
+
+<table class='num'><tr><th>에피소드</th><th>결과</th><th>u_alea (분산)</th><th>비율</th><th>u_epis</th><th>비율</th></tr>
+{_P2_ROWS}</table>
+<p class='sub'>{_P2_SUMMARY}</p>
+
+{{img32}}
+
+<p><b>판정 — 방향 일치, 강한 형태 미지지.</b> 기하평균으로 u_epis가 u_alea보다 더 줄었다(−39% vs −24%)
+— 부호는 예측과 맞다. 그러나 사전 등록한 강한 형태는 <b>지지되지 않는다</b>: u_alea도 같은 자릿수로
+움직였고(기각 조건의 절반 발동), 에피소드 분산이 커서 6개 중 2개(ep23 +15%, ep141 ×2.01)에서는
+u_epis가 오히려 늘었다. 정직한 라벨은 <b>미결·약지지</b>다. 지배적 교란은 K=2 — 두 멤버의 불일치로
+epistemic을 재는 것은 원리적으로 고분산이며(분해 노트의 자기 경고), <code>head_ensemble</code> K≥8
+재측정이 판정의 전제다.</p>
+
+<p><b>부수 발견 (다음 가설감).</b> 성공/실패가 u_alea에서 갈렸다: 성공 3편은 u_alea가 내려가고
+(×0.52·×1.00·×0.60 — 예측 가능한 구간의 분포가 조여짐), 실패 3편 중 2편은 유지·상승했다
+(×1.41·×1.06 — 학습이 실패 구간의 산포를 더 정직하게 표현). 최단 즉시중단 실패 ep141만 양쪽 모두
+반대 방향의 outlier인데, 353프레임짜리 특이 에피소드라 별도 조사감이다. 이 성공/실패 비대칭은 분해
+노트의 "행동정책 산포가 u_alea에 섞인다"는 경고와 정합적이며, u_alea의 정체(환경 확률성 vs return
+다봉성)를 가르는 다음 측정을 정의한다.</p>
+
+<p><b>재현.</b> 스크립트·JSON·figure 모두 리포에 있다. 같은 6 에피소드의 120k "after" 가치 비디오는
+별도 업로드(갤러리 <code>videos/yam_value</code>)로 잇는다.</p>
+""",
+)
+
+
+def _gate_rows():
+    """Recompute the 1-step-gate table from the raw results JSONs on every build."""
+    root = pathlib.Path(__file__).parent.parent / ".scratch"
+    out = {}
+    for tag, d in (("160k", "eval_onestep_160k"), ("200k", "eval_onestep_200k")):
+        f = root / d / "results.json"
+        if f.exists():
+            out[tag] = json.loads(f.read_text())["metrics"]
+    if not out:
+        return "<tr><td colspan='4'>results.json missing</td></tr>", ""
+    rows = []
+    names = [
+        ("af_1step", "α-Flow 1-step"),
+        ("af_2step", "α-Flow 2-step"),
+        ("af_10step", "α-Flow 10-step"),
+        ("bc_10step", "BC 베이스라인 10-step"),
+    ]
+    for k, label in names:
+        cells = "".join(f"<td>{out[t][f'mse_gt/{k}']:.6f}</td>" if t in out else "<td>—</td>" for t in ("160k", "200k"))
+        rows.append(f"<tr><td>{label}</td>{cells}</tr>")
+    g = next(iter(out.values()))["gt_action_var"]
+    extra = ""
+    if "200k" in out:
+        m = out["200k"]
+        extra = (
+            f"self-gap(1↔10) {m['self_gap/af_1_vs_10']:.6f} · self-gap(2↔10) {m['self_gap/af_2_vs_10']:.6f} · "
+            f"GT 액션 분산 {g:.3f} (200k 기준)"
+        )
+    return "".join(rows), extra
+
+
+_GATE_ROWS, _GATE_EXTRA = _gate_rows()
+
+entry(
+    "08-22",
+    "alphaflow-1step-gate",
+    "1-step 게이트 통과 — α-Flow 200k 완주와 원스텝 무손실 판정",
+    "완결",
+    f"""
+<p><b>왜.</b> <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span>의 존재 이유는 offline RL의
+actor 업데이트를 forward 1회로 만드는 것이었고, 그 전제는 "원스텝화가 액션 품질을 깎지 않는다"였다.
+200k run이 완주했으므로(wandb <code>c4vy84yy</code>: α 1.0→0.005 전 커리큘럼 무사고, delta² 0.052→0.0026,
+중간에 /data5 디스크 포화로 attempt1이 사망해 /data1로 체크포인트를 옮겨 재주행) 그 게이트를 판정한다.</p>
+
+<p><b>어떻게.</b> held-out 6 에피소드 × 6 프레임(총 36)에서, 각 정책이 <b>자기 norm stats로 unnormalize한
+로봇 공간</b> 30-스텝 청크의 demo-MSE를 잰다(프레임당 동일 노이즈로 분산 통제; 스크립트
+<code>eval_onestep_bc.py</code>, 표는 results.json에서 게시 때마다 재계산).</p>
+
+<table class='num'><tr><th>변형</th><th>demo-MSE @160k</th><th>@200k (최종)</th></tr>
+{_GATE_ROWS}</table>
+<p class='sub'>{_GATE_EXTRA}</p>
+
+<p><b>판정 — 원스텝화는 무손실이며, 오히려 이득이다.</b> 최종 체크포인트에서 1-step(0.00096)이 같은
+모델의 10-step(0.00153)보다 낫고, 스텝 수에 대해 단조다(1&lt;2&lt;10). floor(α=5e-3) 구간 40k가 1-step을
+더 조였다(160k 0.00107→200k 0.00096, 10-step은 미세 악화) — 큰-점프 타깃을 직접 최적화한 효과.
+자기일관성 갭은 액션 분산의 0.1% 수준. <b>RL 스택의 actor 자리에 이 1-step 정책을 그대로 쓸 수 있다.</b></p>
+
+<p><b>BC 대비 수치의 한계 (명시).</b> BC 베이스라인(0.00267)보다 ~2.8× 낮지만 이것은 확정 주장이
+아니다 — BC는 s300 성공-only 70k 스텝, α-Flow는 s347 전체 200k 스텝으로 <b>method-only-diff가 아니고</b>,
+demo-MSE는 성공률의 프록시일 뿐이다. 확정은 "동일 모델 내 1-step ≥ 10-step"까지.</p>
+
+<p><b>다음.</b> 이 1-step 정책이 FQL/QC-FQL 스택(<span class='xref' data-eid='adaptive-exec-map'>계열 지도</span>의
+빈칸: 오프라인 + 선택·개선 동시)의 actor로 들어간다 — distill 타깃이 10-step ODE에서 1-step forward로
+바뀌면서 actor 학습의 teacher 비용이 사라진다. per-prefix 크리틱과의 결합 실험이 다음 사이클.</p>
+""",
+)
+
 # ================================================================== 육하원칙 + 상호 연결
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "alphaflow-1step-gate": {
+        "date": "2026-08-22 11:30",
+        "who": "워커B",
+        "where": "B200 200k run(c4vy84yy, /data1 ckpt) + L40S offline eval · held-out 6에피소드×6프레임",
+        "what": "1-step 게이트 판정 — 로봇 공간 demo-MSE에서 1-step(0.00096) < 10-step(0.00153) < BC(0.00267), 자기일관성 갭 0.1%",
+        "how": "eval_onestep_bc.py: 정책별 자기-stats unnormalize, 프레임당 동일 노이즈, 160k/200k 두 체크포인트, 표는 JSON 재계산",
+        "why": "offline RL actor를 forward 1회로 만드는 전제(원스텝 무손실)의 판정 — 통과, floor 구간이 오히려 1-step을 개선",
+        "links": ["alphaflow-pi05", "adaptive-exec-map", "three-forces"],
+    },
+    "p2-uncertainty-meas": {
+        "date": "2026-08-20 09:40",
+        "who": "워커B (밤샘 이론 프로그램 후속 측정)",
+        "where": "g5_pi05 20k vs +100k cont(120k) 체크포인트 · yam_s347 캐시 · 6 에피소드(stride 8)",
+        "what": "예측 P2 첫 실측 — u_alea/u_epis 중앙값 변화율: 방향 일치(epis −39% > alea −24%), 강한 형태 미지지(미결·약지지)",
+        "how": "measure_uncertainty_split.py (K=2 HL-Gauss 분해, full-prefix), fig_32 오버레이, 표는 JSON 재계산",
+        "why": "사전 등록 예측의 정직한 판정 + K≥8 재측정 필요성 확정 + 성공/실패 u_alea 비대칭 발견",
+        "links": ["uncertainty-split", "three-forces", "tie-knife-edge"],
+    },
+    "three-forces": {
+        "date": "2026-08-20 06:30",
+        "who": "워커B (밤샘 이론 프로그램 6/6 — 결산)",
+        "where": "이론 종합 (다섯 노트 + Zhang/Metelli/ETC 원문)",
+        "what": "커밋 길이에 작용하는 네 힘(분기↓·정책오차 레짐의존·안정성↑·정보↑)의 종합, 위상도(개념도)와 사전 등록 후보 예측 P1~P5",
+        "how": "다섯 엔트리의 정리·명제를 한 표로 접합, schematic figure(스크립트 재생성 가능), 예측마다 기각 조건 명기",
+        "why": "사용자 지시의 결산 — tie 비발생·불확실성 유도·정책 개선·non-Markov 긴-청크를 하나의 검증 가능한 프로그램으로",
+        "links": [
+            "adaptive-exec-map",
+            "tie-knife-edge",
+            "uncertainty-split",
+            "nonmarkov-longer",
+            "event-triggered-bridge",
+            "chunking-theory",
+        ],
+    },
+    "event-triggered-bridge": {
+        "date": "2026-08-20 05:40",
+        "who": "워커B (밤샘 이론 프로그램 5/6)",
+        "where": "이론 노트 (ETC/STC 문헌: Heemels 튜토리얼·MIET 2002.00058·ET-RL 2605.12561 등)",
+        "what": "event/self-triggered control ↔ adaptive chunking 개념 대응표 — MIET=커밋 하계, Zeno=병적 재계획, 가치 트리거=κ*의 원형, 외란/모델오차=aleatoric/epistemic",
+        "how": "대응표 + 가져올 보장 2건(MIET 형태, 트리거 문법) + 옮겨지지 않는 경계 명시 (ET-RL 선행 존재 인정, VLA 문맥 수입만 신규 주장)",
+        "why": "사용자 지시 — adaptive chunking 유도의 이론적 뒷받침에 제어이론의 기성 정리군을 동원",
+        "links": ["nonmarkov-longer", "uncertainty-split", "tie-knife-edge", "adaptive-exec-map"],
+    },
+    "nonmarkov-longer": {
+        "date": "2026-08-20 05:00",
+        "who": "워커B (밤샘 이론 프로그램 4/6)",
+        "where": "이론 노트 (Zhang arXiv:2507.09061 v3 원문 정독 — Prop 3.1 실행길이 하계 확보)",
+        "what": "긴 커밋이 엄격 우위인 구간의 두 독립 기제 — 안정성(잦은 replan=오차 재주입, Markov에서도)과 정보(Blackwell 가블링/copycat) — 및 K3 부호의 레짐 의존성 정정",
+        "how": "Zhang Prop 3.1(EISS·executed-length 하계) 인용 + 2-상태 가블링 구성 스케치 + copycat 문헌 접속 + 자기 교정 명기",
+        "why": "사용자 지시 — non-Markovianity로 longer chunk가 선호되는 구간의 이론적 존재 증명 (+예상 밖의 Markov 기제 추가)",
+        "links": ["tie-knife-edge", "uncertainty-split", "adaptive-exec-map", "chunking-theory"],
+    },
+    "uncertainty-split": {
+        "date": "2026-08-20 04:10",
+        "who": "워커B (밤샘 이론 프로그램 3/6)",
+        "where": "이론 노트 + PatchCriticEnsemble 구조 (측정은 g5_pi05 20k vs cont 120k 체크포인트 예정)",
+        "what": "총분산 법칙으로 aleatoric(멤버 내)/epistemic(멤버 간)을 상태×커밋길이 격자로 정의, 세 예측(κ*-정렬·서명·라우팅 분리) 도출",
+        "how": "Depeweg/Clements 분해를 K개 HL-Gauss per-prefix 앙상블에 사상 + K2/K3 접속 + 정직한 한계 2건 명기",
+        "why": "사용자 지시 — env/policy 불확실성 분리가 adaptive chunking을 유도하고 정책 개선이 epistemic을 흡수함의 이론화",
+        "links": ["tie-knife-edge", "adaptive-exec-map", "chunking-theory", "critic-heads"],
+    },
+    "tie-knife-edge": {
+        "date": "2026-08-20 03:30",
+        "who": "워커B (밤샘 이론 프로그램 2/6)",
+        "where": "이론 노트 (chunking-theory Thm 2 위에서; Metelli ICML'20 원문 정리 4.1/4.2 확인)",
+        "what": "이상 극한의 k-동률이 칼날임을 정식화 — 확률성(−)·정책오차(−, 흡수 가능)·앨리어싱(+)의 세 섭동이 부호를 결정",
+        "how": "명제 K1–K4 + 정리 K5(잠정) 스케치: VoI 논증, Ross–Bagnell compounding, Blackwell 가블링, Metelli 상계 접속",
+        "why": "사용자 지시 — 'tie가 실제로 안 일어나는' 이유의 이론적 뒷받침 (adaptive chunking 유도의 근거)",
+        "links": ["chunking-theory", "chunking-easy", "adaptive-exec-map", "aqc-ablation"],
+    },
+    "adaptive-exec-map": {
+        "date": "2026-08-20 02:40",
+        "who": "워커B (밤샘 이론 프로그램 1/6)",
+        "where": "arXiv + 업로드 PDF(ExRL) + DEHP·ExRL 전문 정독",
+        "what": "'언제 replan하나' 계열 17+편 전수 지도 — 적응대상×신호×레짐×정책개선 4축 분류와 빈칸 확정",
+        "how": "정독(ExRL·DEHP·AQC·ACSAC)+초록 검증(ACH·EQRL·AutoHorizon·PACE·AAC·A³)+인용 경유(BID·SGAC 등), 출처 신뢰도 명기",
+        "why": "사용자 지시 — tie 비발생·불확실성 분해·non-Markov 이론화의 전제로 계열 지형과 우리 슬롯 확정",
+        "links": ["papers-tier1", "chunking-theory", "chunking-easy", "aqc-ablation", "alphaflow-pi05"],
+    },
     "chunking-theory": {
         "date": "2026-08-19 02:30",
         "who": "워커B(문헌 정독·정리) + 사용자(스토리라인·반론 제기)",
@@ -3040,6 +4595,94 @@ META = {
         "how": "DEAS 코드 실측(V=HLGauss+expectile, Q는 V로 부트스트랩, double-min, dual-discount); 우리 백본·주석 유지, 방법론만",
         "why": "사용자 지적 'cand[0]도 VLA 샘플인데 BoN이 그보다 못할 리 없다' — 앞선 coverage 결론의 정정 가능성",
         "links": ["critic-pfx", "critic-heads", "floq", "conservatism", "calql", "model-based", "final"],
+    },
+    "cfac-easy": {
+        "date": "2026-08-24 00:30",
+        "who": "워커B",
+        "why": "사용자 요청 — 알고리즘이 여전히 어렵다, 아주 쉽게 처음부터 설명하는 글이 필요하다",
+        "where": "허브 (설명 문서, 살아있음)",
+        "what": "CFAC을 사전지식 없이 읽는 설명 — 손으로 계산하는 숫자 예시 둘(복도·분기점)로 두 고침의 필요성을 보임",
+        "how": "용어를 나오는 자리에서 정의, 할인 무시한 정수 예시로 Q₁ 대 Q₄를 직접 비교, 그림 2장 재사용",
+        "links": ["cfac", "cfac-nn", "weekly-cfac-0823", "theory-preexp"],
+    },
+    "weekly-cfac-0823": {
+        "date": "2026-08-23 22:10",
+        "who": "워커B(이 갈래)",
+        "where": "Space weekly/weekly_2026-08-23_cfac.html + hub_figs",
+        "what": "주간 발표 (2/2) — CFAC 제안·toy 검증·M4 기준선·B1 파이프라인, 배경/기제/결과 3겹 시각화",
+        "how": "그림은 전부 스크립트 생성, 수치는 결과 JSON에서 재계산, 덱은 make_weekly_deck.py가 조립",
+        "why": "사용자 규칙 — 실험은 매주 발표 형식으로 보고하고 배경까지 시각화해 둔다",
+        "links": ["cfac", "cfac-nn", "m4-ksweep", "theory-preexp", "adapt-margin-epis"],
+    },
+    "adapt-margin-epis": {
+        "date": "2026-08-23 16:10",
+        "who": "워커B(이론) — 워커C 데이터 분석",
+        "where": "워커C 0823_curve·0823_curve25의 공개 수치 + 우리 chunking-theory Theorem 1·2",
+        "what": "적응 마진이 정책 성능과 완전 반상관(ρ=−1.0, 4쌍) — 분해 정리의 Δ_epis 읽기, GPU 0장 검정 예측 등록",
+        "how": "네 쌍 모두 라운드 안 측정만 사용, 방향은 두 쌍 시점에 선언, 개별 마진의 시드 밴드 한계 명시",
+        "why": "그쪽에서 세 기제 설명이 실패해 미해결로 남은 자리에, 사전 게시된 정리가 주는 예측을 제공",
+        "links": ["chunking-theory", "three-forces", "m4-ksweep", "cfac", "theory-preexp"],
+    },
+    "m4-ksweep": {
+        "date": "2026-08-22 09:30",
+        "who": "워커B(실험)",
+        "where": "공식 robocasa365 pi05 + run_trials 하네스 (A6000, 잡 2063897–2063902)",
+        "what": "사전등록 M4 — 5태스크 × k∈{1,2,4,8,12,16} 고정 실행길이 스윕, best-fixed-k 기준선 확정",
+        "how": "--replan-steps k, 20 trial/칸 seed 3000, k별 잡 분리; 판정은 프로그램 집계(ksweep_collect.py)",
+        "why": "adaptive 비교의 정직한 기준선 확보 + 상태의존 κ의 필요조건 검증 (사전등록 예측·기각조건 고정)",
+        "links": ["theory-preexp", "task-scan", "cfac", "cfac-nn", "three-forces", "wc-r-0819-nonmarkov"],
+    },
+    "cfac-nn": {
+        "date": "2026-08-21 03:40",
+        "who": "워커B(구현·실험)",
+        "where": "probes/toy_cfac_nn.py (PlanReach 연속 toy, torch CPU, 6시드)",
+        "what": "CFAC를 실제 알고리즘으로 구현·검증 — 오라클 동률, 그리고 '합성만으로 부족, 개입적 짝짓기 필요' 이론 정정",
+        "how": "신경 per-prefix 크리틱 + 모델 없는 per-step TD + 정책-기대 부트스트랩 + AWR full-chunk + 2×2 factorial",
+        "why": "사용자 지시 — toy로 실제 알고리즘이 작동하는지 확인",
+        "links": ["cfac", "theory-preexp", "chunking-theory", "three-forces", "wc-r-0820-extract"],
+    },
+    "cfac": {
+        "date": "2026-08-21 01:20",
+        "who": "워커B(이론·방법 제안·toy 실험)",
+        "where": "paper/theory.tex A.6 + probes/toy_cfac.py (plan-maze toy, 8시드 tabular)",
+        "what": "3중 미명세(공짜 재질의·Markov 조건·청크-회귀 교란) 정식화 → CFAC 제안 → toy에서 사전등록 4예측 전부 적중",
+        "how": "corridor(과거 잠재)–junction(미래 잠재) 최소쌍 환경, 크리틱 4종 factorial + 고정k + 오라클, 프로그램 분류",
+        "why": "사용자 지시 — 크리틱이 non-Markov 커밋·반응성을 공정 평가하도록 이론·트릭 발전 + 새 방법 제안 + toy 실험",
+        "links": [
+            "theory-preexp",
+            "chunking-theory",
+            "three-forces",
+            "nonmarkov-longer",
+            "adaptive-exec-map",
+            "wc-r-0820-headcond",
+        ],
+    },
+    "theory-preexp": {
+        "date": "2026-08-20 13:10",
+        "who": "워커B(논문·이론)",
+        "where": "paper/theory.tex·intro.tex·references.bib + 허브 이론 엔트리(chunking-theory·three-forces)",
+        "what": "밤샘 이론의 논문 부록 정식화(정리 3·명제 3·보조정리 2·따름정리 2) + 사전실험 M1–M5 사전 등록",
+        "how": "허브 정리 → 부록 명제 매핑, 신규 명제 2건(부기 편향·선택 천장) 증명, 예측·프로토콜·기각 조건 고정",
+        "why": "사용자 지시 — 이론적 토대를 논문 형태로(인트로 살짝 + 부록 증명) + 이론 기반 사전실험 설계",
+        "links": ["chunking-theory", "three-forces", "adaptive-exec-map", "task-scan", "paper-intro", "exp-board"],
+    },
+    "task-scan": {
+        "date": "2026-08-20 09:06",
+        "who": "워커B(실험)",
+        "where": "공식 robocasa365 pi05 + 우리 run_trials 하네스 (A6000, job 2059735)",
+        "what": "14태스크 SR 스캔 → 베이스라인 사다리용 30–60% 밴드 5태스크 선정",
+        "how": "서버 1회 기동+클라 순회, 20 trial/태스크 seed 고정; 실패 2건(env 이름)·환경버그 2건 기록",
+        "why": "베이스라인 사다리(B1 성공-필터 SFT부터)의 무대 확정 — 단일태스크 천장 교훈 반영",
+        "links": ["aqc-ablation", "deas", "exp-board", "critic-heads"],
+    },
+    "tier1-intros": {
+        "date": "2026-08-19 21:30",
+        "who": "워커B(논문 담당, 리뷰)",
+        "where": "arXiv HTML 인트로 절 (6편)",
+        "what": "Tier 1 여섯 편의 introduction 논리사슬·공백주장 비교분석 + 우리 인트로의 빈 칸 확정",
+        "how": "각 논문 인트로만 정독(문단별 논리·원문 인용) → 공통 패턴/아무도 안 하는 말/겹침 경보 정리",
+        "why": "사용자 지시 'Tier 1 논문들의 introduction/motivation 정리해 새 포스트' — 인트로 차별화 검증",
+        "links": ["papers-tier1", "paper-intro", "deas", "chunking-theory"],
     },
     "papers-tier1": {
         "date": "2026-08-19 14:30",
@@ -3402,6 +5045,430 @@ def _decorate(eid, body):
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+en(
+    "three-forces",
+    "The balance of four forces — synthesis of the adaptive-chunking theory, with testable predictions",
+    """
+<p><b>Why.</b> The close of the overnight theory program. The opening question (from the user): why
+does the k-tie of theoretical perfection fail to occur in practice, and how does the uncertainty
+split induce adaptive chunking, policy improvement, and the non-Markov preference for longer
+chunks? Five notes (<span class='xref' data-eid='adaptive-exec-map'>map</span> ·
+<span class='xref' data-eid='tie-knife-edge'>knife-edge</span> · <span class='xref' data-eid='uncertainty-split'>split</span> ·
+<span class='xref' data-eid='nonmarkov-longer'>two rooms</span> · <span class='xref' data-eid='event-triggered-bridge'>control bridge</span>)
+fold into one picture. We began with three forces; reading Zhang added a <b>fourth</b>.</p>
+
+<p><b>The four forces</b> acting on the commitment length k:</p>
+<table class='num'><tr><th>force</th><th>direction</th><th>origin</th><th>fate</th></tr>
+<tr><td>① branching (aleatoric)</td><td>k ↓</td><td>environment stochasticity — a requery is recourse (VoI)</td><td><b>irrecoverable</b> — the floor</td></tr>
+<tr><td>② policy error (epistemic)</td><td>regime-dependent (↓ if correction, ↑ if re-injection)</td><td>unfinished learning — Metelli's σ_p</td><td><b>absorbed by improvement</b> → the curriculum</td></tr>
+<tr><td>③ stability (Zhang)</td><td>k ↑ (a lower bound!)</td><td>contracting dynamics + error re-injection by frequent replans</td><td>relieved as ε_π→0, but the bound's form remains</td></tr>
+<tr><td>④ information (non-Markov)</td><td>k ↑</td><td>aliasing — replanning is re-inference on a garbled channel (Blackwell/copycat)</td><td>persists unless observability improves</td></tr></table>
+
+{img(P / "31_three_forces.png", "preferred commitment phase diagram + curriculum (schematic)")}
+<p class='sub'>Left: preferred k* on the (aleatoric pressure, long pressure) plane — <b>a schematic, not a
+measurement</b>. The star at the origin is the knife-edge tie; the band near the diagonal is where
+κ*(s) is genuinely state-dependent. Right: the predicted curriculum — training absorbs only the
+epistemic part, so mean k* converges monotonically to the aleatoric floor, which itself never moves.</p>
+
+<p><b>One-paragraph synthesis.</b> The ideal-limit tie is a knife edge made by three erasures
+(branching, correction, information loss — K1). Real environments push it off with four forces:
+branching pushes short (①), aliasing and contracting-dynamics re-injection push long (③④), and
+policy error pushes either way by regime (②) — and only ② vanishes with learning. Hence (i) κ*(s)
+is generically nonconstant (adaptive chunking is induced), (ii) as training proceeds the mean
+commitment grows to the aleatoric floor (the curriculum = the signature of policy improvement), and
+(iii) the short-commit regions remaining above the floor are the environment's branching structure
+itself. Selection-only methods (everyone on <span class='xref' data-eid='adaptive-exec-map'>the map</span>)
+have no means of absorbing ② and stay pinned to the initial configuration of ①–④ — why selection
+and improvement must be done together falls straight out of the four-force picture.</p>
+
+<p><b>Testable predictions (preregistration candidates).</b></p>
+<table class='num'><tr><th>#</th><th>prediction</th><th>measurement</th><th>refuted if</th></tr>
+<tr><td>P1</td><td>κ* locally anti-correlates with \\(u_{\\mathrm{alea}}\\)</td><td>per-prefix argmax vs ensemble split on the g5_pi05 critic, 6 episodes</td><td>correlation positive or zero</td></tr>
+<tr><td>P2</td><td>only \\(u_{\\mathrm{epis}}\\) drops from 20k→120k</td><td>the two checkpoints decomposed on the same frames (after cont finishes)</td><td>\\(u_{\\mathrm{alea}}\\) drops at the same rate</td></tr>
+<tr><td>P3</td><td>mean k* grows only in the improvement arm</td><td>the on/off causal experiment of chunking-theory III.7</td><td>growth in the off arm too</td></tr>
+<tr><td>P4</td><td>regions exist where receding horizon (k=1) underperforms long commitment (Zhang replication)</td><td>non-monotonicity of the fixed-k sweep on YAM/RoboCasa</td><td>k=1 globally optimal</td></tr>
+<tr><td>P5</td><td>replanning dithering (divergence of consecutive chunks) co-occurs with aliasing markers</td><td>distance between consecutively queried chunks vs occlusion/contact events</td><td>no correlation</td></tr></table>
+
+<p><b>The lineage in one line.</b> Metelli (persistence upper bounds) and ETC (MIET, Zeno) are the
+classical half; Zhang (executed-length lower bound) the modern half; ExRL/DEHP (online selection
+learning) the empirical half — this series attempts to join them into one <b>offline, value-based,
+improvement-coupled</b> frame. What remains: measuring P1–P5 and completing the knife-edge v2
+proofs.</p>
+""",
+)
+
+en(
+    "alphaflow-1step-gate",
+    "The one-step gate passes — the alpha-Flow 200k run completes, and one-step sampling is lossless",
+    f"""
+<p><b>Why.</b> The whole point of <span class='xref' data-eid='alphaflow-pi05'>α-Flow π0.5</span> was to make
+the offline-RL actor update cost ONE forward, on the premise that one-step conversion does not
+degrade action quality. With the 200k run complete (wandb <code>c4vy84yy</code>: the full curriculum
+α 1.0→0.005 without incident, delta² 0.052→0.0026; attempt 1 died to a /data5 disk-full during
+checkpointing and the run was restarted with checkpoints on /data1), we judge that gate.</p>
+
+<p><b>How.</b> On 36 held-out frames (6 episodes × 6), we measure demo-MSE of the 30-step chunk in
+<b>robot space, each policy unnormalizing with its own stats</b> (same per-frame noise across
+variants; script <code>eval_onestep_bc.py</code>; the table is recomputed from results.json at every
+publish).</p>
+
+<table class='num'><tr><th>variant</th><th>demo-MSE @160k</th><th>@200k (final)</th></tr>
+{_GATE_ROWS}</table>
+<p class='sub'>{_GATE_EXTRA}</p>
+
+<p><b>Verdict — one-step conversion is lossless, in fact a gain.</b> At the final checkpoint,
+1-step (0.00096) beats the same model's 10-step (0.00153), monotonically in step count (1&lt;2&lt;10).
+The 40k floor phase (α=5e-3) tightened 1-step further (160k 0.00107 → 200k 0.00096, while 10-step
+slipped slightly) — the effect of optimizing the big-jump target directly. The self-consistency gap
+is ~0.1% of action variance. <b>This 1-step policy can serve as the RL stack's actor as-is.</b></p>
+
+<p><b>The BC comparison's limits (stated).</b> ~2.8× below the BC baseline (0.00267), but that is not
+a confirmed claim — the baseline trained on s300 success-only for 70k steps vs α-Flow's s347
+all-episodes 200k, so it is <b>not a method-only diff</b>, and demo-MSE is a proxy for success rate.
+What is confirmed: within the same model, 1-step ≥ 10-step.</p>
+
+<p><b>Next.</b> This 1-step policy slots into the FQL/QC-FQL stack as the actor (the empty cell of
+<span class='xref' data-eid='adaptive-exec-map'>the family map</span>: offline + selection-and-improvement
+together) — the distillation target changes from a 10-step ODE to a single forward, removing the
+teacher cost of actor training. Coupling it with the per-prefix critic is the next cycle.</p>
+""",
+)
+
+en(
+    "p2-uncertainty-meas",
+    "Measuring P2 — does training shrink only the epistemic part (20k vs 120k)? Direction agrees; the strong form is unsupported",
+    f"""
+<p><b>Why.</b> First measurement of prediction ② of the
+<span class='xref' data-eid='uncertainty-split'>uncertainty-split note</span> (preregistered: "training
+shrinks only u_epis, u_alea stays; if u_alea drops at the same rate the decomposition is
+meaningless"). Using the same critic at 20k (g5_pi05) and after a +100k continuation (120k), we
+decomposed the K=2 ensemble's HL-Gauss distributions on every frame (stride 8) of the six episodes
+already rendered as value videos (u_alea = mean within-member variance, u_epis = variance of member
+means; full prefix; script <code>measure_uncertainty_split.py</code>; the table is recomputed from
+the raw JSON on every publish).</p>
+
+<table class='num'><tr><th>episode</th><th>outcome</th><th>u_alea (variance)</th><th>ratio</th><th>u_epis</th><th>ratio</th></tr>
+{_P2_ROWS}</table>
+<p class='sub'>{_P2_SUMMARY}</p>
+
+{{img32}}
+
+<p><b>Verdict — direction agrees; the strong form is unsupported.</b> By geometric mean u_epis fell
+more than u_alea (−39% vs −24%) — the sign matches the prediction. But the preregistered strong form
+is <b>not supported</b>: u_alea moved by the same order (half of the refutation condition fires), and
+per-episode variance is large — in 2 of 6 episodes (ep23 +15%, ep141 ×2.01) u_epis actually rose.
+The honest label is <b>inconclusive, weakly supportive</b>. The dominant confound is K=2: measuring
+epistemic uncertainty as the disagreement of two members is intrinsically high-variance (the split
+note's own warning), so a <code>head_ensemble</code> K≥8 re-measurement is the precondition for a
+real verdict.</p>
+
+<p><b>Side finding (next hypothesis).</b> Success and failure separated in u_alea: the three
+successes tightened (×0.52, ×1.00, ×0.60 — the distribution sharpens where returns are predictable)
+while two of three failures held or grew (×1.41, ×1.06 — training represents the dispersion of
+failure segments more honestly). Only ep141, the shortest instant-abort failure (353 frames), is an
+outlier in both quantities and needs its own look. This success/failure asymmetry is consistent with
+the split note's caveat that behavior-policy dispersion contaminates u_alea, and it defines the next
+measurement, separating environment stochasticity from return multimodality inside u_alea.</p>
+
+<p><b>Reproduction.</b> Script, JSON, and figure are all in the repo. The 120k "after" value videos
+of the same six episodes follow as a separate upload (gallery <code>videos/yam_value</code>).</p>
+""",
+)
+
+en(
+    "event-triggered-bridge",
+    "The bridge from control theory — event-triggered control is adaptive chunking's 40-year-old ancestor",
+    """
+<p><b>Why.</b> "When to replan" is not a question robot learning met first — control theory has
+worked it for decades as <b>event-triggered / self-triggered control</b> (ETC/STC;
+Heemels–Johansson–Tabuada tutorial). This note opens that dictionary for our problem: the
+correspondence table, the guarantees we can import, and what does <b>not</b> transfer. Overnight
+theory program 5/6.</p>
+
+<table class='num'><tr><th>control theory (ETC/STC)</th><th>adaptive chunking (ours)</th></tr>
+<tr><td>control update (measure → recompute control)</td><td>replan (observe → query a new chunk)</td></tr>
+<tr><td>inter-event time</td><td>commitment length k</td></tr>
+<tr><td>trigger \\(\\lVert e(t)\\rVert>\\sigma\\lVert x(t)\\rVert\\) (update when error crosses a threshold)</td><td>value trigger: requery where per-prefix \\(Q_k\\) bends (the prototype of κ*)</td></tr>
+<tr><td>STC: from the current state, <b>precompute the next update time</b></td><td>the state-dependent commitment map κ(s) — literally the same object</td></tr>
+<tr><td><b>MIET</b> (minimum inter-event time) guarantees; Zeno exclusion</td><td>guaranteed lower bounds on commitment; excluding the replan-every-step pathology (ExRL's k=0 loop is Zeno's learned incarnation)</td></tr>
+<tr><td>disturbance magnitude ↔ event frequency</td><td>aleatoric \\(u_{\\mathrm{alea}}\\) ↔ short k (<span class='xref' data-eid='uncertainty-split'>the split</span>, prediction ①)</td></tr>
+<tr><td>model mismatch ↔ conservative triggering</td><td>epistemic \\(u_{\\mathrm{epis}}\\) ↔ absorbed by training (prediction ②)</td></tr>
+<tr><td>communication/compute savings vs performance</td><td>inference cost vs return (the motivation for the lexicographic rule)</td></tr></table>
+
+<p><b>Two things to import.</b> ① <b>The shape of MIET theorems</b>: with Lipschitz dynamics and a
+well-designed trigger, inter-event times have a positive lower bound (e.g., designable MIET,
+arXiv:2002.00058) — the same direction as Zhang's executed-length lower bound
+(<span class='xref' data-eid='nonmarkov-longer'>two rooms</span>), only decades older. The pathology of
+too-short commitment was excluded by control theory under the name Zeno before learning
+rediscovered it. ② <b>The grammar of triggers</b>: an ETC trigger fires when the Lyapunov decrease is
+threatened — our critic's per-prefix \\(Q_k(s)\\) is a <b>learned value certificate</b> standing in
+exactly that slot. The deployment rule "cut where \\(Q_{k+g}-Q_k\\) bends below threshold" reads as
+the return-maximizing generalization of a Lyapunov trigger.</p>
+
+<p><b>What does not transfer (honest boundary).</b> ETC guarantees concern (i) stabilization
+objectives, (ii) known or partially known dynamics, (iii) designed (not learned) triggers.
+Porting them to return maximization, unknown dynamics, and learned triggers is <b>a program, not a
+theorem</b> — and that gap is precisely what this theory series fills. Nor is the ETC↔RL bridge
+itself new — event-triggered RL exists in cyber-physical contexts (e.g., Learning When to Act via
+Run-Time Assurance, arXiv:2605.12561; ET-MPC+DRL, arXiv:2208.10302); what we newly lay is the
+<b>import into the VLA action-chunking context</b> with the value-trigger and uncertainty mappings.</p>
+
+<p><b>The view gained.</b> Through the ETC lens, the heuristic signals of the adaptive-execution
+family (<span class='xref' data-eid='adaptive-exec-map'>the map</span>) — entropy, consistency,
+attention — are all <b>surrogate triggers</b>: different proxies for the true trigger (threatened value
+decrease). Why a trigger built directly on learned per-prefix value is in-principle superior now
+fits in one line: <b>the trigger speaks the same currency as the objective.</b></p>
+""",
+)
+
+en(
+    "nonmarkov-longer",
+    "Two rooms where long commitment wins — stability (Zhang) and information (Blackwell/copycat), plus a sign correction to K3",
+    """
+<p><b>Why.</b> K4 of the <span class='xref' data-eid='tie-knife-edge'>knife-edge note</span> promised regions
+where longer commitment strictly wins, via aliasing. This note establishes that existence through
+<b>two independent mechanisms</b> — the <b>stability mechanism</b> of Zhang et al.
+(arXiv:2507.09061), just verified against the original (and holding even with Markovian experts!),
+and the <b>information mechanism</b> of partial observability (Blackwell garbling + the copycat
+literature). Along the way we honestly correct K3's sign (policy error → short k) as
+<b>regime-dependent</b>. Overnight theory program 4/6.</p>
+
+<p><b>Room A — stability: frequent replanning creates exponential blow-up (Zhang, verified).</b>
+Their Prop 3.1: if the dynamics are open-loop \\((C_{\\mathrm{ISS}},\\rho)\\)-EISS (contracting) and the
+policy–model pair is EISS, the chunked policy inherits stability on the true dynamics — with the
+condition being a <b>lower bound on the executed chunk length</b>:
+\\[ \\ell \\;>\\; \\frac{\\log\\mathrm{poly}(L_\\pi, C_{\\mathrm{ISS}})}{\\log(1/\\rho)}. \\]
+The key reversal, in their words: "<i>even on synthetic globally stable dynamics, frequent feedback
+can cause exponential compounding error, which action-chunking mitigates</i>" — and the requirement
+binds the <b>executed</b> length, not the predicted one (the same policy run receding-horizon can be
+unstable). Mechanism: replanning re-injects the learned error into the feedback loop every step;
+committing lets the environment's contraction (ρ) absorb it. No aliasing needed — this holds with
+unimodal, Markovian experts.</p>
+
+<p><b>The K3 sign correction (self-correction of v1).</b> The knife-edge note's K3 said "policy error
+→ replanning helps (short k)"; Room A exhibits the opposite-sign regime. The precise statement:
+which way \\(\\varepsilon_\\pi\\) pushes depends on whether <b>replanning is a correction or a
+re-injection</b> — (i) when the replan distribution is a trustworthy on-support correction (near the
+expert; the error lies in execution, not state estimation), short k wins (original K3); (ii) when
+the environment contracts and the error lives in the policy's own output, replanning re-excites the
+error and k at least Zhang's bound wins. Which regime holds is set by ρ and the error's origin; in
+both, the effect vanishes as \\(\\varepsilon_\\pi\\to0\\) — <b>absorbability survives</b>, but the direction
+of the pre-absorption curriculum can differ by state and regime. That is the content of the
+correction.</p>
+
+<p><b>Room B — information: replanning is re-inference on a garbled channel.</b> Two-state
+construction: states \\(x_A,x_B\\) merge into one observation o while demanding different
+continuations (e.g., an occluded object left vs right). A chunk launched from an earlier separable
+state \\(s_0\\) carries the correct branch open-loop; a policy replanning at o is weakly worse by
+Blackwell's theorem — strictly worse when the branches differ — with the worst case being
+<b>dithering</b>, averaging between modes at every requery. The imitation literature knows another
+face of the same pathology: copycat / causal confusion (arXiv:1905.11979; Fighting Copycat,
+NeurIPS'20) shows per-step re-inference under partial observability collapses onto a shortcut
+(copying the previous action); chunk commitment removes the re-inference altogether. Zhang lists it
+too — the folk rationale #1 for chunking is "robustness to non-Markovian / partial observability
+quirks"; we are formalizing it as the garbling argument.</p>
+
+<p><b>Synthesis — existence of long-commitment regions (statement).</b> In regions where (A) ρ&lt;1,
+the policy error is finite, and there is no branching, or (B) the executed segment is aliased while
+the launch state is separable, \\(\\varphi_k(s)>0\\): longer commitment strictly wins. (A) is
+quantitative via Zhang's lower bound; (B) is an existence proof via the two-state construction. The
+opposing pressure (aleatoric branching) is measured by the \\(u_{\\mathrm{alea}}\\) grid of
+<span class='xref' data-eid='uncertainty-split'>the uncertainty split</span> — κ*(s) is the local
+balance point of these two pressures.</p>
+
+<p><b>Remaining.</b> ① Numerical validation of the two-state construction (toy POMDP with a complete
+proof) — follow-up entry. ② A YAM proxy for the relative size of rooms A/B (replanning dithering =
+divergence between consecutive chunks vs post-commit error). ③ Fold the K3 correction into
+knife-edge v2.</p>
+""",
+)
+
+en(
+    "uncertainty-split",
+    "Two faces of uncertainty — the aleatoric/epistemic split induces adaptive chunking (with a measurement plan)",
+    """
+<p><b>Why.</b> The <span class='xref' data-eid='tie-knife-edge'>knife-edge formalization</span> showed two of
+the three tie-breaking forces are uncertainties: environment stochasticity (K2, irrecoverable) and
+policy error (K3, absorbed by improvement). This note identifies them with the standard
+<b>aleatoric / epistemic</b> decomposition (Depeweg et al., ICML'18, arXiv:1710.07283; Clements et
+al., arXiv:1905.09638) and shows our distributional ensemble critic can <b>measure both, on a
+state × commitment-length grid, with no extra training</b>. Overnight theory program 3/6.</p>
+
+<p><b>The decomposition (law of total variance).</b> With ensemble members \\(m=1..K\\) each predicting
+a return distribution \\(Z_m(s,a_{1:k})\\):
+\\[ \\underbrace{\\mathrm{Var}[Z]}_{\\text{total}} \\;=\\;
+\\underbrace{\\tfrac1K\\textstyle\\sum_m \\mathrm{Var}[Z_m]}_{u_{\\mathrm{alea}}\\;(\\text{within-member})} \\;+\\;
+\\underbrace{\\mathrm{Var}_m\\big[\\mathbb E[Z_m]\\big]}_{u_{\\mathrm{epis}}\\;(\\text{across-member})} \\]
+Within-member spread survives infinite data (aleatoric); across-member disagreement is the
+ignorance that data and training remove (epistemic). Our <code>PatchCriticEnsemble</code>
+<b>already has this shape</b>: K HL-Gauss distributional heads, per prefix — a forward pass over a
+checkpoint yields the two fields \\(u_{\\mathrm{alea}}(s,k)\\), \\(u_{\\mathrm{epis}}(s,k)\\) for free.</p>
+
+<p><b>Theory hooks — three predictions.</b>
+① <b>κ* tracks the aleatoric field</b>: K2's branching term fires where \\(u_{\\mathrm{alea}}\\) is high, so
+the true-value-optimal commitment shortens there — our hypothesis for what DEHP/ExRL observed
+qualitatively as "fine-grained phases → short".
+② <b>Training shrinks only the epistemic part</b>: K3's absorption appears as \\(u_{\\mathrm{epis}}\\downarrow\\)
+with \\(u_{\\mathrm{alea}}\\) unchanged — a <b>measurable signature</b> of the curriculum (mean commitment
+length rising monotonically).
+③ <b>Routing must separate the two</b>: EQRL (arXiv:2606.14375) routes computation by ensemble
+disagreement (= epistemic only) — half the story, in decomposition terms. Short commitment
+(replanning) is justified by aleatoric uncertainty; extra compute and data collection by epistemic.
+A merged signal wastes replanning on fixable ignorance and compute on unfixable spread.</p>
+
+<p><b>Two honest caveats.</b> (a) A learned return distribution's within-member variance includes the
+<b>behavior policy's dispersion and return multimodality</b>, not just env stochasticity (teleop style
+variation shows up as aleatoric) — consistent with Metelli Thm 4.2's \\(\\sigma_p\\) (policy dispersion)
+entering the persistence cost, but identifying it with pure env noise would overclaim. (b) Our
+deployed ensemble is K=2, a weak epistemic estimate — <code>ARQCritic.head_ensemble</code> (shared
+trunk + K independent heads) already provides a nearly-free path to K≥8.</p>
+
+<p><b>Measurement plan (immediately runnable).</b> We happen to hold the same critic at <b>20k
+(g5_pi05) and a 120k continuation (in progress)</b>: compute both fields along the six episodes
+already rendered as value videos (ep320/79/23/214/5/141) and test ①② directly — if right, only the
+\\(u_{\\mathrm{epis}}\\) curve drops from 20k→120k while \\(u_{\\mathrm{alea}}\\) persists, and failure episodes
+show a distinct \\(u_{\\mathrm{alea}}\\) phase profile (contact/alignment peaks). One extra panel in
+<code>render_yam_value_video.py</code> makes it visible in video. The measurement will be posted as a
+follow-up entry.</p>
+
+<p><b>Relation to prior work.</b> The decomposition itself is standard (Depeweg; Clements;
+arXiv:2206.01558); our candidate contribution is <b>unrolling it along the commitment axis</b> — the
+\\(u(s,k)\\) grid, its link to κ*, and the routing principle "replanning for aleatoric, improvement and
+compute for epistemic". Prediction ② is the measurable version of
+<span class='xref' data-eid='chunking-theory'>chunking-theory</span> III.7's curriculum.</p>
+""",
+)
+
+en(
+    "tie-knife-edge",
+    "The knife-edge of perfection — the theoretical tie is structurally unstable (formalization v1)",
+    """
+<p><b>Why.</b> <span class='xref' data-eid='chunking-theory'>chunking-theory</span>'s Theorem 2 shows that in
+the deterministic, fully observed limit \\(\\Delta_{\\mathrm{react}}=0\\): <b>every commitment length k
+ties</b>. So why does adaptive chunking help in practice? This note formalizes that tie as a
+<b>knife-edge singularity</b>: three kinds of ε-perturbation (environment stochasticity, policy
+inconsistency, observation aliasing) each break the tie <b>in different directions</b>, so a generic
+environment has a nontrivial state-dependent commitment map \\(\\kappa^*(s)\\). Overnight theory
+program 2/6.</p>
+
+<p><b>Setup.</b> Base MDP \\(M=(\\mathcal S,\\mathcal A,T,r,\\gamma)\\), chunk policy \\(\\pi\\) (length H),
+selector \\(\\kappa:\\mathcal S\\to\\{1..H\\}\\). \\(Q^\\pi_k(s)\\) = value of executing the chunk's first k steps
+open-loop from s, then requerying; \\(\\varphi_k(s):=Q^\\pi_k(s)-Q^\\pi_H(s)\\) = the relative gain of
+replanning at k.</p>
+
+<p><b>Proposition K1 (the tie's mechanism — replanning has nothing to undo).</b> If (i) T is
+deterministic, (ii) the policy is <b>replan-consistent</b> (a requery reproduces the previous chunk's
+tail), and (iii) observations separate states, then \\(\\varphi_k(s)=0\\) for all s, k. <i>Sketch.</i> The
+only thing replanning can produce is a correction based on new information; (i) removes the new
+information, (ii) removes the correction, (iii) removes the information loss — the executed path
+becomes k-independent. ∎ (A restatement of chunking-theory Thm 2: the tie is not an accident but
+the conjunction of three erasures.)</p>
+
+<p><b>Proposition K2 (stochasticity breaks the tie toward short k — the value of recourse).</b> If a
+reachable branch state \\(s_b\\) exists where the optimal continuation differs across next-state
+realizations with probability p and value gap g, replanning right after the branch strictly gains
+\\(\\gamma^{t_b}\\,p\\,g>0\\) — \\(\\varphi_k\\) is strictly negative for any k that buries the branch inside the
+chunk. The mechanism is the <i>value of information</i>: a requery strictly helps exactly when the
+observation changes the decision. This term is <b>irrecoverable</b> (no policy improvement removes
+it) — it is the aleatoric floor. The classical quantitative side: Metelli et al. (ICML'20,
+arXiv:2002.06836) Thm 4.1 bounds the persistence cost by
+\\(\\tfrac{\\gamma(1-\\gamma^{k-1})}{(1-\\gamma)(1-\\gamma^k)}\\,\\lVert d^\\pi\\rVert\\), where d is the discrepancy
+between what the policy would do and what persistence does; our branching term is its lower-bound
+counterpart.</p>
+
+<p><b>Proposition K3 (policy error also breaks toward short k — but absorbably).</b> Let
+\\(\\varepsilon_\\pi\\) be the per-step TV gap between the replan distribution and the chunk's
+continuation. By Ross–Bagnell compounding this component of \\(\\varphi\\) grows with k and pushes
+toward short commitment; but \\(\\varepsilon_\\pi\\to0\\) as \\(\\pi\\to\\pi^*\\): <b>policy improvement absorbs
+this term</b>, leaving only K2 — the other face of the curriculum (mean commitment length rising to
+the aleatoric floor, chunking-theory III.7). Notably, Metelli Thm 4.2's bound contains the policy's
+own action dispersion \\(\\sigma_p^p=\\sup_s\\int\\!\\!\\int d_{\\mathcal A}(a,a')^p\\,\\pi(da|s)\\pi(da'|s)\\)
+<b>explicitly</b> — a 2020 precedent for "policy uncertainty raises the cost of committing".</p>
+
+<p><b>Proposition K4 (aliasing breaks the tie toward LONG k — the only sign flip).</b> If the
+observation channel \\(O\\) merges states, replanning is <b>re-inference on garbled information</b>. By
+Blackwell's theorem decisions on a garbled channel are weakly worse — strictly worse when the
+merged states demand different continuations — whereas a chunk launched from an earlier,
+separable state <b>carries</b> that information open-loop. In states where replanning dithers between
+modes, \\(\\varphi_k>0\\): <b>regions exist where longer commitment strictly wins</b>. (The two-state
+construction and the copycat-literature connection are completed in the next entry.)</p>
+
+<p><b>Theorem K5 (the knife-edge; provisional statement).</b> The tie \\(\\varphi\\equiv0\\) ⟺ (no
+reachable branching) ∧ (replan-consistency) ∧ (no aliasing along executed segments). If any
+condition fails by ε, the sign of \\(\\varphi\\) near the affected states is determined (K2, K3: −;
+K4: +), and since the direction varies by state, the generic \\(\\kappa^*(s)\\) is nonconstant. That is:
+<b>adaptive chunking is not an exception to the tie; the tie is adaptive chunking's measure-zero
+singularity.</b> Provisional because the precise topology of "generic" (open-dense in which
+perturbation space) is tightened in the next version.</p>
+
+<p><b>Corollary (justifying the deployment rule).</b> Near the ideal point all k are ε-tied, so the
+lexicographic rule — the longest k within the return-optimal ±ε set — is the natural tie-break: it
+recovers compute without touching return, and away from the ideal point the sign decides anyway.
+(chunking-theory III.7's rule becomes a corollary of this theorem.)</p>
+
+<p><b>Relation to prior work.</b> Everything here concerns <b>true values</b> — estimation-side
+k-biases are a separate axis: the discount-bookkeeping bias was solved by ExRL's SMDP backup, and
+the hindsight leakage of closed-loop teleop (DQC) survives correct bookkeeping and remains our
+open, unmeasured axis (see the claim-strength guard in
+<span class='xref' data-eid='adaptive-exec-map'>the family map</span>).</p>
+""",
+)
+
+en(
+    "adaptive-exec-map",
+    "A complete map of the adaptive-execution family — signal × regime × what-adapts, and the empty cells",
+    """
+<p><b>Why.</b> Reading ExRL (RSS RL4VLA workshop) and DEHP (arXiv:2606.11408) in full revealed that
+"when to replan" became a crowded family in early 2026. As step 1/6 of tonight's theory program
+(structural instability of the tie → uncertainty decomposition → non-Markov long-chunk regions →
+the event-triggered-control bridge → three-forces synthesis), this entry draws the complete map and
+confirms whether our slot (offline learned signal + simultaneous policy improvement) is truly empty.</p>
+
+<p><b>Axes.</b> ① <b>what adapts</b> — execution length k / the actions themselves / latents &
+compute budget. ② <b>signal</b> — learned value (Q/V) vs heuristic (entropy, consistency,
+attention). ③ <b>regime</b> — does it need online interaction. ④ <b>policy improvement</b> — does
+the base policy get better (frozen = ✕).</p>
+
+<table class='num'><tr><th>method</th><th>adapts</th><th>signal</th><th>regime</th><th>improves policy</th><th>source confidence</th></tr>
+<tr><td><b>ExRL</b> (RSS'26 RL4VLA WS)</td><td>k∈{0..H}</td><td>learned Q(s,a₁:H,k), off-policy (replay)</td><td>online ~10⁶</td><td>✕ (frozen; self-admitted: "bounded by the action distribution of the frozen base policy")</td><td>full read (PDF)</td></tr>
+<tr><td><b>DEHP</b> (2606.11408)</td><td>h∈{1..H}</td><td>learned π_len + V(s), on-policy PPO</td><td>online 5×10⁸</td><td>✕ (frozen)</td><td>full read</td></tr>
+<tr><td><b>AQC</b> (2605.05544)</td><td>commit K∈{1,4,8,16}</td><td>learned Q (offline TD)</td><td>offline</td><td>✕ (selection only)</td><td>full read (earlier report)</td></tr>
+<tr><td><b>ACSAC</b> (2605.11009)</td><td>commitment length</td><td>learned per-prefix Q</td><td>offline</td><td>✕</td><td>PDF held, partial read</td></tr>
+<tr><td><b>ACH</b> (2605.10044)</td><td>chunk length (during training too)</td><td>parallel multi-length Q</td><td>offline→online</td><td><b>△ trains the policy</b></td><td>abstract</td></tr>
+<tr><td><b>EQRL</b> (2606.14375)</td><td>latent + denoise steps + chunk length C</td><td><b>critic-ensemble disagreement (= epistemic!)</b> + macro-action RL, γ^L</td><td>online (likely)</td><td>✕ (frozen + adaptor)</td><td>abstract</td></tr>
+<tr><td><b>AutoHorizon</b> (2602.21445)</td><td>execution horizon</td><td>action self-attention (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>PACE</b> (2606.00537)</td><td>execution horizon</td><td>phase-kinematic trajectory structure (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>AAC</b> (CVPR'26, 2604.04161)</td><td>chunk size</td><td>action entropy (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract</td></tr>
+<tr><td><b>A³</b> (2605.11567)</td><td>committed prefix</td><td>self-speculative verification (heuristic)</td><td>training-free test-time</td><td>✕</td><td>abstract + HTML</td></tr>
+<tr><td><b>DVAC</b> (2606.03847)</td><td>replan timing</td><td>denoising variance (heuristic)</td><td>training-free</td><td>✕</td><td>title/abstract</td></tr>
+<tr><td>BID · SGAC · TAS · MoH · HiPolicy</td><td>chunk selection/fusion</td><td>consistency, similarity, entropy, caching</td><td>training-free to light</td><td>✕</td><td>via DEHP related work</td></tr>
+<tr><td><b>TempoRL</b> (ICML'21)</td><td>action-repeat length (skip)</td><td>learned skip-Q (action-conditioned!)</td><td>online</td><td>△ (policy co-trained)</td><td>abstract + blog</td></tr>
+<tr><td><b>Metelli PFQI</b> (ICML'20)</td><td>persistence k (fixed pick)</td><td>learned Q_k + <b>theoretical bounds</b></td><td>batch (offline)</td><td>✕</td><td>abstract; theory check pending</td></tr>
+<tr><td>FiGAR · AP-PI · SDAR</td><td>repeat length</td><td>learned (action-unconditioned etc.)</td><td>online</td><td>△</td><td>via citation</td></tr></table>
+
+<p><b>Three observations.</b> ① Within the VLA-chunk family, <b>every learned signal is online</b>
+(ExRL, DEHP, EQRL, ACH) and <b>every offline/test-time method is heuristic</b> (AutoHorizon, PACE,
+AAC, A³, DVAC, BID…) — the "learned signal × offline" cell holds only AQC/ACSAC and our per-prefix
+ARQ critic. ② The VLA family is (ACH aside) <b>selection-only across the board</b> — the base policy
+stays frozen, and ExRL states that ceiling itself. Doing selection <b>and</b> policy improvement at
+once is a family-wide gap — exactly what <span class='xref' data-eid='chunking-theory'>chunking-theory</span>'s
+Lemma B ("selection alone cannot grow the commitment length") targets. ③ The only member with
+theoretical bounds is the decade-old lineage (Metelli's PFQI: persistence loss bounded via dynamics
+regularity) — the VLA generation is rediscovering it empirically, without theory. Tonight's theory
+entries connect the two.</p>
+
+<p><b>Claim-strength guard (self-correction).</b> We must not write "nobody addressed k-dependent
+bias" — the discount-bookkeeping bias in k was identified and fixed by ExRL's SMDP backup ("a
+standard one-step backup ... can bias the critic toward shortcut choices"). Our distinct axis is the
+<b>hindsight leakage of closed-loop teleop data</b> (DQC arXiv:2512.10926): an optimism bias that
+survives correct bookkeeping and grows with k offline. The two must always be kept separate.</p>
+
+<p><b>Next.</b> The theory entries that fill the two confirmed gaps (offline learned signal;
+selection + improvement together): structural instability of the tie → aleatoric/epistemic
+decomposition → non-Markov long-chunk regions → the event-triggered bridge → three-forces synthesis.</p>
+""",
+)
+
 en(
     "alphaflow-pi05",
     "α-Flow π0.5 — turning the VLA into a few/one-step generator (implementation + curriculum verification)",
@@ -4375,6 +6442,561 @@ td-max vs DEAS), <code>plot_cmp.py</code>. DEAS code <code>github.com/csmile-100
 )
 
 en(
+    "task-scan",
+    "Multi-task SR scan — staging the baseline ladder with the official RoboCasa-365 pi05",
+    """
+<p class='sub'>To stage the baseline ladder (success-filtered SFT, weighted SFT, Q-filtered, chunked RL), the
+official robocasa365 pi05 (pretrain_human300/75000, worker A's serving fixes) was evaluated on 14 atomic and
+pick-and-place tasks, 20 trials each at a fixed seed. Goal: tasks in the 30 to 60 percent band, with room to improve
+and no ceiling. Results: CloseDrawer 0.90 (ceiling), PickPlaceCounterToSink 0.75, <b>PickPlaceSinkToCounter 0.60,
+CoffeeServeMug 0.40, OpenDrawer 0.30, TurnOnStove 0.20, PickPlaceCounterToMicrowave 0.20 selected</b>;
+PickPlaceMicrowaveToCounter 0.15 and CoffeeSetupMug 0.10 in reserve; faucet/stove-off/coffee-start at or near zero
+excluded; the two door tasks failed on env naming and will be retried. Single-seed n=20 is for selection only; the
+ladder itself runs at run-level multi-seed. Next: B1 (success-filtered SFT) on the five selected tasks. Reproduce:
+<code>probes/run_task_scan.sh</code>, per-task JSONs under <code>gr1_eval/task_scan/</code>.</p>""",
+)
+
+en(
+    "theory-preexp",
+    "📐 Theory → paper → pre-experiments — the SMDP appendix (theory.tex) and pre-registered M1–M5",
+    """
+<p class='sub'>The overnight theory program is now formalized as paper appendix <code>paper/theory.tex</code>
+(3 theorems, 3 propositions, 2 lemmas, 2 corollaries, all with proofs), and five falsifiable predictions of that
+theory are pre-registered here as pre-experiments M1–M5.</p>
+
+<p>The sources are <span class='xref' data-eid='chunking-theory'>chunking-theory</span> Part III and the
+<span class='xref' data-eid='three-forces'>four forces</span>; the introduction received a light touch (SMDP lineage
+citations and an appendix pointer). M1–M5 fix prediction, protocol, and rejection condition <b>before any run</b>;
+this post will not be edited after publication. Results will be reported as separate entries.</p>
+
+<h3>① Paper placement — which hub result became which appendix statement</h3>
+<table class='num'><tr><th>Appendix (theory.tex)</th><th>Content</th><th>Source</th></tr>
+<tr><td>Eq. (A.1)</td><td>The <b>SMDP backup</b> for variable commitment — the option value of committing k steps is
+\\(\\sum_{j&lt;k}\\gamma^j r_j + \\gamma^k V(s_k)\\); the only bookkeeping that compares commitments of different
+lengths fairly</td><td>classical options/SMDP (Sutton–Precup–Singh, Bradtke–Duff), with QC (fixed k) and DEAS (dual
+discounts) positioned as its instantiations</td></tr>
+<tr><td>Prop 1</td><td><b>Bookkeeping bias</b>: the duration-blind backup (one γ per decision) distorts values by
+\\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)] \\ge 0\\) — monotone in k, <b>inflating long commitments regardless of
+outcomes</b> (a k-step reach masquerades as a one-step shortcut; under the success-reward convention — the sign
+reverses under cost-to-go, see the ⚠️ amendment below). The quantitative form of the bias ExRL identified
+online</td><td>new formalization (ExRL credited)</td></tr>
+<tr><td>Prop 2</td><td><b>Support ceiling + winner's curse</b>: best-of-N execution can never exceed the frozen
+policy's support (for every N), and the believed-minus-realized gap grows like \\(\\sigma\\sqrt{2\\ln N}\\) —
+scaling N scales the self-deception</td><td>new formalization (EMaQ's N-interpolation made explicit)</td></tr>
+<tr><td>Lemmas 1·2</td><td>Sandwich (\\(V^\\star_H \\le V^\\star_{ada} \\le V^\\star_1\\)) / <b>the full-chunk
+objective is a tight lower bound on deployed value</b> — improving only short prefixes leaves the bound unmoved, so
+commitments never lengthen (why the selection-only family stays stuck at its initial lengths)</td>
+<td>chunking-theory Lemmas A·B</td></tr>
+<tr><td>Thms 1–3 + 2 corollaries</td><td>Shortfall decomposition (aleatoric/epistemic) · determinism ⇒ zero value of
+reactivity + <b>absorption</b> (every adaptive gain compiles into a better full chunk) · the floor bound ·
+<b>curriculum</b> (as improvement proceeds, mean commitment grows to an environment-set floor — no replan cost
+needed)</td><td>chunking-theory III.2–III.7</td></tr>
+<tr><td>Prop 3</td><td><b>The prefix baseline cannot cancel leakage</b>: \\(b^Q_k\\) grows with k (DQC Thm 1 cited
+as Fact), the baseline conditions on the state alone so subtraction leaves a residual, and the \\(\\gamma^{-k}\\)
+normalization amplifies it</td><td>chunking-theory III.8 + DQC</td></tr>
+<tr><td>Worked example</td><td>Corridor (commitment wins: each requery risks an ε-resample) vs junction (reaction
+wins: a coin is revealed after step 1) — for ε∈(0,½) <b>every fixed k is strictly suboptimal</b>; only a
+state-dependent κ takes both. The corridor margin vanishes as ε→0 (the curriculum in miniature); the junction gain
+persists (the floor)</td><td>new</td></tr></table>
+
+<p><b>Separating the two biases (the core discipline).</b> ① The <b>bookkeeping bias</b> (Prop 1) is a property of
+the estimator — the SMDP backup (A.1) removes it exactly. ② <b>Hindsight leakage</b> (Prop 3) is a property of the
+data-generating process — it survives correct bookkeeping and grows with k. The former is cured by the backup, the
+latter by conservative in-sample targets — <b>different tools</b>. Attribution discipline: the bookkeeping bias was
+identified by ExRL, leakage was quantified by DQC — we never claim either as ours (exactly the claim-strength guard
+of the <span class='xref' data-eid='adaptive-exec-map'>family map</span>).</p>
+
+<h3>② Pre-experiments M1–M5 (pre-registered — fixed before running)</h3>
+<table class='num'><tr><th>#</th><th>Theory</th><th>Prediction</th><th>Protocol</th><th>Rejected if</th><th>Infra · when</th></tr>
+<tr><td><b>M1</b> bookkeeping A/B</td><td>Prop 1</td><td>plugging a duration-blind scorer into the same critic
+shifts the k distribution long and drops SR on branching tasks</td><td>same critic, same scenes, only the scorer
+swaps \\(\\gamma^k\\) vs \\(\\gamma\\) — k histogram + paired closed-loop SR (2 tasks × 3 seeds × 25)</td>
+<td>k distributions and SR indistinguishable</td><td>reuses critic ckpt; scorer is post-processing — small</td></tr>
+<tr><td><b>M2</b> leakage curve</td><td>Prop 3 + DQC</td><td>\\(b_k := \\hat Q^k - \\)(discounted MC of open-loop
+replay) increases monotonically in k; a residual survives subtracting \\(b^V_k\\)</td><td>replay demo prefixes open
+loop → realized return vs critic estimate, per-k run-level CI (episode-clustered bootstrap)</td>
+<td>\\(b_k\\) flat in k</td><td>needs robocasa state-reset support — else fall back to episode-start open-loop
+(risk noted)</td></tr>
+<tr><td><b>M3</b> best-of-N sweep</td><td>Prop 2</td><td>SR(N) saturates while believed (selected \\(\\hat Q\\))
+minus realized (return) grows like \\(\\sqrt{\\ln N}\\)</td><td>N ∈ {1,2,4,8,16,32}, top-2 tasks × 3 seeds × 25 —
+add \\(\\hat Q\\) logging to serve_bon_policy</td><td>realized keeps pace with believed (no gap growth)</td>
+<td>serve_bon_policy exists — medium rollouts</td></tr>
+<tr><td><b>M4</b> fixed-k sweep</td><td>Thm 3 (+ P4 of the four forces)</td><td>best fixed k differs across tasks,
+k=1 is not globally optimal, SR(k) is non-monotone</td><td>official pi05, k ∈ {1,2,4,8,H/2,H} × 5 tasks × 20
+(selection seed) — <b>establishes the best-fixed-k baseline</b> (worker C's lesson: adaptive must always be compared
+against best-fixed)</td><td>k=1 globally optimal (no Zhang force)</td><td>check/patch client execute-horizon option —
+first in the M series</td></tr>
+<tr><td><b>M5</b> curriculum on/off</td><td>curriculum corollary (+ P3)</td><td>mean selected k* grows over training
+only in the policy-improvement arm</td><td>improvement on/off arms (joined with ladder B2/B4), same data, same
+critic — mean k* trajectory</td><td>growth in the off arm too (curriculum not a signature of improvement)</td>
+<td>after the baseline ladder</td></tr></table>
+
+<p><b>⚠️ Amendment (2026-08-20 13:40, 30 min after posting · before any M1 run).</b> Prompted by the user (DEHP and
+AQC report a <b>short</b>-side bias), we re-examined Prop 1. The distortion
+\\((\\gamma-\\gamma^k)\\,\\mathbb E[V(s_k)]\\) <b>takes the sign of the landing value</b>: with success rewards
+(V≥0) it inflates long commitments, with cost-to-go (V≤0 — where our DEAS-family critics and floq's [−1,0]
+normalization live) it <b>reverses and inflates short ones</b>. M1's prediction is therefore amended from "shifts
+long" to <b>"a monotone shift whose sign matches the critic's value convention"</b> (the rejection condition,
+indistinguishable distributions, is unchanged; the tested critic's reward convention must be reported). The
+short-side biases of DEHP/AQC involve separate mechanisms (weak dominance of requerying [DQC Lemma 8] + conservative
+targets penalizing open-loop variance + γ^k-compressed advantage scales [AQC's motivation for normalizing]) that
+operate even under correct bookkeeping — reflected as a sign Remark after Prop 1 in the appendix. ExRL's own bias
+direction is left unasserted until the PDF is re-checked.
+<b>Addendum (13:55, after the user's counter-question "is this not global to any MDP rather than a reward-regime
+thing").</b> The sharper formalization — the distortion's <b>existence</b> is global (any MDP with nonzero landing
+values), but its <b>direction is not a property of the MDP</b>: in discounted infinite horizon, adding a constant c
+to all rewards leaves optimal behavior unchanged, shifts every correct option value by c/(1−γ) uniformly in k
+(ordering invariant), yet shifts the blind score by c(1+γ−γ^k)/(1−γ), which is <b>k-dependent</b>, so the sign of c
+alone flips the selector's direction. The direction is a gauge artifact of where the value scale puts zero — the
+blind selector's commitment preference is not even well defined for the task, and the opposite-direction reports in
+the literature are the two signs of one defect. The appendix Remark now states this gauge form.</p>
+
+<p><b>Execution order.</b> M4 (least infra, most information — the best-fixed baseline is a precondition for every
+later adaptive comparison) → M3 (reuses serve_bon_policy) → M1·M2 once the critic lands → M5 after the ladder.
+<b>Verdict discipline</b>: run-level multi-seed CIs throughout, programmatic classification. P1 (κ*↔uncertainty
+anti-correlation) and P2 (20k→120k shrinks epistemic only) of the <span class='xref'
+data-eid='three-forces'>four forces</span> are already registered and being measured by the parallel program, so they
+are not duplicated here — M1–M3 probe the <b>estimator</b>, M4–M5 probe <b>execution</b>; the two sets are
+complementary.</p>
+
+<p class='sub'><b>Reproduce.</b> Appendix <code>paper/theory.tex</code> · intro touch <code>paper/intro.tex</code> ·
+bibliography <code>paper/references.bib</code> (sutton1999options and bradtke1994smdp added; exrl left with a TODO
+author field — the workshop PDF is not indexed yet and must be filled in). Side correction: the task-scan entry
+carried a future timestamp (14:00); fixed to the actual publication time (09:06 KST).</p>""",
+)
+
+en(
+    "adapt-margin-epis",
+    "🧩 The adaptive margin is unabsorbed policy error — worker C's four pairs follow our decomposition (rho = -1.0)",
+    """
+<div class='callout warn'><span class='k'>Correction (2026-08-23 18:00, two hours after posting)</span>
+<p><b>This entry's evidence has weakened; two things surfaced at once.</b></p>
+<p><b>(1) The seed band I quoted was the wrong ruler.</b> Below I wrote that each margin sits inside a band of
+SD 0.092–0.127, but that band was measured by <span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span> on a
+<b>different comparison</b> (HL-Gauss versus baseline). <span class='xref' data-eid='wc-r-0823-power'>0823_power</span>
+measured the seed SD of adaptive versus fixed-2 <b>itself</b> and found 0.26–0.29, two to three times larger. So
+"inside the band" did not mean the effect was small, it meant <b>n=3 had no power</b>. Seed SD is
+comparison-specific, and using one round's SD as the ruler for another judges real effects as noise. I repeated
+exactly that error.</p>
+<p><b>(2) The ordering itself reverses at eight seeds.</b> Re-measured with eight seeds, task3 has both the
+<b>higher success (0.621 vs 0.552) and the larger margin (+0.246 vs +0.131)</b>. The ρ = −1.0 below was computed
+from n=3 estimates that have since moved across submissions. In other words <b>my analysis fell into the very trap
+this branch keeps hitting</b>: comparisons that skip across submissions. Nobody yet has all four tasks measured in
+one submission with adequate seeds.</p>
+<p><b>What survives.</b> The decomposition itself (Δ_react + Δ_epis) and its deterministic-limit prediction stand;
+what changes is that the test must be <b>P-abs</b> (does the margin shrink within one run as training proceeds)
+rather than a cross-task ordering, because P-abs lives inside a single comparison and a single submission and so
+avoids both traps. And since <span class='xref' data-eid='wc-r-0823-power'>0823_power</span> found +0.246, 8/8,
+p=0.004 on task3, <b>"adaptivity beats the best constant" now holds significantly for the first time</b>, which
+also corrects their own "it ties". The body below is left as published.</p></div>
+
+<p class='sub'>By measuring <b>whole fixed-length curves within one submission</b> on four tasks, worker C produced
+the first clean pairs for "does adaptivity beat the best constant". Those margins follow <b>exactly</b> the order
+our <span class='xref' data-eid='chunking-theory'>decomposition theorem</span> predicts, and we register one
+prediction that can be tested with zero new GPU time.</p>
+
+<p><b>Background.</b> Three mechanism explanations failed there in two days: a short bias in the selection score
+(<span class='xref' data-eid='wc-r-0822-score'>0822_score</span>), "adaptivity is a property of the method"
+(<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span>), and headroom
+(<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span>). Following their own rule ("do not invent a
+fourth narrative, report that we do not know"), they left it unresolved. What we offer is not a new narrative but
+a prediction that follows from a theorem <b>published on 20 August</b>, so it is not a post-hoc fit.</p>
+
+<h3>① What the theorem says</h3>
+<p>The value adaptive execution can buy splits in two
+(<span class='xref' data-eid='chunking-theory'>Theorem 1</span>):</p>
+<p style='text-align:center'>V<sup>π,κ</sup> − V<sup>π,H</sup> ≤ <b>Δ<sub>react</sub></b> (a floor set by the
+environment) + <b>Δ<sub>epis</sub>(π)</b> (policy error, absorbed by improvement)</p>
+<p>And Theorem 2: <b>under deterministic dynamics with full observation, Δ<sub>react</sub> = 0</b>. cube-double is
+state-based with deterministic transitions, so the floor term vanishes and only Δ<sub>epis</sub> remains, which is
+<b>larger the worse the policy is</b>. Hence the prediction: <b>the adaptive margin should anti-correlate with the
+policy's own performance level on that task</b>, not with how peaked the curve is.</p>
+
+<h3>② The four pairs follow that order</h3>
+<table class='num'><tr><th>task</th><th>adaptive success</th><th>best constant</th><th>margin</th></tr>
+<tr><td>task5</td><td>0.864</td><td>h=3 (0.878)</td><td>−0.013</td></tr>
+<tr><td>task1</td><td>0.860</td><td>h=2 (0.858)</td><td>+0.002</td></tr>
+<tr><td>task2</td><td>0.624</td><td>h=2 (0.580)</td><td>+0.044</td></tr>
+<tr><td>task3</td><td>0.596</td><td>h=2 (0.451)</td><td>+0.144</td></tr></table>
+<p>The success ordering and the margin ordering are <b>exactly reversed</b> (6/6 discordant pairs, Spearman
+ρ = −1.0). As a one-sided test with the direction fixed in advance, a uniform-random-ordering null gives
+p = 1/24 ≈ 0.042. The prediction was moreover stated when only the <b>two</b> pairs of
+<span class='xref' data-eid='wc-r-0823-curve'>0823_curve</span> existed, and the two new pairs from a different
+submission (<span class='xref' data-eid='wc-r-0823-curve25'>0823_curve25</span>) landed where it said they
+would.</p>
+
+<p><b>Claim strength (important).</b> As their own caveat records, <b>each individual margin sits inside the seed
+band</b> (SD 0.092–0.127), so none is separately distinguishable from zero. Our claim is therefore about
+<b>order, not magnitude</b>, with n=4 in a single domain. It does not resurrect "adaptivity wins"; it explains why
+their honest summary ("it ties the best constant without being told which one") <b>should</b> hold.</p>
+
+<h3>③ A registered prediction, testable with zero GPU</h3>
+<p><b>P-abs.</b> Within one run, <b>the margin should shrink as training proceeds</b>. They already store 0.8M,
+0.9M and 1.0M checkpoints and average them. Reading those three <b>separately instead of averaging</b> exposes the
+Δ<sub>epis</sub> trajectory at fixed submission and fixed seeds. <b>Passes</b> if margin(0.8M) &gt; margin(1.0M)
+on most tasks; <b>rejected</b> if there is no ordering or the reverse. No new rollouts are needed; the existing
+CSVs suffice.</p>
+<p><b>P-react.</b> In our domain (RoboCasa, image observations, stochastic contact) Δ<sub>react</sub> &gt; 0, so
+<b>the margin should not decay to zero as the policy improves</b>. That is what M6 and M7 will judge, and the
+contrast between the two domains measures the floor term directly. The necessary condition our
+<span class='xref' data-eid='m4-ksweep'>M4</span> already established on a VLA (the best constant splits across
+8/12/16 and cannot be known in advance) is its premise.</p>
+
+<p class='sub'><b>Why this is useful.</b> All three failed explanations looked for the cause in the
+<b>selection rule</b> or the <b>shape of the curve</b>. The decomposition puts it in the <b>immaturity of the
+policy</b>: whether adaptivity buys anything on a task becomes a question of how much that task's policy has left
+to learn, not of the task's character. This is the other face of our curriculum corollary, in which improvement
+absorbs the adaptive gain and the mean commitment grows.</p>""",
+)
+
+en(
+    "m4-ksweep",
+    "📏 M4 fixed-k sweep — which constant you compare against decides the answer (5 RoboCasa tasks × 6 lengths)",
+    """
+<p class='sub'>Results of pre-registered M4 (<span class='xref' data-eid='theory-preexp'>the pre-registration
+post</span>). The official RoboCasa-365 pi05 was evaluated on five tasks × execution length k∈{1,2,4,8,12,16}
+(chunk H=16), for two purposes: ① check the <b>necessary condition</b> for state-dependent commitment (does the
+best constant differ across tasks, is the curve non-monotone), and ② fix the <b>honest baseline</b>
+(best-fixed-k) for every adaptive comparison that follows.</p>
+
+<p><b>Why this comes first.</b> Adaptive-chunking papers routinely claim gains against the <b>default k=H</b>
+(the full chunk). If a merely <b>better constant</b> explains much of that, the gain is not the method's. We
+quantify on our VLA stack the lesson worker C drew on OGBench
+(<span class='xref' data-eid='wc-r-0819-nonmarkov'>0819_nonmarkov</span>: "which fixed length you compare against
+decides the answer").</p>
+
+<h3>Setup</h3>
+<p>Checkpoint <code>robocasa365_official/pi05_pretrain_human300/multitask_learning/75000</code> (worker A's serving
+fixes); the client's <code>--replan-steps k</code> executes only the first k actions of each chunk before
+requerying. 20 trials per task at fixed seed 3000 (the same scene convention as the
+<span class='xref' data-eid='task-scan'>task scan</span>). One job per k (a single server start; the k=1 arm makes
+16× the inference calls and dominates wall-clock). The registered grid's H/2 collided with 8 and was replaced by
+12.</p>
+
+<h3>Results</h3>
+"""
+    + img("/scratch/jellyho/acrft/hub_figs/ksweep.png", "fixed-k sweep on five RoboCasa tasks")
+    + """
+<table class='num'><tr><th>task</th><th>k=1</th><th>k=2</th><th>k=4</th><th>k=8</th><th>k=12</th><th>k=16 (full chunk)</th><th>best k</th></tr>
+"""
+    + _ksweep_table("en")[0]
+    + """</table>
+<p class='sub'>Green marks each task's best k. Error bars are binomial standard errors (n=20, single seed): this is
+selection grade.</p>
+
+<h3>Verdicts</h3>
+<p><b>① k=1 is not globally optimal (the rejection condition is not met).</b> Requerying every step is the
+<b>worst</b> arm on """
+    + _ksweep_stat("k1_is_worst", "en")
+    + """ tasks, and it collapses CoffeeServeMug from 0.40 to <b>0.00</b> and
+PickPlaceSinkToCounter from 0.55 to 0.15. The intuition that reactivity is free is wrong on a real VLA: frequent
+requerying re-injects error (the Zhang force).</p>
+<p><b>② The best fixed length differs by task.</b> best k ∈ {"""
+    + _ksweep_stat("distinct_best_k", "en")
+    + """}, with an <b>interior peak</b>
+(non-monotone) on """
+    + _ksweep_stat("interior_peaks", "en")
+    + """ tasks. No single constant is right everywhere, which is the <b>necessary
+condition</b> for a state-dependent κ.</p>
+<p><b>③ The baseline must change.</b> best-fixed-k beats the default k=16 by <b>"""
+    + _ksweep_stat("mean_best_minus_full_chunk", "en")
+    + """</b> on average
+(+0.20 / 0.00 / +0.10 / +0.25 / +0.15 per task). A single constant, chosen better, is worth +0.14. From here on
+our adaptive and CFAC results are compared <b>against best-fixed-k</b>, and we do not report numbers relative to
+k=16. This table is that baseline.</p>
+
+<h3>Limits (stated plainly)</h3>
+<p>Each cell is a <b>single seed, n=20</b>, so the binomial SE near 0.5 is ±0.11. Differences of order 0.1 within
+a cell are therefore <b>unresolved</b>, and the exact per-task best k is not settled. What is settled is the
+<b>pattern across five tasks</b> (k=1 worst, interior peaks common, best k inconsistent). Applying worker C's
+measured spread (<span class='xref' data-eid='wc-r-0820-repl'>0820_repl</span>: seed SD 0.092–0.127 on paired
+differences), the method evaluation itself will be <b>multi-seed</b>. One cell (k=4 × PickPlaceCounterToMicrowave) first failed on a
+server websocket drop (infrastructure); the re-run filled it at 0.05, so <b>all 30 grid cells are now
+populated</b> and the conclusions are unchanged (that task's best is still k=12).</p>
+
+<p><b>Further limitation (2026-08-22, self-correction after reading worker C's
+<span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span>).</b> Our fixed-k arms fix the length <b>at
+execution time only</b>; the checkpoint was trained for full-chunk execution. Worker C designed the same question
+more cleanly: restricting the candidate set to a single length (<code>prefix_candidates</code>) makes the fixed arm
+traverse the <b>same code path</b> as the adaptive arm and trains the actor at that length too. Fixing only at
+execution measures the mismatch of a policy trained to adapt but forbidden from doing so, which is a different
+question (their 0819_soft measured that effect separately at +0.284/+0.269). Retraining the official checkpoint was
+not possible here, but <b>our own method must be compared against fixed baselines built by candidate restriction</b>.
+The limitation barely touches M4's conclusions (best k differs by task; k=1 worst), but the absolute numbers must
+not be read as "the best a fixed policy can do".</p>
+
+<p><b>Complementary result, and its scope (re-updated 2026-08-23).</b> Worker C is drilling the same question
+(does adaptivity beat the best fixed length) in consecutive rounds on OGBench, and the answer has moved three
+times: <span class='xref' data-eid='wc-r-0822-fixedh'>0822_fixedh</span> (task2 +0.233, 3/3, adaptivity wins) →
+<span class='xref' data-eid='wc-r-0822-tasks'>0822_tasks</span> (extended to five tasks: only task1 and task2, the
+rest inside the seed band) → <span class='xref' data-eid='wc-r-0823-nothing'>0823_nothing</span> (one of those
+"rest", task3, <b>does not reproduce</b>: same setting, same seeds, 0.433 → 0.636). The reproduction gap of +0.202
+is <b>ten times</b> the −0.020 the null rested on, so task3's null was submission noise, not a verdict.</p>
+
+<p><b>What can be stated confidently is narrow.</b> Adaptivity <b>clearly beats the best fixed length on some
+tasks</b> (task2 +0.233, reproduced; task1 +0.156), and its status elsewhere is <b>unresolved</b> ("no evidence",
+not "no gain"). The <b>necessary condition</b> our M4 supplies (no constant fits every task; k=1 worst on 4 of 5)
+is independent of that and unaffected.</p>
+
+<p><b>A lesson for our own protocol (self-check).</b> All three revisions share one cause: <b>comparisons that skip
+across submissions</b>. In their setup the submission-to-submission gap (+0.202) dwarfs the seed spread
+(0.092–0.127), because their submissions include <b>retraining</b> and so carry initialization and data-order
+noise. Our M4 evaluates a <b>fixed checkpoint on fixed scene seeds</b>, so that component is absent, but we did
+split the k arms into <b>separate jobs</b>, which leaves exposure to server-process differences such as flow
+sampling randomness. From here on, verdicts about our method put the arms <b>side by side within one
+submission</b> (the success/all pair in B1 is exactly that shape), and cross-submission numbers are context
+only.</p>
+
+<p class='sub'><b>Reproduce.</b> <code>probes/run_ksweep.sh K [Task,...]</code> (six per-K sbatches plus the failed
+cell), aggregation and figure <code>probes/ksweep_collect.py</code>, results JSON
+<code>probes/ksweep_results.json</code> committed. <b>Next</b>: M3 (best-of-N sweep, reusing serve_bon_policy) →
+M1 and M2 once the critic lands → porting CFAC to RoboCasa (M6, M7).</p>""",
+)
+
+en(
+    "cfac-nn",
+    "🔬 Running CFAC for real — it works under function approximation, and composition alone was not enough",
+    """
+<p class='sub'>The tabular existence proof (<span class='xref' data-eid='cfac'>the CFAC proposal</span>) is now
+implemented as <b>the actual algorithm</b> and tested in a continuous environment: neural per-prefix critic,
+model-free per-step TD, policy-expectation bootstrap, AWR full-chunk improvement, lexicographic selector. It
+works (it reaches oracle level). And <b>implementing it corrected the theory once</b>: a composed backup is not
+enough, the pairing must be <b>interventional</b>.</p>
+
+<p><b>Why.</b> The previous toy was tabular with an empirical model. For the paper's claim, the mechanism must
+survive the form we would actually ship (neural, model-free, with policy improvement), so the environment is now
+<b>continuous</b> and enumeration is impossible.</p>
+
+<h3>① What implementation revealed — a correction to the theory</h3>
+<p>The first implementation composed the TD backup with the data as it lies:
+<code>Q_k(h_t, c) ← r_t + γ Q_{k-1}(s_{t+1}^data, c_{2:k})</code>. Junction over-commitment <b>did not go away</b>.
+The reason: the demonstration's own successor carries the event that the demonstrator <b>already knew</b> when it
+chose that tail. Composing the bookkeeping leaves the tail↔event correlation intact, so the confound survives, and
+the dataset contains no "blind tail" from which the critic could learn that blindness is bad.</p>
+<p>What actually made the tabular version work was <b>marginalizing the successor through the model</b> while
+holding the candidate tail fixed, which is the <b>do(c) intervention</b>. Model-free equivalent: <b>resample the
+successor from another episode at the same decision point</b>, keeping the evaluated tail and one's own executed
+history fixed. The exogenous mid-window revelation then enters with its marginal, and the candidate tail is scored
+against each realization.</p>
+<p><b>Corrected clause</b> (to land in appendix A.6): "form within-window values by <b>composition</b>" becomes
+"compose <b>interventionally</b>, so that the tail is conditionally independent of the realized successor". The
+same language explains why DQC's open-loop-consistency assumption is needed: under OLC data that independence
+holds for free.</p>
+
+<h3>② Environment, algorithm, pre-registration</h3>
+<p><b>PlanReach</b> (continuous): 3 segments × 4 steps, H=4, action a∈R², a target direction g drawn uniformly on
+the unit circle per segment. <b>Corridor</b> (segments 0, 2) — g appears in the observation only at entry, then is
+hidden, and every step is scored (past latent: commitment carries the plan). <b>Junction</b> (segment 1) — g is
+revealed only <b>after</b> the first step, steps 1–3 scored (future latent: reaction wins). Reward
+r=exp(−2‖a−g‖²), γ=0.95. The demonstrator <b>remembers</b> g and acts with noise 0.25, so the data is
+non-Markovian. The policy is a Markov chunk policy (the VLA analogue). Everything is offline.</p>
+<p><b>2×2 factorial</b> (history conditioning × interventional composition) plus naive chunk-outcome regression,
+fixed k, oracle, and joint; 6 seeds × 800 demo episodes × 300 eval episodes. Pre-registered: V1 CFAC > naive,
+V2 joint > selection-only, V3 curriculum (corridor commitment grows across improvement rounds), V4 naive
+over-commits at junctions. Rejection conditions fixed in the code docstring.</p>
+
+<h3>③ Results</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac_nn.png",
+        "neural CFAC toy: deployment return, and what each ingredient buys",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>deployed discounted return</th><th>mean k @ corridor entry (truth 4)</th><th>re-query rate after the reveal (truth 1.0)</th></tr>
+"""
+    + _cfacnn_rows("en")
+    + """</table>
+
+<p><b>Paired verdicts</b> (6 seeds, mean ± SD of per-seed differences, wins):
+CFAC−naive <b>"""
+    + _cfacnn_paired("cfac_sel-naive_sel", "en")
+    + """</b> ·
+CFAC−(no intervention) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nointerv_sel", "en")
+    + """</b> ·
+CFAC−(no history) <b>"""
+    + _cfacnn_paired("cfac_sel-cfac_nohist_sel", "en")
+    + """</b> ·
+joint−selection-only <b>"""
+    + _cfacnn_paired("cfac_joint-cfac_sel", "en")
+    + """</b> ·
+joint−oracle <b>"""
+    + _cfacnn_paired("cfac_joint-bc_oracle", "en")
+    + """</b>.</p>
+
+<p><b>Reading.</b> ① <b>V1 and V4 confirmed</b>: the naive critic reacts at only 0.70±0.30 of junctions and returns
+5.12; CFAC reacts at 1.00 and returns 6.98 (+1.86, 6/6). ② <b>Both ingredients are needed</b>: removing either
+costs −0.76 (intervention) or −0.97 (history), removing both gives 5.74 — and the <b>variance grows</b> (reaction
+rate SD 0.30–0.43): without an ingredient, whether the system reacts becomes seed-dependent. ③ <b>V2 confirmed but
+small</b>: joint−selection-only is +0.124 (6/6); this environment's oracle ceiling leaves little headroom.
+④ <b>Joint ties the hand-crafted oracle</b> (+0.037, 5/6): the learned κ reproduced the hand-written rule.</p>
+
+<h3>④ V3 (curriculum) was not testable here — recorded as rejected</h3>
+<p><b>Rejected in the base environment.</b> Corridor commitment starts at 3.98, so there was <b>no room to
+grow</b> (a ceiling effect). By the letter of the pre-registered rejection condition ("returns improve while
+corridor commitment fails to grow"), V3 is rejected here. The cause is a design flaw: with no cue at all
+mid-corridor, requerying is always catastrophic, so k=4 is optimal for a bad policy and a good one alike.</p>
+<p><b>Confirmed in a variant.</b> Make requerying non-catastrophic by leaving a <b>degraded cue</b> (noise 0.6)
+mid-corridor and worsen the initial policy (demo noise 0.5), and short commitments become initially attractive, so
+there is headroom. Result: mean corridor commitment grows <b>3.04 → 3.27 → 3.39 → 3.49</b> while return rises
+6.42 → 6.72, giving <b>Δk = +0.446 ± 0.328 (6/6 seeds) and Δreturn = +0.297 ± 0.117 (6/6)</b>. This is the
+curriculum produced by force ② (absorption of policy error), and it appears <b>with no replanning-cost term</b>,
+from the return alone.</p>
+<p><b>Two honest caveats.</b> ① Strict round-to-round monotonicity holds for only <b>3/6 seeds</b>; the mean
+trajectory is monotone but individual rounds are noisy. ② In this variant <b>the interventional ingredient does not
+separate</b> (naive 6.46 ≈ CFAC 6.42): in a regime where everything requeries often, the junction confound is not
+decisive. <b>History is decisive instead</b> — removing it collapses commitment to k=1.18 and return to 5.56. The
+two environments stress different ingredients, so the conclusion that <b>both</b> are needed rests on the pair of
+experiments, not on either alone.</p>
+<table class='num'><tr><th>stage</th><th>mean k @ corridor entry</th><th>deployed return</th><th>reaction rate</th></tr>
+"""
+    + _cfacnn_curric("en")
+    + """</table>
+
+<h3>⑤ Limits</h3>
+<p>A toy validates mechanisms, not performance. The "same decision point" that interventional pairing needs is
+trivial here (segment, step) but not in RoboCasa — whether to marginalize successors by state similarity, a learned
+model, or an ensemble is <b>the real design question for M6 and M7</b>. Single demo-noise level, H=4, 2-D actions.
+Reproduce: <code>probes/toy_cfac_nn.py --seeds 6</code> → <code>toy_cfac_nn_fig.py</code>; results JSON
+committed.</p>""",
+)
+
+en(
+    "cfac",
+    "🧭 CFAC — making the critic price commitment and reaction fairly, and a toy where every prediction lands",
+    """
+<p class='sub'>We formalize <b>three misspecifications</b> that prevent a standard chunked critic from pricing
+non-Markovian commitment and reactiveness fairly, and propose <b>CFAC</b> (Commitment-Fair Adaptive Chunking),
+which removes all three. In a corridor–junction toy, all four pre-registered predictions land — only CFAC
+separates commitment from reaction state by state.</p>
+
+<p>User directive — "develop tricks and theory so the critic fairly values the dataset's non-Markovianness and
+reactiveness, propose a new adaptive chunking method, and test it on a toy." Background: current value learning
+<b>structurally prefers short executions</b> (including a gauge-invariant bias, distinct from the gauge argument
+in the <span class='xref' data-eid='theory-preexp'>pre-registration post</span>). We decompose the cause into
+three specification errors.</p>
+
+<h3>① The three misspecifications</h3>
+<table class='num'><tr><th>misspecification</th><th>content</th><th>bias direction</th><th>cure</th></tr>
+<tr><td><b>free requery</b></td><td>the bootstrap V assumes "a good continuation arrives after requery" — deployment
+actually resamples an imperfect π. The optimism δ≥0 enters with weight γ^k, <b>decreasing in k</b></td>
+<td>short (gauge-invariant!)</td><td>policy-expectation bootstrap: V(s)=E_{a~π}[Q(s,a,κ)] — a fixed point of the
+deployed process</td></tr>
+<tr><td><b>Markov conditioning (past latent)</b></td><td>when the demonstrator's plan z is absent from the
+observation (occlusion), a state-conditioned critic has no room to represent the private information a commitment
+carries</td><td>commitment value collapses</td><td>history conditioning (a representation fix — backdoor
+blocking)</td></tr>
+<tr><td><b>confounded chunk regression (future latent)</b></td><td>an event b revealed inside the window causes both
+the demo's actions and the outcome — regressing outcomes on (s, a₁:ₖ) selects episodes where b happened to match
+(the causal reading of DQC's leak). History cannot block it (b is still future at decision time)</td>
+<td>long (nominal≫actual)</td><td><b>composed backup</b>: one-step backups composed through observed intermediate
+states — b enters with its marginal</td></tr></table>
+
+<p><b>The poetic summary</b>: the states where reaction is valuable are exactly the states where chunk regression
+lies (the same mid-window revelation creates both). So the naive critic inflates commitment precisely where it
+should react.</p>
+
+<h3>② CFAC</h3>
+<p>A per-prefix causal critic with four clauses: (i) SMDP bookkeeping (gauge-invariant), (ii) <b>history
+conditioning</b>, (iii) within-window values by <b>composition</b> (no chunk-outcome regression), (iv) the requery
+branch bootstrapped by the <b>deployed policy's own expectation</b>. The selector takes the longest k within ε
+(lexicographic — the curriculum device); the actor is updated against the same critic in both output dimensions
+(joint — the toy validates the critic+selector half). Now in the paper appendix A.6 as propositions and a
+definition (<code>paper/theory.tex</code>).</p>
+
+<h3>③ The toy — a minimal environment separating the two latent positions</h3>
+<p><b>Plan maze</b>: [corridor, junction, corridor] × 4 steps, H=4, reward 1 on completion, γ=0.95, 4% demo step
+error. <b>Corridor</b> — the plan z is visible <b>only at entry</b>, then hidden; the correct action is z every
+step (past latent: commitment carries information, Markov requery is 50/50). <b>Junction</b> — the event b is
+revealed <b>only after the first step</b>; steps 1–3 must match b (future latent: committing guesses b, reacting
+wins). Ground truth κ*: corridor entry k=4, junction entry k=1. Four critics factorially (A0 naive → A1 +history →
+A2 +policy bootstrap → A3 = CFAC composed backup) + four fixed k + a hand-crafted oracle, 8 seeds × 1000 demo ×
+2000 eval episodes. All classification programmatic.</p>
+
+<p><b>Pre-registered</b> (fixed in the code docstring before running): T1 A0 believes "everything succeeds"
+(leak) and over-commits junctions; largest believed−realized gap. T2 history (A1) and policy bootstrap (A2) do
+<b>not</b> fix junction over-commitment (no conditioning blocks a future latent). T3 only A3 separates corridor
+commitment from junction reaction, at oracle-level SR. T4 the fixed-k sweep is non-monotone. Rejected if A3 fails
+to separate from A0–A2.</p>
+
+<h3>④ Results — every prediction lands</h3>
+"""
+    + img(
+        "/scratch/jellyho/acrft/hub_figs/toy_cfac.png",
+        "CFAC toy: deployment SR, commitment by state type, self-deception",
+    )
+    + """
+<table class='num'><tr><th>arm</th><th>deployed SR</th><th>mean k @ corridor entry (truth 4)</th><th>mean k @ junction entry (truth 1)</th><th>believed − realized</th></tr>
+"""
+    + _cfac_rows("en")
+    + """</table>
+
+<p>Reading: <b>A0–A2 commit even at junctions (k≈3.8)</b> — the leak tells them every chunk in the data succeeded —
+and overestimate their own forecast by +0.20. <b>Only A3 drops to k=1.000 at junctions</b>, with a belief gap ≈ 0 —
+a <b>calibrated critic</b>. Fixed k is non-monotone (k2 > k3). A1≈A0 and A2 only slightly better — of the three
+misspecifications, <b>the composed backup is decisive</b> (exactly T2), which rejects the easy answer "just add
+history."</p>
+
+<p><b>Emergent observation (outside the pre-registration, post-hoc)</b>: A3 (0.778) beats the hand-crafted oracle
+(0.642). The mechanism is <b>implicit rejection</b> — when the sampled chunk is bad (demo noise), the critic scores
+all its prefixes low, the longest-within-ε rule falls to k=1, and the system <b>resamples immediately</b>. The
+oracle executes its fixed rule regardless. So state-dependent k performs not only reactivity collection but
+<b>absorption of policy error</b> (force ② of the <span class='xref' data-eid='three-forces'>four forces</span>)
+at deployment time — the theory's prediction appeared in the toy unprompted.</p>
+
+<h3>⑤ Limits and next</h3>
+<p>Limits: a tabular, fully enumerable toy; the empirical-model composition must become per-step TD composition
+under function approximation; unseen (h,c) fall back pessimistically (declared); single demo-noise level. Toy ≠
+VLA — this is an <b>existence proof of the mechanisms</b>, not a performance claim. Next: ① port M6 (bootstrap
+source A/B) and M7 (history conditioning) to the RoboCasa critic as pre-registered probes, ② design the CFAC
+actor (joint update), ③ adopt worker C's 0820_headcond control design (freeze the head's own marginal) for M5 and
+the main method's evaluation. Reproduce: <code>probes/toy_cfac.py --seeds 8</code> →
+<code>probes/toy_cfac_fig.py</code>; results JSON at <code>/scratch/jellyho/acrft/probes/toy_cfac/results.json</code>.</p>""",
+)
+
+en(
+    "tier1-intros",
+    "📄 How the six Tier-1 papers write their introductions — a comparative map, and where ours stands",
+    """
+<p class='sub'>A close read of the <b>introduction sections only</b> of the six closest VLA-RL papers
+(<span class='xref' data-eid='papers-tier1'>Tier 1 deep dive</span>): what narrative chain each uses, what gap each
+claims (verbatim), and how our <span class='xref' data-eid='paper-intro'>introduction draft</span> overlaps or
+diverges.</p>
+
+<p><b>Narrative chains in one line each.</b> CO-RFT: SFT is data-quality-bound and OOD-fragile → RL (citing LLM
+successes) → online impractical, test-time marginal → offline → "action chunking ... has been <b>overlooked</b>".
+DEAS: offline RL collapses on long horizons → sequences promising but "actors maximizing over potentially erroneous
+critic estimates" → detached value. GR-RL: precision tasks make "human demonstrators slow down, hesitate, and
+introduce noisy suboptimal demonstrations" (shoe-lacing example) + train-inference mismatch. BORA: denoising-chain
+credit collapse + critics "overfitting to background visual artifacts". GigaBrain: VLAs have an "architectural bias
+toward reactive control rather than prospective planning" → world models. MoRE: architectures untailored + IL
+"unable to leverage more easily gathered sub-optimal data".</p>
+
+<p><b>Common moves</b>: every paper opens with "VLAs are promising, but"; half (GR-RL, MoRE, CO-RFT) build on
+suboptimal demonstrations (our P2 is the standard narrative, safely). CO-RFT even uses the same elimination
+(online impossible → offline) and the LLM-RL analogy — dropping that analogy in our draft turned out to be a
+differentiator.</p>
+
+<p><b>What nobody says (our empty cells)</b>: (1) no introduction poses the <b>mechanism</b> as a problem — all six
+presuppose their deployment (fixed execution, BoN, filtering, residual); our Question 3 has no competitor.
+(2) none treats <b>commitment length as a decision</b> (CO-RFT and DEAS handle chunks but execute fixed-length);
+none uses the nominal-vs-actual gap as motivation. (3) none promises the complete "same demonstrations, better VLA"
+path: GR-RL/BORA/GigaBrain need online or world-model stacks, and CO-RFT stays purely offline but small-scale.</p>
+
+<p><b>DEHP added (08-20)</b>. Its introduction is the closest neighbor to our second axis: fixed-horizon trade-off,
+then "the right horizon differs by task phase", then a horizon head. The difference in roots matters: DEHP motivates
+from the policy's execution trade-off, we motivate from the non-Markovian structure of human demonstrations; and DEHP
+optimizes the horizon only, with online PPO on a frozen policy, whereas we jointly optimize actions and commitments
+purely offline. Must cite and contrast.</p>
+
+<p><b>Overlap alarms for our draft</b>: CO-RFT's P1–P3 skeleton is closest to ours — our contrast must be explicit:
+they <i>incorporate</i> chunking, we argue the chunk <i>forces three questions</i>. DEAS owns the overestimation
+narrative — we elevate it from a value-learning problem to a mechanism-dependent one (selection exploits error,
+commitment suppresses it via correlation). And GR-RL's concrete shoe-lacing example is worth imitating once our
+real-world task is fixed.</p>""",
+)
+
+en(
     "papers-tier1",
     "📄 Tier 1 read in depth — the six prior works on offline direct value learning for VLAs",
     """
@@ -4412,6 +7034,14 @@ Laundry/Box/Espresso. Gap: no chunk granularity treatment; industrial-scale stac
 
 <p><b>⑥ MoRE</b> (2503.08007). Quadruped VLA: LoRA experts as sparse MoE inside an MLLM, RL objective (CQL family) on
 auto-collected mixed-quality data; beats baselines on six skills. Gap: locomotion, no chunks. (Abstract-level.)</p>
+
+<p><b>⑦ DEHP</b> (2606.11408, added 08-20). A lightweight execution-horizon head trained with <b>online</b> PPO on top
+of a <b>frozen</b> chunk policy ("A single fixed execution horizon cannot capture this variation across different task
+phases"); chunk-level PPO with a state-only critic and sparse rewards. Large gains over the best fixed horizon on
+assembly/insertion (e.g. one_leg 70→95%), with learned horizons aligned to task phases. Gaps: actions are never
+optimized (the policy stays frozen, so demonstration suboptimality remains), online rollouts are required, and no value
+is learned over actions. Their related work also maps a fast-growing adaptive-execution lineage (BID, SGAC, TAS, MoH,
+AAC, HiPolicy).</p>
 
 <p><b>The three cells everyone leaves empty</b>: state-dependent <b>commitment-length decision</b> (all ✕),
 <b>mechanism comparison</b> (each assumes its own: BoN, filter, fixed execution), and the conjunction of

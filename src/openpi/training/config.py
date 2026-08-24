@@ -14,6 +14,7 @@ from typing_extensions import override
 import tyro
 
 import openpi.models.model as _model
+import openpi.models.pi0_alphaflow as pi0_alphaflow
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.pi0_rlt as pi0_rlt
@@ -1043,6 +1044,43 @@ _CONFIGS = [
         save_interval=10_000,
         action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     ),
+    # Baseline ladder rung B1: success-filtered fine-tuning of the OFFICIAL RoboCasa-365 pi05 on its
+    # OWN rollouts. The dataset is built by examples/robocasa/convert_rollouts.py from a collection
+    # that recorded successes and failures alike, so B1 (--filter success), B2 (weighted) and the
+    # unfiltered control all read one collection; the repo_id selects which. Set
+    # HF_LEROBOT_HOME=/scratch/jellyho/acrft/rollout_v3 so the local dataset resolves.
+    #
+    # Continuing from the released checkpoint (not pi05_base) is the point: the comparison is
+    # "does outcome-filtered imitation of its own behaviour improve the released policy", so the
+    # weights, the norm stats convention and the action order all have to match the server that
+    # produced the rollouts.
+    TrainConfig(
+        name="pi05_robocasa_b1",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id="jellyho/rc_b1_PickPlaceSinkToCounter",
+            base_config=DataConfig(prompt_from_task=True),
+            force_mean_std_norm=True,  # the released checkpoint's norm_stats carry no quantiles
+            # Reuse the RELEASED checkpoint's normalization rather than computing new stats from the
+            # rollouts. Recomputing would renormalize states and actions under weights trained with
+            # the old statistics, which silently corrupts the policy we are trying to continue.
+            assets=AssetsConfig(
+                assets_dir="/scratch/jellyho/acrft/assets/official",
+                asset_id="robocasa365_official",
+            ),
+        ),
+        batch_size=32,
+        # short, low-LR continuation: the run must not relearn the task, only re-weight what the
+        # policy already does. A long schedule here would confound "filtering helped" with
+        # "more training helped".
+        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=200, peak_lr=1e-5, decay_steps=10_000, decay_lr=1e-5),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/scratch/jellyho/acrft/checkpoints/robocasa365_official/pi05_pretrain_human300/multitask_learning/75000/params"
+        ),
+        num_train_steps=10_000,
+        save_interval=2_000,
+        action_dist_interval=0,
+    ),
     # Serving config for the OFFICIAL RoboCasa 365 pi05 release (robocasa/robocasa365_checkpoints,
     # pi05_pretrain_human300/multitask_learning/75000). Same architecture as pi05_robocasa but that
     # checkpoint was trained with mean/std norm (its norm_stats carry no quantiles), so force it.
@@ -1611,6 +1649,77 @@ _CONFIGS.extend(_yam_bc_config(_m, num_train_steps=500_000) for _m in ("joint", 
 # is long enough that stopping early is a real choice; at horizon 30 the longest commitment the critic
 # can score is one second.
 _CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=500_000))
+
+
+def _yam_alphaflow_config(
+    *,
+    delta_mode: str = "joint",
+    horizon: int = 30,
+    fsdp_devices: int = 1,
+    init_checkpoint: str = "gs://openpi-assets/checkpoints/pi05_base/params",
+) -> TrainConfig:
+    """alpha-Flow finetune of pi05 on YAM: turn the 10-step flow policy into a few/one-step one.
+
+    This exists for offline RL, not for inference speed. Every actor-critic update has to draw an
+    action from the policy, and a 10-step ODE per update is the single biggest reason RL on a VLA is
+    expensive; a one-step generator makes the actor update cost one forward. Unlike distillation,
+    alpha-Flow gets there by pure regression on the data -- the VLA never samples during training.
+
+    ONE run; the curriculum is a function of the training step (state.step reaches the loss via the
+    `wants_step` hook), so the whole anneal happens inside this config with no checkpoint chaining:
+
+        progress 0 - ~0.29     alpha = 1 (sigmoid still above the 1 - 5e-3 clamp). Trajectory flow
+                               matching -- the BC objective with an extra r input. The pretrained
+                               pi05 IS this model at init (zero-init r MLP), so this stretch is a
+                               plain BC finetune warm-up.
+        progress ~0.29 - ~0.71 alpha anneals (sigmoid, gamma 25, centred mid-run). Consistency
+                               targets ramp up as flow matching hands over.
+        progress ~0.71 - 1     alpha = 5e-3 (the clamp floor). Discrete MeanFlow-limit training;
+                               the JVP branch stays off (pi0_alphaflow.py explains that default).
+
+    This is the OFFICIAL alpha-Flow schedule (sigmoid over the whole run; the clamps carve the
+    phases), in progress fractions: train.py passes progress = step / num_train_steps into the
+    loss, so overriding --num-train-steps rescales the whole curriculum with it.
+
+    The alpha = 1 stretch pays for the second (stop-gradient, no-backward) forward it does not yet
+    need -- that is the price of a single run, ~15% of a BC step, and it buys not having to chain
+    checkpoints or split wandb curves across runs. Watch `alpha` and `delta2` in wandb: the loss
+    itself sits pinned near 1.0 by MeanFlow's adaptive weight and is NOT the progress signal.
+
+    An optional pure-MeanFlow (JVP) polish stays available as a followup run via
+    Pi0AlphaFlowConfig(alpha_init=0, alpha_final=0, meanflow_jvp=True) pointed at this run's output;
+    it is deliberately not registered as a config until the discrete floor proves insufficient.
+    """
+    tag = "" if delta_mode == "joint" else f"_{delta_mode}"
+    hsuf = "" if horizon == 30 else f"_h{horizon}"
+    steps = 200_000  # schedule is in progress fractions, so the curriculum stretches with this
+    return TrainConfig(
+        name=f"pi05_yam_lego_taxi{tag}{hsuf}_alphaflow",
+        # Schedule defaults ARE the official alpha-Flow recipe (sigmoid over the whole run, gamma
+        # 25, clamp 5e-3, fm_ratio 0.5), expressed in progress fractions so --num-train-steps
+        # rescales the curriculum -- nothing here to keep in sync.
+        model=pi0_alphaflow.Pi0AlphaFlowConfig(
+            pi05=True,
+            action_horizon=horizon,
+            discrete_state_input=False,
+        ),
+        data=LeRobotYAMDataConfig(
+            repo_id="jellyho/yam_lego_taxi",
+            delta_mode=delta_mode,
+            include_progress=False,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        fsdp_devices=fsdp_devices,
+        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=1_000, peak_lr=5e-5, decay_steps=steps, decay_lr=5e-5),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(init_checkpoint),
+        num_train_steps=steps,
+        save_interval=10_000,
+        action_dist_interval=0,
+    )
+
+
+_CONFIGS.append(_yam_alphaflow_config())
 
 
 def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:
