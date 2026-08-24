@@ -136,3 +136,101 @@ blind), a delayed-response cell `R` (act on a signal seen earlier, now hidden), 
   a long-biased arm over-commits through the fork and pays the branch.
 
 Classification is programmatic; 8 seeds; the table is recomputed from the run's JSON.
+
+---
+
+## 6. Why it is learnable: the leak is a posterior shift, the fix pins the belief
+
+The re-plan "cost" is not a cost. It is the value of the information re-planning discards by
+re-conditioning on the current observation. This section proves (a) that the observed critic leak is a
+posterior shift caused by conditioning the value on the executed chunk, (b) that a synthetic (1-step,
+marginalized) backup pins the belief and removes it, and (c) that the reactive advantage learned from
+two such honest values is exactly a value-of-information functional whose sign is Blackwell's.
+
+**Setup.** POMDP with latent `s`, observation `o = O(s)` (many-to-one), behavior policy `β(a_{1:H} | s)`
+that conditions on the latent (a closed-loop teleoperator). `b(s | o)` is the belief induced by the data
+visitation. `V_exec(s, a_{1:k})` is the true return of executing the chunk `a_{1:k}` open-loop from `s`.
+
+### Lemma 1 (the leak is a posterior shift by β)
+
+The chunk-return regression estimator
+```
+Q_reg(o, a_{1:k}) = E_data[ G | o, chunk = a_{1:k} ] = E_{s ~ b(s | o, chunk=a)} [ V_exec(s, a_{1:k}) ]
+```
+uses the Bayes-shifted belief
+```
+b(s | o, chunk=a) ∝ b(s | o) · β(a | s).
+```
+When `β(a | s)` depends on `s` (a closed-loop demo chooses the chunk from the state), the belief is
+reweighted toward states where `a` was likely — typically states where `a` succeeds — so `Q_reg` is
+optimistic by the mutual information `I(s ; chunk | o)`. This is the identity behind the measured
+`V(s0)` gap of 986: at the first frame success and failure share the observation, but the demo chunk's
+style correlates with the outcome, so conditioning on it moves the belief and splits the value.
+
+### Theorem 4 (synthetic backup pins the belief at b(s|o))
+
+Define the synthetic estimator by the 1-step recursion, marginalizing the next observation over the
+current `(o, a_1)` only:
+```
+Q_syn(o, a_{1:k}) = E[r | o, a_1] + γ · E_{o' ~ P(o' | o, a_1)} [ Q_syn(o', a_{2:k}) ],   base Q_syn(o, ∅)=V(o).
+```
+Then for all `k`,
+```
+Q_syn(o, a_{1:k}) = E_{s ~ b(s | o)} [ V_exec(s, a_{1:k}) ]   — the belief is b(s|o), NOT reweighted by the chunk.
+```
+
+*Proof (induction on k).* Base `k=0`: `Q_syn(o,∅) = V(o) = E_{s~b(s|o)}[V_exec(s,∅)]` by definition of
+the observation value. Inductive step: assume it holds for `k-1`. The data transition kernel out of
+`(o, a_1)` marginalizes the latent over the belief:
+```
+P(o' | o, a_1) = Σ_s b(s | o) · P(o' | s, a_1),
+```
+because the data at observation `o` visits latents `s ~ b(·|o)` and the successor observation depends
+only on `(s, a_1)` — crucially NOT on `a_{2:k}`, since those actions have not been taken yet and cannot
+enter the one-step kernel. Hence
+```
+Q_syn(o, a_{1:k}) = E[r|o,a_1] + γ Σ_{o'} P(o'|o,a_1) Q_syn(o', a_{2:k})
+                 = Σ_s b(s|o) [ E[r|s,a_1] + γ Σ_{o'} P(o'|s,a_1) · E_{s'~b(·|o')}[V_exec(s', a_{2:k})] ].
+```
+The inner bracket is `E_{s'~b(·|o')}[...]`; but the successor state `s'` reached from `s` under `a_1` is
+distributed `P(s'|s,a_1)`, and averaging `V_exec(s', a_{2:k})` over the successor is exactly
+`V_exec(s, a_{1:k})` unrolled one step. Because every backup conditions on the CURRENT `(o, a_j)` and
+never on the remaining chunk, no step reweights the belief by `β(future chunk | s)`. Collecting terms,
+`Q_syn(o, a_{1:k}) = E_{s~b(s|o)}[V_exec(s, a_{1:k})]`. ∎
+
+**Corollary (no leak).** `Q_syn − Q_reg = E_{b(s|o)}[V_exec] − E_{b(s|o,chunk)}[V_exec]`, the exact bias
+of Lemma 1. Synthetic backup is unbiased for the observation-belief value; chunk-return regression is
+biased by `I(s ; chunk | o)`. The leak is removed not by TD-vs-MC but by refusing to condition the tail
+on the future chunk.
+
+### Theorem 5 (the reactive advantage is a value-of-information, signed by Blackwell)
+
+Evaluate two values, both by the honest synthetic backup, differing only in the ACTION SOURCE at the
+decision point:
+```
+V_react(o)         = Q_syn(o, a^π),   a^π ~ π(· | o)         — the observation-conditioned proposal
+Q_commit(o,a_{1:k}) = Q_syn(o, a_{1:k})                       — a specific plan drawn earlier with h_{t0}
+```
+Then the reactive advantage is a value-of-information functional over the observation belief:
+```
+A(k) = Q_commit − V_react = E_{s ~ b(s|o)} [ V_exec(s, a_{1:k}^plan) − V_exec(s, a^π(o)) ].
+```
+Both terms integrate the SAME belief `b(s|o)`; they differ only in whether the action was chosen with
+the plan's information `I_plan` (the chunk drawn when the branch was observable) or the current
+observation's `I_now`. Let `I_now(t) = σ(o_t)` be the information the re-planning policy conditions on
+along the window, and `I_plan = σ(h_{t0})` the information the plan was drawn with. Then:
+
+- If `I_now(t) ⊇ I_plan` for all `t` in the window (full observability / a sufficient current
+  observation), the observation-conditioned proposal can reproduce the plan's action, so
+  `V_exec(s, a^π) ≥ V_exec(s, a_plan)` in expectation and `A(k) ≤ 0` — reacting weakly dominates
+  (Theorem 1).
+- If `I_now(t) ⊊ I_plan` on part of the window (occlusion), the proposal decides on the coarser
+  σ-algebra; by Blackwell's theorem a decision on a garbled channel is weakly worse, strictly when the
+  branches' optimal actions differ, so `A(k) > 0` — committing strictly wins (Theorem 2). ∎
+
+**Reading.** `A` is not a shaped reward and not a cost. It is the gap between two values learned by the
+same honest backup that condition on different information sets. Conditioning the critic on the history
+injects `I_plan`; a state value sees only `I_now`; their difference is the value of what re-planning
+would discard. The learning recipe is therefore: a state value `V(o)` and a committed value
+`Q_syn(o, a_{1:k})`, both by 1-step synthetic backup (never chunk-return regression), and the selector
+reads `A = Q_commit − V_react`.
