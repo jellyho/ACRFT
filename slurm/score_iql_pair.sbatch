@@ -22,7 +22,7 @@ for arm in fixed_200k g5_200k; do
     --cache /data1/jellyho/pc_cache/yam_s347 \
     --outcomes /data5/jellyho/ACRFT/openpi/.scratch/yam_outcomes_347.jsonl \
     --homing-onsets /data5/jellyho/ACRFT/openpi/.scratch/yam_homing_onsets.json \
-    --stride 20 \
+    --stride 20 --out "$OUT/${arm}.json" \
     2>&1 | tee "$OUT/${arm}.log"
 done
 echo "==== done ===="
