@@ -114,26 +114,56 @@ values in one pass, trained by regression on $\{y_k\}_{k=1}^{H}$ from
 the estimated $A$ tracks the truth: nonpositive where the input is sufficient, positive where a plan
 survives an occlusion the observation does not.
 
-\subsection{Improvement on the full chunk}
+\subsection{Extraction over the joint action--horizon space}
 \label{sec:method:actor}
 
-Selection cannot lengthen commitments. With the policy frozen the option values are fixed and the
-deployed behavior is a deterministic functional of the initial policy, and improving only the selected
-short prefixes leaves the full-chunk value unchanged, which is the quantity that lower bounds deployed
-value (Lem.~\ref{lem:fullchunk}). We improve the policy against the same critic on the \emph{full}
-chunk by advantage-weighted regression on the demonstrations,
+The reactive advantage prices commitments for a \emph{fixed} chunk, but the chunk is not fixed: the
+policy is what we improve. Two couplings make action and horizon inseparable. The optimal action
+depends on how long it will be committed --- a reactive first action where a branch is imminent, a
+coherent multi-step plan where none is --- and the horizon the selector chooses depends on the chunk,
+since a chunk's prefix values determine $\kappa(x,c)$. Improving the two separately mis-specifies each.
+
+\paragraph{Why the full-chunk objective is not enough.}
+Improving the policy on the full-chunk value $Q(x,c,H)$ is stable and lower-bounds deployed value
+(Lem.~\ref{lem:fullchunk}), but it optimizes a plan of length $H$ everywhere, including states where the
+selector will commit only $k\ll H$. There the tail is discarded, and because a chunk model trades
+capacity across its actions, optimizing that tail can compromise the very first action --- the one that
+is actually executed and that should react. The full-chunk objective is the right target where the
+optimal commitment is long and the wrong one where it is short.
+
+\paragraph{The joint objective.}
+The value deployment realizes for proposing $c$ at $x$ is the value at the length actually executed,
+$Q(x, c, \kappa(x,c))$, not $Q(x,c,H)$. We therefore improve the policy against the deployed value
+directly, reinforcing the prefix that will run, weighted by its advantage at that length,
 \begin{equation}
-\label{eq:rcv-actor}
-\max_\theta\; \mathbb E_{(x, c)\sim\mathcal D}\big[\, w(x,c)\,\log \pi_\theta(c \mid o)\big],
+\label{eq:rcv-joint}
+\max_\theta\; \mathbb E_{(x, c)\sim\mathcal D}\Big[\,
+w(x,c)\,\log \pi_\theta\big(c_{1:\kappa(x,c)} \mid o\big)\Big],
 \qquad
-w(x,c)=\exp\!\big(\beta^{-1}\big[Q_\phi(x, c, H)-V_\phi(x)\big]\big),
+w(x,c)=\exp\!\Big(\beta^{-1}\big[\,Q_\phi\big(x, c, \kappa(x,c)\big)-V_{\mathrm{react}}(x)\,\big]\Big),
 \end{equation}
-with $V_\phi(x)=\mathbb E_{c'\sim\pi_\theta}[Q_\phi(x,c',H)]$. Weighting the recorded chunks keeps the
-update inside the demonstrations, so the critic is never maximized over chunks it has not scored ---
-the failure mode that makes deterministic policy-gradient extraction unstable offline. As the tail
-accuracy improves, the states where a strictly shorter commitment wins shrink to those where reactive
-information genuinely arrives, so the mean commitment grows: the curriculum improvement predicts
-(Cor.~\ref{cor:curriculum}).
+with $V_{\mathrm{react}}(x)=\mathbb E_{c'\sim\pi_\theta}[Q_\phi(x,c',\kappa(x,c'))]$ and $\kappa$ from
+\eqref{eq:rcv-kappa}. This is optimization over the joint action--horizon space: a chunk is reinforced
+on exactly the prefix deployment will execute, and by its value at that length. Where the state is
+reactive, $\kappa=1$ and only the first action is improved, toward a good reaction; where it admits a
+plan, $\kappa$ is long and the whole coherent chunk is improved. The full-chunk objective (advantage-weighted regression at $k=H$) is the special case $\kappa\equiv H$; \eqref{eq:rcv-joint} refines it per state.
+
+\paragraph{Why it does not collapse to short.}
+Reinforcing only short prefixes, independent of value, would leave the full-chunk value unchanged and
+never lengthen commitments. The joint weight avoids this because it is a \emph{value} weight: where a
+long plan is genuinely good, the chunks with high $Q(x,c,H)$ are the ones the selector commits at
+$\kappa=H$, so \eqref{eq:rcv-joint} reinforces their full length and the policy produces more of them.
+Commitments lengthen exactly where lengthening carries value, which is the curriculum improvement
+predicts (Cor.~\ref{cor:curriculum}), while reactive states keep a first action optimized to react.
+
+\paragraph{The coupling, and stability.}
+Because $\kappa$ reads $Q_\phi$, which depends on $\pi_\theta$, \eqref{eq:rcv-joint} is nonstationary:
+the horizon that defines the objective moves as the policy improves. We compute $\kappa$ from a target
+critic $Q_{\bar\phi}$ and treat it as a stop-gradient selection, and we alternate a critic evaluation
+step \eqref{eq:rcv-interv}--\eqref{eq:rcv-leaf} with the actor step \eqref{eq:rcv-joint}. The honesty of
+the critic is a precondition rather than a detail: if $A$ is contaminated by the leakage of
+Section~\ref{sec:method:critic}, $\kappa$ selects the wrong length and the joint objective reinforces
+the wrong prefix, so the interventional and requery corrections are what make joint extraction safe.
 
 \subsection{Deployment}
 \label{sec:method:deploy}
