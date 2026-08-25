@@ -75,3 +75,21 @@ def test_a_long_dataset_list_scrolls(qapp, tmp_path):
             assert "combobox-popup: 0" in combo.styleSheet()
     finally:
         gui.close()
+
+
+def test_speed_is_relative_to_the_dataset_not_a_fixed_rate(qapp, tmp_path):
+    """One rendered frame per recorded tick, so writing at the dataset's own rate is real time.
+    Multiplying a fixed 10 made "speed 1.0" a third-speed video on 30 fps footage -- which reads
+    as the renderer being slow rather than the file being slowed down."""
+    gui = RenderGUI(str(tmp_path))
+    try:
+        gui._fps = 30
+        gui.speed_spin.setValue(1.0)
+        assert gui._build_args().fps == 30, "1.0 is real time"
+        gui.speed_spin.setValue(4.0)
+        assert gui._build_args().fps == 120
+        gui._fps = 60  # a 60 fps recording writes at 60 for real time
+        gui.speed_spin.setValue(1.0)
+        assert gui._build_args().fps == 60
+    finally:
+        gui.close()

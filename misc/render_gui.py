@@ -84,6 +84,7 @@ class RenderGUI(QtWidgets.QWidget):
         self.setStyleSheet(theme.QSS)
         self._worker: _RenderWorker | None = None
         self._episodes: list[tuple[int, int]] = []  # (episode, frames)
+        self._fps = 30
 
         self.root_edit = QtWidgets.QLineEdit(root)
         self.root_edit.setToolTip("Folder holding one subfolder per dataset (the recorder's root)")
@@ -109,7 +110,10 @@ class RenderGUI(QtWidgets.QWidget):
         self.speed_spin.setRange(0.25, 8.0)
         self.speed_spin.setSingleStep(0.25)
         self.speed_spin.setValue(1.0)
-        self.speed_spin.setToolTip("Playback speed of the written file (2 = half the duration)")
+        self.speed_spin.setToolTip(
+            "Playback speed relative to real time: 1.0 writes at the dataset's own rate,\n"
+            "2.0 halves the duration."
+        )
         self.height_spin = QtWidgets.QSpinBox()
         self.height_spin.setRange(120, 1080)
         self.height_spin.setSingleStep(60)
@@ -215,6 +219,7 @@ class RenderGUI(QtWidgets.QWidget):
 
     def _describe(self, reader: DatasetReader) -> None:
         """Say what the recording carries, so the operator does not have to remember it."""
+        self._fps = int(reader.fps or 30)
         bits = [f"{reader.num_episodes} episode(s) at {reader.fps} fps"]
         samples = reader.feature_shape("action_samples")
         if samples:
@@ -239,6 +244,10 @@ class RenderGUI(QtWidgets.QWidget):
             self.out_edit.clear()
             return
         self.out_edit.setText(str(pathlib.Path.home() / f"{name}_ep{ep}.mp4"))
+
+    def _dataset_fps(self) -> int:
+        """The selected recording's own rate; 30 if it cannot be read yet."""
+        return self._fps or 30
 
     def _current_episode(self) -> int | None:
         row = self.episode_combo.currentIndex()
@@ -266,9 +275,10 @@ class RenderGUI(QtWidgets.QWidget):
             replans=0,
             hold=1,
             height=self.height_spin.value(),
-            # Speed is applied as the written frame rate: the render draws one frame per recorded
-            # tick, so N x speed is just N x the dataset rate rather than a re-encode.
-            fps=max(1, round(10 * self.speed_spin.value())),
+            # Speed is the written frame rate relative to the DATASET's own rate: one rendered
+            # frame per recorded tick means 1.0 is real time. It used to multiply a fixed 10,
+            # so "1.0" against 30 fps footage silently produced a third-speed video.
+            fps=max(1, round(self._dataset_fps() * self.speed_spin.value())),
             out=self.out_edit.text().strip(),
             fx=430.0,
             fy=430.0,

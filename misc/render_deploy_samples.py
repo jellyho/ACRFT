@@ -686,8 +686,12 @@ def render(args: argparse.Namespace) -> pathlib.Path:
     # a list -- which is exactly how a full-length render got OOM-killed.
     # Browser-friendly h264: yuv420p is what every browser can decode (hf-utils encodes the same
     # way for its dataset previews); macro_block_size=1 keeps odd panel widths from being padded.
+    # One rendered frame per recorded tick, so writing at the dataset's rate plays back in real
+    # time. The old fixed default of 10 against 30 fps footage made every render a third speed --
+    # which read as the renderer being slow rather than the file being slowed down.
+    fps = args.fps or int(reader.fps or 30)
     writer = imageio.get_writer(
-        out, fps=args.fps, quality=8, macro_block_size=1, codec="libx264", pixelformat="yuv420p"
+        out, fps=fps, quality=8, macro_block_size=1, codec="libx264", pixelformat="yuv420p"
     )
     # Frames are pulled in order, so decode in order: seeking per frame costs ~221 ms for three
     # cameras against ~1 ms streamed, and it is the whole cost of a render. Falls back to the
@@ -912,7 +916,14 @@ def main() -> None:
     p.add_argument("--replans", type=int, default=0, help="max replans to render (0 = the whole episode)")
     p.add_argument("--hold", type=int, default=1, help="repeat each rendered tick N times (>1 = slow motion)")
     p.add_argument("--height", type=int, default=360, help="per-panel height in px (width follows the 4:3 footage)")
-    p.add_argument("--fps", type=int, default=10)
+    p.add_argument(
+        "--fps",
+        type=int,
+        default=None,
+        help="frame rate of the written file; defaults to the DATASET's rate, i.e. real time. "
+        "The renderer draws one frame per recorded tick, so this is the playback speed: half "
+        "the dataset rate is half speed, double is double",
+    )
     p.add_argument("--out", default=".scratch/deploy_samples.mp4")
     # Uncalibrated placeholder -- same numbers tests/test_wrist_view.py uses. The fan's shape is
     # meaningful before calibration; its exact pixel position is not (see module docstring).
