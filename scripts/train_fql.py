@@ -412,7 +412,8 @@ def main():
             print(
                 f"step {s:5d}  l_critic {i['l_critic']:.4f}  l_actor {i['l_actor']:.4f}  "
                 f"q_mean {i['q_mean']:.3f}  l_distill {i['l_distill']:.4f}  q_pi {i['q_pi']:.3f}  "
-                f"({(s + 1) / (time.time() - t0):.2f} it/s)",
+                + (f"l_flow_bc {i['l_flow_bc']:.4f}  " if "l_flow_bc" in i else "")
+                + f"({(s + 1) / (time.time() - t0):.2f} it/s)",
                 flush=True,
             )
         if not a.synthetic and ((s + 1) % a.save_every == 0 or s == a.steps - 1):
