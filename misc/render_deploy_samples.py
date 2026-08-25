@@ -66,7 +66,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 
@@ -576,7 +576,7 @@ def _compose_frame(
     return np.asarray(canvas)
 
 
-def render(args: argparse.Namespace) -> pathlib.Path:
+def render(args: argparse.Namespace, progress: "Optional[Callable[[int, int], None]]" = None) -> pathlib.Path:
     from misc.dataset_reader import DatasetReader, SequentialImages, dataset_dir
     from misc.viz import CameraIntrinsics
     from misc.viz import WristCameraGeometry
@@ -701,6 +701,14 @@ def render(args: argparse.Namespace) -> pathlib.Path:
     except Exception as e:
         print(f"sequential decode unavailable ({e}); falling back to per-frame seeks", file=sys.stderr)
         stream = None
+
+    # How many frames this render will write, known before it starts: every tick of every block,
+    # times --hold. A caller showing progress needs the denominator up front, and the loop below
+    # can skip a frame (missing state/images) but never add one.
+    total = sum(
+        ((blocks[i + 1] if i + 1 < len(blocks) else n_frames) - b) if recorded else min(horizon, n_frames - b)
+        for i, b in enumerate(blocks)
+    ) * max(1, args.hold)
 
     written = 0
     for block_idx, start in enumerate(blocks):
@@ -847,6 +855,8 @@ def render(args: argparse.Namespace) -> pathlib.Path:
             for _ in range(max(1, args.hold)):
                 writer.append_data(composed)
                 written += 1
+            if progress is not None:
+                progress(written, total)
 
     writer.close()
     if stream is not None:

@@ -61,6 +61,7 @@ class _RenderWorker(QtCore.QThread):
     """Runs one render off the GUI thread; the window stays responsive and can report failure."""
 
     done = QtCore.pyqtSignal(bool, str)
+    progressed = QtCore.pyqtSignal(int, int)
 
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__()
@@ -69,8 +70,18 @@ class _RenderWorker(QtCore.QThread):
     def run(self) -> None:
         from misc.render_deploy_samples import render
 
+        # Emitted from this thread; Qt queues it across to the GUI one. Throttled to whole
+        # percents: a 9000-frame render would otherwise post 9000 events for 100 visible states.
+        last = [-1]
+
+        def report(written: int, total: int) -> None:
+            pct = (100 * written) // max(total, 1)
+            if pct != last[0]:
+                last[0] = pct
+                self.progressed.emit(written, total)
+
         try:
-            out = render(self._args)
+            out = render(self._args, progress=report)
             self.done.emit(True, str(out))
         except BaseException as e:  # a failed render must land in the window, not the console
             logger.exception("render failed")
@@ -132,6 +143,10 @@ class RenderGUI(QtWidgets.QWidget):
         self.info = QtWidgets.QLabel("—")
         self.info.setWordWrap(True)
         self.info.setStyleSheet(f"color:{theme.MUTED};")
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(True)
+        self.progress.setVisible(False)
         self.status = QtWidgets.QLabel("")
         self.status.setWordWrap(True)
 
@@ -160,6 +175,7 @@ class RenderGUI(QtWidgets.QWidget):
         lay.addWidget(box)
         lay.addWidget(self.info)
         lay.addWidget(self.render_btn)
+        lay.addWidget(self.progress)
         lay.addWidget(self.status)
         lay.addStretch(1)
         self.resize(760, 380)
@@ -303,12 +319,20 @@ class RenderGUI(QtWidgets.QWidget):
         self.render_btn.setEnabled(False)
         self.status.setStyleSheet(f"color:{theme.MUTED};")
         self.status.setText(f"Rendering episode {args.episode} → {args.out} …")
+        self.progress.setValue(0)
+        self.progress.setVisible(True)
         self._worker = _RenderWorker(args)
+        self._worker.progressed.connect(self._on_progress)
         self._worker.done.connect(self._on_done)
         self._worker.start()
 
+    def _on_progress(self, written: int, total: int) -> None:
+        self.progress.setValue((100 * written) // max(total, 1))
+        self.progress.setFormat(f"%p%  ({written} / {total} frames)")
+
     def _on_done(self, ok: bool, message: str) -> None:
         self.render_btn.setEnabled(True)
+        self.progress.setVisible(False)
         if ok:
             size = pathlib.Path(message).stat().st_size / 1e6 if pathlib.Path(message).exists() else 0.0
             self.status.setStyleSheet(f"color:{theme.OK if hasattr(theme, 'OK') else theme.ACCENT};")

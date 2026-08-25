@@ -95,3 +95,43 @@ def test_speed_is_relative_to_the_dataset_not_a_fixed_rate(qapp, tmp_path):
         assert gui._build_args().fps == 60
     finally:
         gui.close()
+
+
+def test_progress_is_reported_and_throttled_to_percents():
+    """A render is tens of seconds; the window should say how far it is. Emitting per frame would
+    post 9000 events for a 9000-frame episode to show 100 distinct states, so the worker only
+    emits when the whole percent changes."""
+    from misc.render_gui import _RenderWorker
+
+    worker = _RenderWorker(None)
+    seen = []
+    worker.progressed.connect(lambda w, t: seen.append(w))
+
+    # The reporting closure is what render() is handed; drive it directly rather than rendering.
+    last = [-1]
+
+    def report(written, total):
+        pct = (100 * written) // max(total, 1)
+        if pct != last[0]:
+            last[0] = pct
+            worker.progressed.emit(written, total)
+
+    for i in range(1, 1001):
+        report(i, 1000)
+    # 0 % through 100 % inclusive -- 101 distinct states, not 100.
+    assert len(seen) == 101, f"one event per percent, got {len(seen)}"
+    assert seen[-1] == 1000
+
+
+def test_the_bar_hides_when_the_render_finishes(qapp, tmp_path):
+    gui = RenderGUI(str(tmp_path))
+    try:
+        gui.progress.setVisible(True)
+        gui._on_progress(30, 120)
+        assert gui.progress.value() == 25
+        assert "30 / 120" in gui.progress.format()
+        gui._on_done(True, str(tmp_path / "nope.mp4"))
+        assert not gui.progress.isVisible()
+        assert gui.render_btn.isEnabled()
+    finally:
+        gui.close()
