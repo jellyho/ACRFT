@@ -53,25 +53,41 @@ Three properties of closed-loop demonstration data corrupt a naive estimate of $
 direction, and each is removed by a modeling choice rather than a loss term. We state each as the bias
 it removes.
 
-\paragraph{History conditioning removes the collapse of $Q_{\mathrm{commit}}$.}
-A teleoperator holds a plan across a stretch of motion and acts from it while the scene alone no
-longer reveals it; that is precisely what makes a committed execution informative. A critic
-conditioned on the instantaneous observation cannot represent the carried plan, so
-$Q_{\mathrm{commit}}$ collapses to $V_{\mathrm{react}}$ and $A$ is forced nonpositive everywhere: a
-Markov value can, at best, tie on long commitments and generically prefers short ones
-(Rem.~\ref{rem:confound}). We condition on
+\paragraph{History conditioning is forced, not added.}
+The input is not a modeling preference; it is what makes a positive $A$ representable at all. Suppose
+the critic's input $x$ is a sufficient statistic of the state, as it is when $x=o_t$ and the
+environment is fully observed. Then re-planning at any intermediate step has access to at least the
+information the commitment was chosen with, so the interrupted option is weakly better than the
+committed one~\citep{sutton1999options}: $V_{\mathrm{react}}(x)\ge Q_{\mathrm{commit}}(x,c,k)$ for every
+$k$, that is $A\le 0$ everywhere, with equality only for a self-consistent optimal policy. An
+observation-conditioned critic therefore cannot express a strict preference for a longer commitment; at
+best it ties, and any strict preference it does report is estimation error. Every force that breaks the
+tie inside this class --- policy error, bootstrap optimism --- points short. So a critic that is to
+price commitment at all must leave the class in which its input determines the state.
+
+It leaves that class exactly when the demonstrator conditioned on something the input does not carry.
+A teleoperator holds a plan across a stretch of motion and acts from it while the scene alone no longer
+reveals it; the chunk drawn at the informative moment carries that latent forward, whereas re-planning
+re-conditions on the impoverished present and discards it. Conditioning on
 \begin{equation}
 \label{eq:rcv-input}
-x_t=(o_t,\, a_{t-m:t-1}),
+x_t=(o_t,\, a_{t-m:t-1})
 \end{equation}
-the observation together with the actions executed since the last query. A delayed observation
-$o_{t-\Delta}$ serves the same role more cheaply. This is a change of input, not of objective, and it
-is placed on the \emph{critic}, which is trained offline and unconstrained by inference latency, while
-the policy stays short context; conditioning the policy on history instead lowers its fit but worsens
-its rollout, because it overfits temporal correlations that break under its own state
-distribution~\citep{park-bc-mystery}. The critic-side use is safe only insofar as $x$ carries the
-latent the observation lost rather than an action-history shortcut, which the reactive-map diagnostic
-below verifies.
+restores the latent through the actions already executed since the last query --- the past commitment
+is itself evidence about what the demonstrator was doing --- and a delayed observation $o_{t-\Delta}$
+serves the same role more cheaply. With it, $A>0$ is representable precisely where the plan carries
+information the current input has lost, which is the content of the sign law in
+Section~\ref{sec:method:setup}.
+
+Two consequences worth stating. First, the conditioning belongs on the \emph{critic}: it is trained
+offline and unconstrained by inference latency, while the policy stays short context. Conditioning the
+policy on history instead lowers its training loss but worsens its rollout, because it overfits temporal
+correlations that break under its own induced state distribution~\citep{park-bc-mystery}; the same
+elimination result also says the alternative fix --- simply lengthening the policy's
+context~\citep{zeng2026openloop} --- is unavailable to a deployed VLA. Second, the same result names the
+failure mode we must avoid: history helps only insofar as $x$ carries the latent the observation lost,
+rather than an action-history shortcut the critic can copy. That distinction is measurable, and the
+reactive-map diagnostic of Section~\ref{sec:method:diagnostic} is the test.
 
 \paragraph{Interventional composition removes the leakage in $Q_{\mathrm{commit}}$.}
 The committed value must not be estimated by regressing outcomes on the executed chunk. An event
@@ -95,9 +111,16 @@ the intervention is what buys that independence when the data is closed loop.
 
 \paragraph{An honestly priced requery removes the optimism in $V_{\mathrm{react}}$.}
 The leaf of the recursion is the value of querying the policy again, and it must be the value of the
-policy that will resume control. Bootstrapping from demonstration returns credits the requery with the
-demonstrator's competence, an optimism that enters with weight $\gamma^{k}$ and biases the choice
-toward short commitments regardless of the reward convention (Prop.~\ref{prop:optimism}). We use the
+policy that will resume control. Two leaves fail here, in the same direction. Bootstrapping from
+demonstration returns credits the requery with the demonstrator's competence. Bootstrapping from a
+maximum over sampled candidates --- the EMaQ-style operator that prior adaptive-chunking critics use,
+taking a joint $\max$ over $N$ candidate chunks and $H$ prefixes~\citep{acsac} --- credits it instead
+with the largest estimation error among $NH$ options, since $\mathbb E[\max] \ge \max \mathbb E$ and the
+gap widens with the number of options. Because the true values of different commitments coincide in the
+idealized limit, that maximum is taken over what is mostly estimation noise. Either optimism enters the
+prefix comparison with weight $\gamma^{k}$ and therefore biases the choice toward short commitments
+regardless of the reward convention (Prop.~\ref{prop:optimism}). We keep the deployment-consistency of
+the second (the leaf is the policy that will actually resume) while removing the maximum, using the
 deployed policy's own expectation,
 \begin{equation}
 \label{eq:rcv-leaf}
