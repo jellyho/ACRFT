@@ -40,11 +40,13 @@ def test_it_leaves_the_recorded_numbers_for_the_renderer_to_recover(qapp, tmp_pa
         args = gui._build_args()
         assert args.candidates is None and args.horizon is None
         assert args.replans == 0 and args.hold == 1
-        # Speed is the written frame rate, not a re-encode: 1x is the renderer's own default of 10.
+        # Speed is the written frame rate, not a re-encode, and it is relative to the dataset's
+        # own rate -- see test_speed_is_relative_to_the_dataset_not_a_fixed_rate.
+        gui._fps = 30
         gui.speed_spin.setValue(1.0)
-        assert gui._build_args().fps == 10
+        assert gui._build_args().fps == 30
         gui.speed_spin.setValue(4.0)
-        assert gui._build_args().fps == 40
+        assert gui._build_args().fps == 120
     finally:
         gui.close()
 
