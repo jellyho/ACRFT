@@ -75,7 +75,7 @@ if TYPE_CHECKING:
     from PIL.ImageFont import FreeTypeFont
     from PIL.ImageFont import ImageFont
 
-    from misc.dataset_reader import DatasetReader
+    from misc.dataset_reader import DatasetReader, SequentialImages, dataset_dir
     from misc.viz import CameraIntrinsics
     from misc.viz import WristCameraGeometry
 
@@ -534,9 +534,20 @@ def _label(
     x, y = xy
     if "r" in anchor:
         x -= w
-    box = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    ImageDraw.Draw(box).rectangle([x - pad, y - pad, x + w + pad, y + h + pad], fill=(0, 0, 0, 140))
-    canvas.paste(Image.alpha_composite(canvas.convert("RGBA"), box).convert("RGB"), (0, 0))
+    # Darken only the box's own pixels. Compositing a full-canvas RGBA layer gives the same
+    # picture, but converts and blends 1440x606 four times a frame -- 4.5 s of a 23 s render,
+    # more than the video decoding it was drawn on top of.
+    # +1 on the far edges: PIL's rectangle() includes its end points and crop() excludes them, so
+    # without it the box comes out a pixel short on the right and bottom.
+    region = (
+        max(0, x - pad),
+        max(0, y - pad),
+        min(canvas.width, x + w + pad + 1),
+        min(canvas.height, y + h + pad + 1),
+    )
+    if region[2] > region[0] and region[3] > region[1]:
+        crop = canvas.crop(region)
+        canvas.paste(Image.blend(crop, Image.new("RGB", crop.size, (0, 0, 0)), 140 / 255), region[:2])
     ImageDraw.Draw(canvas).text((x, y), text, font=font, fill=fill, anchor="la")
 
 
@@ -566,7 +577,7 @@ def _compose_frame(
 
 
 def render(args: argparse.Namespace) -> pathlib.Path:
-    from misc.dataset_reader import DatasetReader
+    from misc.dataset_reader import DatasetReader, SequentialImages, dataset_dir
     from misc.viz import CameraIntrinsics
     from misc.viz import WristCameraGeometry
 
@@ -678,6 +689,15 @@ def render(args: argparse.Namespace) -> pathlib.Path:
     writer = imageio.get_writer(
         out, fps=args.fps, quality=8, macro_block_size=1, codec="libx264", pixelformat="yuv420p"
     )
+    # Frames are pulled in order, so decode in order: seeking per frame costs ~221 ms for three
+    # cameras against ~1 ms streamed, and it is the whole cost of a render. Falls back to the
+    # reader's random access if the stream cannot be opened (an unusual layout, a missing file).
+    try:
+        stream = SequentialImages(dataset_dir(args.root, args.repo_id), args.episode)
+    except Exception as e:
+        print(f"sequential decode unavailable ({e}); falling back to per-frame seeks", file=sys.stderr)
+        stream = None
+
     written = 0
     for block_idx, start in enumerate(blocks):
         # Each block runs to the next boundary (or the end), so a recorded chunk is drawn whole
@@ -728,7 +748,7 @@ def render(args: argparse.Namespace) -> pathlib.Path:
         for offset in range(block_len):
             frame_idx = start + offset
             state = reader.get_state(args.episode, frame_idx)
-            images = reader.get_images(args.episode, frame_idx)
+            images = stream.frame(frame_idx) if stream is not None else reader.get_images(args.episode, frame_idx)
             if state is None or not images:
                 print(f"frame {frame_idx}: no state/images, skipping", file=sys.stderr)
                 continue
@@ -825,6 +845,8 @@ def render(args: argparse.Namespace) -> pathlib.Path:
                 written += 1
 
     writer.close()
+    if stream is not None:
+        stream.close()
     if not written:
         out.unlink(missing_ok=True)
         raise SystemExit("nothing to render -- no frame had both action/action_samples and images")

@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -247,3 +249,44 @@ def test_a_recording_without_the_commitment_columns_draws_as_before():
 
     # committed = (best_prefix + 1) * macro -- three groups of five.
     assert _load_commitment(_Adaptive(), 0, 0) == (5, 15)
+
+
+def test_sequential_decoding_matches_random_access():
+    """Rendering walks the episode in order, so the decoder does too. Seeking per frame cost 221 ms
+    for three cameras against ~1 ms streamed -- the whole cost of a render -- but it has to return
+    the same pictures, or the speedup would be a different video."""
+    import numpy as np
+
+    from misc.dataset_reader import DatasetReader, SequentialImages
+
+    root = "/home/rllab4/lerobot_rollout/yam_s300_rel_200k_g5"
+    if not pathlib.Path(root, "meta").exists():
+        pytest.skip("needs a recorded rollout on this machine")
+    reader = DatasetReader("lerobot_rollout/yam_s300_rel_200k_g5", "/home/rllab4/lerobot_rollout")
+    reader.load()
+    stream = SequentialImages(root, 4)
+    try:
+        for index in (0, 17, 60):
+            seeked, streamed = reader.get_images(4, index), stream.frame(index)
+            assert set(seeked) == set(streamed)
+            for camera, image in seeked.items():
+                assert np.array_equal(image, streamed[camera]), camera
+    finally:
+        stream.close()
+
+
+def test_the_stream_is_forward_only():
+    """Rewinding is exactly the seek this exists to avoid, so it refuses rather than quietly
+    paying for one."""
+    from misc.dataset_reader import SequentialImages
+
+    root = "/home/rllab4/lerobot_rollout/yam_s300_rel_200k_g5"
+    if not pathlib.Path(root, "meta").exists():
+        pytest.skip("needs a recorded rollout on this machine")
+    stream = SequentialImages(root, 4)
+    try:
+        stream.frame(5)
+        with pytest.raises(ValueError, match="forward-only"):
+            stream.frame(4)
+    finally:
+        stream.close()
