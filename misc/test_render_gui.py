@@ -59,3 +59,19 @@ def test_render_is_refused_without_an_episode(qapp, tmp_path):
         assert gui.render_btn.isEnabled()
     finally:
         gui.close()
+
+
+def test_a_long_dataset_list_scrolls(qapp, tmp_path):
+    """A styled popup comes with ScrollBarAlwaysOff and ignores maxVisibleItems, so a list longer
+    than the screen simply lost its tail with nothing to drag -- and one root here holds 41
+    datasets."""
+    from PyQt5 import QtCore
+
+    gui = RenderGUI(str(tmp_path))
+    try:
+        for combo in (gui.dataset_combo, gui.episode_combo):
+            assert combo.view().verticalScrollBarPolicy() == QtCore.Qt.ScrollBarAsNeeded
+            assert combo.maxVisibleItems() > 1
+            assert "combobox-popup: 0" in combo.styleSheet()
+    finally:
+        gui.close()

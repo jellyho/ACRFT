@@ -1,6 +1,6 @@
-"""Point-and-click front end for ``yam-data render-samples``.
+"""Point-and-click front end for the rollout renderer.
 
-    workstation/yam-data render-gui
+    misc/yam-misc render-gui
 
 Pick a dataset, pick an episode, press Render. Everything the command line asks for that the
 recording already knows -- how many candidates, where the replans were, whether a critic scored
@@ -22,8 +22,14 @@ import pathlib
 import traceback
 from typing import TYPE_CHECKING
 
-from PyQt5 import QtCore
-from PyQt5 import QtWidgets
+try:
+    from PyQt5 import QtCore, QtWidgets
+except ModuleNotFoundError as e:  # almost always: run outside the launcher
+    raise SystemExit(
+        f"{e}.\n\nRun this through the launcher, which activates the workstation conda env:\n"
+        "    misc/yam-misc render-gui\n\n"
+        "This repo's own .venv has neither PyQt5 nor mink."
+    ) from e
 
 from misc import theme
 from misc.dataset_reader import list_datasets
@@ -34,6 +40,21 @@ if TYPE_CHECKING:  # the reader pulls in LeRobot, which a GUI import should not
 logger = logging.getLogger(__name__)
 
 DEFAULT_ROOT = "~/lerobot_rollout"
+
+
+def _scrollable(combo: QtWidgets.QComboBox, visible: int = 18) -> QtWidgets.QComboBox:
+    """Make a long popup scroll instead of being clipped.
+
+    Two things have to be true together, and neither is the default here. `combobox-popup: 0`
+    switches Qt to the non-native popup, which is what makes `maxVisibleItems` mean anything; and
+    the popup's own scrollbar has to be re-enabled, because a styled popup comes with
+    ScrollBarAlwaysOff -- so a list longer than the screen simply lost its tail, with nothing to
+    drag. With 41 datasets under one root that is most of them.
+    """
+    combo.setMaxVisibleItems(visible)
+    combo.setStyleSheet(combo.styleSheet() + "\nQComboBox { combobox-popup: 0; }")
+    combo.view().setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+    return combo
 
 
 class _RenderWorker(QtCore.QThread):
@@ -71,9 +92,9 @@ class RenderGUI(QtWidgets.QWidget):
         browse.setFixedWidth(36)
         browse.clicked.connect(self._browse)
 
-        self.dataset_combo = QtWidgets.QComboBox()
+        self.dataset_combo = _scrollable(QtWidgets.QComboBox())
         self.dataset_combo.currentTextChanged.connect(lambda *_: self._refresh_episodes())
-        self.episode_combo = QtWidgets.QComboBox()
+        self.episode_combo = _scrollable(QtWidgets.QComboBox())
         self.episode_combo.currentIndexChanged.connect(lambda *_: self._sync_out())
 
         self.source_combo = QtWidgets.QComboBox()
