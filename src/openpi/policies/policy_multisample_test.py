@@ -216,3 +216,52 @@ def test_a_stale_critic_select_key_never_reaches_the_model():
     policy = MultiSamplePolicy(inner, action_horizon=30, action_dim=32)
     policy.infer({"state": np.zeros(42), "critic_select": True})
     assert "critic_select" not in seen
+
+
+class _Chunked:
+    """A policy that answers with a full horizon and some per-step extras."""
+
+    metadata: ClassVar[dict] = {}
+
+    def infer(self, obs):
+        return {
+            "actions": np.arange(30 * 14, dtype=np.float32).reshape(30, 14),
+            "action_samples": np.arange(30 * 8 * 14, dtype=np.float32).reshape(30, 8, 14),
+            "critic_scores": np.arange(30 * 8, dtype=np.float32).reshape(30, 8),
+            "policy_timing": {"infer_ms": 1.0},
+        }
+
+    def extra_features(self, num_samples=None):
+        return {"action_samples": [8, 14]}
+
+
+def test_truncating_a_chunk_cuts_every_per_step_array_together():
+    """A horizon-30 checkpoint run whole is open loop for a second. Cutting the reply makes the
+    robot replan sooner -- but the extras have to be cut with it, or the recorded columns would
+    describe steps that were never executed."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    result = TruncateChunkPolicy(_Chunked(), 10).infer({"state": np.zeros(42)})
+
+    assert result["actions"].shape == (10, 14)
+    assert result["action_samples"].shape == (10, 8, 14)
+    assert result["critic_scores"].shape == (10, 8)
+    # The kept steps are the FIRST ones, unchanged.
+    assert np.array_equal(result["actions"], _Chunked().infer({})["actions"][:10])
+    # Anything that is not per-step rides through untouched.
+    assert result["policy_timing"] == {"infer_ms": 1.0}
+
+
+def test_truncating_to_more_than_the_chunk_changes_nothing():
+    """K >= H is the plain policy; it must not pad, copy or re-wrap."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    assert TruncateChunkPolicy(_Chunked(), 50).infer({})["actions"].shape == (30, 14)
+
+
+def test_the_declaration_survives_truncation():
+    """The handshake describes ONE step, which truncation does not change -- and the wrapper is
+    outermost, so a declaration it dropped would never reach the client."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    assert TruncateChunkPolicy(_Chunked(), 5).extra_features() == {"action_samples": [8, 14]}

@@ -90,6 +90,12 @@ class Args:
     # --critic, which samples its own candidates).
     num_samples: int = 0
 
+    # Execute only the first N steps of each reply, then replan. A checkpoint trained at horizon 30
+    # is open loop for a second when its chunk is run whole; this trades inference cost for
+    # reaction time without retraining, and the client needs no setting -- it reads the length off
+    # the reply. 0 (default) leaves the chunk as the policy returned it.
+    execute_steps: int = 0
+
 
 # Default checkpoints that should be used for each environment.
 DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
@@ -239,6 +245,13 @@ def main(args: Args) -> None:
         robot_action_dim=robot_action_dim,
         default_samples=args.num_samples,
     )
+    if args.execute_steps > 0:
+        # Outermost, so it cuts the actions and every per-step extra together -- see
+        # TruncateChunkPolicy. Wrapping inside MultiSamplePolicy would leave the candidates
+        # describing steps that never ran.
+        logging.info("executing %d of each chunk, then replanning", args.execute_steps)
+        policy = _policy.TruncateChunkPolicy(policy, args.execute_steps)
+
     # Config-derived spec first, so an explicit policy_metadata entry can still override it.
     policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}
     # What this policy sends alongside its actions, so the robot client records it without
