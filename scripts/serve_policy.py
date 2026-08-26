@@ -96,6 +96,13 @@ class Args:
     # the reply. 0 (default) leaves the chunk as the policy returned it.
     execute_steps: int = 0
 
+    # Denoising iterations per chunk, passed to the model's sample_actions. This is where the
+    # few-step models are worth what they cost: alphaflow is trained on mean velocity so it can
+    # answer in one step (its own default), while pi05 integrates the flow over ten. Sweeping it
+    # is how you find where quality stops paying for latency -- and the latency is per replan, so
+    # it compounds with --execute-steps. Unset leaves each model's own default alone.
+    num_steps: int | None = None
+
 
 # Default checkpoints that should be used for each environment.
 DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
@@ -118,6 +125,18 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
+def _sample_kwargs(args: Args) -> "dict | None":
+    """What to pass through to the model's own sample_actions, or None to leave its defaults.
+
+    Only set what was asked for: handing a model `num_steps=None` is not the same as not handing
+    it one, and each model's default is its own (alphaflow 1, pi05 10).
+    """
+    if args.num_steps is None:
+        return None
+    logging.info("sampling with num_steps=%d", args.num_steps)
+    return {"num_steps": int(args.num_steps)}
+
+
 def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
     """Create a policy from the given arguments, with the config it was built from.
 
@@ -138,7 +157,12 @@ def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
                     ),
                 )
             return (
-                _policy_config.create_trained_policy(train_config, args.policy.dir, default_prompt=args.default_prompt),
+                _policy_config.create_trained_policy(
+                    train_config,
+                    args.policy.dir,
+                    default_prompt=args.default_prompt,
+                    sample_kwargs=_sample_kwargs(args),
+                ),
                 train_config,
             )
         case Default():
@@ -147,7 +171,9 @@ def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
                 raise ValueError(f"Unsupported environment mode: {args.env}")
             train_config = _config.get_config(checkpoint.config)
             return (
-                _policy_config.create_trained_policy(train_config, checkpoint.dir, default_prompt=args.default_prompt),
+                _policy_config.create_trained_policy(
+                    train_config, checkpoint.dir, default_prompt=args.default_prompt, sample_kwargs=_sample_kwargs(args)
+                ),
                 train_config,
             )
 

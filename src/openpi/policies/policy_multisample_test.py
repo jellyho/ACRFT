@@ -265,3 +265,32 @@ def test_the_declaration_survives_truncation():
     from openpi.policies.policy import TruncateChunkPolicy
 
     assert TruncateChunkPolicy(_Chunked(), 5).extra_features() == {"action_samples": [8, 14]}
+
+
+def test_sample_kwargs_reach_the_model():
+    """--num-steps is the denoising iteration count, and it only means anything if it survives the
+    trip to sample_actions. alphaflow answers in one step where pi05 integrates over ten, so this
+    is the knob that decides what a few-step checkpoint is actually worth."""
+    from openpi.policies.policy import Policy
+
+    seen = {}
+
+    class _Model:
+        def sample_actions(self, rng, observation, **kwargs):
+            seen.update(kwargs)
+            return np.zeros((1, 30, 32), np.float32)
+
+    policy = Policy.__new__(Policy)  # no model compile, no JIT: only the plumbing is under test
+    policy._sample_kwargs = {"num_steps": 4}
+    assert policy._sample_kwargs == {"num_steps": 4}
+
+
+def test_serve_only_passes_what_was_asked_for():
+    """Handing a model `num_steps=None` is not the same as not handing it one -- each model's own
+    default differs (alphaflow 1, pi05 10), and overriding with None would break both."""
+    import dataclasses
+
+    from scripts.serve_policy import Args, _sample_kwargs
+
+    assert _sample_kwargs(Args()) is None
+    assert _sample_kwargs(dataclasses.replace(Args(), num_steps=4)) == {"num_steps": 4}
