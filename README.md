@@ -217,9 +217,29 @@ cd /path/to/ACRFT
 # YAM, relative-joint actions (the default convention)
 uv run scripts/serve_policy.py \
     --port 8000 \
+    --execute-steps 50 \
     policy:checkpoint \
-    --policy.config pi05_yam_lego_taxi_rlt \
-    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000
+    --policy.config pi05_yam_lego_taxi_h50 \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h50/200000
+
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    --execute-steps 30 \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000
+
+# with a patch critic scoring 8 candidates. --critic takes the critic DIRECTORY; the server
+# reads its config to tell a patch critic from an RLT one and to derive adaptive vs bon.
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    --num-samples 8 \
+    --critic ~/hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_fixed_200k \
+    --critic-mode bon \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000
+
 
 uv run scripts/serve_policy.py \
     --num-samples 16 \
@@ -304,19 +324,24 @@ PY
 
 srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
   bash -lc 'cd /path/to/ACRFT && XLA_PYTHON_CLIENT_PREALLOCATE=false \
-    uv run --no-sync python scripts/serve_policy.py --critic \
-      --config pi05_yam_lego_taxi_rlt \
-      --checkpoint checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000 \
+    uv run --no-sync python scripts/serve_policy.py \
+      --port 8000 --num-samples 8 \
       --critic /data5/jellyho/critics/yam/fixed_pi05_s347 \
-      --mode bon --num-samples 8 --port 8000'
+      --critic-mode bon \
+      policy:checkpoint \
+      --policy.config pi05_yam_lego_taxi_rlt \
+      --policy.dir checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000'
 ```
 
 ```bash
-uv run python scripts/serve_policy.py --critic \
-      --config pi05_yam_lego_taxi_rlt \
-      --checkpoint ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000 \
-      --critic ~/hf_utils_downloads/patch_critic_yam_lego_taxi/fixed_pi05_s347 \
-      --mode bon --num-samples 8 --port 8000
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    --num-samples 8 \
+    --critic ~/hf_utils_downloads/patch_critic_yam_lego_taxi/fixed_pi05_s347 \
+    --critic-mode bon \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000
 
 uv run scripts/serve_policy.py \
     --port 8000 \
