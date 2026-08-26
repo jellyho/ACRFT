@@ -54,6 +54,32 @@ Everything else is optional. `--candidates` and `--horizon` are read from the re
 pass them; `--source action` draws the single executed trajectory instead of the fan, which works
 on any LeRobot recording (teleop, demo, replay).
 
+## A whole dataset at once
+
+```bash
+misc/yam-misc render-bulk \
+    --repo-id lerobot_rollout/yam_s300_rel_200k_g5 \
+    --root ~/lerobot_rollout
+```
+
+Renders every episode to `~/<dataset>_renders/<dataset>_ep000.mp4`, then zips the folder next to
+it. Takes every option `render-samples` does, plus:
+
+| | |
+|---|---|
+| `--episodes` | `all` (default), `3`, `0-9`, `0,3,5-7`. An out-of-range index is an error, not a trim -- asking for `0-49` of a 20-episode run means one of the numbers is wrong, and quietly rendering 20 hides which. |
+| `--out-dir` | where the mp4s go (default `~/<dataset>_renders`) |
+| `--zip` / `--no-zip` | zip path (default `<out-dir>.zip`), or skip it |
+| `--overwrite` | re-render episodes whose mp4 already exists |
+
+Two things a long batch depends on: **a failing episode does not end it** (episode 17 recording no
+candidates is not a reason to lose 18..40 -- failures are collected and reported at the end, and
+the exit code is non-zero), and **a killed batch resumes** (existing renders are skipped, so
+re-running after a Ctrl-C picks up where it stopped).
+
+The zip is stored rather than deflated: the payload is h264 in mp4, already compressed, so
+deflating spends CPU on every byte to save roughly none.
+
 ## What the frame shows
 
 ```
@@ -99,6 +125,9 @@ PyQt5 / lerobot / mujoco / mink. ACRFT's own `.venv` does not have PyQt5 or mink
 ## Tests
 
 ```bash
+conda activate yam_ws   # NOT `uv run`: ACRFT's .venv has no mink or PyQt5, and those
+                        # two modules are importorskip'd, so the suite goes quiet rather
+                        # than red -- 9 of 29 tests would run and still report success.
 QT_QPA_PLATFORM=offscreen PYTHONPATH=$PWD python -m pytest misc/ -q
 ```
 

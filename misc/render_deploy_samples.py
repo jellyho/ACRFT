@@ -868,7 +868,8 @@ def render(args: argparse.Namespace, progress: "Optional[Callable[[int, int], No
     return out
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Every render option, shared with bulk mode so the two can never drift apart."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--repo-id", required=True, help="dataset repo id, as recorded (e.g. user/my_deploy_run)")
     p.add_argument("--root", default="~/lerobot_data")
@@ -950,7 +951,11 @@ def main() -> None:
     p.add_argument("--agent-fy", type=float, default=390.0)
     p.add_argument("--agent-cx", type=float, default=320.0)
     p.add_argument("--agent-cy", type=float, default=240.0)
-    args = p.parse_args()
+    return p
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     # --candidates is filled in from the recording when it can be (see _recorded_candidates);
     # only a dataset whose schema does not declare action_samples still needs it spelled out.
     render(args)
