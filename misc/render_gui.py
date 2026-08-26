@@ -39,7 +39,9 @@ if TYPE_CHECKING:  # the reader pulls in LeRobot, which a GUI import should not
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ROOT = "~/lerobot_rollout"
+# Where rollouts are stacked now, and what render-samples already defaults to -- the two used to
+# disagree, so the window opened on a different root than the command line.
+DEFAULT_ROOT = "~/lerobot_data"
 
 
 def _scrollable(combo: QtWidgets.QComboBox, visible: int = 18) -> QtWidgets.QComboBox:

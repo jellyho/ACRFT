@@ -34,13 +34,19 @@ def dataset_dir(root: str, repo_id: str) -> str:
 
 
 def list_datasets(root: str) -> list:
-    """Dataset folder names under the parent ``root`` (for the GUI's picker), sorted; [] if the
-    root does not exist."""
+    """LeRobot dataset folder names under the parent ``root`` (for the GUI's picker), sorted; [] if
+    the root does not exist.
+
+    A folder counts only if it has ``meta/info.json``. Listing every directory instead put the
+    renderer's own ``*_renders`` output folders in the picker alongside the recordings -- 14 of 62
+    entries in one root -- and bulk rendering only adds more.
+    """
     path = os.path.expanduser(root)
     try:
-        return sorted(d for d in os.listdir(path) if not d.startswith(".") and os.path.isdir(os.path.join(path, d)))
+        names = [d for d in os.listdir(path) if not d.startswith(".") and os.path.isdir(os.path.join(path, d))]
     except OSError:
         return []
+    return sorted(d for d in names if os.path.exists(os.path.join(path, d, "meta", "info.json")))
 
 
 #: Both arms x applied(7) -- the recorded action width (was imported from the recorder's config).

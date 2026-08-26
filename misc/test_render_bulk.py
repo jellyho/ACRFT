@@ -97,3 +97,18 @@ def test_one_bad_episode_does_not_end_the_batch(monkeypatch, tmp_path, capsys):
     cap = capsys.readouterr()
     assert "ep1: FAILED" in cap.out, "the failure is visible as it happens"
     assert "ep1: nothing to render" in cap.err, "and again in the end-of-run summary, with the reason"
+
+
+def test_the_picker_lists_datasets_not_render_output(tmp_path):
+    """Rendering writes `<name>_renders/` folders, and bulk writes more of them. Listing every
+    directory put 14 of them in the GUI's dataset picker alongside the 48 real recordings; a
+    LeRobot dataset is a folder with meta/info.json, so that is the test."""
+    from misc.dataset_reader import list_datasets
+
+    (tmp_path / "a_real_run" / "meta").mkdir(parents=True)
+    (tmp_path / "a_real_run" / "meta" / "info.json").write_text("{}")
+    (tmp_path / "a_real_run_renders").mkdir()
+    (tmp_path / "a_real_run_renders" / "a_real_run_ep000.mp4").write_bytes(b"\x00")
+    (tmp_path / ".hidden").mkdir()
+
+    assert list_datasets(str(tmp_path)) == ["a_real_run"]

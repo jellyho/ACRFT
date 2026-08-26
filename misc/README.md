@@ -12,10 +12,11 @@ Self-contained. Nothing here imports the robot repo (see [What it carries](#what
 misc/yam-misc render-gui
 ```
 
-Pick a dataset, pick an episode, press **Render**.
+Pick a dataset, pick an episode, press **Render**. The picker lists folders that hold a LeRobot
+dataset (`meta/info.json`), so the renderer's own `*_renders` output folders stay out of it.
 
 ```
-root      [~/lerobot_rollout                     ] [ … ]
+root      [~/lerobot_data                        ] [ … ]
 dataset   [yam_s300_rel_200k_g5               ▾]
 episode   [── all episodes · render every one, then zip ──  ▾]
 overlay   [samples ▾]
