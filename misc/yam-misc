@@ -13,6 +13,7 @@
 #   misc/yam-misc render-samples [args]  the same render from the command line
 #   misc/yam-misc render-bulk [args]     every episode of a dataset, zipped
 #   misc/yam-misc stats [args]           what a run did, in numbers (compare several)
+#   misc/yam-misc plots [args]           figures from those numbers
 #
 # Runs in the workstation conda env (default yam_ws), which has PyQt5 / lerobot / mujoco / mink;
 # ACRFT's own .venv does not. Override with YAM_WS_ENV.
@@ -37,8 +38,9 @@ case "$cmd" in
     render-samples) exec python -m misc.render_deploy_samples "$@" ;;
     render-bulk)    exec python -m misc.render_bulk "$@" ;;
     stats)          exec python -m misc.rollout_stats "$@" ;;
+    plots)          exec python -m misc.stats_plots "$@" ;;
     *)
-        echo "usage: misc/yam-misc {render-gui|render-samples|render-bulk|stats} [args]" >&2
+        echo "usage: misc/yam-misc {render-gui|render-samples|render-bulk|stats|plots} [args]" >&2
         exit 2
         ;;
 esac

@@ -122,6 +122,20 @@ describes frames rather than runs. A single episode reports no interval instead 
 Columns no dataset has are dropped, so a table of teleop recordings carries no empty critic
 columns. `--json` writes the full per-episode numbers.
 
+### Figures
+
+```bash
+misc/yam-misc plots --stats ~/stats.json --out-dir ~/figs --title "h30 critic arms"
+```
+
+Three, in the house style (`slurm/plot_style.py`): the commitment **distribution** (grouped bars —
+the commitment is discrete, and overlaid lines hid four of six arms behind each other with no way
+to tell a coinciding arm from a missing one), the mean commitment **length** with its CI, and the
+**splice** — boundary step against within-chunk step, side by side, because the boundary bar alone
+says nothing.
+
+Keep `--title` short. Conditions, n and protocol belong in the prose, per the repo's figure rules.
+
 ## What the frame shows
 
 ```
