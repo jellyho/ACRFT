@@ -77,10 +77,14 @@ def test_one_bad_episode_does_not_end_the_batch(monkeypatch, tmp_path, capsys):
 
         num_episodes = 4
 
+    monkeypatch.setattr(rb, "DatasetReader", FakeReader, raising=False)
     monkeypatch.setitem(
         sys.modules, "misc.dataset_reader", types.SimpleNamespace(DatasetReader=FakeReader, SequentialImages=None)
     )
-    monkeypatch.setattr("misc.render_deploy_samples.render", fake_render)
+    # The name run_bulk actually calls. Patching misc.render_deploy_samples.render would not bind
+    # here, because render_bulk imported it at module level -- and the batch would swallow every
+    # resulting ImportError as a "failed episode" and still look like it ran.
+    monkeypatch.setattr(rb, "render", fake_render)
     monkeypatch.setattr(
         sys, "argv", ["render_bulk", "--repo-id", "x/run", "--root", str(tmp_path), "--out-dir", str(tmp_path / "o")]
     )
@@ -90,4 +94,6 @@ def test_one_bad_episode_does_not_end_the_batch(monkeypatch, tmp_path, capsys):
     assert e.value.code == 1, "a batch with failures must exit non-zero"
     assert rendered == [0, 2, 3]
     assert (tmp_path / "o.zip").exists(), "the episodes that DID render are still worth zipping"
-    assert "ep1: FAILED" in capsys.readouterr().err
+    cap = capsys.readouterr()
+    assert "ep1: FAILED" in cap.out, "the failure is visible as it happens"
+    assert "ep1: nothing to render" in cap.err, "and again in the end-of-run summary, with the reason"

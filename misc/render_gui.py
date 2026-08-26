@@ -58,17 +58,27 @@ def _scrollable(combo: QtWidgets.QComboBox, visible: int = 18) -> QtWidgets.QCom
 
 
 class _RenderWorker(QtCore.QThread):
-    """Runs one render off the GUI thread; the window stays responsive and can report failure."""
+    """Runs a render off the GUI thread; the window stays responsive and can report failure.
+
+    Two jobs, one class: a single episode, or -- when `episodes` is given -- the whole dataset
+    through the same `run_bulk` the command line uses, so a batch behaves identically either way.
+    """
 
     done = QtCore.pyqtSignal(bool, str)
     progressed = QtCore.pyqtSignal(int, int)
 
-    def __init__(self, args: argparse.Namespace) -> None:
+    def __init__(self, args: argparse.Namespace, episodes: "list | None" = None, name: str = "rollout") -> None:
         super().__init__()
         self._args = args
+        self._episodes = episodes
+        self._name = name
 
     def run(self) -> None:
         from misc.render_deploy_samples import render
+
+        if self._episodes is not None:
+            self._run_bulk()
+            return
 
         # Emitted from this thread; Qt queues it across to the GUI one. Throttled to whole
         # percents: a 9000-frame render would otherwise post 9000 events for 100 visible states.
@@ -86,6 +96,53 @@ class _RenderWorker(QtCore.QThread):
         except BaseException as e:  # a failed render must land in the window, not the console
             logger.exception("render failed")
             self.done.emit(False, f"{type(e).__name__}: {e}\n\n{traceback.format_exc(limit=3)}")
+
+    def _run_bulk(self) -> None:
+        """Every episode, then a zip. Progress spans the batch, not each render.
+
+        A per-episode bar would sweep 0..100 once per episode and say nothing about how much of the
+        job is left, which for a forty-episode run is the only number worth showing.
+        """
+        from misc.render_bulk import run_bulk
+
+        out_dir = pathlib.Path(self._args.out).expanduser()
+        last = [-1]
+
+        def report(i: int, total: int, written: int, frames: int) -> None:
+            # Whole episodes done, plus how far into the current one -- throttled to whole percents.
+            pct = int(100 * (i + (written / max(frames, 1))) / max(total, 1))
+            if pct != last[0]:
+                last[0] = pct
+                self.progressed.emit(pct, 100)
+
+        try:
+            r = run_bulk(
+                self._args,
+                self._episodes,
+                out_dir,
+                name=self._name,
+                zip_to=out_dir.with_suffix(".zip"),
+                progress=report,
+                log=logger.info,
+            )
+        except BaseException as e:  # noqa: BLE001 - a failure must land in the window, not the console
+            logger.exception("bulk render failed")
+            self.done.emit(False, f"{type(e).__name__}: {e}\n\n{traceback.format_exc(limit=3)}")
+            return
+
+        parts = [f"{len(r['done'])} rendered", f"{len(r['skipped'])} skipped", f"{len(r['failed'])} failed"]
+        summary = ", ".join(parts)
+        if r["failed"]:
+            # Partial success is still success for the episodes that worked, but the window has to
+            # say which ones did not -- a batch that quietly drops three of forty is worse than one
+            # that fails outright.
+            detail = "\n".join(f"  ep{ep}: {why}" for ep, why in r["failed"])
+            self.done.emit(False, f"{summary}\n\nzip: {r['zip']}\n\n{detail}")
+        else:
+            self.done.emit(True, str(r["zip"] or out_dir))
+
+
+BULK_LABEL = "── all episodes  ·  render every one, then zip ──"
 
 
 class RenderGUI(QtWidgets.QWidget):
@@ -225,6 +282,10 @@ class RenderGUI(QtWidgets.QWidget):
             for ep in range(reader.num_episodes):
                 frames = reader.episode_length(ep)
                 self._episodes.append((ep, frames))
+            if self._episodes:
+                # First, so it is reachable without scrolling past forty episodes.
+                self.episode_combo.addItem(BULK_LABEL)
+            for ep, frames in self._episodes:
                 self.episode_combo.addItem(f"episode {ep}  ·  {frames} frames  ({frames / max(reader.fps, 1):.0f}s)")
             self._describe(reader)
         except Exception as e:
@@ -255,6 +316,10 @@ class RenderGUI(QtWidgets.QWidget):
 
     def _sync_out(self) -> None:
         name = self.dataset_combo.currentText().strip() or "rollout"
+        if self._bulk_selected():
+            # A folder, not a file: the mp4s go in it and the zip lands beside it.
+            self.out_edit.setText(str(pathlib.Path.home() / f"{name}_renders"))
+            return
         ep = self._current_episode()
         if ep is None:
             self.out_edit.clear()
@@ -265,8 +330,12 @@ class RenderGUI(QtWidgets.QWidget):
         """The selected recording's own rate; 30 if it cannot be read yet."""
         return self._fps or 30
 
+    def _bulk_selected(self) -> bool:
+        return bool(self._episodes) and self.episode_combo.currentIndex() == 0
+
     def _current_episode(self) -> int | None:
-        row = self.episode_combo.currentIndex()
+        """The chosen episode, or None when nothing (or the bulk entry) is selected."""
+        row = self.episode_combo.currentIndex() - (1 if self._episodes else 0)
         return self._episodes[row][0] if 0 <= row < len(self._episodes) else None
 
     # ------------------------------------------------------------------ rendering
@@ -309,7 +378,8 @@ class RenderGUI(QtWidgets.QWidget):
     def _on_render(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
-        if self._current_episode() is None:
+        bulk = self._bulk_selected()
+        if not bulk and self._current_episode() is None:
             self.status.setText("Pick an episode first.")
             return
         args = self._build_args()
@@ -318,17 +388,24 @@ class RenderGUI(QtWidgets.QWidget):
             return
         self.render_btn.setEnabled(False)
         self.status.setStyleSheet(f"color:{theme.MUTED};")
-        self.status.setText(f"Rendering episode {args.episode} → {args.out} …")
+        name = self.dataset_combo.currentText().strip() or "rollout"
+        episodes = [ep for ep, _ in self._episodes] if bulk else None
+        if bulk:
+            self.status.setText(f"Rendering {len(episodes)} episode(s) → {args.out} (then zipping) …")
+        else:
+            self.status.setText(f"Rendering episode {args.episode} → {args.out} …")
         self.progress.setValue(0)
         self.progress.setVisible(True)
-        self._worker = _RenderWorker(args)
+        self._worker = _RenderWorker(args, episodes=episodes, name=name)
         self._worker.progressed.connect(self._on_progress)
         self._worker.done.connect(self._on_done)
         self._worker.start()
 
     def _on_progress(self, written: int, total: int) -> None:
         self.progress.setValue((100 * written) // max(total, 1))
-        self.progress.setFormat(f"%p%  ({written} / {total} frames)")
+        # The batch reports percent-of-batch; a single render reports frames, which is the more
+        # useful number when there is only one of them.
+        self.progress.setFormat("%p%  (whole batch)" if self._bulk_selected() else f"%p%  ({written} / {total} frames)")
 
     def _on_done(self, ok: bool, message: str) -> None:
         self.render_btn.setEnabled(True)

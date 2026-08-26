@@ -135,3 +135,69 @@ def test_the_bar_hides_when_the_render_finishes(qapp, tmp_path):
         assert gui.render_btn.isEnabled()
     finally:
         gui.close()
+
+
+def _with_episodes(gui, lengths=(100, 200, 300)):
+    """Populate the combo the way _refresh_episodes does, without needing a dataset on disk."""
+    from misc.render_gui import BULK_LABEL
+
+    gui._episodes = [(i, n) for i, n in enumerate(lengths)]
+    gui.episode_combo.blockSignals(True)
+    gui.episode_combo.clear()
+    gui.episode_combo.addItem(BULK_LABEL)
+    for ep, n in gui._episodes:
+        gui.episode_combo.addItem(f"episode {ep}  ·  {n} frames")
+    gui.episode_combo.blockSignals(False)
+    return gui
+
+
+def test_the_bulk_entry_shifts_every_episode_row_by_one(qapp, tmp_path):
+    """Putting "all episodes" first means row N is episode N-1. Getting this wrong renders the
+    neighbouring episode and looks entirely successful -- the video plays, it is just the wrong
+    one."""
+    gui = _with_episodes(RenderGUI(str(tmp_path)))
+    try:
+        gui.episode_combo.setCurrentIndex(0)
+        assert gui._bulk_selected() is True
+        assert gui._current_episode() is None, "the bulk row is not an episode"
+
+        for row, expect in ((1, 0), (2, 1), (3, 2)):
+            gui.episode_combo.setCurrentIndex(row)
+            assert gui._bulk_selected() is False
+            assert gui._current_episode() == expect
+    finally:
+        gui.close()
+
+
+def test_output_is_a_folder_for_a_batch_and_a_file_for_one_episode(qapp, tmp_path):
+    """The batch writes many mp4s and a zip beside them, so its output cannot be a .mp4 path."""
+    gui = RenderGUI(str(tmp_path))
+    try:
+        # Name the dataset FIRST: adding it fires currentTextChanged -> _refresh_episodes, which
+        # would clear whatever the helper had put in the combo (the folder is not on disk here).
+        gui.dataset_combo.addItem("my_run")
+        gui.dataset_combo.setCurrentIndex(0)
+        _with_episodes(gui)
+
+        gui.episode_combo.setCurrentIndex(0)
+        gui._sync_out()
+        assert gui.out_edit.text().endswith("my_run_renders")
+        assert not gui.out_edit.text().endswith(".mp4")
+
+        gui.episode_combo.setCurrentIndex(2)
+        gui._sync_out()
+        assert gui.out_edit.text().endswith("my_run_ep1.mp4")
+    finally:
+        gui.close()
+
+
+def test_no_bulk_entry_when_there_are_no_episodes(qapp, tmp_path):
+    """An empty dataset must not offer to render all of nothing -- and row 0 would then be an
+    episode row, which is what the offset in _current_episode depends on."""
+    gui = RenderGUI(str(tmp_path))
+    try:
+        assert gui.episode_combo.count() == 0
+        assert gui._bulk_selected() is False
+        assert gui._current_episode() is None
+    finally:
+        gui.close()

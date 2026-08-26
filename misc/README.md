@@ -17,10 +17,10 @@ Pick a dataset, pick an episode, press **Render**.
 ```
 root      [~/lerobot_rollout                     ] [ … ]
 dataset   [yam_s300_rel_200k_g5               ▾]
-episode   [episode 3 · 1580 frames (53s)      ▾]
+episode   [── all episodes · render every one, then zip ──  ▾]
 overlay   [samples ▾]
 options   speed [4.0]  panel height [360]  ☑ critic value strip  ☑ chunk length strip
-output    [~/yam_s300_rel_200k_g5_ep3.mp4         ]
+output    [~/yam_s300_rel_200k_g5_renders         ]
 
 6 episode(s) at 30 fps · 8 candidates · critic scores · ADAPTIVE (full candidates recorded) ·
 replan boundaries from the run
@@ -33,6 +33,11 @@ whether a critic scored them, whether the run was adaptive, and whether it recor
 boundaries. Those are the numbers that are painful to get wrong from the command line — a mistyped
 candidate count is a reshape error, and a mistyped horizon *silently* draws every chunk in the
 wrong place.
+
+The first entry in the episode list renders **every** episode and zips the folder — the same
+batch the command line runs (see [A whole dataset at once](#a-whole-dataset-at-once)), so it skips
+what is already rendered, survives an episode that cannot be drawn, and names the ones that failed.
+The progress bar then spans the whole batch rather than sweeping 0–100 once per episode.
 
 Rendering runs on a worker thread, so the window stays live and a failure lands in the window
 rather than a terminal you have closed.

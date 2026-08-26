@@ -18,8 +18,9 @@ Usage:
 import argparse
 import pathlib
 import sys
-import traceback
 import zipfile
+
+from misc.render_deploy_samples import render
 
 
 def parse_episodes(spec: str, available: int) -> list:
@@ -61,10 +62,52 @@ def zip_folder(folder: pathlib.Path, dest: pathlib.Path) -> pathlib.Path:
     return dest
 
 
+
+def run_bulk(
+    args,
+    episodes: list,
+    out_dir: pathlib.Path,
+    *,
+    name: str,
+    overwrite: bool = False,
+    zip_to: "pathlib.Path | None" = None,
+    progress=None,
+    log=print,
+) -> dict:
+    """Render `episodes` into `out_dir`, optionally zip, and report what happened.
+
+    Shared by the command line and the GUI so the batch behaves identically in both -- a failing
+    episode never ends the run, and an existing render is skipped so a killed batch resumes.
+
+    `progress(done_episodes, total_episodes, written, frames)` is called during each render, where
+    `written`/`frames` are that episode's own counters; the caller decides how to combine them.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    done, skipped, failed = [], [], []
+    for i, ep in enumerate(episodes):
+        out = out_dir / f"{name}_ep{ep:03d}.mp4"
+        if out.exists() and not overwrite:
+            log(f"[{i + 1}/{len(episodes)}] ep{ep}: exists, skipping")
+            skipped.append(ep)
+            continue
+        args.episode, args.out = ep, str(out)
+        log(f"[{i + 1}/{len(episodes)}] ep{ep} -> {out.name}")
+        try:
+            render(args, progress=(lambda w, t, _i=i: progress(_i, len(episodes), w, t)) if progress else None)
+            done.append(ep)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - one bad episode must not end the batch
+            failed.append((ep, str(e) or type(e).__name__))
+            log(f"[{i + 1}/{len(episodes)}] ep{ep}: FAILED -- {e}")
+
+    zipped = None
+    if zip_to is not None and (done or skipped):
+        zipped = zip_folder(out_dir, zip_to)
+    return {"done": done, "skipped": skipped, "failed": failed, "zip": zipped, "out_dir": out_dir}
+
+
 def main() -> None:
     from misc.dataset_reader import DatasetReader
     from misc.render_deploy_samples import build_parser
-    from misc.render_deploy_samples import render
 
     p = build_parser()
     p.description = __doc__
@@ -87,33 +130,17 @@ def main() -> None:
     del reader  # the renderer opens its own; holding this one just pins the metadata
 
     print(f"{len(episodes)} episode(s) -> {out_dir}")
-    done, skipped, failed = [], [], []
-    for i, ep in enumerate(episodes, 1):
-        out = out_dir / f"{name}_ep{ep:03d}.mp4"
-        if out.exists() and not args.overwrite:
-            print(f"[{i}/{len(episodes)}] ep{ep}: exists, skipping")
-            skipped.append(ep)
-            continue
-        args.episode, args.out = ep, str(out)
-        print(f"[{i}/{len(episodes)}] ep{ep} -> {out.name}")
-        try:
-            render(args)
-            done.append(ep)
-        except (Exception, SystemExit) as e:  # noqa: BLE001 - one bad episode must not end the batch
-            failed.append((ep, str(e) or type(e).__name__))
-            print(f"[{i}/{len(episodes)}] ep{ep}: FAILED -- {e}", file=sys.stderr)
-            traceback.print_exc(limit=3, file=sys.stderr)
+    zip_to = None
+    if not args.no_zip:
+        zip_to = pathlib.Path(args.zip_to).expanduser() if args.zip_to else out_dir.with_suffix(".zip")
+    r = run_bulk(args, episodes, out_dir, name=name, overwrite=args.overwrite, zip_to=zip_to)
 
-    print(f"\nrendered {len(done)}, skipped {len(skipped)}, failed {len(failed)}")
-    for ep, why in failed:
+    print(f"\nrendered {len(r['done'])}, skipped {len(r['skipped'])}, failed {len(r['failed'])}")
+    for ep, why in r["failed"]:
         print(f"  ep{ep}: {why}", file=sys.stderr)
-
-    if not args.no_zip and (done or skipped):
-        dest = pathlib.Path(args.zip_to).expanduser() if args.zip_to else out_dir.with_suffix(".zip")
-        zip_folder(out_dir, dest)
-        print(f"zipped -> {dest} ({dest.stat().st_size / 1e6:.1f} MB)")
-
-    if failed:
+    if r["zip"]:
+        print(f"zipped -> {r['zip']} ({r['zip'].stat().st_size / 1e6:.1f} MB)")
+    if r["failed"]:
         raise SystemExit(1)
 
 
