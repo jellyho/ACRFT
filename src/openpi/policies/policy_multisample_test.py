@@ -271,18 +271,28 @@ def test_sample_kwargs_reach_the_model():
     """--num-steps is the denoising iteration count, and it only means anything if it survives the
     trip to sample_actions. alphaflow answers in one step where pi05 integrates over ten, so this
     is the knob that decides what a few-step checkpoint is actually worth."""
+    import jax
+    import jax.numpy as jnp
+
     from openpi.policies.policy import Policy
 
     seen = {}
 
-    class _Model:
-        def sample_actions(self, rng, observation, **kwargs):
-            seen.update(kwargs)
-            return np.zeros((1, 30, 32), np.float32)
-
-    policy = Policy.__new__(Policy)  # no model compile, no JIT: only the plumbing is under test
+    policy = Policy.__new__(Policy)  # no model build, no JIT: only the plumbing is under test
+    policy._is_pytorch_model = False
+    policy._rng = jax.random.key(0)
     policy._sample_kwargs = {"num_steps": 4}
-    assert policy._sample_kwargs == {"num_steps": 4}
+    policy._input_transform = lambda x: x
+    policy._output_transform = lambda x: x
+    policy._metadata = {}
+
+    def _sample(rng, observation, **kwargs):
+        seen.update(kwargs)
+        return jnp.zeros((1, 30, 32), jnp.float32)
+
+    policy._sample_actions = _sample
+    policy.infer({"state": np.zeros(32, np.float32), "image": {}, "image_mask": {}})
+    assert seen == {"num_steps": 4}, seen
 
 
 def test_serve_only_passes_what_was_asked_for():
@@ -294,3 +304,19 @@ def test_serve_only_passes_what_was_asked_for():
 
     assert _sample_kwargs(Args()) is None
     assert _sample_kwargs(dataclasses.replace(Args(), num_steps=4)) == {"num_steps": 4}
+
+
+def test_truncate_is_inert_at_or_above_the_horizon():
+    """`--execute-steps` at least as long as the chunk is the same as not passing it. The server
+    warns instead of wrapping, because the usual reason for asking is a config/checkpoint horizon
+    mismatch -- an h50 checkpoint under an h30 config serves 30 and nothing complains."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    class _Fixed:
+        def infer(self, obs):
+            return {"actions": np.arange(30 * 14, dtype=np.float32).reshape(30, 14)}
+
+    for steps in (30, 50):
+        out = TruncateChunkPolicy(_Fixed(), steps).infer({})["actions"]
+        assert out.shape == (30, 14), (steps, out.shape)
+    assert TruncateChunkPolicy(_Fixed(), 5).infer({})["actions"].shape == (5, 14)

@@ -244,6 +244,12 @@ def _build_critic_policy(policy, args: Args):
 
 def main(args: Args) -> None:
     policy, train_config = create_policy(args)
+    horizon = int(train_config.model.action_horizon)
+    # Say the horizon out loud. It comes from the CONFIG, never from the checkpoint: no parameter
+    # in a pi0/pi05 tree carries a horizon axis, so an h50 checkpoint loads under an h30 config
+    # without a murmur and just serves 30-step chunks. The only signal a caller ever got was a
+    # chunk that looked wrong on the robot, hours later.
+    logging.info("serving %s: chunks of %d steps (from the config, not the checkpoint)", train_config.name, horizon)
     # Wrapped unconditionally: it is inert unless a request carries `num_samples`, so a plain
     # rollout pays nothing, and there is no server-side mode to remember to turn on before
     # looking at the action distribution.
@@ -272,11 +278,23 @@ def main(args: Args) -> None:
         default_samples=args.num_samples,
     )
     if args.execute_steps > 0:
-        # Outermost, so it cuts the actions and every per-step extra together -- see
-        # TruncateChunkPolicy. Wrapping inside MultiSamplePolicy would leave the candidates
-        # describing steps that never ran.
-        logging.info("executing %d of each chunk, then replanning", args.execute_steps)
-        policy = _policy.TruncateChunkPolicy(policy, args.execute_steps)
+        if args.execute_steps >= horizon:
+            # Asking for at least the whole chunk is the same as asking for the whole chunk, so
+            # this stays a warning rather than an error -- but it is worth saying, because the
+            # usual reason for asking is a config/checkpoint horizon mismatch, and clamping in
+            # silence is what lets that mismatch reach the robot.
+            logging.warning(
+                "--execute-steps %d >= the %d-step horizon: serving whole chunks. If you expected "
+                "longer chunks, check --policy.config -- the horizon comes from there.",
+                args.execute_steps,
+                horizon,
+            )
+        else:
+            # Outermost, so it cuts the actions and every per-step extra together -- see
+            # TruncateChunkPolicy. Wrapping inside MultiSamplePolicy would leave the candidates
+            # describing steps that never ran.
+            logging.info("executing %d of each %d-step chunk, then replanning", args.execute_steps, horizon)
+            policy = _policy.TruncateChunkPolicy(policy, args.execute_steps)
 
     # Config-derived spec first, so an explicit policy_metadata entry can still override it.
     policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}
