@@ -317,6 +317,27 @@ uv run python scripts/serve_policy.py --critic \
       --checkpoint ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000 \
       --critic ~/hf_utils_downloads/patch_critic_yam_lego_taxi/fixed_pi05_s347 \
       --mode bon --num-samples 8 --port 8000
+
+uv run scripts/serve_policy.py \
+    --port 8000 \
+    --num-samples 8 \
+    --critic ~/hf_utils_downloads/patch_critic_yam_lego_taxi/fixed_pi05_s347 \
+    --critic-mode bon \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_alphaflow \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_alphaflow/200000
+```
+
+`--num-steps` sets the denoising iterations per chunk; unset leaves the model's own default
+(alphaflow 1, since it is trained on mean velocity; pi05 10). It is charged per replan, so it
+compounds with `--execute-steps`:
+
+```bash
+# commit 5 steps at a time instead of 30, and pay one denoising step per replan
+uv run scripts/serve_policy.py --port 8000 --execute-steps 5 --num-steps 1 \
+    policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_alphaflow \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_alphaflow/200000
 ```
 
 Or build the wrapper in-process, which is the fastest way to check a new critic loads and infers:
