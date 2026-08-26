@@ -66,6 +66,17 @@ def _policy_norm_stats(policy):
     return None
 
 
+def emits_full_candidates(mode: str, action_horizon: int, critic_horizon: int) -> bool:
+    """Does any part of a proposal go unexecuted, and so need recording separately?
+
+    `action_samples` carries the EXECUTED prefix, so a tail beyond it exists nowhere else in a
+    recording. Adaptive always leaves one. So does best-of-N when the critic is shorter than the
+    policy's chunk: the commitment is capped at what the critic actually scored, and the rest was
+    proposed but selected on by nothing.
+    """
+    return mode == "adaptive" or action_horizon > critic_horizon
+
+
 class PatchCriticSelectPolicy(BasePolicy):
     def __init__(
         self,
@@ -208,6 +219,9 @@ class PatchCriticSelectPolicy(BasePolicy):
         # The critic's own horizon is baked into its weights (the positional table is sized by
         # H / macro_group_size), so a chunk of a different length cannot be fed to it at all.
         self._critic_horizon = int(cc["horizon"])
+        # Set once the horizons are known (below): whether any part of a proposal goes unexecuted,
+        # and so has to be recorded separately from the executed prefix.
+        self._emit_full = False
         if self._action_horizon < self._critic_horizon:
             raise ValueError(
                 f"the policy proposes {self._action_horizon}-step chunks but the critic scores "
@@ -227,6 +241,10 @@ class PatchCriticSelectPolicy(BasePolicy):
                 self._critic_horizon,
                 self._critic_horizon,
             )
+        # Adaptive always leaves a tail; so does a critic shorter than the policy's chunk, which
+        # is why this is not simply `mode == "adaptive"`. Decided here rather than per reply so the
+        # declared schema and what infer actually sends cannot drift apart.
+        self._emit_full = emits_full_candidates(mode, self._action_horizon, self._critic_horizon)
         atoms = int(cc["num_atoms"])
         import flax.serialization
 
@@ -389,10 +407,12 @@ class PatchCriticSelectPolicy(BasePolicy):
         # records, so a replan's frames repeat them.
         out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
-        if self._mode == "adaptive":
-            # Only adaptive drops part of what the model proposed: `action_samples` above is the
-            # EXECUTED prefix, so the un-executed tail exists nowhere else. In `bon` the executed
-            # chunk IS the full horizon, so this would be a duplicate column.
+        if self._emit_full:
+            # `action_samples` above is the EXECUTED prefix, so whatever the model proposed beyond
+            # it exists nowhere else. Adaptive always leaves such a tail; so does bon when the
+            # critic is shorter than the policy's chunk, since the commitment is capped at what was
+            # scored. Only when the executed prefix IS the whole proposal would this duplicate a
+            # column, and then it is not sent.
             out["action_samples_full"] = np.broadcast_to(
                 np.swapaxes(decoded, 0, 1)[None], (x, decoded.shape[1], decoded.shape[0], decoded.shape[2])
             ).copy()
@@ -420,7 +440,7 @@ class PatchCriticSelectPolicy(BasePolicy):
             "critic_macro": [1],
             "critic_best_prefix": [1],
         }
-        if self._mode == "adaptive":
+        if self._emit_full:
             # The full horizon the model proposed, of which only a prefix was executed (see infer).
             declared["action_samples_full"] = [self._action_horizon, n, self._robot_action_dim]
         return declared

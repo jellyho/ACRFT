@@ -108,3 +108,20 @@ def test_the_first_C_steps_of_a_long_chunk_are_a_C_step_chunk():
     long_scored = pre.actions(absolute_50, state)[:, :30]
     short_scored = pre.actions(absolute_50[:, :30], state)
     np.testing.assert_array_equal(long_scored, short_scored)
+
+
+@pytest.mark.parametrize(
+    ("mode", "policy_h", "critic_h", "expect"),
+    [
+        ("bon", 30, 30, False),  # the executed prefix IS the whole proposal
+        ("bon", 50, 30, True),  # steps 31..50 are proposed, scored by nothing, never flown
+        ("adaptive", 30, 30, True),  # adaptive always stops short of the proposal
+        ("adaptive", 50, 30, True),
+    ],
+)
+def test_full_candidates_are_recorded_exactly_when_a_tail_exists(mode, policy_h, critic_h, expect):
+    """The un-executed tail lives in no other column, and the declaration has to match what infer
+    sends -- a declared-but-absent field is dropped by the recorder silently, every frame."""
+    from openpi.policies.patch_critic_policy import emits_full_candidates
+
+    assert emits_full_candidates(mode, policy_h, critic_h) is expect
