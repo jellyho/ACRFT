@@ -26,7 +26,7 @@ output    [~/yam_s300_rel_200k_g5_renders         ]
 6 episode(s) at 30 fps · 8 candidates · critic scores · ADAPTIVE (full candidates recorded) ·
 replan boundaries from the run
 
-                         [ Render ]
+                    [ Render ]  [ Stats ]
 ```
 
 The line under the form is read off the dataset, not typed in: how many candidates it holds,
@@ -103,6 +103,10 @@ Several runs side by side is the point: that is how a critic arm gets compared t
 watching forty videos. Above, the fixed critic commits 29.8 steps on average (one group, so it can
 only ever choose the whole chunk) while the adaptive one commits 11.1 and replans three times as
 often — and pays for it at the splices, where its boundary jumps are smaller but far more numerous.
+
+The GUI's **Stats** button runs the same summary for the selected dataset (every episode, whatever
+the episode row says — a summary of one episode is mostly its own row repeated), and adds the
+per-episode rows and the commitment histogram that `--per-episode` prints.
 
 Every number is recomputed from the recording. Aggregates are **episode-level means with a 95%
 t-CI**, never a mean over pooled frames — pooling weights long episodes more, and its spread

@@ -215,12 +215,48 @@ def format_table(results: list) -> str:
     return "\n".join(lines)
 
 
+def format_episode_table(result: dict) -> str:
+    """One row per episode of a single dataset, for when the aggregate hides the story.
+
+    An average commitment of 17 steps can be every replan committing 17, or half committing 5 and
+    half committing 30 -- the same mean, a different policy. Per-episode rows and the length
+    histogram are where that shows.
+    """
+    agg = result["aggregate"]
+    cols = [
+        ("ep", lambda r: str(r["episode"]), 4),
+        ("frames", lambda r: str(r["frames"]), 7),
+        ("sec", lambda r: f"{r['seconds']:.0f}", 5),
+        ("replans", lambda r: str(r.get("replans", "—")), 8),
+        ("chunk len", lambda r: f"{r['chunk_mean']:.1f}" if "chunk_mean" in r else "—", 10),
+        ("range", lambda r: f"{r['chunk_min']}-{r['chunk_max']}" if "chunk_min" in r else "—", 8),
+        ("infer p50", lambda r: f"{r['infer_ms_p50']:.0f}" if "infer_ms_p50" in r else "—", 10),
+        ("spread", lambda r: f"{r['critic_spread']:.2f}" if "critic_spread" in r else "—", 9),
+        ("jump@bnd", lambda r: f"{r['boundary_jump_p95']:.3f}" if "boundary_jump_p95" in r else "—", 9),
+    ]
+    rows = result["per_episode"]
+    keep = [c for c in cols if any(c[1](r) != "—" for r in rows)]
+    out = [result["repo_id"], ""]
+    out.append("  ".join(h.ljust(w) for h, _, w in keep))
+    out.append("  ".join("-" * w for _, _, w in keep))
+    out += ["  ".join(f(r).ljust(w) for _, f, w in keep) for r in rows]
+    if agg.get("chunk_hist"):
+        total = sum(agg["chunk_hist"].values())
+        out += ["", f"commitment lengths over {total} replan(s):"]
+        top = max(agg["chunk_hist"].values())
+        for length, count in agg["chunk_hist"].items():
+            bar = "#" * max(1, round(40 * count / top))
+            out.append(f"  {length:3d} steps  {count:5d}  {100 * count / total:5.1f}%  {bar}")
+    return "\n".join(out)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--repo-id", nargs="*", default=[], help="one or more datasets, compared side by side")
     p.add_argument("--root", default="~/lerobot_data")
     p.add_argument("--all", action="store_true", help="every dataset under --root")
     p.add_argument("--episodes", default="all", help='"all", "3", "0-9", "0,3,5-7"')
+    p.add_argument("--per-episode", action="store_true", help="also print each episode, and the commitment histogram")
     p.add_argument("--json", dest="json_out", default=None, help="also write the full per-episode numbers here")
     args = p.parse_args()
 
@@ -248,6 +284,9 @@ def main() -> None:
         raise SystemExit("no dataset could be read")
 
     print(format_table(results))
+    if args.per_episode:
+        for r in results:
+            print("\n" + format_episode_table(r))
     if args.json_out:
         out = pathlib.Path(args.json_out).expanduser()
         out.parent.mkdir(parents=True, exist_ok=True)

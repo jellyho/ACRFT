@@ -201,3 +201,48 @@ def test_no_bulk_entry_when_there_are_no_episodes(qapp, tmp_path):
         assert gui._current_episode() is None
     finally:
         gui.close()
+
+
+def test_stats_summarizes_the_dataset_not_the_selected_episode(qapp, tmp_path, monkeypatch):
+    """The episode picker chooses what to RENDER. A summary of one episode would mostly be its own
+    row repeated, and the comparison that makes the numbers useful is across episodes -- so Stats
+    takes the dataset and ignores the episode row, including the bulk one."""
+    import misc.render_gui as rg
+
+    asked = {}
+
+    class FakeWorker:
+        def __init__(self, repo_id, root):
+            asked.update(repo_id=repo_id, root=root)
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            pass
+
+        @property
+        def done(self):
+            return type("S", (), {"connect": staticmethod(lambda *_: None)})()
+
+    gui = RenderGUI(str(tmp_path))
+    try:
+        gui.dataset_combo.addItem("my_run")
+        gui.dataset_combo.setCurrentIndex(0)
+        _with_episodes(gui)
+        gui.episode_combo.setCurrentIndex(0)  # the bulk row
+        monkeypatch.setattr(rg, "_StatsWorker", FakeWorker)
+        gui._on_stats()
+        assert asked["repo_id"] == "my_run"
+        assert asked["root"] == str(tmp_path)
+    finally:
+        gui.close()
+
+
+def test_stats_needs_a_dataset(qapp, tmp_path):
+    gui = RenderGUI(str(tmp_path))
+    try:
+        gui._on_stats()
+        assert "Pick a dataset" in gui.status.text()
+    finally:
+        gui.close()

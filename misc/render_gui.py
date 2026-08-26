@@ -23,7 +23,8 @@ import traceback
 from typing import TYPE_CHECKING
 
 try:
-    from PyQt5 import QtCore, QtWidgets
+    from PyQt5 import QtCore
+    from PyQt5 import QtGui, QtWidgets
 except ModuleNotFoundError as e:  # almost always: run outside the launcher
     raise SystemExit(
         f"{e}.\n\nRun this through the launcher, which activates the workstation conda env:\n"
@@ -144,6 +145,27 @@ class _RenderWorker(QtCore.QThread):
             self.done.emit(True, str(r["zip"] or out_dir))
 
 
+class _StatsWorker(QtCore.QThread):
+    """Summarizes a dataset off the GUI thread -- it reads every frame of several columns, which on
+    a long run is seconds, not milliseconds."""
+
+    done = QtCore.pyqtSignal(bool, str)
+
+    def __init__(self, repo_id: str, root: str) -> None:
+        super().__init__()
+        self._repo_id, self._root = repo_id, root
+
+    def run(self) -> None:
+        from misc.rollout_stats import dataset_stats, format_episode_table, format_table
+
+        try:
+            r = dataset_stats(self._repo_id, self._root)
+            self.done.emit(True, format_table([r]) + "\n\n" + format_episode_table(r))
+        except BaseException as e:  # noqa: BLE001 - a failure belongs in the window, not the console
+            logger.exception("stats failed")
+            self.done.emit(False, f"{type(e).__name__}: {e}\n\n{traceback.format_exc(limit=3)}")
+
+
 BULK_LABEL = "── all episodes  ·  render every one, then zip ──"
 
 
@@ -153,6 +175,7 @@ class RenderGUI(QtWidgets.QWidget):
         self.setWindowTitle("YAM · Render rollout")
         self.setStyleSheet(theme.QSS)
         self._worker: _RenderWorker | None = None
+        self._stats_worker: _StatsWorker | None = None
         self._episodes: list[tuple[int, int]] = []  # (episode, frames)
         self._fps = 30
 
@@ -198,6 +221,9 @@ class RenderGUI(QtWidgets.QWidget):
         self.out_edit = QtWidgets.QLineEdit()
         self.render_btn = QtWidgets.QPushButton("Render")
         self.render_btn.clicked.connect(self._on_render)
+        self.stats_btn = QtWidgets.QPushButton("Stats")
+        self.stats_btn.setToolTip("Commitment lengths, latency, the critic's decision, and the splice at each replan")
+        self.stats_btn.clicked.connect(self._on_stats)
 
         self.info = QtWidgets.QLabel("—")
         self.info.setWordWrap(True)
@@ -233,7 +259,10 @@ class RenderGUI(QtWidgets.QWidget):
         box.setLayout(form)
         lay.addWidget(box)
         lay.addWidget(self.info)
-        lay.addWidget(self.render_btn)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.render_btn, 3)
+        buttons.addWidget(self.stats_btn, 1)
+        lay.addLayout(buttons)
         lay.addWidget(self.progress)
         lay.addWidget(self.status)
         lay.addStretch(1)
@@ -402,6 +431,52 @@ class RenderGUI(QtWidgets.QWidget):
         self._worker.progressed.connect(self._on_progress)
         self._worker.done.connect(self._on_done)
         self._worker.start()
+
+
+    def _on_stats(self) -> None:
+        """Numbers for the whole selected dataset -- every episode, regardless of the episode row.
+
+        The episode picker chooses what to RENDER; a summary of one episode would mostly be its own
+        row repeated, and the comparison that makes these numbers useful is across episodes.
+        """
+        name = self.dataset_combo.currentText().strip()
+        if not name:
+            self.status.setText("Pick a dataset first.")
+            return
+        if self._stats_worker is not None and self._stats_worker.isRunning():
+            return
+        self.stats_btn.setEnabled(False)
+        self.status.setStyleSheet(f"color:{theme.MUTED};")
+        self.status.setText(f"Summarizing {name} …")
+        self._stats_worker = _StatsWorker(name, self.root_edit.text().strip() or DEFAULT_ROOT)
+        self._stats_worker.done.connect(self._on_stats_done)
+        self._stats_worker.start()
+
+    def _on_stats_done(self, ok: bool, text: str) -> None:
+        self.stats_btn.setEnabled(True)
+        self.status.setText("" if ok else "Stats failed - see the window.")
+        self.status.setStyleSheet(f"color:{theme.MUTED if ok else theme.BAD if hasattr(theme, 'BAD') else theme.MUTED};")
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Rollout statistics" if ok else "Stats failed")
+        view = QtWidgets.QPlainTextEdit(text)
+        view.setReadOnly(True)
+        # Monospace, or the columns stop lining up and the table stops being a table.
+        view.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+        view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        box = QtWidgets.QVBoxLayout(dlg)
+        box.addWidget(view)
+        row = QtWidgets.QHBoxLayout()
+        copy = QtWidgets.QPushButton("Copy")
+        copy.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(text))
+        close = QtWidgets.QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        row.addStretch(1)
+        row.addWidget(copy)
+        row.addWidget(close)
+        box.addLayout(row)
+        dlg.resize(1000, 620)
+        dlg.exec_()
 
     def _on_progress(self, written: int, total: int) -> None:
         self.progress.setValue((100 * written) // max(total, 1))
