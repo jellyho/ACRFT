@@ -237,7 +237,11 @@ def _build_critic_policy(policy, args: Args):
             "" if args.critic_mode else " (from the critic)",
             groups,
         )
-        return _pcp.PatchCriticSelectPolicy(policy, str(critic_dir), mode=mode, **samples)
+        # --num-steps means the same thing here as anywhere: denoising iterations per chunk. It is
+        # charged per CANDIDATE, so it is the difference between BoN-8 costing 8 suffix passes and
+        # 80. Unset keeps the wrapper's own default (10, the pi05 flow default).
+        steps = {"flow_steps": int(args.num_steps)} if args.num_steps is not None else {}
+        return _pcp.PatchCriticSelectPolicy(policy, str(critic_dir), mode=mode, **samples, **steps)
     logging.info("critic: RLT-token critic (%s)", critic_dir.name)
     return _policy.CriticSelectPolicy(policy, str(critic_dir), **samples)
 

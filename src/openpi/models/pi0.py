@@ -277,3 +277,73 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
+
+    def sample_n_actions(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        num_samples: int,
+        num_steps: int | at.Int[at.Array, ""] = 10,
+    ) -> at.Float[at.Array, "n ah ad"]:
+        """N candidate chunks from ONE prefix pass -- the plain-pi05 analogue of Pi0RLT's
+        ``extract_token_and_base_actions`` and Pi0AlphaFlow's ``sample_n_actions``.
+
+        This is what value-guided serving (best-of-N, adaptive commitment) needs from a base
+        policy, and pi05 BC is the base the patch critics are trained against. Sampling by calling
+        ``sample_actions`` N times would re-run the VLM prefix -- images, prompt, state -- N times
+        over one unchanged frame; here it runs once and its KV cache is tiled across the N noise
+        draws, so the extra candidates cost only their own suffix forwards.
+
+        The chunks are model-space [N, H, action_dim]; the caller unnormalizes and scores them.
+        """
+        observation = _model.preprocess_observation(None, observation, train=False)
+        if observation.state.shape[0] != 1:
+            raise ValueError(
+                f"sample_n_actions expects a batch-1 observation (one live frame), got "
+                f"{observation.state.shape[0]}"
+            )
+
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+
+        # KVCache is [layers, BATCH, ...]; the prefix is identical for every candidate, so tiling it
+        # is exactly what running the prefix N times would have produced.
+        kv_n = jax.tree.map(lambda x: jnp.repeat(x, num_samples, axis=1), kv_cache)
+        mask_n = jnp.repeat(prefix_mask, num_samples, axis=0)
+        # Tiled whole rather than field-by-field: Observation type-checks a single batch axis across
+        # images and state together. Only the state is read from here (pi05's suffix is actions +
+        # time; pi0's adds a state token) -- the images are already baked into the cached prefix.
+        obs_n = jax.tree.map(lambda x: jnp.repeat(x, num_samples, axis=0), observation)
+
+        dt = -1.0 / num_steps
+        noise = jax.random.normal(rng, (num_samples, self.action_horizon, self.action_dim))
+
+        def step(carry):
+            x_t, time = carry
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
+                obs_n, x_t, jnp.broadcast_to(time, num_samples)
+            )
+            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+            prefix_attn = einops.repeat(mask_n, "b p -> b s p", s=suffix_tokens.shape[1])
+            full_attn_mask = jnp.concatenate([prefix_attn, suffix_attn_mask], axis=-1)
+            positions = jnp.sum(mask_n, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+
+            (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+                [None, suffix_tokens],
+                mask=full_attn_mask,
+                positions=positions,
+                kv_cache=kv_n,
+                adarms_cond=[None, adarms_cond],
+            )
+            assert prefix_out is None
+            return x_t + dt * self.action_out_proj(suffix_out[:, -self.action_horizon :]), time + dt
+
+        def cond(carry):
+            _, time = carry
+            return time >= -dt / 2
+
+        x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
+        return x_0

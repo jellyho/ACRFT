@@ -104,8 +104,9 @@ class PatchCriticSelectPolicy(BasePolicy):
                 model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
             )
         elif hasattr(model, "sample_n_actions"):
-            # Pi0AlphaFlow: same one-prefix-pass contract, no token. With its 1-step sampler
-            # (--flow-steps 1), BoN-N costs ~N single forwards instead of N*10.
+            # Pi0AlphaFlow and plain pi05 (Pi0): same one-prefix-pass contract, no token. With
+            # alpha-Flow's 1-step sampler (--num-steps 1), BoN-N costs ~N single forwards instead
+            # of N*10; plain pi05 pays its usual 10 per candidate.
             _sample_n = nnx_utils.module_jit(model.sample_n_actions, static_argnames=("num_samples", "num_steps"))
 
             def _extract(rng, obs, *, num_samples, num_steps):
@@ -115,7 +116,8 @@ class PatchCriticSelectPolicy(BasePolicy):
         else:
             raise TypeError(
                 f"{type(model).__name__} offers neither extract_token_and_base_actions (RLT) nor "
-                "sample_n_actions (alpha-Flow); the patch-critic wrapper needs one of them"
+                "sample_n_actions (pi05 / alpha-Flow); the patch-critic wrapper needs one of them "
+                "to draw N candidates from a single backbone pass"
             )
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
