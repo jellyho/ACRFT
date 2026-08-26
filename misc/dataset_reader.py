@@ -203,6 +203,22 @@ class DatasetReader:
         arr = np.asarray(val, dtype=np.float32).reshape(-1)
         return float(arr[0]) if arr.size else None
 
+    def column(self, episode: int, key: str) -> np.ndarray | None:
+        """A whole per-frame column at once, or None if absent. No video decode.
+
+        Statistics read every frame of every column; going through ``get_scalar`` would materialize
+        one dataset ROW per frame per column, which turns a few seconds into minutes on a long run.
+        """
+        if self.mock:
+            return None
+        self._ensure_episode(episode)
+        try:
+            if key not in self._ds.hf_dataset.column_names:
+                return None
+            return np.asarray(self._ds.hf_dataset[key], dtype=np.float32)
+        except Exception:
+            return None
+
     def get_extra(self, episode: int, frame: int, key: str, shape: tuple) -> np.ndarray | None:
         """Return a declared extra-feature column (e.g. ``action_samples``) at its declared
         shape (no video decode), or None if the frame/column is absent.

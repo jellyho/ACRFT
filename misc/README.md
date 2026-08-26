@@ -86,6 +86,38 @@ re-running after a Ctrl-C picks up where it stopped).
 The zip is stored rather than deflated: the payload is h264 in mp4, already compressed, so
 deflating spends CPU on every byte to save roughly none.
 
+## What a run did, in numbers
+
+```bash
+misc/yam-misc stats --root ~/lerobot_data --repo-id run_a run_b run_c
+misc/yam-misc stats --root ~/lerobot_data --all --json ~/stats.json
+```
+
+```
+dataset                     eps  sec      replans   chunk len    range  replan/s     infer p50  spread         jump@bnd       jump@in
+yam_s300_rel_200k_fixed     5    55 ± 36  56 ± 36   29.8 ± 0.3   8-30   1.01 ± 0.01  164 ± 15   18.42 ± 15.96  0.405 ± 0.154  0.071 ± 0.023
+yam_s300_rel_200k_g5        6    36 ± 17  94 ± 32   11.1 ± 2.9   5-30   2.92 ± 1.04  157 ± 1     8.67 ± 4.50   0.205 ± 0.087  0.066 ± 0.019
+```
+
+Several runs side by side is the point: that is how a critic arm gets compared to another without
+watching forty videos. Above, the fixed critic commits 29.8 steps on average (one group, so it can
+only ever choose the whole chunk) while the adaptive one commits 11.1 and replans three times as
+often — and pays for it at the splices, where its boundary jumps are smaller but far more numerous.
+
+Every number is recomputed from the recording. Aggregates are **episode-level means with a 95%
+t-CI**, never a mean over pooled frames — pooling weights long episodes more, and its spread
+describes frames rather than runs. A single episode reports no interval instead of zero.
+
+| | |
+|---|---|
+| `chunk len`, `range`, `replan/s` | how far ahead each reply committed, from `policy.chunk_index` — the same boundaries the renderer draws |
+| `infer p50/p95`, `delay ticks` | from `policy.infer_ms` / `policy.delay_ticks` |
+| `spread`, `adv`, `pick#0` | best-minus-worst candidate value per replan, best minus runner-up, and how often the first sample won. A near-zero spread means the critic saw nothing to choose between |
+| `jump@bnd`, `jump@in` | 95th pct of the largest single-joint step across a replan boundary vs inside a chunk. The boundary number means nothing alone — a splice artefact is a boundary step much larger than an ordinary one |
+
+Columns no dataset has are dropped, so a table of teleop recordings carries no empty critic
+columns. `--json` writes the full per-episode numbers.
+
 ## What the frame shows
 
 ```
