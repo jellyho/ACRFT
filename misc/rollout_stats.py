@@ -104,6 +104,29 @@ def episode_stats(reader, episode: int) -> dict:
                 out[f"{name}_p50"] = float(np.median(flat))
                 out[f"{name}_p95"] = float(np.percentile(flat, 95))
 
+    # What the critic CHOSE, which is not the same as what ran. `critic_best_prefix` is the index
+    # of the last committed macro group, so the chosen commitment is (k*) * macro steps -- while the
+    # realized chunk above can be shorter, cut off by the end of an episode or an intervention.
+    # Reporting only the realized length would blame the critic for those truncations.
+    macro_col = reader.column(episode, "critic_macro")
+    prefix_col = reader.column(episode, "critic_best_prefix")
+    if macro_col is not None and prefix_col is not None and starts:
+        macro = int(macro_col.reshape(macro_col.shape[0], -1)[starts[0], 0])
+        kstar = prefix_col.reshape(prefix_col.shape[0], -1)[starts, 0].astype(int) + 1
+        groups = max(1, out.get("chunk_max", macro) // macro) if macro else 1
+        out["macro"] = macro
+        out["macro_groups"] = int(np.ceil(30 / macro)) if macro else 1
+        out["kstar_mean"] = float(kstar.mean())
+        out["kstar_hist"] = {int(k): int(v) for k, v in zip(*np.unique(kstar, return_counts=True), strict=False)}
+        out["chosen_steps_mean"] = float((kstar * macro).mean())
+        if "chunk_mean" in out:
+            lengths = np.diff([*starts, n])
+            # A replan whose reply ran shorter than the critic asked for: the decision stands, the
+            # execution did not. Worth separating -- it is the difference between a critic that
+            # commits briefly and a run that keeps getting interrupted.
+            out["truncated_frac"] = float(np.mean(lengths < kstar * macro))
+        del groups
+
     scores = reader.column(episode, "critic_scores")
     if scores is not None and scores.ndim == 2 and scores.shape[1] > 1 and starts:
         per_replan = scores[starts]  # the decision is made once per reply; frames repeat it
@@ -152,6 +175,9 @@ def dataset_stats(repo_id: str, root: str, episodes: "list | None" = None) -> di
         "critic_spread",
         "critic_advantage",
         "chose_first_frac",
+        "kstar_mean",
+        "chosen_steps_mean",
+        "truncated_frac",
         "boundary_jump_p50",
         "boundary_jump_p95",
         "boundary_jump_over_0p3",
@@ -171,6 +197,16 @@ def dataset_stats(repo_id: str, root: str, episodes: "list | None" = None) -> di
             hist[int(k)] = hist.get(int(k), 0) + int(v)
     if hist:
         agg["chunk_hist"] = dict(sorted(hist.items()))
+    khist: dict = {}
+    for r in rows:
+        for k, v in (r.get("kstar_hist") or {}).items():
+            khist[int(k)] = khist.get(int(k), 0) + int(v)
+    if khist:
+        agg["kstar_hist"] = dict(sorted(khist.items()))
+    macros = {r["macro"] for r in rows if "macro" in r}
+    if len(macros) == 1:
+        agg["macro"] = macros.pop()
+
     lo = [r["chunk_min"] for r in rows if "chunk_min" in r]
     hi = [r["chunk_max"] for r in rows if "chunk_max" in r]
     if lo:
@@ -201,6 +237,8 @@ def format_table(results: list) -> str:
         ("spread", lambda r: _fmt(r["aggregate"].get("critic_spread"), 2), 13),
         ("adv", lambda r: _fmt(r["aggregate"].get("critic_advantage"), 2), 12),
         ("pick#0", lambda r: _fmt(r["aggregate"].get("chose_first_frac"), 2), 11),
+        ("k*", lambda r: _fmt(r["aggregate"].get("kstar_mean"), 2), 12),
+        ("cut short", lambda r: _fmt(r["aggregate"].get("truncated_frac"), 2), 12),
         ("jump@bnd", lambda r: _fmt(r["aggregate"].get("boundary_jump_p95"), 3), 13),
         ("jump@in", lambda r: _fmt(r["aggregate"].get("within_jump_p95"), 3), 13),
     ]
@@ -211,6 +249,7 @@ def format_table(results: list) -> str:
     lines.append("")
     lines.append("mean ± 95% t-CI over EPISODES (— - not recorded, or one episode so no spread).")
     lines.append("spread = best-worst candidate value per replan; adv = best minus runner-up.")
+    lines.append("k* = macro groups the critic committed (x macro = steps); cut short = replans that ran shorter.")
     lines.append("jump@bnd / jump@in = 95th pct of max joint step across a replan boundary vs inside a chunk.")
     return "\n".join(lines)
 
@@ -240,6 +279,26 @@ def format_episode_table(result: dict) -> str:
     out.append("  ".join(h.ljust(w) for h, _, w in keep))
     out.append("  ".join("-" * w for _, _, w in keep))
     out += ["  ".join(f(r).ljust(w) for _, f, w in keep) for r in rows]
+    ks = sorted({int(k) for r in rows for k in (r.get("kstar_hist") or {})})
+    if ks:
+        macro = agg.get("macro") or 1
+        out += ["", f"commitments per episode, by macro group (group = {macro} steps):"]
+        head = ["ep".ljust(4)] + [f"k={k} ({k * macro})".rjust(11) for k in ks] + ["mean k*".rjust(9)]
+        out.append("  ".join(head))
+        out.append("  ".join("-" * len(h) for h in head))
+        for r in rows:
+            h = {int(k): int(v) for k, v in (r.get("kstar_hist") or {}).items()}
+            if not h:
+                continue
+            total = sum(h.values())
+            cells = [f"{h.get(k, 0):4d} {100 * h.get(k, 0) / total:4.0f}%".rjust(11) for k in ks]
+            out.append("  ".join([str(r["episode"]).ljust(4), *cells, f"{r.get('kstar_mean', 0):9.2f}"]))
+        tot = {k: sum(int((r.get("kstar_hist") or {}).get(k, (r.get("kstar_hist") or {}).get(str(k), 0))) for r in rows) for k in ks}
+        n = sum(tot.values())
+        cells = [f"{tot[k]:4d} {100 * tot[k] / n:4.0f}%".rjust(11) for k in ks]
+        out.append("  ".join(["-" * 4, *["-" * 11 for _ in ks], "-" * 9]))
+        out.append("  ".join(["all".ljust(4), *cells, f"{agg.get('kstar_mean', {}).get('mean', 0):9.2f}"]))
+
     if agg.get("chunk_hist"):
         total = sum(agg["chunk_hist"].values())
         out += ["", f"commitment lengths over {total} replan(s):"]

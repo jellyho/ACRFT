@@ -116,6 +116,7 @@ describes frames rather than runs. A single episode reports no interval instead 
 |---|---|
 | `chunk len`, `range`, `replan/s` | how far ahead each reply committed, from `policy.chunk_index` — the same boundaries the renderer draws |
 | `infer p50/p95`, `delay ticks` | from `policy.infer_ms` / `policy.delay_ticks` |
+| `k*`, `cut short` | macro groups the critic committed to (× the group size = steps), and the share of replans that ran shorter than it asked for. The second is what keeps the first honest: a reply cut off by the end of an episode is not a shorter commitment |
 | `spread`, `adv`, `pick#0` | best-minus-worst candidate value per replan, best minus runner-up, and how often the first sample won. A near-zero spread means the critic saw nothing to choose between |
 | `jump@bnd`, `jump@in` | 95th pct of the largest single-joint step across a replan boundary vs inside a chunk. The boundary number means nothing alone — a splice artefact is a boundary step much larger than an ordinary one |
 
@@ -128,11 +129,16 @@ columns. `--json` writes the full per-episode numbers.
 misc/yam-misc plots --stats ~/stats.json --out-dir ~/figs --title "h30 critic arms"
 ```
 
-Three, in the house style (`slurm/plot_style.py`): the commitment **distribution** (grouped bars —
+Four (the last only for adaptive runs), in the house style (`slurm/plot_style.py`): the commitment **distribution** (grouped bars —
 the commitment is discrete, and overlaid lines hid four of six arms behind each other with no way
 to tell a coinciding arm from a missing one), the mean commitment **length** with its CI, and the
 **splice** — boundary step against within-chunk step, side by side, because the boundary bar alone
 says nothing.
+
+`--per-episode` also prints, for adaptive runs, a table of **commitments per episode by macro
+group** — how many replans stopped at k=1, k=2, … and each episode's mean k*. `macro_choice.png`
+is that table as a figure, with one point per episode behind each bar: a mean k* of 2.89 covers
+episodes running from 1.82 to 3.59, and the bar alone would hide that.
 
 Keep `--title` short. Conditions, n and protocol belong in the prose, per the repo's figure rules.
 

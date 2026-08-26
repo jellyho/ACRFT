@@ -61,3 +61,21 @@ def test_missing_values_are_dropped_not_counted_as_zero():
     """An episode that recorded no infer_ms must not drag the mean toward zero."""
     m = mean_ci([100.0, None, 200.0, float("nan")])
     assert m["n"] == 2 and m["mean"] == pytest.approx(150.0)
+
+
+def test_kstar_is_the_choice_and_the_chunk_is_what_ran():
+    """`critic_best_prefix` is what the critic committed to; the realized chunk can be shorter,
+    cut off by the end of an episode or an intervention. Reporting only the realized length blames
+    the critic for those truncations, and `cut short` is what separates them."""
+    import numpy as np
+
+    from misc.rollout_stats import chunk_starts
+
+    # three replans: the critic asked for 30, 10, 30 steps (k* = 6, 2, 6 at macro 5)...
+    chunk_ids = np.array([0] * 30 + [1] * 10 + [2] * 12)  # ...but the last ran only 12
+    starts = chunk_starts(chunk_ids)
+    assert starts == [0, 30, 40]
+    lengths = np.diff([*starts, len(chunk_ids)])
+    kstar = np.array([6, 2, 6])
+    assert lengths.tolist() == [30, 10, 12]
+    assert float(np.mean(lengths < kstar * 5)) == pytest.approx(1 / 3)

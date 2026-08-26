@@ -134,13 +134,57 @@ def splice(results: list, out: pathlib.Path, title: str = "") -> pathlib.Path:
     return out
 
 
+def macro_choice(results: list, out: pathlib.Path, title: str = "") -> pathlib.Path:
+    """How often each macro group was the critic's commitment, per episode.
+
+    This is the critic's DECISION, not the realized chunk -- a reply cut short by the end of an
+    episode is not a shorter commitment. One point per episode with the arm's mean as a bar behind
+    them, because a mean k* of 2.9 hides episodes running from 1.8 to 3.6.
+    """
+    import matplotlib.pyplot as plt
+
+    ps = _style()
+    arms = [r for r in results if (r["aggregate"].get("kstar_hist") or {})]
+    if not arms:
+        raise SystemExit("no adaptive run here -- k* needs critic_macro / critic_best_prefix")
+
+    fig, ax = plt.subplots(figsize=(7.0, 3.8))
+    for i, r in enumerate(arms):
+        hist = {int(k): int(v) for k, v in r["aggregate"]["kstar_hist"].items()}
+        total = sum(hist.values()) or 1
+        ks = sorted(hist)
+        color = ps.PALETTE[i % len(ps.PALETTE)]
+        width = 0.8 / len(arms)
+        offset = (i - (len(arms) - 1) / 2) * width
+        ax.bar([k + offset for k in ks], [100 * hist[k] / total for k in ks], width, color=color,
+               label=f"{_short(r['repo_id'])}  (k* {r['aggregate'].get('kstar_mean', {}).get('mean', float('nan')):.2f})")
+        # Per-episode shares as points, so an arm's spread across runs is visible behind its mean.
+        for ep in r["per_episode"]:
+            h = {int(k): int(v) for k, v in (ep.get("kstar_hist") or {}).items()}
+            t = sum(h.values()) or 1
+            ax.plot([k + offset for k in ks], [100 * h.get(k, 0) / t for k in ks], ".", ms=3,
+                    color=ps.GRAY, alpha=0.55, zorder=3)
+    macro = arms[0]["aggregate"].get("macro")
+    ax.set_xlabel(f"macro group committed (k*{f' x {macro} steps' if macro else ''})")
+    ax.set_ylabel("share of replans (%)")
+    if title:
+        ax.set_title(title)
+    ax.legend(frameon=False, fontsize=9)
+    fig.savefig(out)
+    plt.close(fig)
+    return out
+
+
 def make_all(results: list, out_dir: pathlib.Path, title: str = "") -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
-    return [
+    figs = [
         commitment_distribution(results, out_dir / "commitment_distribution.png", title),
         commitment_length(results, out_dir / "commitment_length.png", title),
         splice(results, out_dir / "splice.png", title),
     ]
+    if any(r["aggregate"].get("kstar_hist") for r in results):
+        figs.append(macro_choice(results, out_dir / "macro_choice.png", title))
+    return figs
 
 
 def main() -> None:

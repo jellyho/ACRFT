@@ -56,3 +56,23 @@ def test_shares_still_sum_to_100_with_an_other_bucket(tmp_path):
     other = sum(v for k, v in hist.items() if k not in major)
     assert 100 * (sum(hist[k] for k in major) + other) / total == pytest.approx(100.0)
     assert other == 6
+
+
+def test_macro_choice_needs_an_adaptive_run(tmp_path):
+    """A fixed critic has one group, so there is no choice to plot -- better to say so than to draw
+    a single bar at k=1 and call it a distribution."""
+    from misc.stats_plots import macro_choice
+
+    with pytest.raises(SystemExit, match="no adaptive run"):
+        macro_choice([_result("a", {30: 100})], tmp_path / "m.png")
+
+
+def test_macro_choice_draws_per_episode_points(tmp_path):
+    """A mean k* of 2.9 hides episodes running 1.8 to 3.6, so each episode is a point behind the
+    bar."""
+    from misc.stats_plots import macro_choice
+
+    r = _result("yam_s300_h30_g5", {5: 300, 30: 100})
+    r["aggregate"] |= {"kstar_hist": {1: 300, 6: 100}, "kstar_mean": {"n": 2, "mean": 2.9, "ci": 0.4}, "macro": 5}
+    r["per_episode"] = [{"episode": 0, "kstar_hist": {1: 150, 6: 20}}, {"episode": 1, "kstar_hist": {1: 150, 6: 80}}]
+    assert macro_choice([r], tmp_path / "m.png").exists()
