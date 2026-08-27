@@ -62,7 +62,7 @@ def smooth(v, w=31):
 
 # ---- (1) one episode per figure, ALL predictors together -------------------------------
 cmap = plt.get_cmap("viridis")
-FINE15 = any(k in ERR for k in (2, 4, 6, 8, 12))
+FINE15 = True  # <=15 view; extra fine arms (lags3) join automatically when present
 ks_all = sorted(k for k in ERR if 0 < k <= 15) if FINE15 else sorted(k for k in ERR if k != 0)
 succ_short = sorted(succ_eps, key=lambda e: (ep_of == e).sum())[:4]  # shortest successes
 for e in succ_short:
