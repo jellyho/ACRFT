@@ -77,7 +77,8 @@ for e in succ_short:
             label=f"lag {k}",
         )
     # shade where SHORT lags beat LONG lags (blue) or vice versa (orange); |gap| <= 15%p left blank
-    SHORT, LONG = (1, 3, 5, 10), (30, 60, 150)
+    # split WITHIN the 30-frame chunk window (lags > 30 are out of scope for commitment)
+    SHORT, LONG = (1, 3, 5, 10), (15, 20, 30)
     g_s = np.mean([100 * smooth(ERR[0][m] - ERR[k][m]) / base for k in SHORT], axis=0)
     g_l = np.mean([100 * smooth(ERR[0][m] - ERR[k][m]) / base for k in LONG], axis=0)
     diff = g_s - g_l
@@ -87,7 +88,7 @@ for e in succ_short:
             ax.axvspan(frac[a0], frac[min(a1, len(frac) - 1)], color=color, alpha=0.10, lw=0)
     ok = is_succ[m][0]
     ax.set_title(
-        f"ep{e} ({'success' if ok else 'failure'})  ·  shading: blue = short lags win, orange = long lags win",
+        f"ep{e} ({'success' if ok else 'failure'})  ·  shading: blue = first half of chunk (lag<15) wins, orange = second half (15–30) wins",
         fontsize=10,
     )
     ax.set_xlabel("episode position (fraction)")
