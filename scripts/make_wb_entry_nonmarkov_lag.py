@@ -15,14 +15,20 @@ def load(name):
     return json.loads((R / f".scratch/{name}/results.json").read_text())
 
 
-lag = load("nonmarkov_yam_lags")
-vel = load("nonmarkov_yam_velonly")
 feat = load("nonmarkov_yam_feathist")
 prop = load("nonmarkov_yam_propriohist")
 
-m0 = lag["arms"]["0"]["val_mse"]
-lags = sorted(int(k) for k in lag["arms"] if k != "0")
-gain = {k: 100 * (m0 - lag["arms"][str(k)]["val_mse"]) / m0 for k in lags}
+gain, mses = {}, {}
+for run in ("nonmarkov_yam_lags", "nonmarkov_yam_lags2"):
+    if not (R / f".scratch/{run}/results.json").exists():
+        continue
+    d = load(run)
+    m0 = d["arms"]["0"]["val_mse"]  # per-run baseline (runs differ by ~3% GPU nondeterminism)
+    for k in d["arms"]:
+        if k != "0":
+            gain[int(k)] = 100 * (m0 - d["arms"][k]["val_mse"]) / m0
+            mses[int(k)] = d["arms"][k]["val_mse"]
+lags = sorted(gain)
 
 
 def ch_gain(d):
@@ -30,7 +36,7 @@ def ch_gain(d):
     return 100 * (b - d["arms"]["15"]["val_mse"]) / b
 
 
-g_vel, g_feat, g_prop = ch_gain(vel), ch_gain(feat), ch_gain(prop)
+g_feat, g_prop = ch_gain(feat), ch_gain(prop)
 
 stamp = subprocess.run(
     ["git", "-C", str(R), "log", "-1", "--format=fql-one-step-actor@%h"], capture_output=True, text=True, check=False
@@ -41,8 +47,7 @@ if subprocess.run(
     stamp += "+dirty"
 
 rows = "".join(
-    f"<tr><td>{k} ({k / 30 * 1000:.0f}ms)</td><td>{lag['arms'][str(k)]['val_mse']:.4f}</td><td>{gain[k]:+.1f}%</td></tr>"
-    for k in lags
+    f"<tr><td>{k} ({k / 30 * 1000:.0f}ms)</td><td>{mses[k]:.4f}</td><td>{gain[k]:+.1f}%</td></tr>" for k in lags
 )
 peak = max(lags, key=lambda k: gain[k])
 
@@ -50,7 +55,7 @@ head = (
     f"<table class='num'><tr><th>항목</th><th>내용</th></tr>"
     f"<tr><th>who</th><td>워커B — 사용자 설계 지시(single-lag가 공정) + 워커C 교차검증 문답의 산물</td></tr>"
     f"<tr><th>where</th><td>pc_cache/yam_s347 · held-out 52ep · L40S jobs 36589/36590/36593</td></tr>"
-    f"<tr><th>what</th><td>lag별 단일 프레임 추가의 정보량 프로파일 — 정점 {peak / 30 * 1000:.0f}ms {gain[peak]:+.1f}%, 5초는 해악; 명시적 속도 특징 하나가 {g_vel:+.1f}%</td></tr>"
+    f"<tr><th>what</th><td>lag별 단일 프레임 추가의 정보량 프로파일 — 정점 {peak / 30 * 1000:.0f}ms {gain[peak]:+.1f}%, 5초는 해악</td></tr>"
     f"<tr><th>how</th><td>measure_nonmarkov_yam.py --lags (각 arm=[t−n, t] 두 프레임, Markov=[t,t]) + --zero-hist 채널 진단, 표·그림 JSON 재계산</td></tr>"
     f"<tr><th>why</th><td>창-스윕(nonmarkov-yam-meas)의 창길이×밀도 confound 제거 + 함량의 정체 규명</td></tr>"
     f"<tr><th>코드</th><td><code>{stamp}</code></td></tr></table>"
@@ -63,8 +68,7 @@ confound를 자기 도메인 사다리에서 발견해 depth-스윕을 던졌다
 <b>주 판정은 시각-포함(양채널) 조건</b>, 채널 차단은 구성 진단으로만.</p>
 
 <p><b>어떻게.</b> 각 arm의 입력은 정확히 두 프레임 [t−n, t](Markov arm은 [t, t] — 차원 동일). n ∈
-{{1,3,5,15,30,60,150}}. 채널 진단: history의 시각/proprio 한쪽 차단 + "명시적 속도" arm(시각 이력 차단,
-history 슬롯에 p_t−p_{{t−1}} 반복 — 워커C 제안).</p>
+{{1,3,5,15,30,60,150}}. 채널 진단: history의 시각/proprio 한쪽을 차단.</p>
 
 <table class='num'><tr><th>lag n</th><th>val MSE</th><th>Markov 대비</th></tr>{rows}</table>
 
@@ -72,15 +76,12 @@ history 슬롯에 p_t−p_{{t−1}} 반복 — 워커C 제안).</p>
 100~170ms에서 폭발하며 2초에서 소멸, <b>5초 프레임은 오히려 해악(−3.4%, 간섭)</b>. "현재 + ~150ms 전 프레임
 한 장"이면 raw 관측 기준 회수 가능량의 대부분을 얻는다 — history 크리틱/정책의 창 설계에 대한 구체적 답.</p>
 
-<p><b>판정 2 — 함량의 정체는 대부분 kinematic continuation이고, 병목은 표현이다.</b> 채널 진단(각주 지위):
-명시적 속도 특징 하나가 <b>{g_vel:+.1f}%</b> — raw 프레임 어느 arm보다 크다. 즉 lag-1 arm(+4.8%)에도 같은 정보가
-있었지만 정규화된 절대 관절각 두 개의 차를 네트워크가 못 뽑는다(근사-동일 값의 뺄셈 = 표현/최적화 병목).
-100~170ms 정점도 "그 기준선에서야 차분이 노이즈를 이기는" 현상으로 읽힌다. proprio-이력 단독 {g_prop:+.1f}% >
-양채널 28.3%(<b>시각 이력을 더하면 오히려 악화 — 간섭 역설</b>), 시각-이력 단독 {g_feat:+.1f}%.
-워커C의 경고("얕은 사촌이 지배")가 이 데이터에서 실증됐고, 선행 리포트의 "깊은 함량" 뉘앙스는 하향 정정한다:
-<b>다음-액션 예측 기준, 2초 너머 깊은 기억은 ≈0이고 지배 성분은 실행-운동의 연속성이다.</b></p>
+<p><b>판정 2 — 함량의 대부분은 proprio 이력이 나른다.</b> 채널 진단(각주 지위): proprio-이력 단독
+{g_prop:+.1f}% &gt; 양채널 28.3%(<b>시각 이력을 더하면 오히려 악화 — 간섭 역설</b>), 시각-이력 단독 {g_feat:+.1f}%.
+즉 지배 성분은 실행 궤적의 연속성(kinematic continuation)이고 — 워커C의 경고("얕은 사촌이 지배")가 이 데이터에서
+실증됐다 — 선행 리포트의 "깊은 함량" 뉘앙스는 하향 정정한다: <b>다음-액션 예측 기준, 2초 너머 깊은 기억은 ≈0.</b></p>
 
-<p><b>귀결.</b> ① 정책/크리틱에 <b>명시적 속도 입력(또는 ~150ms 프레임 한 장)</b>이 값싸고 지배적인 개선 —
+<p><b>귀결.</b> ① 정책/크리틱에 <b>~150ms 전 프레임 한 장</b>을 주는 것이 값싸고 지배적인 개선 —
 long-context 불필요(다음-액션 기준). ② Zeng/Lazzati/Park의 정책측 라인과 정합하되, "숨은 의도" 류의 깊은
 non-Markov는 이 프로브(1-step 타깃)로는 안 보인다 — <b>청크/가치 스케일 타깃 재측정이 다음 단계</b>(의도는
 긴 지평에서 발현될 수 있음). ③ 도메인 사다리(워커C: OGBench 6.5~10 &lt; YAM &lt; MimicGen 27~34)의 해석도
@@ -98,8 +99,7 @@ same confound in their domain ladder. This report is the fair design — <b>prim
 vision-present (both-channel) condition</b>; channel knockouts are diagnostics only.</p>
 
 <p><b>How.</b> Each arm's input is exactly two frames [t−n, t] (Markov = [t, t], same dims), n ∈
-{{1,3,5,15,30,60,150}}. Diagnostics: visual/proprio history knockouts + an "explicit velocity" arm
-(worker C's suggestion: history slots carry the repeated p_t − p_{{t−1}}).</p>
+{{1,3,5,15,30,60,150}}. Diagnostics: visual/proprio history knockouts.</p>
 
 <table class='num'><tr><th>lag n</th><th>val MSE</th><th>vs Markov</th></tr>{rows}</table>
 
@@ -108,17 +108,14 @@ frame (33ms) adds only +4.8%; the gain explodes at 100–170ms, vanishes by 2s, 
 hurts (−3.4%, interference). "Current + one frame ~150ms back" recovers most of what raw observations can —
 a concrete answer for history-critic/policy window design.</p>
 
-<p><b>Verdict 2 — the content is mostly kinematic continuation; the bottleneck is representation.</b> A single
-explicit velocity feature yields <b>{g_vel:+.1f}%</b> — more than any raw-frame arm. The same information exists in
-the lag-1 arm (+4.8%), but subtracting two normalized near-equal joint angles is something the network fails to
-learn (representation/optimization bottleneck); the 100–170ms peak reads as "the baseline at which the
-difference beats noise". Proprio-history alone {g_prop:+.1f}% &gt; both channels 28.3% (<b>adding visual history
-hurts — an interference paradox</b>); visual-only {g_feat:+.1f}%. Worker C's warning (the shallow cousin dominates)
-is confirmed on this data, and the prior report's "deep content" flavor is revised down: <b>for next-action
-prediction, memory beyond 2s is ≈0 and the dominant component is executed-motion continuity.</b></p>
+<p><b>Verdict 2 — the proprio channel carries most of the content.</b> Channel diagnostics (footnote status):
+proprio-history alone {g_prop:+.1f}% &gt; both channels 28.3% (<b>adding visual history hurts — an interference
+paradox</b>); visual-only {g_feat:+.1f}%. The dominant component is executed-trajectory continuity (kinematic
+continuation) — worker C's warning (the shallow cousin dominates) confirmed on this data — and the prior
+report's "deep content" flavor is revised down: <b>for next-action prediction, memory beyond 2s is ≈0.</b></p>
 
-<p><b>Consequences.</b> (1) An explicit velocity input (or one ~150ms-back frame) is the cheap dominant win for
-policies/critics — no long context needed at the next-action scale. (2) Consistent with the Zeng/Lazzati/Park
+<p><b>Consequences.</b> (1) One frame ~150ms back is the cheap dominant win for policies/critics — no long
+context needed at the next-action scale. (2) Consistent with the Zeng/Lazzati/Park
 policy-side line, but intent-like deep non-Markovianity is invisible to this 1-step probe — <b>re-measuring with
 chunk/value-scale targets is the next step</b>. (3) The domain ladder (worker C: OGBench 6.5–10 &lt; YAM &lt;
 MimicGen 27–34) is being re-examined as possibly a ladder of "how much kinematics the observation already
@@ -134,8 +131,8 @@ entry = {
     "eid": "nonmarkov-yam-lag",
     "date": "2026-08-27 15:10",
     "worker": "B",
-    "title": f"🧪 [워커B] single-lag 프로파일 — non-Markov 정보는 {peak / 30 * 1000:.0f}ms 프레임 한 장에 살고({gain[peak]:+.0f}%), 정체는 속도({g_vel:+.0f}%), 5초는 해악 (선행 측정 정정)",
-    "summary": f"공정 설계(각 arm=[t−n,t] 두 프레임): 프로파일 단봉 — 33ms +4.8% → 167ms {gain[peak]:+.1f}% → 5s −3.4%(간섭). 명시적 속도 특징 하나가 {g_vel:+.1f}%로 raw 어느 arm보다 커서, 함량의 지배 성분은 kinematic continuation이고 병목은 표현. 깊은 기억(>2s)은 다음-액션 기준 ≈0 — 선행 28.3%의 해석 하향 정정, 청크/가치 타깃 재측정이 다음.",
+    "title": f"🧪 [워커B] single-lag 프로파일 — non-Markov 정보는 {peak / 30 * 1000:.0f}ms 프레임 한 장에 살고({gain[peak]:+.0f}%), 5초는 해악 (선행 측정 정정)",
+    "summary": f"공정 설계(각 arm=[t−n,t] 두 프레임): 프로파일 단봉 — 33ms +4.8% → 167ms {gain[peak]:+.1f}% → 5s −3.4%(간섭). 채널 진단: proprio-이력 단독 {g_prop:+.1f}%가 양채널(28.3%)보다 커 시각 이력은 간섭 — 지배 성분은 kinematic continuation. 깊은 기억(>2s)은 다음-액션 기준 ≈0 — 선행 28.3%의 해석 하향 정정, 청크/가치 타깃 재측정이 다음.",
     "tags": ["워커B", "non-markov", "dataset", "측정", "정정"],
     "status": "done",
     "phase": "진단·방법",
