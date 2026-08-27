@@ -48,6 +48,15 @@ def pooled_features(n, npatch, emb):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ks", type=int, nargs="+", default=[15, 30, 60, 150])
+    ap.add_argument(
+        "--lags",
+        type=int,
+        nargs="+",
+        default=None,
+        help="single-lag mode (fairer attribution): each arm's input is [frame(t-n), frame(t)] for one n, "
+        "Markov arm = frame(t) twice. Overrides --ks/--frames; isolates the information at exactly lag n "
+        "instead of confounding window length with frame density",
+    )
     ap.add_argument("--frames", type=int, default=6, help="K frames per input (both arms)")
     ap.add_argument("--steps", type=int, default=30000)
     ap.add_argument("--batch", type=int, default=1024)
@@ -94,6 +103,8 @@ def main():
     val_eps |= set(rng.choice(fail_eps, max(2, int(len(fail_eps) * a.val_frac)), replace=False).tolist())
     print(f"val episodes: {len(val_eps)} ({sum(1 for e in val_eps if e in set(fail_eps))} failure)")
 
+    if a.lags is not None:
+        a.ks = a.lags
     kmax = max(a.ks)
     per_ep = {int(k): (v["offset"], v["full_len"], v["success"]) for k, v in eps}
     tr_idx, va_idx = [], []
@@ -111,6 +122,8 @@ def main():
     vmu, vsd = _v.mean(0), _v.std(0) + 1e-6
 
     def offsets(k):  # K frames evenly spaced over [t-k, t]; k=0 -> all zeros (markov arm)
+        if a.lags is not None:  # single-lag mode: [t-n, t] pairs, capacity-matched [t, t] baseline
+            return np.array([-k, 0], np.int64) if k else np.zeros(2, np.int64)
         if k == 0:
             return np.zeros(a.frames, np.int64)
         return np.unique(np.round(np.linspace(-k, 0, a.frames)).astype(np.int64))
