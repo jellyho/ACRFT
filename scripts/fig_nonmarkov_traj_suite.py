@@ -33,13 +33,15 @@ is_succ = np.load(D / "perframe_is_succ.npy")
 ERR = {0: np.load(D / "perframe_err_k0.npy")}
 for k in (1, 3, 5, 15, 30, 60, 150):
     ERR[k] = np.load(D / f"perframe_err_k{k}.npy")
-idx2_f = D2 / "perframe_idx.npy"
-if idx2_f.exists():  # lags2 covers MORE frames (smaller kmax) -> align onto the main index set
+for extra, extra_ks in ((D2, (10, 20)), (R / ".scratch/nonmarkov_yam_lags3", (2, 4, 6, 8, 12))):
+    idx2_f = extra / "perframe_idx.npy"
+    if not idx2_f.exists():
+        continue  # extra runs cover MORE frames (smaller kmax) -> align onto the main index set
     idx2 = np.load(idx2_f)
     pos = np.searchsorted(idx2, idx)
     ok = (pos < len(idx2)) & (idx2[np.minimum(pos, len(idx2) - 1)] == idx)
-    for k in (10, 20):
-        f = D2 / f"perframe_err_k{k}.npy"
+    for k in extra_ks:
+        f = extra / f"perframe_err_k{k}.npy"
         if f.exists() and ok.all():
             ERR[k] = np.load(f)[pos]
 meta = json.loads(pathlib.Path("/data1/jellyho/pc_cache/yam_s347/meta.json").read_text())
@@ -60,7 +62,8 @@ def smooth(v, w=31):
 
 # ---- (1) one episode per figure, ALL predictors together -------------------------------
 cmap = plt.get_cmap("viridis")
-ks_all = sorted(k for k in ERR if k != 0)
+FINE15 = any(k in ERR for k in (2, 4, 6, 8, 12))
+ks_all = sorted(k for k in ERR if 0 < k <= 15) if FINE15 else sorted(k for k in ERR if k != 0)
 succ_short = sorted(succ_eps, key=lambda e: (ep_of == e).sum())[:4]  # shortest successes
 for e in succ_short:
     m = ep_of == e
