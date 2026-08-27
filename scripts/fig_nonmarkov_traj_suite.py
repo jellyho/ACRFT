@@ -61,10 +61,11 @@ def smooth(v, w=31):
 # ---- (1) one episode per figure, ALL predictors together -------------------------------
 cmap = plt.get_cmap("viridis")
 ks_all = sorted(k for k in ERR if k != 0)
-for e in succ_eps[:2] + fail_eps[:2]:
+succ_short = sorted(succ_eps, key=lambda e: (ep_of == e).sum())[:4]  # shortest successes
+for e in succ_short:
     m = ep_of == e
     frac = np.linspace(0, 1, m.sum())
-    fig, ax = plt.subplots(figsize=(7.6, 3.4))
+    fig, ax = plt.subplots(figsize=(19, 3.6))
     ax.axhline(0, color="black", lw=1.2, ls="--", label="Markov", zorder=5)
     base = max(float(ERR[0][m].mean()), 1e-6)  # % of this episode's Markov error, higher = better
     for j, k in enumerate(ks_all):
@@ -75,11 +76,23 @@ for e in succ_eps[:2] + fail_eps[:2]:
             lw=1.1,
             label=f"lag {k}",
         )
+    # shade where SHORT lags beat LONG lags (blue) or vice versa (orange); |gap| <= 15%p left blank
+    SHORT, LONG = (1, 3, 5, 10), (30, 60, 150)
+    g_s = np.mean([100 * smooth(ERR[0][m] - ERR[k][m]) / base for k in SHORT], axis=0)
+    g_l = np.mean([100 * smooth(ERR[0][m] - ERR[k][m]) / base for k in LONG], axis=0)
+    diff = g_s - g_l
+    for cls, color in ((diff > 15, "#4C72B0"), (diff < -15, "#DD8452")):
+        edges = np.flatnonzero(np.diff(np.concatenate([[0], cls.astype(int), [0]])))
+        for a0, a1 in zip(edges[::2], edges[1::2], strict=True):
+            ax.axvspan(frac[a0], frac[min(a1, len(frac) - 1)], color=color, alpha=0.10, lw=0)
     ok = is_succ[m][0]
-    ax.set_title(f"ep{e} ({'success' if ok else 'failure'})", fontsize=10)
+    ax.set_title(
+        f"ep{e} ({'success' if ok else 'failure'})  ·  shading: blue = short lags win, orange = long lags win",
+        fontsize=10,
+    )
     ax.set_xlabel("episode position (fraction)")
     ax.set_ylabel("improvement over Markov (%)")
-    ax.legend(fontsize=7, ncol=2, loc="upper right")
+    ax.legend(fontsize=8, ncol=10, loc="upper right")
     fig.tight_layout()
     fig.savefig(R / f".scratch/fig_nmtraj_ep{e}.png", dpi=200)
     plt.close(fig)
