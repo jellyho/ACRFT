@@ -33,18 +33,18 @@ for run in ("nonmarkov_yam_lags", "nonmarkov_yam_lags2"):
         if k != "0":
             gains[int(k)] = 100 * (m0 - d["arms"][k]["val_mse"]) / m0
 lags = sorted(gains)
-xs = [k / 30.0 for k in lags]
+xs = lags
 ys = [gains[k] for k in lags]
 
 fig, ax = plt.subplots(figsize=(4.8, 3.1))
 ax.plot(xs, ys, "o-", color=PAL[0], lw=1.8, ms=6)
 ax.axhline(0, color="#555", lw=1.0, ls="--")
-ax.text(4.8, 1.0, "Markov", ha="right", fontsize=8, color="#555")
+ax.text(145, 1.0, "Markov", ha="right", fontsize=8, color="#555")
 ax.set_xscale("log")
 ax.set_xticks(xs)
-ax.set_xticklabels([f"{x:.2g}" for x in xs], fontsize=7, rotation=45)
+ax.set_xticklabels([str(x) for x in xs], fontsize=8)
 ax.minorticks_off()
-ax.set_xlabel("lag of the added frame (s)")
+ax.set_xlabel("lag of the added frame (steps, 30 Hz)")
 ax.set_ylabel("held-out action-pred.\nimprovement over Markov (%)")
 fig.tight_layout()
 out = R / ".scratch/fig_nonmarkov_lags"
