@@ -93,7 +93,9 @@ def main():
     slow = build()
     fast = build()
     graphdef_s = nnx.graphdef(slow)
-    params_s = jax.device_put(nnx.state(slow))  # frozen slow field; on-device for jit closure capture
+    params_s = jax.device_put(
+        nnx.state(slow)
+    )  # frozen slow field, passed as a jit ARG (closure constants OOM: XLA bakes them into the executable)
     graphdef_f = nnx.graphdef(fast)
     params_f = nnx.state(fast)
 
@@ -133,7 +135,7 @@ def main():
         tau = jnp.broadcast_to(1.0 - t_qam, x.shape[0])
         return -suffix_v(model, obs, kv, pm, x, tau)
 
-    def rollout(params_f_const, obs, kv_s, pm, rng):
+    def rollout(params_f_const, params_s, obs, kv_s, pm, rng):
         """qam.py:49-77 verbatim structure; runs under stop-grad (constants for the loss)."""
         fast_m = nnx.merge(graphdef_f, params_f_const)
         slow_m = nnx.merge(graphdef_s, params_s)
@@ -157,7 +159,7 @@ def main():
 
     grad_q = critic_q.grad_q_chunk(critic)  # ensemble MEAN grad + in-call clip (qam.py:80-83)
 
-    def adjoints(obs, kv_s, pm, xs, ts, x_final, feats, proprio):
+    def adjoints(params_s, obs, kv_s, pm, xs, ts, x_final, feats, proprio):
         """Terminal adj = -grad Q * inv_temp (qam.py:85); backward VJP recursion (:92-101)."""
         slow_m = nnx.merge(graphdef_s, params_s)
         g = grad_q(x_final[..., :robot_ad], feats, proprio)
@@ -176,7 +178,7 @@ def main():
         adjs.reverse()  # align with xs[0..T-1]; matches qam.py:102 ordering
         return jax.lax.stop_gradient(jnp.stack(adjs))
 
-    def loss_fn(params_f_train, obs, kv_s, pm, xs, ts, adjs):
+    def loss_fn(params_f_train, params_s, obs, kv_s, pm, xs, ts, adjs):
         fast_m = nnx.merge(graphdef_f, params_f_train)
         slow_m = nnx.merge(graphdef_s, params_s)
         total = 0.0
@@ -191,16 +193,16 @@ def main():
         return jnp.mean(total), {"adj_absmax": jnp.abs(adjs).max()}
 
     @functools.partial(jax.jit, donate_argnums=(0, 1))
-    def step(params_f, opt, rng, obs, feats, proprio):
+    def step(params_f, opt, params_s, rng, obs, feats, proprio):
         obs = _model.preprocess_observation(None, obs, train=False)
         slow_m = nnx.merge(graphdef_s, params_s)
         kv_s, pm = prefix_kv(slow_m, obs)  # one frozen prefix, shared by both fields
         rng, rk = jax.random.split(rng)
-        xs, ts, x_final = rollout(params_f, obs, kv_s, pm, rk)
-        adjs = adjoints(obs, kv_s, pm, xs, ts, x_final, feats, proprio)
-        (loss, info), grads = jax.value_and_grad(lambda pf: loss_fn(pf, obs, kv_s, pm, xs, ts, adjs), has_aux=True)(
-            params_f
-        )
+        xs, ts, x_final = rollout(params_f, params_s, obs, kv_s, pm, rk)
+        adjs = adjoints(params_s, obs, kv_s, pm, xs, ts, x_final, feats, proprio)
+        (loss, info), grads = jax.value_and_grad(
+            lambda pf: loss_fn(pf, params_s, obs, kv_s, pm, xs, ts, adjs), has_aux=True
+        )(params_f)
         p = params_f.filter(expert_filter)
         gsub = grads.filter(expert_filter)
         upd, opt = tx.update(gsub, opt, p)
@@ -237,7 +239,7 @@ def main():
         obs, _actions, ann = next(it)
         f, _st, pr = cache.rows(np.asarray(ann["idx"], np.int64), critic)
         rng, k = jax.random.split(rng)
-        params_f, opt, loss, info = step(params_f, opt, k, obs, jnp.asarray(f), jnp.asarray(pr))
+        params_f, opt, loss, info = step(params_f, opt, params_s, k, obs, jnp.asarray(f), jnp.asarray(pr))
         if s % 50 == 0:
             print(
                 f"step {s:6d}  adj_loss {float(loss):.4f}  adj_absmax {float(info['adj_absmax']):.3f}  "

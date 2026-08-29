@@ -89,7 +89,7 @@ def main():
     state.replace_by_pure_dict(loaded)
     model = nnx.merge(graphdef, state)
     graphdef = nnx.graphdef(model)
-    base_params = jax.device_put(nnx.state(model))  # frozen; on-device so jit closures can index with tracers
+    base_params = jax.device_put(nnx.state(model))  # frozen; passed as a jit ARG (closure constants OOM in XLA)
 
     # ---- latent actor: plain MLP (networks.py:301), raw output --------------------------------
     def init_mlp(key, dims):
@@ -108,9 +108,9 @@ def main():
         w, b = p[-1]
         return x @ w + b
 
-    def one_step(obs, z):
+    def one_step(bp, obs, z):
         """alpha-Flow one-step action: z - u(z, r=0, t=1) with the frozen base (differentiable in z)."""
-        m = nnx.merge(graphdef, base_params)
+        m = nnx.merge(graphdef, bp)
         prefix_mask, kv = m._prefix_forward(obs)
         b = z.shape[0]
         t = jnp.ones((b,), jnp.float32)
@@ -118,12 +118,12 @@ def main():
         u = m._u(obs, prefix_mask, kv, z.reshape(b, H, AD), t, r)
         return (z.reshape(b, H, AD) - u).reshape(b, LAT)
 
-    def loss_fn(pi_l, rng, obs, feats_pool, proprio, feats):
+    def loss_fn(pi_l, bp, rng, obs, feats_pool, proprio, feats):
         b = feats_pool.shape[0]
         rep = jnp.concatenate([feats_pool, proprio], axis=-1)
         if a.mode == "lps":
             z = mlp(pi_l, rep)  # deterministic latent actor (lps.py:294-305 no-e branch)
-            act = one_step(obs, z)
+            act = one_step(bp, obs, z)
             q = critic.q_mean(feats, act.reshape(b, H, AD)[..., :robot_ad], proprio)
             lam = jax.lax.stop_gradient(1.0 / (jnp.abs(q).mean() + 1e-8))  # lps.py:198
             loss = a.alpha * lam * (-q.mean())  # lps.py:197-199
@@ -131,8 +131,8 @@ def main():
         # lpsd
         e = jax.random.normal(rng, (b, LAT))  # 'normal' latent (deviation: base trained w/ N(0,I))
         z = mlp(pi_l, jnp.concatenate([rep, e], axis=-1))
-        a_e = jax.lax.stop_gradient(one_step(obs, e))  # anchor from the raw latent (lps.py:176)
-        a_z = one_step(obs, z)
+        a_e = jax.lax.stop_gradient(one_step(bp, obs, e))  # anchor from the raw latent (lps.py:176)
+        a_z = one_step(bp, obs, z)
         q = critic.q_mean(feats, a_z.reshape(b, H, AD)[..., :robot_ad], proprio)
         lam = jax.lax.stop_gradient(1.0 / (jnp.abs(q).mean() + 1e-8))
         q_loss = lam * (-q.mean())  # lps.py:214-216
@@ -143,9 +143,9 @@ def main():
     opt = tx.init(pi_l)
 
     @functools.partial(jax.jit, donate_argnums=(0, 1))
-    def step(pi_l, opt, rng, obs, feats_pool, proprio, feats):
+    def step(pi_l, opt, bp, rng, obs, feats_pool, proprio, feats):
         obs = _model.preprocess_observation(None, obs, train=False)
-        (loss, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(pi_l, rng, obs, feats_pool, proprio, feats)
+        (loss, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(pi_l, bp, rng, obs, feats_pool, proprio, feats)
         upd, opt = tx.update(grads, opt, pi_l)
         return optax.apply_updates(pi_l, upd), opt, loss, info
 
@@ -180,7 +180,7 @@ def main():
         f, _st, pr = cache.rows(np.asarray(ann["idx"], np.int64), critic)
         fp = f.mean(axis=1)  # pooled DINO rep for the latent actor
         rng, k = jax.random.split(rng)
-        pi_l, opt, loss, info = step(pi_l, opt, k, obs, jnp.asarray(fp), jnp.asarray(pr), jnp.asarray(f))
+        pi_l, opt, loss, info = step(pi_l, opt, base_params, k, obs, jnp.asarray(fp), jnp.asarray(pr), jnp.asarray(f))
         if s % 50 == 0:
             msg = "  ".join(f"{k2} {float(v2):.4f}" for k2, v2 in info.items())
             print(f"step {s:6d}  loss {float(loss):.4f}  {msg}  ({(s + 1) / (time.time() - t0):.3f} it/s)", flush=True)
