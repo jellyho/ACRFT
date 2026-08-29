@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sequential few-step smoke of all 7 extraction trainers on one GPU. Continue on failure;
+# Sequential few-step smoke of all 10 extraction arms on one GPU. Continue on failure;
 # per-method verdict lines are the artifact.
 #SBATCH --job-name=extract_smoke
 #SBATCH --partition=debug
@@ -25,4 +25,7 @@ run lps       scripts/train_lps.py      --mode lps  --steps 10 --batch 4 --save-
 run lpsd      scripts/train_lps.py      --mode lpsd --steps 10 --batch 4 --save-every 999999 --out /tmp/ex_lpsd
 run qam       scripts/train_qam.py      --steps 3  --batch 2 --save-every 999999 --out /tmp/ex_qam
 run flowdagger scripts/train_flowdagger.py --phase all --stride 50000 --collect-batch 4 --bc-steps 100 --out /tmp/ex_fdag
+run dql       scripts/train_dql.py      --steps 3  --batch 2 --save-every 999999 --out /tmp/ex_dql
+run qpilots   scripts/qpilots_steer.py  --num-batches 2 --batch 4 --alphas 0.2 --out /tmp/ex_qpilots.json
+run idql      scripts/idql_select.py    --num-batches 2 --batch 4 --n-samples 4 --out /tmp/ex_idql.json
 echo "==== SMOKE DONE ===="
