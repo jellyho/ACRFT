@@ -41,6 +41,12 @@ class CriticQ:
     proprio_idx: np.ndarray | None
     pre: critic_preproc.Pi05Preproc | None  # raw absolute chunk + raw state -> normalized delta
 
+    def q_min(self, feats, chunk_norm, proprio):
+        """Min-over-ensemble full-chunk Q — the twin-critic min of FlowDPG Eq. 5 (arXiv
+        2606.22303 Sec. 3.2); our K=2 ensemble plays the twin pair."""
+        logits = self.net.apply({"params": self.params}, feats, chunk_norm, proprio)
+        return self.hl.from_logits(logits).min(axis=0)[..., -1]
+
     def q_mean(self, feats, chunk_norm, proprio):
         """Mean-over-ensemble, per-prefix-last (full-chunk) Q. Differentiable in chunk_norm.
 
@@ -119,5 +125,15 @@ def grad_q_chunk(critic: CriticQ):
 
     def q_of(chunk, feats, proprio):
         return critic.q_mean(feats, jnp.clip(chunk, -1.0, 1.0), proprio).sum()
+
+    return jax.grad(q_of, argnums=0)
+
+
+def grad_qmin_chunk(critic: CriticQ):
+    """d(min-ensemble Q)/d(chunk_norm) — FlowDPG Eq. 5 gradient (min over twins), with the
+    QAM-style in-call clip guard."""
+
+    def q_of(chunk, feats, proprio):
+        return critic.q_min(feats, jnp.clip(chunk, -1.0, 1.0), proprio).sum()
 
     return jax.grad(q_of, argnums=0)
