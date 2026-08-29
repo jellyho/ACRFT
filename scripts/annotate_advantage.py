@@ -56,7 +56,7 @@ def main():
         pad = np.repeat(acts[-1:], H, axis=0)
         acts_ext = np.concatenate([acts, pad], axis=0)
         chunks = np.stack([acts_ext[t : t + H] for t in range(ln)])  # [ln, H, ad] raw absolute
-        chunk_norm = critic.pre(chunks, states)  # -> pi05-normalized joint delta
+        chunk_norm = critic.pre.actions(chunks, states)  # -> pi05-normalized joint delta (preproc.py:92-104)
         for s in range(0, ln, a.batch):
             sl = slice(off + s, off + min(s + a.batch, ln))
             f, _st, pr = cache.rows(np.arange(sl.start, sl.stop), critic)
