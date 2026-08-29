@@ -27,8 +27,8 @@ import jax.numpy as jnp
 
 import openpi.models.model as _model
 from openpi.models.pi0 import Pi0
-from openpi.models.pi0 import Pi0Config
 from openpi.models.pi0 import make_attn_mask
+from openpi.models.pi0_config import Pi0Config
 import openpi.shared.array_typing as at
 
 
