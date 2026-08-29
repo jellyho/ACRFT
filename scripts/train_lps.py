@@ -169,7 +169,8 @@ def main():
 
         out.mkdir(parents=True, exist_ok=True)
         (out / f"latent_actor_{step_i}.msgpack").write_bytes(
-            flax.serialization.msgpack_serialize(jax.tree.map(np.asarray, pi_l))
+            # msgpack can't pack tuples: serialize as list-of-[w, b] lists (round-2 smoke)
+            flax.serialization.msgpack_serialize([[np.asarray(w), np.asarray(b)] for w, b in pi_l])
         )
         print(f"saved {out}/latent_actor_{step_i}.msgpack", flush=True)
 

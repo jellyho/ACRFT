@@ -155,7 +155,9 @@ def main():
             else:
                 v = v_qam(slow_m, obs, kv_s, pm, x, t)  # deterministic last step, slow field (:72-73)
                 x = x + h * v
-        return jax.lax.stop_gradient(jnp.stack(xs)), jnp.asarray(ts), jax.lax.stop_gradient(x)
+        # ts is a STATIC python time grid (i*h): keep it host-side — jnp.asarray stages it into a
+        # tracer under jit and float(ts[i]) then fails (round-2 smoke)
+        return jax.lax.stop_gradient(jnp.stack(xs)), tuple(ts), jax.lax.stop_gradient(x)
 
     grad_q = critic_q.grad_q_chunk(critic)  # ensemble MEAN grad + in-call clip (qam.py:80-83)
 

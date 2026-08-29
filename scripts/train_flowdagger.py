@@ -286,7 +286,8 @@ def main():
         import flax.serialization
 
         (a.out / "steering_head.msgpack").write_bytes(
-            flax.serialization.msgpack_serialize(jax.tree.map(np.asarray, head))
+            # msgpack can't pack tuples: serialize as list-of-[w, b] lists (round-2 smoke)
+            flax.serialization.msgpack_serialize([[np.asarray(w), np.asarray(b)] for w, b in head])
         )
         np.save(a.out / "dct_basis.npy", B)
         print("FlowDAgger steering head saved.", flush=True)
