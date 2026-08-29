@@ -107,7 +107,7 @@ def main():
     state.replace_by_pure_dict(loaded)
     model = nnx.merge(graphdef, state)
     graphdef = nnx.graphdef(model)
-    base_params = nnx.state(model)
+    base_params = jax.device_put(nnx.state(model))  # on-device: numpy closure constants break tracer indexing
 
     def prefix(obs):
         m = nnx.merge(graphdef, base_params)

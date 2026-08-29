@@ -89,7 +89,7 @@ def main():
     state.replace_by_pure_dict(loaded)
     model = nnx.merge(graphdef, state)
     graphdef = nnx.graphdef(model)
-    base_params = nnx.state(model)  # frozen
+    base_params = jax.device_put(nnx.state(model))  # frozen; on-device so jit closures can index with tracers
 
     # ---- latent actor: plain MLP (networks.py:301), raw output --------------------------------
     def init_mlp(key, dims):

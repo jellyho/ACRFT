@@ -93,7 +93,7 @@ def main():
     slow = build()
     fast = build()
     graphdef_s = nnx.graphdef(slow)
-    params_s = nnx.state(slow)
+    params_s = jax.device_put(nnx.state(slow))  # frozen slow field; on-device for jit closure capture
     graphdef_f = nnx.graphdef(fast)
     params_f = nnx.state(fast)
 
