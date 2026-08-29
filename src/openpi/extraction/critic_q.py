@@ -87,10 +87,16 @@ def load(critic_dir) -> CriticQ:
         macro_group_size=cc["macro_group_size"],
         num_atoms=cc["num_atoms"],
     )
+
+    def _unwrap(raw):
+        # the msgpacks store the full variables dict {"params": ...} (score_critic_cached.py:43,55
+        # passes them to apply() verbatim); CriticQ methods re-wrap, so strip the outer layer here
+        return raw["params"] if set(raw.keys()) == {"params"} else raw
+
     return CriticQ(
         config=cc,
-        params=flax.serialization.msgpack_restore((d / "params.msgpack").read_bytes()),
-        v_params=flax.serialization.msgpack_restore((d / "v_params.msgpack").read_bytes()),
+        params=_unwrap(flax.serialization.msgpack_restore((d / "params.msgpack").read_bytes())),
+        v_params=_unwrap(flax.serialization.msgpack_restore((d / "v_params.msgpack").read_bytes())),
         net=net,
         v_net=PatchV(num_atoms=cc["num_atoms"]),
         hl=HLGauss(cc["v_min"], cc["v_max"], cc["num_atoms"]),
