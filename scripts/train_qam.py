@@ -202,15 +202,18 @@ def main():
         rng, rk = jax.random.split(rng)
         xs, ts, x_final = rollout(params_f, params_s, obs, kv_s, pm, rk)
         adjs = adjoints(params_s, obs, kv_s, pm, xs, ts, x_final, feats, proprio)
-        (loss, info), grads = jax.value_and_grad(
-            lambda pf: loss_fn(pf, params_s, obs, kv_s, pm, xs, ts, adjs), has_aux=True
-        )(params_f)
+        # differentiate wrt the EXPERT subtree only (DiffState, as in train_awr/train_dql):
+        # a full-state grad pytree is 13GB fp32 and was the round-4 smoke OOM
+        fast_model = nnx.merge(graphdef_f, params_f)
+        (loss, info), grads = nnx.value_and_grad(
+            lambda m: loss_fn(nnx.state(m), params_s, obs, kv_s, pm, xs, ts, adjs),
+            argnums=nnx.DiffState(0, expert_filter),
+            has_aux=True,
+        )(fast_model)
         p = params_f.filter(expert_filter)
-        gsub = grads.filter(expert_filter)
-        upd, opt = tx.update(gsub, opt, p)
-        model = nnx.merge(graphdef_f, params_f)
-        nnx.update(model, optax.apply_updates(p, upd))
-        return nnx.state(model), opt, loss, info
+        upd, opt = tx.update(grads, opt, p)
+        nnx.update(fast_model, optax.apply_updates(p, upd))
+        return nnx.state(fast_model), opt, loss, info
 
     run = None
     if a.wandb:
