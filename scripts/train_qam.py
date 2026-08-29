@@ -90,21 +90,21 @@ def main():
         state.replace_by_pure_dict(loaded)
         return nnx.merge(graphdef, state)
 
-    slow = build()
-    fast = build()
-    graphdef_s = nnx.graphdef(slow)
-    params_s = jax.device_put(
-        nnx.state(slow)
-    )  # frozen slow field, passed as a jit ARG (closure constants OOM: XLA bakes them into the executable)
-    graphdef_f = nnx.graphdef(fast)
-    params_f = nnx.state(fast)
-
     expert_filter = nnx.Any(
         nnx_utils.PathRegex(".*llm.*_1.*"),
         nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)|state_proj).*"),
     )
+    # slow and fast differ ONLY in the (trainable) action expert; two full fp32 param sets
+    # (~14GB each) plus the training program blew the 44GB L40S (round-5 smoke OOM). Share one
+    # non-expert state and keep two expert subtrees — mathematically identical to qam.py's two
+    # registered modules because the backbone is frozen in both.
+    graphdef_m, p_exp_s, p_rest = nnx.split(build(), expert_filter, ...)
+    p_exp_s = jax.device_put(p_exp_s)
+    p_rest = jax.device_put(p_rest)
+    p_exp_f = jax.tree.map(lambda x: x.copy(), jax.device_put(p_exp_s))  # fast expert starts at slow
+
     tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))  # qam.py:387-389,:414
-    opt = tx.init(params_f.filter(expert_filter))
+    opt = tx.init(p_exp_f)
 
     T = a.flow_steps
     h = 1.0 / T
@@ -130,17 +130,16 @@ def main():
         )
         return model.action_out_proj(out[:, -H:])
 
-    def _v_qam_p(graphdef, params, obs, kv, pm, x, t_qam):
+    def _v_qam_p(p_exp, p_rest, obs, kv, pm, x, t_qam):
         # QAM's data-pointing velocity from openpi's noise-pointing one: v_qam = -v_openpi(1 - t)
         tau = jnp.broadcast_to(1.0 - t_qam, x.shape[0])
-        return -suffix_v(nnx.merge(graphdef, params), obs, kv, pm, x, tau)
+        return -suffix_v(nnx.merge(graphdef_m, p_exp, p_rest), obs, kv, pm, x, tau)
 
     # remat: T fast + T slow forward passes plus the VJP recursion held every suffix activation
-    # live at once -> 17GB OOM (round-3 smoke). Recompute per step instead; math unchanged.
-    v_qam_f = jax.checkpoint(functools.partial(_v_qam_p, graphdef_f))
-    v_qam_s = jax.checkpoint(functools.partial(_v_qam_p, graphdef_s))
+    # live at once (round-3 smoke OOM). Recompute per step instead; math unchanged.
+    v_qam = jax.checkpoint(_v_qam_p)
 
-    def rollout(params_f_const, params_s, obs, kv_s, pm, rng):
+    def rollout(exp_f_const, exp_s, p_rest, obs, kv_s, pm, rng):
         """qam.py:49-77 verbatim structure; runs under stop-grad (constants for the loss)."""
         b = pm.shape[0]
         x = jax.random.normal(rng, (b, H, AD))
@@ -151,12 +150,12 @@ def main():
             xs.append(x)
             ts.append(t)
             if i < T - 1:
-                v = v_qam_f(params_f_const, obs, kv_s, pm, x, t)  # rollout uses the CURRENT fast field (:68-70)
+                v = v_qam(exp_f_const, p_rest, obs, kv_s, pm, x, t)  # rollout uses the CURRENT fast field (:68-70)
                 rng, nk = jax.random.split(rng)
                 noise = jax.random.normal(nk, x.shape)
                 x = x + h * (2 * v - x / (t + h)) + jnp.sqrt(h) * sig * noise  # qam.py:71
             else:
-                v = v_qam_s(params_s, obs, kv_s, pm, x, t)  # deterministic last step, slow field (:72-73)
+                v = v_qam(exp_s, p_rest, obs, kv_s, pm, x, t)  # deterministic last step, slow field (:72-73)
                 x = x + h * v
         # ts is a STATIC python time grid (i*h): keep it host-side — jnp.asarray stages it into a
         # tracer under jit and float(ts[i]) then fails (round-2 smoke)
@@ -164,7 +163,7 @@ def main():
 
     grad_q = critic_q.grad_q_chunk(critic)  # ensemble MEAN grad + in-call clip (qam.py:80-83)
 
-    def adjoints(params_s, obs, kv_s, pm, xs, ts, x_final, feats, proprio):
+    def adjoints(exp_s, p_rest, obs, kv_s, pm, xs, ts, x_final, feats, proprio):
         """Terminal adj = -grad Q * inv_temp (qam.py:85); backward VJP recursion (:92-101)."""
         g = grad_q(x_final[..., :robot_ad], feats, proprio)
         g = jnp.concatenate([g, jnp.zeros((*g.shape[:-1], AD - robot_ad))], axis=-1)
@@ -174,7 +173,7 @@ def main():
             t = float(ts[i])
 
             def fn(x, t=t):
-                return 2 * v_qam_s(params_s, obs, kv_s, pm, x, t) - x / (t + h)  # qam.py:95-97
+                return 2 * v_qam(exp_s, p_rest, obs, kv_s, pm, x, t) - x / (t + h)  # qam.py:95-97
 
             _, vjp = jax.vjp(fn, xs[i])
             adj = adj + h * vjp(adj)[0]  # qam.py:98-100
@@ -182,38 +181,32 @@ def main():
         adjs.reverse()  # align with xs[0..T-1]; matches qam.py:102 ordering
         return jax.lax.stop_gradient(jnp.stack(adjs))
 
-    def loss_fn(params_f_train, params_s, obs, kv_s, pm, xs, ts, adjs):
+    def loss_fn(exp_f_train, exp_s, p_rest, obs, kv_s, pm, xs, ts, adjs):
         total = 0.0
         for i in range(T):
             t = float(ts[i])
             sig = jnp.sqrt(2 * (1 - t + h) / (t + h))
-            vf = v_qam_f(params_f_train, obs, kv_s, pm, xs[i], t)
-            vs = jax.lax.stop_gradient(v_qam_s(params_s, obs, kv_s, pm, xs[i], t))
+            vf = v_qam(exp_f_train, p_rest, obs, kv_s, pm, xs[i], t)
+            vs = jax.lax.stop_gradient(v_qam(exp_s, p_rest, obs, kv_s, pm, xs[i], t))
             # qam.py:140-142 (residual=False): ((vf - vs) * 2/sigma + sigma * adj)^2, per-dim sum
             per = jnp.sum(jnp.square((vf - vs) * (2.0 / sig) + sig * adjs[i]), axis=(-2, -1))
             total = total + per  # summed over the step axis (qam.py:145)
         return jnp.mean(total), {"adj_absmax": jnp.abs(adjs).max()}
 
     @functools.partial(jax.jit, donate_argnums=(0, 1))
-    def step(params_f, opt, params_s, rng, obs, feats, proprio):
+    def step(p_exp_f, opt, p_exp_s, p_rest, rng, obs, feats, proprio):
         obs = _model.preprocess_observation(None, obs, train=False)
-        slow_m = nnx.merge(graphdef_s, params_s)
+        slow_m = nnx.merge(graphdef_m, p_exp_s, p_rest)
         kv_s, pm = prefix_kv(slow_m, obs)  # one frozen prefix, shared by both fields
         rng, rk = jax.random.split(rng)
-        xs, ts, x_final = rollout(params_f, params_s, obs, kv_s, pm, rk)
-        adjs = adjoints(params_s, obs, kv_s, pm, xs, ts, x_final, feats, proprio)
-        # differentiate wrt the EXPERT subtree only (DiffState, as in train_awr/train_dql):
-        # a full-state grad pytree is 13GB fp32 and was the round-4 smoke OOM
-        fast_model = nnx.merge(graphdef_f, params_f)
-        (loss, info), grads = nnx.value_and_grad(
-            lambda m: loss_fn(nnx.state(m), params_s, obs, kv_s, pm, xs, ts, adjs),
-            argnums=nnx.DiffState(0, expert_filter),
-            has_aux=True,
-        )(fast_model)
-        p = params_f.filter(expert_filter)
-        upd, opt = tx.update(grads, opt, p)
-        nnx.update(fast_model, optax.apply_updates(p, upd))
-        return nnx.state(fast_model), opt, loss, info
+        xs, ts, x_final = rollout(p_exp_f, p_exp_s, p_rest, obs, kv_s, pm, rk)
+        adjs = adjoints(p_exp_s, p_rest, obs, kv_s, pm, xs, ts, x_final, feats, proprio)
+        # grads wrt the fast EXPERT subtree only (a full-state grad pytree was the round-4 OOM)
+        (loss, info), grads = jax.value_and_grad(
+            lambda pe: loss_fn(pe, p_exp_s, p_rest, obs, kv_s, pm, xs, ts, adjs), has_aux=True
+        )(p_exp_f)
+        upd, opt = tx.update(grads, opt, p_exp_f)
+        return optax.apply_updates(p_exp_f, upd), opt, loss, info
 
     run = None
     if a.wandb:
@@ -233,7 +226,7 @@ def main():
 
         path = (a.out / f"{step_i}").absolute()
         with ocp.StandardCheckpointer() as c:
-            c.save(path, {"expert": params_f.filter(expert_filter).to_pure_dict()}, force=True)
+            c.save(path, {"expert": p_exp_f.to_pure_dict()}, force=True)
         print(f"saved {path}", flush=True)
 
     import numpy as np
@@ -244,7 +237,7 @@ def main():
         obs, _actions, ann = next(it)
         f, _st, pr = cache.rows(np.asarray(ann["idx"], np.int64), critic)
         rng, k = jax.random.split(rng)
-        params_f, opt, loss, info = step(params_f, opt, params_s, k, obs, jnp.asarray(f), jnp.asarray(pr))
+        p_exp_f, opt, loss, info = step(p_exp_f, opt, p_exp_s, p_rest, k, obs, jnp.asarray(f), jnp.asarray(pr))
         if s % 50 == 0:
             print(
                 f"step {s:6d}  adj_loss {float(loss):.4f}  adj_absmax {float(info['adj_absmax']):.3f}  "
