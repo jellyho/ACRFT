@@ -226,6 +226,19 @@ def main():
     if a.phase in ("train", "all"):
         import optax
 
+        run = None
+        if a.wandb:
+            import wandb
+
+            run = wandb.init(
+                project="yam-rlt",
+                entity="RSS-PFT_RLLAB",
+                name="extract_flowdagger_run1",
+                group="extraction",
+                config={k: str(v) for k, v in vars(a).items()} | {"method": "flowdagger"},
+            )
+            print(f"wandb: {run.url}", flush=True)
+
         coeffs = np.load(coeff_f)
         reps = np.load(rep_f)
         print(f"steering BC on {len(coeffs)} pairs")
@@ -268,6 +281,8 @@ def main():
             head, opt, loss = bstep(head, opt, jnp.asarray(reps[bi]), jnp.asarray(coeffs[bi].reshape(len(bi), -1)))
             if s % 500 == 0:
                 print(f"bc step {s}  mse {float(loss):.5f}", flush=True)
+                if run is not None:
+                    run.log({"steering_mse": float(loss)}, step=s)
         import flax.serialization
 
         (a.out / "steering_head.msgpack").write_bytes(
