@@ -45,7 +45,7 @@ def main():
     ap.add_argument(
         "--critic",
         type=pathlib.Path,
-        default=pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_g5_tau9_min"),
+        default=pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_fixed_tau9_min_200k"),
     )
     ap.add_argument("--cache", type=pathlib.Path, default=pathlib.Path("/data1/jellyho/pc_cache/yam_s347"))
     ap.add_argument("--alpha", type=float, default=10.0, help="distillation weight (fql.py get_config)")
