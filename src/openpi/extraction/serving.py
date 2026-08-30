@@ -231,11 +231,19 @@ class ArmChunkSampler:
         dt = 1.0 / n
         for i in range(n):
             tv = jnp.full((x.shape[0],), 1.0 - i * dt)
-            if i == 0 or alpha == 0.0:
-                # i == 0: no state-dependent signal at t=0 (paper Sec. 4). alpha == 0: the base
-                # sampler, and skipping the grad makes it cost a plain velocity eval per step.
+            if i == 0:
+                # No state-dependent signal at t=0 (paper Sec. 4). Both draws take this branch, so
+                # it is symmetric between them.
                 v = self._velocity(model, obs, kv, pm, x, tv)
             else:
+                # NOT short-circuited at alpha == 0, though it would save the grad on every base
+                # step. `v` here comes out of jax.grad's forward pass, and a direct _velocity call
+                # is the same math in a different accumulation ORDER -- measured elsewhere in this
+                # repo at 1.2e-02 in bf16 (1.4e-06 in fp32) between a joint and a cached-prefix
+                # attention. Branching on alpha would put that difference between the steered draw
+                # and the twin it is measured against, compounded over every step, and call the
+                # result steering displacement. The twin is worth its cost only if alpha is the
+                # ONLY thing that differs.
 
                 def q_of(x_, tv_=tv):
                     v_ = self._velocity(model, obs, kv, pm, x_, tv_)

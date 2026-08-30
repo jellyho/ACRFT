@@ -91,3 +91,41 @@ def test_only_qpilots_has_a_twin(arm):
     """The other arms have no alpha to zero out, so there is no same-noise unsteered counterpart.
     Their reference draws are still recorded; the twin is not invented for them."""
     assert arm in serving.LATENT_ARMS or arm == "flowdagger"
+
+
+def test_the_two_draws_differ_by_alpha_and_by_nothing_else():
+    """No branch on alpha inside the Euler loop, however tempting the saved gradient is.
+
+    `v` inside the steered branch comes out of jax.grad's forward pass; a direct _velocity call is
+    the same math in a different accumulation order. That difference was measured in this repo at
+    1.2e-02 in bf16 (1.4e-06 in fp32) between a joint and a cached-prefix attention -- the same
+    class of thing. Short-circuiting alpha=0 to the direct call would put that between the steered
+    draw and the twin it is measured against, compound it over every step, and report the sum as
+    steering displacement.
+
+    Asserted on the source because it is a property of the control flow, and because the reason to
+    reintroduce the branch (it is faster) will look good on the day someone profiles this.
+    """
+    import inspect
+
+    from openpi.extraction.serving import ArmChunkSampler
+
+    src = inspect.getsource(ArmChunkSampler._steer)
+    loop = src[src.index("for i in range(n):") :]
+    assert "alpha == 0" not in loop.split("#")[0] or True  # comments may discuss it
+    code = "\n".join(line for line in loop.splitlines() if not line.strip().startswith("#"))
+    assert "alpha == 0" not in code, "the base draw must take the same branch as the steered one"
+    assert "if i == 0:" in code, "only the t=0 skip, which both draws share"
+
+
+def test_both_draws_share_one_prefix_pass():
+    """The prefix is computed once and handed to both. Recomputing it per draw would introduce the
+    same accumulation-order difference between the twin and its reference."""
+    import inspect
+
+    from openpi.extraction.serving import ArmChunkSampler
+
+    src = inspect.getsource(ArmChunkSampler.__call__)
+    body = src[src.index('spec.arm == "qpilots"') :]
+    assert body.count("self._steer(") == 2, "steered and twin"
+    assert "self._prefix(" not in body, "the prefix comes from above, not from inside the branch"
