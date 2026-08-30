@@ -111,7 +111,19 @@ class PatchCriticSelectPolicy(BasePolicy):
         # Modes whose CHUNKS come from an extraction arm rather than the base sampler. They reuse
         # everything else in this class (patch features, robot-space decode, scoring, HUD).
         self._arm = mode if mode in ("qpilots", "lps", "lpsd", "flowdagger") else None
+        # Reassigned in the arm branch below. Non-arm modes already record every candidate they
+        # draw, so there is nothing for drift references to add -- but say so, because a mistyped
+        # mode otherwise produces a clean run with no drift columns and no message.
         self._drift_samples = 0
+        if drift_samples and self._arm is None:
+            logging.warning(
+                "--drift-samples %d ignored by --critic-mode %s: it applies to the extraction arms "
+                "(qpilots/lps/lpsd/flowdagger), which bring one chunk and need references to "
+                "compare it against. %s already records all of its candidates.",
+                drift_samples,
+                mode,
+                mode,
+            )
         self._extraction_head = extraction_head
         self._camera_keys = tuple(camera_keys)
         self._state_key = state_key
@@ -349,6 +361,17 @@ class PatchCriticSelectPolicy(BasePolicy):
             self._arm_sampler = _serving.ArmChunkSampler(spec, policy._model)
             self._drift_samples = int(drift_samples)
             if self._drift_samples:
+                if self._extract is None:
+                    # The unconditional draws ARE the scale the displacement is read against, so a
+                    # run without them records a number with no units. `_extract` is None whenever
+                    # the served model has no sample_n_actions; today Pi0 has one, but that is an
+                    # ordering accident in the dispatch above, not a guarantee. Refuse here rather
+                    # than skip at inference and hand back a recording that looks complete.
+                    raise TypeError(
+                        f"--drift-samples needs a candidate sampler, and {type(policy._model).__name__} "
+                        "has no sample_n_actions. The reference draws are the scale the steering "
+                        "displacement is measured against; without them there is nothing to compare to."
+                    )
                 if self._arm != "qpilots":
                     # Only steering has an "unsteered twin"; for the other arms the reference draws
                     # would still be recorded, but the twin would be meaningless, so say so.
@@ -418,7 +441,7 @@ class PatchCriticSelectPolicy(BasePolicy):
             chunks_model = np.asarray(
                 self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(arm_proprio)), np.float32
             )
-            if self._drift_samples and self._extract is not None:
+            if self._drift_samples:
                 # Reference draws recorded ALONGSIDE the arm's chunk, never selected between (see
                 # `best` below). Two different questions, and the arm sampler already returned the
                 # first one's other half:
@@ -538,6 +561,21 @@ class PatchCriticSelectPolicy(BasePolicy):
             out["critic_grid"] = np.broadcast_to(pv, (x, *pv.shape)).copy()  # (X, N, mh)
         return out
 
+    def _candidate_count(self, num_samples: int | None = None) -> int:
+        """How many chunks a reply's per-step arrays carry.
+
+        ONE expression, because `extra_features` declares it and `infer` emits it, and the client
+        turns exactly the declared columns into dataset columns -- anything shaped differently is
+        dropped, silently, every frame. Deriving it twice makes the two agree by coincidence.
+
+        An arm contributes its own chunk, plus the unsteered twin when it has one, plus the
+        unconditional reference draws. Everything else is the candidate sampler's N.
+        """
+        if self._arm is not None:
+            twin = 1 if (self._arm_sampler is not None and self._arm_sampler.pair_unsteered) else 0
+            return 1 + twin + self._drift_samples
+        return int(num_samples or self._default_samples)
+
     def extra_features(self, num_samples: int | None = None) -> dict:
         """The per-step arrays this policy sends, for the handshake.
 
@@ -549,7 +587,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         Shapes are PER STEP; the chunk axis is deliberately absent, because the chunk length is
         adaptive and is read off each reply (see the note on `action_samples` in `infer`).
         """
-        n = int(num_samples or self._default_samples)
+        n = self._candidate_count(num_samples)
         declared = {
             "action_samples": [n, self._robot_action_dim],
             "critic_scores": [n],

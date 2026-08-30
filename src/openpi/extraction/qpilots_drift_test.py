@@ -129,3 +129,33 @@ def test_both_draws_share_one_prefix_pass():
     body = src[src.index('spec.arm == "qpilots"') :]
     assert body.count("self._steer(") == 2, "steered and twin"
     assert "self._prefix(" not in body, "the prefix comes from above, not from inside the branch"
+
+
+def test_the_declared_count_and_the_emitted_count_come_from_one_expression():
+    """`extra_features` declares the per-step shapes and `infer` emits them; the client turns
+    exactly the declared columns into dataset columns and drops anything shaped otherwise, without
+    complaint, every frame. Deriving the count in both places makes them agree by coincidence --
+    and a drift run would come back with the readout the PR exists for simply missing."""
+    import inspect
+
+    from openpi.policies import patch_critic_policy as pcp
+
+    declared = inspect.getsource(pcp.PatchCriticSelectPolicy.extra_features)
+    assert "self._candidate_count(" in declared, "declaration must not recompute the count"
+    counter = inspect.getsource(pcp.PatchCriticSelectPolicy._candidate_count)
+    # arm chunk + twin (qpilots only) + reference draws
+    assert "1 + twin + self._drift_samples" in counter
+    assert "pair_unsteered" in counter, "the twin only counts when it is actually drawn"
+
+
+def test_drift_without_a_candidate_sampler_is_refused_not_skipped():
+    """The unconditional draws ARE the scale. A run without them records a displacement in radians
+    with nothing to compare it to, and the recording looks complete. Refuse at construction."""
+    import inspect
+
+    from openpi.policies import patch_critic_policy as pcp
+
+    src = inspect.getsource(pcp.PatchCriticSelectPolicy.__init__)
+    assert "if self._extract is None:" in src
+    idx = src.index("if self._extract is None:")
+    assert "raise TypeError" in src[idx : idx + 600]
