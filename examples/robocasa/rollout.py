@@ -70,6 +70,44 @@ def obs_to_element(obs: dict, prompt: str) -> dict:
     }
 
 
+def end_state(env):
+    """Final-frame success-condition readout, for splitting pressed_no_success into its sub-modes:
+    retreat failure (gripper still near mug/button) vs displaced mug (placement lost)."""
+    try:
+        from robocasa.utils import object_utils as ou
+
+        obj = env.sim.data.body_xpos[env.obj_body_id["obj"]]
+        grip = env.sim.data.site_xpos[env.robots[0].eef_site_id["right"]]
+        return {
+            "grip_obj_dist": float(np.linalg.norm(grip - obj)),
+            "placed": bool(env.coffee_machine.check_receptacle_placement_for_pouring(env, "obj")),
+            "machine_on": bool(env.coffee_machine._turned_on),
+            "grip_button_far": bool(env.coffee_machine.gripper_button_far(env)),
+            "grasped": bool(ou.check_obj_grasped(env, "obj")),
+        }
+    except Exception:
+        return {}
+
+
+def stage_flags(env):
+    """Task-stage predicates for the failure taxonomy. PrepareCoffee-shaped; returns {} elsewhere.
+
+    grasped   the gripper currently holds the mug
+    placed    the mug sits under the dispenser well enough to pour
+    machine_on the start button has been pressed
+    """
+    try:
+        from robocasa.utils import object_utils as ou
+
+        return {
+            "grasped": bool(ou.check_obj_grasped(env, "obj")),
+            "placed": bool(env.coffee_machine.check_receptacle_placement_for_pouring(env, "obj")),
+            "machine_on": bool(env.coffee_machine._turned_on),
+        }
+    except Exception:
+        return {}
+
+
 def run_trials(
     env,
     policy_fn,
@@ -81,6 +119,8 @@ def run_trials(
     max_steps: int | None = None,
     on_trial=None,
     on_step=None,
+    on_transition=None,
+    ep_metas=None,
 ) -> dict:
     """Roll out ``policy_fn`` for ``num_trials`` and return {successes, num_trials, success_rate, trials}.
 
@@ -91,6 +131,10 @@ def run_trials(
     and is never interpreted here.
 
     ``on_trial(trial_index, success, steps)`` fires once per trial (e.g. logging).
+    ``on_transition(obs, action, step)`` fires BEFORE each env.step with the action about to run —
+    the (state, action) pairs a dataset collector wants.
+    ``ep_metas`` is an optional list of robocasa ep_meta dicts; trial i replays scene i (mod len)
+    exactly instead of sampling a fresh one from (seed, trial).
     ``on_step(obs, info, step)`` fires after every env step, which is where a caller renders frames.
     """
     max_steps = max_steps or int(getattr(env, "horizon", 500))
@@ -103,9 +147,18 @@ def run_trials(
         # the legacy global RNG instead, so both are pinned here rather than once per eval.
         env.rng = np.random.default_rng(seed + trial)
         np.random.seed(seed + trial)
+        if ep_metas is not None:
+            # Replay an exact recorded scene: robocasa Kitchen envs rebuild the kitchen (layout,
+            # style, every object placement) from a stored ep_meta on the next reset. This is how
+            # the training demos' scenes are put back in front of the policy - the in-distribution
+            # evaluation that fresh seeds cannot give.
+            env.set_ep_meta(ep_metas[trial % len(ep_metas)])
         obs = env.reset()
+        if hasattr(policy_fn, "reset"):
+            policy_fn.reset()  # clear per-episode state (e.g. the critic's history token buffer)
         prompt = env.get_ep_meta().get("lang", task)
         success, step = False, 0
+        stage_at: dict = {}
         while step < max_steps and not success:
             out = policy_fn(obs_to_element(obs, prompt))
             info = None
@@ -116,6 +169,13 @@ def run_trials(
                 chunk, n_exec = out, replan_steps
             chunk = np.asarray(chunk)
             for action in chunk[: max(int(n_exec), 1)]:
+                for k, v in stage_flags(env).items():
+                    if v and k not in stage_at:
+                        stage_at[k] = step  # first step each stage was observed true
+                if on_transition is not None:
+                    # Fires with the PRE-step obs: (obs_t, action executed at t) is the pair an
+                    # annotation pass needs; post-step obs would shift every frame by one.
+                    on_transition(obs, np.asarray(action), step)
                 obs, _, _, _ = env.step(lerobot_action_to_env(np.asarray(action)))
                 step += 1
                 if on_step is not None:
@@ -126,7 +186,22 @@ def run_trials(
                 if step >= max_steps:
                     break
         successes += int(success)
-        trials.append({"trial": trial, "success": bool(success), "steps": step})
+        meta = env.get_ep_meta() if hasattr(env, "get_ep_meta") else {}
+        trials.append(
+            {
+                "trial": trial,
+                "success": bool(success),
+                "steps": step,
+                # Scene fingerprint: lets any later audit confirm two runs really replayed the same
+                # scenes without keeping the sim around.
+                "layout": meta.get("layout_id"),
+                "style": meta.get("style_id"),
+                # First step each task stage was reached (absent = never): the failure taxonomy
+                # reads straight off this - no grasp / grasped-but-not-placed / placed-but-no-press.
+                "stage_at": stage_at,
+                "end_state": end_state(env),
+            }
+        )
         if on_trial is not None:
             on_trial(trial, success, step)
     return {

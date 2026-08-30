@@ -1,0 +1,188 @@
+"""Run-level Δ(method − in-job vla) chart for the v11 fair-comparison campaign.
+
+One dot per evaluation run (one seed, 30 paired scenes); the black bar is the mean over runs with
+its 95% t-CI whiskers. A method "beats vla" when the CI clears zero. Dot color names the scene
+pool, so pool-specific behaviour is visible instead of hiding in the pool.
+
+Panel 2 shows the generational flip that motivated the campaign: the SAME selection rule (IQL
+joint argmax) on the SAME old scene pool, v6 checkpoint (200k, raw actions) vs v11 (100k,
+z-scored actions, current trainer).
+
+    uv run --no-sync python slurm/make_run_level_plot.py   # -> $CACHE_DIR/plots/16_run_level.png
+"""
+
+import glob
+import json
+import os
+import pathlib
+
+import matplotlib as mpl
+
+mpl.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+C = pathlib.Path(os.environ.get("CACHE_DIR", "/scratch/jellyho/acrft"))
+METHODS = [
+    ("v11_std/td", "td\n(demo-only)", "critic"),
+    ("v11_std/iql", "iql\n(demo-only)", "critic"),
+    ("v11_std/qc", "qc\n(demo-only)", "critic"),
+    ("v11_std/aqc", "aqc\n(demo-only)", "aqc"),
+    ("v12_mixed/iql", "iql\n(MIXED +failures)", "critic"),
+    ("v12_mixed/aqc", "aqc\n(MIXED +failures)", "aqc"),
+]
+POOLS = {
+    "std": ("scenes 3000-3300", "#2563eb"),
+    "old": ("scenes 0-300", "#dc2626"),
+    "nseed": ("scenes 4000-4700", "#16a34a"),
+    "ev": ("mixed-eval scenes (0-300+3000-3300)", "#9333ea"),
+}
+TCRIT = dict(
+    zip(
+        range(2, 40),
+        [
+            12.7,
+            4.30,
+            3.18,
+            2.78,
+            2.57,
+            2.45,
+            2.36,
+            2.31,
+            2.26,
+            2.23,
+            2.20,
+            2.18,
+            2.16,
+            2.14,
+            2.13,
+            2.12,
+            2.11,
+            2.10,
+            2.09,
+            2.09,
+            2.08,
+            2.07,
+            2.07,
+            2.06,
+            2.06,
+            2.06,
+            2.05,
+            2.05,
+            2.05,
+            2.04,
+            2.04,
+            2.04,
+            2.03,
+            2.03,
+            2.03,
+            2.03,
+            2.03,
+            2.02,
+        ],
+        strict=False,
+    )
+)
+
+
+def run_deltas(root, mode):
+    out = []
+    for prefix, (pool_label, color) in POOLS.items():
+        for f in sorted(glob.glob(str(C / f"critic_runs/{root}/rollout/{prefix}_s*.json"))):
+            j = json.loads(pathlib.Path(f).read_text())
+            if mode not in j or "vla" not in j:
+                continue
+            a = np.mean([t["success"] for t in j[mode]["trials"]])
+            v = np.mean([t["success"] for t in j["vla"]["trials"]])
+            out.append((a - v, pool_label, color))
+    return out
+
+
+def main():
+    fig, axes = plt.subplots(
+        1, 2, figsize=(16.5, 5.2), constrained_layout=True, dpi=200, gridspec_kw={"width_ratios": [2.2, 1]}
+    )
+
+    ax = axes[0]
+    xticks, xlabels = [], []
+    rng = np.random.default_rng(0)
+    for i, (root, m, mode) in enumerate(METHODS):
+        ds = run_deltas(root, mode)
+        if not ds:
+            xticks.append(i)
+            xlabels.append(f"{m}\n(no data yet)")
+            continue
+        vals = np.array([d[0] for d in ds])
+        for d, pool_label, color in ds:
+            ax.scatter(
+                i + rng.uniform(-0.13, 0.13),
+                d,
+                s=42,
+                color=color,
+                alpha=0.75,
+                zorder=3,
+                label=pool_label if (pool_label, "dot") not in getattr(ax, "_seen", set()) else None,
+            )
+            seen = getattr(ax, "_seen", set())
+            seen.add((pool_label, "dot"))
+            ax._seen = seen
+        n = len(vals)
+        mmean = vals.mean()
+        se = vals.std(ddof=1) / np.sqrt(n) if n > 1 else 0
+        ci = TCRIT.get(n, 2.0) * se
+        ax.errorbar(i, mmean, yerr=ci, color="black", capsize=6, lw=2.4, zorder=4)
+        ax.scatter([i], [mmean], marker="_", s=600, color="black", zorder=5)
+        xticks.append(i)
+        xlabels.append(f"{m}\nΔ̄={mmean:+.3f}\nn={n} runs")
+    ax.axhline(0, color="#888", lw=1.2, ls="--")
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xlabels, fontsize=9)
+    ax.set_ylabel("Δ success rate  (method − in-job vla, per 30-scene run)")
+    ax.set_title(
+        "v11 fair checkpoints: run-level Δ vs paired vla\n(dot = one seed-run · black = mean ± 95% t-CI · beat-vla criterion: CI above 0)"
+    )
+    ax.legend(fontsize=8, frameon=True, framealpha=0.9, title="scene pool", title_fontsize=8)
+    ax.grid(axis="y", alpha=0.25)
+
+    # ---- panel 2: pool-by-pool decomposition of ONE checkpoint (v11_iql)
+    # The point: a single pool can read +0.10 while the overall verdict is null - pool variance
+    # dwarfs method effects, so no claim may rest on one pool. (The earlier v6-vs-v11 "generation
+    # flip" panel was removed: generations differ in normalisation/steps/code at once, and the
+    # bar invited a "+10%" misreading.)
+    ax = axes[1]
+    ds = run_deltas("v11_std/iql", "critic")
+    groups = {}
+    for d, lbl, color in ds:
+        groups.setdefault(lbl, ([], color))[0].append(d)
+    xs = []
+    for i, (lbl, (raw_vals, color)) in enumerate(groups.items()):
+        vals = np.array(raw_vals)
+        ax.scatter(
+            np.full(len(vals), i) + np.linspace(-0.09, 0.09, len(vals)), vals, s=46, color=color, alpha=0.85, zorder=3
+        )
+        ax.scatter([i], [vals.mean()], marker="_", s=700, color="black", zorder=4)
+        ax.text(i, vals.mean() + 0.015, f"{vals.mean():+.3f}", ha="center", fontsize=9)
+        xs.append((i, f"{lbl}\n(n={len(vals)})"))
+    overall = np.array([d for d, _, _ in ds])
+    ax.axhline(
+        overall.mean(),
+        color="#1d4ed8",
+        lw=1.6,
+        ls="-",
+        label=f"overall mean of 16 runs {overall.mean():+.3f} (CI includes 0 = no effect)",
+    )
+    ax.axhline(0, color="#888", lw=1.2, ls="--")
+    ax.set_xticks([i for i, _ in xs])
+    ax.set_xticklabels([t for _, t in xs], fontsize=8)
+    ax.set_ylabel("Δ success rate vs in-job vla")
+    ax.set_title("One checkpoint (v11 iql), pool by pool:\na single pool can read +0.10 while the verdict is null")
+    ax.legend(fontsize=8, frameon=False, loc="lower right")
+    ax.grid(axis="y", alpha=0.25)
+
+    out = C / "plots/16_run_level.png"
+    fig.savefig(out)
+    print(f"saved {out}")
+
+
+if __name__ == "__main__":
+    main()

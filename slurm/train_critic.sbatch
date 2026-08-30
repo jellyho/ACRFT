@@ -18,15 +18,14 @@
 #    SWEEP          sweep name; groups the runs on disk and in wandb        (default manual)
 #    STEPS          training steps                                          (default 200000)
 #    TASK           RoboCasa task, used by the rollout eval                 (default PrepareCoffee)
-#    ROLLOUT        1 = in-process critic-vs-VLA sim rollouts               (default 1)
-#    ROLLOUT_EVERY  steps between rollout evals                             (default 50000)
-#    ROLLOUT_TRIALS trials per rollout eval, per mode                       (default 20)
 #    EVAL_EVERY     steps between the cheap within-state diagnostics        (default 5000)
 #    SEED           seed                                                    (default 0)
 #    WANDB          1 = log to $WANDB_PROJECT                               (default 1)
 #
-#  NOTE: train_rlt_critic.py has no resume path, so the job is NOT submitted with --requeue —
-#  a preempted job would silently restart from step 0. Resubmit by hand if a node dies.
+#  Preemption/time-limit safe: training checkpoints its FULL state (state.msgpack, params +
+#  optimizer + target net) every --save-every steps and resumes from it on restart, and the job
+#  requeues itself 3 minutes before the wall clock (see the USR1 trap). A limit costs at most one
+#  save interval.
 # ============================================================================================
 #SBATCH --job-name=acrft_critic
 #SBATCH --partition=suma_a6000,gigabyte_a6000,tyan_a6000,asus_6000ada
@@ -37,9 +36,18 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=2-00:00:00
+#SBATCH --signal=B:USR1@180
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --output=/scratch/jellyho/acrft/logs/%x_%A_%a.out
 
 set -euo pipefail
+# Requeue ourselves 3 minutes before the wall clock: training checkpoints its FULL state
+# (state.msgpack) every --save-every steps, and the next incarnation resumes from it, so a time
+# limit costs at most one save interval instead of the whole run. The python process is left to be
+# killed by slurm - requeue is queued, not immediate.
+trap 'echo "[requeue] time limit imminent - requeuing ${SLURM_JOB_ID}"; scontrol requeue "${SLURM_JOB_ID}"' USR1
+
 
 cd "${ACRFT_REPO:-/home/jellyho/ACRFT/ACRFT}"
 source slurm/env.sh
@@ -59,9 +67,6 @@ SWEEP="${SWEEP:-manual}"
 STEPS="${STEPS:-200000}"
 TASK="${TASK:-PrepareCoffee}"
 SEED="${SEED:-0}"
-ROLLOUT="${ROLLOUT:-1}"
-ROLLOUT_EVERY="${ROLLOUT_EVERY:-50000}"
-ROLLOUT_TRIALS="${ROLLOUT_TRIALS:-20}"
 EVAL_EVERY="${EVAL_EVERY:-5000}"
 WANDB="${WANDB:-1}"
 BATCH="${BATCH:-0}"                 # 0 = train_rlt_critic.py's own default (1024)
@@ -89,7 +94,7 @@ SEED_ARGS=()
 # The venv check comes first because `uv run --no-sync` against a missing .venv CREATES an empty one
 # and then fails with a bare ModuleNotFoundError — and with several array members starting at once,
 # each would race to create it in the shared checkout.
-[[ -x .venv/bin/python ]] || { echo "ERROR: no .venv — run 'ROLLOUT=1 slurm/setup.sh' on the login node first"; exit 1; }
+[[ -x .venv/bin/python ]] || { echo "ERROR: no .venv — run 'slurm/setup.sh' on the login node first"; exit 1; }
 [[ -f "$DATA/meta.json" ]] || { echo "ERROR: no meta.json in DATA=$DATA"; exit 1; }
 grep -q '"stride": 1' "$DATA/meta.json" \
     || { echo "ERROR: $DATA was annotated with stride != 1; the per-prefix reward sums need every frame"; exit 1; }
@@ -122,24 +127,6 @@ fi
 # This is the actual objective (does critic-guided selection beat the plain VLA?); the offline
 # diagnostics are only its proxy. It keeps the annotated VLA resident, so it needs the checkpoint
 # the tokens came from plus the sim deps (`uv sync --group eval`, see slurm/setup.sh).
-ROLLOUT_ARGS=()
-if [[ "$ROLLOUT" == "1" ]]; then
-    [[ -d "$VLA_CKPT" ]] || {
-        echo "ERROR: ROLLOUT=1 but VLA_CKPT=$VLA_CKPT is not a directory."
-        echo "       Fetch the pi05 checkpoint the tokens were annotated from, or run the sweep"
-        echo "       offline-only with ROLLOUT=0 and add the rollout arm once it is available."
-        exit 1
-    }
-    uv run --no-sync python -c "import robosuite, mujoco" 2>/dev/null \
-        || { echo "ERROR: sim deps missing — run 'ROLLOUT=1 slurm/setup.sh' on the login node"; exit 1; }
-    ROLLOUT_ARGS=(
-        --rollout-every "$ROLLOUT_EVERY"
-        --rollout-trials "$ROLLOUT_TRIALS"
-        --vla-checkpoint "$VLA_CKPT"
-        --task "$TASK"
-    )
-    echo "rollout   : every $ROLLOUT_EVERY steps, $ROLLOUT_TRIALS trials, vla=$VLA_CKPT"
-fi
 
 # Only now, past every check — an empty run dir left by a job that died in preflight would show up
 # in collect.py as a variant that ran and produced nothing.
@@ -194,6 +181,9 @@ trap 'kill "$SAMPLER" 2>/dev/null || true' EXIT
 
 # --- train -------------------------------------------------------------------------------------
 # $FLAGS is deliberately unquoted: it is a pre-tokenised flag string from the manifest.
+# Backgrounded + `wait`: bash only delivers a trapped signal once its FOREGROUND child yields, so a
+# foreground python would swallow the USR1 until it was already being killed - the requeue must be
+# scheduled while training still runs.
 # shellcheck disable=SC2086
 uv run --no-sync scripts/train_rlt_critic.py \
     --data "$DATA" \
@@ -203,9 +193,10 @@ uv run --no-sync scripts/train_rlt_critic.py \
     --save-every "${SAVE_EVERY:-50000}" \
     "${SEED_ARGS[@]}" \
     "${FIT_ARGS[@]}" \
-    "${ROLLOUT_ARGS[@]}" \
     "${WANDB_ARGS[@]}" \
-    $FLAGS
+    $FLAGS &
+TRAIN_PID=$!
+wait "$TRAIN_PID"
 
 # --- offline diagnostics ------------------------------------------------------------------------
 # eval_rlt_critic.py reads the architecture (and the wandb run id) from the config.json the run just

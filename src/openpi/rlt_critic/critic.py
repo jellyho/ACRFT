@@ -32,9 +32,14 @@ import jax
 import jax.numpy as jnp
 
 
-def _mlp(x, dims, *, out_dim):
+def _mlp(x, dims, *, out_dim, use_ln: bool = False):
+    # use_ln: LayerNorm after each hidden Dense (RLPD's stabilizer - bounds Q extrapolation off the
+    # narrow demo manifold, which is exactly our data). Off by default so old checkpoints load.
     for d in dims:
-        x = nn.gelu(nn.Dense(d)(x))
+        h = nn.Dense(d)(x)
+        if use_ln:
+            h = nn.LayerNorm()(h)
+        x = nn.gelu(h)
     return nn.Dense(out_dim)(x)
 
 
@@ -80,6 +85,13 @@ class ARQCritic(nn.Module):
     mlp_dim: int = 1024
     num_atoms: int = 1
     per_position_head: bool = True
+    # >1 = ONE shared trunk with K independent per-position output heads, returned with a leading
+    # ensemble axis [K, ..., mh(, atoms)] - the same contract Ensemble provides, at ~1/K the cost of
+    # K full transformers. The members share features, so they are more correlated than true
+    # ensembles (weaker per-member pessimism); the trade is that K can be large for free, which is
+    # what the min/LCB over the DEPLOYMENT arg-max actually needs.
+    head_ensemble: int = 1
+    head_ensemble_hidden: int = 128
     # >0 = the last `proprio_dim` entries of obs are proprioception, given their OWN sequence
     # position instead of being concatenated into the state token. Concatenated, 16 proprio dims sit
     # beside 2048 token dims (0.8% of the input) and are then LayerNorm'd against the token's
@@ -87,18 +99,43 @@ class ARQCritic(nn.Module):
     # token it gets its own projection and its own place in attention.
     proprio_dim: int = 0
 
+    # floq (arXiv:2509.06863): parameterize Q as a velocity field v(t, z | s, a); read Q by ODE
+    # integration. When flow_head=True, __call__ takes (obs, actions, flow_z, flow_t) and returns the
+    # per-prefix VELOCITY. The two collapse-prevention design choices are baked in: the interpolant z
+    # is fed as a categorical (HL-Gauss-style) encoding over [flow_lo, flow_hi], and time t as a
+    # Fourier-basis embedding. Default off leaves the standard scalar/HL-Gauss critic unchanged.
+    flow_head: bool = False
+    flow_bins: int = 51
+    flow_lo: float = -1.0
+    flow_hi: float = 1.0
+    flow_fourier: int = 16
+
     @property
     def n_embd(self) -> int:
         return self.num_heads * self.head_dim
+
+    # >0 = the LEADING history*history_token_dim entries of obs are K past rl_tokens (oldest first),
+    # each becoming its own observation position (short-history conditioning: single frames are
+    # ambiguous under occlusion and repeated motions - Robo-ValueRL ablation, 5 frames > none > 30).
+    history: int = 0
+    history_token_dim: int = 2048
 
     @property
     def macro_h(self) -> int:
         return self.horizon // self.macro_group_size
 
     @nn.compact
-    def __call__(self, obs, actions):
+    def __call__(self, obs, actions, flow_z=None, flow_t=None):
         d, mh = self.n_embd, self.macro_h
         a = actions.reshape(*actions.shape[:-2], mh, self.macro_group_size * self.action_dim)
+
+        hist_tok = None
+        if self.history:
+            hd = self.history * self.history_token_dim
+            hist, obs = obs[..., :hd], obs[..., hd:]
+            hist = hist.reshape(*hist.shape[:-1], self.history, self.history_token_dim)
+            # ONE shared projection for every history slot; order is carried by the pos embedding.
+            hist_tok = nn.Dense(d, name="hist_proj")(nn.LayerNorm()(hist))  # [..., K, d]
 
         if self.proprio_dim:
             z, pro = obs[..., : -self.proprio_dim], obs[..., -self.proprio_dim :]
@@ -108,6 +145,8 @@ class ARQCritic(nn.Module):
             )  # [..., 2, d]
         else:
             lead = nn.Dense(d)(nn.LayerNorm()(obs))[..., None, :]  # [..., 1, d]
+        if hist_tok is not None:
+            lead = jnp.concatenate([hist_tok, lead], axis=-2)
         nl = lead.shape[-2]
         act_tok = nn.Dense(d)(a)  # [..., mh, d]
         x = jnp.concatenate([lead, act_tok], axis=-2)  # [..., nl+mh, d]
@@ -125,6 +164,33 @@ class ARQCritic(nn.Module):
             x = x + nn.Dense(d)(nn.gelu(nn.Dense(self.mlp_dim)(h)))
         x = nn.LayerNorm()(x)[..., nl:, :]  # drop the observation positions: [..., mh, d]
 
+        if self.flow_head:
+            # floq design choice 2: categorical(z) + Fourier(t), fused into the per-prefix feature
+            # before a scalar VELOCITY head. flow_z/flow_t broadcast to [..., mh].
+            centers = jnp.linspace(self.flow_lo, self.flow_hi, self.flow_bins)
+            sigma = (self.flow_hi - self.flow_lo) / (self.flow_bins - 1)
+            zc = jnp.broadcast_to(flow_z[..., None], (*x.shape[:-1], 1))  # [..., mh, 1]
+            zcat = jnp.exp(-0.5 * ((zc - centers) / sigma) ** 2)  # soft one-hot [..., mh, bins]
+            zcat = zcat / (jnp.sum(zcat, -1, keepdims=True) + 1e-8)
+            k = jnp.arange(1, self.flow_fourier + 1, dtype=jnp.float32)
+            tt = jnp.broadcast_to(flow_t[..., None], (*x.shape[:-1], 1))  # [..., mh, 1]
+            tfe = jnp.concatenate([jnp.sin(jnp.pi * k * tt), jnp.cos(jnp.pi * k * tt)], -1)  # [..., mh, 2F]
+            cond = nn.Dense(d)(jnp.concatenate([zcat, tfe], -1))
+            x = nn.LayerNorm()(x + cond)
+            return jnp.squeeze(nn.Dense(1)(x), -1)  # per-prefix velocity [..., mh]
+
+        if self.head_ensemble > 1:
+            # Two-layer MLP per head, NOT a linear map: linear heads on a shared feature are K
+            # reparametrisations of one function and diversify only through a single init matrix.
+            ke, hh = self.head_ensemble, self.head_ensemble_hidden
+            w1 = self.param("head_w1", nn.initializers.lecun_normal(), (ke, mh, d, hh))
+            b1 = self.param("head_b1", nn.initializers.zeros, (ke, mh, hh))
+            w2 = self.param("head_w2", nn.initializers.lecun_normal(), (ke, mh, hh, self.num_atoms))
+            b2 = self.param("head_b2", nn.initializers.zeros, (ke, mh, self.num_atoms))
+            pad = (slice(None),) + (None,) * (x.ndim - 2)
+            h1 = nn.gelu(jnp.einsum("...hd,khdm->k...hm", x, w1) + b1[pad])
+            out = jnp.einsum("k...hm,khma->k...ha", h1, w2) + b2[pad]
+            return out if self.num_atoms > 1 else jnp.squeeze(out, -1)  # [K, ..., mh(, atoms)]
         if self.per_position_head:
             # A distinct head per prefix position (ACSAC Prop. G.7).
             kernel = self.param("head_k", nn.initializers.lecun_normal(), (mh, d, self.num_atoms))
@@ -149,10 +215,26 @@ class ValueNet(nn.Module):
     """
 
     hidden_dims: tuple[int, ...] = (512, 512, 512)
+    # (lo, hi) squashes the output onto the value support with a sigmoid. Plain IQL leaves this off:
+    # V is anchored directly by its target (Q_tgt lives on the support). Dueling NEEDS it - Q = A + V
+    # has a gauge freedom ((V+c, A-c) changes the loss only through the (gamma^h - 1)*c residue of
+    # the bootstrap, ~0.02c here), and measured un-bounded, V drifted to +-200 within 1k steps while
+    # A chased it. Bounding V is what pins the gauge.
+    bound: tuple[float, float] | None = None
+    # 1 = the classic scalar V. 1 + P = AQC layout: head 0 keeps the bootstrap semantics unchanged,
+    # heads 1..P are per-prefix baselines b_h(z) ~ expectile_h of Q(z, a_demo, h) - each Q head gets
+    # a baseline that shares its own systematic bias, so (Q_h - b_h) cancels it before the /gamma^h
+    # rescale makes horizons comparable.
+    out_dim: int = 1
 
     @nn.compact
     def __call__(self, obs):
-        return jnp.squeeze(_mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=1), -1)  # [...]
+        out = _mlp(nn.LayerNorm()(obs), self.hidden_dims, out_dim=self.out_dim)
+        out = jnp.squeeze(out, -1) if self.out_dim == 1 else out  # [...] or [..., out_dim]
+        if self.bound is not None:
+            lo, hi = self.bound
+            out = lo + (hi - lo) * nn.sigmoid(out)
+        return out
 
 
 class Ensemble(nn.Module):
@@ -214,6 +296,59 @@ def make_critic(kind: str, *, action_dim: int, horizon: int, num_atoms: int, **k
     raise ValueError(f"critic kind must be 'qc' or 'arq', got {kind!r}")
 
 
+def load_value_net(params_path):
+    """Load the IQL state-value net saved beside a critic checkpoint, or None if the run has none.
+
+    Returns ``v_apply(obs [..., D]) -> V [...]``. TD runs never write vparams, so a None here is the
+    normal case, not an error - callers use it to decide whether a V trace exists at all.
+    """
+    import json
+    import pathlib
+
+    import flax.serialization
+
+    params_path = pathlib.Path(params_path)
+    run_dir = params_path.parent
+    vpath = run_dir / params_path.name.replace("params", "vparams")
+    if not vpath.exists():
+        vpath = run_dir / "vparams.msgpack"
+    if not vpath.exists():
+        return None
+    cfg = json.loads((run_dir / "config.json").read_text())
+    out_dim = 1 + cfg.get("num_prefixes", 0) if cfg.get("aqc_baseline") else 1
+    v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", (512, 512, 512))), out_dim=out_dim)
+    vparams = flax.serialization.msgpack_restore(vpath.read_bytes())
+    if out_dim == 1:
+        return lambda obs: v_net.apply(vparams, obs)
+    return lambda obs: v_net.apply(vparams, obs)[..., 0]  # scalar V; baselines via load_prefix_baselines
+
+
+def load_prefix_baselines(params_path):
+    """b_h(z) [..., P] for AQC-style prefix selection, or None if the run trained no baselines."""
+    import json
+    import pathlib
+
+    import flax.serialization
+
+    run_dir = pathlib.Path(params_path).parent
+    cfg = json.loads((run_dir / "config.json").read_text())
+    if not cfg.get("aqc_baseline"):
+        return None
+    vpath = run_dir / pathlib.Path(params_path).name.replace("params", "vparams")
+    if not vpath.exists():
+        vpath = run_dir / "vparams.msgpack"
+    if not vpath.exists():
+        # td+aqcmax runs before the save fix trained baselines but never wrote them. Deployment
+        # under the shared joint-argmax rule never reads b_h, so a missing file downgrades to None.
+        import logging
+
+        logging.getLogger(__name__).warning(f"aqc_baseline run without vparams at {run_dir}: baselines unavailable")
+        return None
+    v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", (512, 512, 512))), out_dim=1 + cfg["num_prefixes"])
+    vparams = flax.serialization.msgpack_restore(vpath.read_bytes())
+    return lambda obs: v_net.apply(vparams, obs)[..., 1:]
+
+
 def load_trained(params_path, *, action_dim: int, horizon: int):
     """Rebuild a trained critic from the params and the config train_rlt_critic.py saved beside them.
 
@@ -233,10 +368,13 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
     arch = (
         {
             "macro_group_size": g,
+            "head_ensemble": cfg.get("head_ensemble", 1),
             "num_layers": cfg.get("num_layers", 3),
             "num_heads": cfg.get("num_heads", 8),
             "head_dim": cfg.get("head_dim", 48),
             "mlp_dim": cfg.get("mlp_dim", 1024),
+            "history": cfg.get("history", 0),
+            "history_token_dim": cfg.get("history_token_dim", 2048),
         }
         if cfg.get("kind", "arq") == "arq"
         else {"hidden_dims": tuple(cfg.get("hidden_dims", [512, 512, 512]))}
@@ -249,14 +387,41 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
         import pathlib as _pathlib
 
         arch["proprio_dim"] = _json.loads((_pathlib.Path(cfg["data"]) / "meta.json").read_text())["proprio_dim"]
-    net = Ensemble(
-        make_critic=lambda: make_critic(
-            cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch
-        ),
-        num_critics=cfg.get("num_critics", 2),
-    )
+    if cfg.get("head_ensemble", 1) > 1:
+        # The K axis already leads from the head bank; wrapping in Ensemble would nest two
+        # ensemble axes and break every consumer's [K, ...] contract.
+        net = make_critic(cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch)
+    else:
+        net = Ensemble(
+            make_critic=lambda: make_critic(
+                cfg.get("kind", "arq"), action_dim=action_dim, horizon=horizon, num_atoms=num_atoms, **arch
+            ),
+            num_critics=cfg.get("num_critics", 2),
+        )
     hl = HLGauss(v_min=cfg.get("v_min", 0.0), v_max=cfg.get("v_max", 1.0), num_atoms=max(num_atoms, 2))
     params = flax.serialization.msgpack_restore(params_path.read_bytes())
+    a_norm = cfg.get("action_norm")
+    if a_norm:
+        # Training normalised actions per-dim (stats recorded in config.json); every caller keeps
+        # passing RAW actions and the transform is applied here, once, for all of them.
+        _mu = jnp.asarray(a_norm["mean"], dtype=jnp.float32)
+        _sd = jnp.asarray(a_norm["std"], dtype=jnp.float32)
+
+    v_add = None
+    if cfg.get("dueling"):
+        # The saved Q params are the ADVANTAGE head; deployment must add the value baseline back or
+        # every consumer of "Q" (value traces, commit rules, diagnostics) reads a different quantity.
+        # Within-state arg-max alone would survive without it - nothing else would.
+        vp = params_path.parent / (
+            "vparams.msgpack"
+            if params_path.name == "params.msgpack"
+            else params_path.name.replace("params_", "vparams_")
+        )
+        v_params = flax.serialization.msgpack_restore(vp.read_bytes())
+        v_net = ValueNet(hidden_dims=tuple(cfg.get("hidden_dims", [512, 512, 512])))
+
+        def v_add(obs):
+            return v_net.apply(v_params, obs)
 
     if cfg.get("kind", "arq") == "qc":
         # QC has no prefix head, so the raw output is [K, S, M] and the promised trailing P axis is
@@ -265,13 +430,21 @@ def load_trained(params_path, *, action_dim: int, horizon: int):
         # contract; the matching "steps per prefix" is the whole horizon, because committing to QC's
         # one value IS committing to the full chunk.
         def apply_fn(obs, actions):
+            if a_norm:
+                actions = (actions - _mu) / _sd
             out = net.apply(params, obs, actions)
-            return (hl.from_logits(out) if num_atoms > 1 else out)[..., None]
+            out = (hl.from_logits(out) if num_atoms > 1 else out)[..., None]
+            return out + v_add(obs)[..., None] if v_add is not None else out
 
         return apply_fn, params, horizon
 
     def apply_fn(obs, actions):
+        if a_norm:
+            actions = (actions - _mu) / _sd
         out = net.apply(params, obs, actions)
-        return hl.from_logits(out) if num_atoms > 1 else out
+        out = hl.from_logits(out) if num_atoms > 1 else out
+        if v_add is not None:
+            out = out - out.mean(axis=-1, keepdims=True) + v_add(obs)[..., None]
+        return out
 
     return apply_fn, params, g

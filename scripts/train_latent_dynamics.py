@@ -167,6 +167,8 @@ def main() -> None:
             ident.append(float(jnp.sum(jnp.mean(jnp.square(z - zn), -1) * w) / (jnp.sum(w) + 1e-8)))
         results[name] = float(np.mean(errs))
         results["identity"] = float(np.mean(ident))
+        if use_action:
+            params_ac = params
         logger.info(
             f"[{name}] mse {results[name]:.5f}   identity {results['identity']:.5f}  ({(time.perf_counter() - t0) / 60:.1f} min)"
         )
@@ -189,7 +191,8 @@ def main() -> None:
         (cfg.out / "results.json").write_text(json.dumps(results | {"token_var": z_var, "action_gain": gain}, indent=1))
         import flax.serialization as fser
 
-        (cfg.out / "params.msgpack").write_bytes(fser.to_bytes(params))
+        (cfg.out / "params.msgpack").write_bytes(fser.to_bytes(params_ac))
+        (cfg.out / "params_noaction.msgpack").write_bytes(fser.to_bytes(params))
         print(f"\nwrote {cfg.out}")
 
 

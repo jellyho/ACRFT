@@ -1,0 +1,511 @@
+"""Point-and-click front end for the rollout renderer.
+
+    misc/yam-misc render-gui
+
+Pick a dataset, pick an episode, press Render. Everything the command line asks for that the
+recording already knows -- how many candidates, where the replans were, whether a critic scored
+them, whether the run was adaptive -- is read from the dataset and shown, rather than typed in and
+got wrong (a mistyped ``--candidates`` is a reshape error, a mistyped ``--horizon`` silently draws
+every chunk in the wrong place).
+
+The render itself is :func:`render_deploy_samples.render`, unchanged: this window builds the same
+argparse Namespace the CLI would and calls it on a worker thread, so there is one renderer and the
+GUI cannot drift from it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import pathlib
+import traceback
+from typing import TYPE_CHECKING
+
+try:
+    from PyQt5 import QtCore
+    from PyQt5 import QtGui, QtWidgets
+except ModuleNotFoundError as e:  # almost always: run outside the launcher
+    raise SystemExit(
+        f"{e}.\n\nRun this through the launcher, which activates the workstation conda env:\n"
+        "    misc/yam-misc render-gui\n\n"
+        "This repo's own .venv has neither PyQt5 nor mink."
+    ) from e
+
+from misc import theme
+from misc.dataset_reader import list_datasets
+
+if TYPE_CHECKING:  # the reader pulls in LeRobot, which a GUI import should not
+    from misc.dataset_reader import DatasetReader
+
+logger = logging.getLogger(__name__)
+
+# Where rollouts are stacked now, and what render-samples already defaults to -- the two used to
+# disagree, so the window opened on a different root than the command line.
+DEFAULT_ROOT = "~/lerobot_data"
+
+
+def _scrollable(combo: QtWidgets.QComboBox, visible: int = 18) -> QtWidgets.QComboBox:
+    """Make a long popup scroll instead of being clipped.
+
+    Two things have to be true together, and neither is the default here. `combobox-popup: 0`
+    switches Qt to the non-native popup, which is what makes `maxVisibleItems` mean anything; and
+    the popup's own scrollbar has to be re-enabled, because a styled popup comes with
+    ScrollBarAlwaysOff -- so a list longer than the screen simply lost its tail, with nothing to
+    drag. With 41 datasets under one root that is most of them.
+    """
+    combo.setMaxVisibleItems(visible)
+    combo.setStyleSheet(combo.styleSheet() + "\nQComboBox { combobox-popup: 0; }")
+    combo.view().setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+    return combo
+
+
+class _RenderWorker(QtCore.QThread):
+    """Runs a render off the GUI thread; the window stays responsive and can report failure.
+
+    Two jobs, one class: a single episode, or -- when `episodes` is given -- the whole dataset
+    through the same `run_bulk` the command line uses, so a batch behaves identically either way.
+    """
+
+    done = QtCore.pyqtSignal(bool, str)
+    progressed = QtCore.pyqtSignal(int, int)
+
+    def __init__(self, args: argparse.Namespace, episodes: "list | None" = None, name: str = "rollout") -> None:
+        super().__init__()
+        self._args = args
+        self._episodes = episodes
+        self._name = name
+
+    def run(self) -> None:
+        from misc.render_deploy_samples import render
+
+        if self._episodes is not None:
+            self._run_bulk()
+            return
+
+        # Emitted from this thread; Qt queues it across to the GUI one. Throttled to whole
+        # percents: a 9000-frame render would otherwise post 9000 events for 100 visible states.
+        last = [-1]
+
+        def report(written: int, total: int) -> None:
+            pct = (100 * written) // max(total, 1)
+            if pct != last[0]:
+                last[0] = pct
+                self.progressed.emit(written, total)
+
+        try:
+            out = render(self._args, progress=report)
+            self.done.emit(True, str(out))
+        except BaseException as e:  # a failed render must land in the window, not the console
+            logger.exception("render failed")
+            self.done.emit(False, f"{type(e).__name__}: {e}\n\n{traceback.format_exc(limit=3)}")
+
+    def _run_bulk(self) -> None:
+        """Every episode, then a zip. Progress spans the batch, not each render.
+
+        A per-episode bar would sweep 0..100 once per episode and say nothing about how much of the
+        job is left, which for a forty-episode run is the only number worth showing.
+        """
+        from misc.render_bulk import run_bulk
+
+        out_dir = pathlib.Path(self._args.out).expanduser()
+        last = [-1]
+
+        def report(i: int, total: int, written: int, frames: int) -> None:
+            # Whole episodes done, plus how far into the current one -- throttled to whole percents.
+            pct = int(100 * (i + (written / max(frames, 1))) / max(total, 1))
+            if pct != last[0]:
+                last[0] = pct
+                self.progressed.emit(pct, 100)
+
+        try:
+            r = run_bulk(
+                self._args,
+                self._episodes,
+                out_dir,
+                name=self._name,
+                zip_to=out_dir.with_suffix(".zip"),
+                progress=report,
+                log=logger.info,
+            )
+        except BaseException as e:  # noqa: BLE001 - a failure must land in the window, not the console
+            logger.exception("bulk render failed")
+            self.done.emit(False, f"{type(e).__name__}: {e}\n\n{traceback.format_exc(limit=3)}")
+            return
+
+        parts = [f"{len(r['done'])} rendered", f"{len(r['skipped'])} skipped", f"{len(r['failed'])} failed"]
+        summary = ", ".join(parts)
+        if r["failed"]:
+            # Partial success is still success for the episodes that worked, but the window has to
+            # say which ones did not -- a batch that quietly drops three of forty is worse than one
+            # that fails outright.
+            detail = "\n".join(f"  ep{ep}: {why}" for ep, why in r["failed"])
+            self.done.emit(False, f"{summary}\n\nzip: {r['zip']}\n\n{detail}")
+        else:
+            self.done.emit(True, str(r["zip"] or out_dir))
+
+
+class _StatsWorker(QtCore.QThread):
+    """Summarizes a dataset off the GUI thread -- it reads every frame of several columns, which on
+    a long run is seconds, not milliseconds."""
+
+    done = QtCore.pyqtSignal(bool, str)
+
+    def __init__(self, repo_id: str, root: str) -> None:
+        super().__init__()
+        self._repo_id, self._root = repo_id, root
+
+    def run(self) -> None:
+        from misc.rollout_stats import dataset_stats, format_episode_table, format_table
+
+        try:
+            r = dataset_stats(self._repo_id, self._root)
+            self.done.emit(True, format_table([r]) + "\n\n" + format_episode_table(r))
+        except BaseException as e:  # noqa: BLE001 - a failure belongs in the window, not the console
+            logger.exception("stats failed")
+            self.done.emit(False, f"{type(e).__name__}: {e}\n\n{traceback.format_exc(limit=3)}")
+
+
+BULK_LABEL = "── all episodes  ·  render every one, then zip ──"
+
+
+class RenderGUI(QtWidgets.QWidget):
+    def __init__(self, root: str = DEFAULT_ROOT) -> None:
+        super().__init__()
+        self.setWindowTitle("YAM · Render rollout")
+        self.setStyleSheet(theme.QSS)
+        self._worker: _RenderWorker | None = None
+        self._stats_worker: _StatsWorker | None = None
+        self._episodes: list[tuple[int, int]] = []  # (episode, frames)
+        self._fps = 30
+
+        self.root_edit = QtWidgets.QLineEdit(root)
+        self.root_edit.setToolTip("Folder holding one subfolder per dataset (the recorder's root)")
+        self.root_edit.editingFinished.connect(self._refresh_datasets)
+        browse = QtWidgets.QPushButton("…")
+        browse.setFixedWidth(36)
+        browse.clicked.connect(self._browse)
+
+        self.dataset_combo = _scrollable(QtWidgets.QComboBox())
+        self.dataset_combo.currentTextChanged.connect(lambda *_: self._refresh_episodes())
+        self.episode_combo = _scrollable(QtWidgets.QComboBox())
+        self.episode_combo.currentIndexChanged.connect(lambda *_: self._sync_out())
+
+        self.source_combo = QtWidgets.QComboBox()
+        self.source_combo.addItems(["samples", "action"])
+        self.source_combo.setToolTip(
+            "samples: the multi-candidate fan (needs an action_samples column)\n"
+            "action: the single executed trajectory -- works on any recording"
+        )
+        self.source_combo.currentTextChanged.connect(lambda *_: self._sync_out())
+
+        self.speed_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_spin.setRange(0.25, 8.0)
+        self.speed_spin.setSingleStep(0.25)
+        self.speed_spin.setValue(1.0)
+        self.speed_spin.setToolTip(
+            "Playback speed relative to real time: 1.0 writes at the dataset's own rate,\n"
+            "2.0 halves the duration."
+        )
+        self.height_spin = QtWidgets.QSpinBox()
+        self.height_spin.setRange(120, 1080)
+        self.height_spin.setSingleStep(60)
+        self.height_spin.setValue(360)
+        self.height_spin.setToolTip("Per-camera panel height in px")
+
+        self.value_check = QtWidgets.QCheckBox("critic value strip")
+        self.value_check.setChecked(True)
+        self.chunk_check = QtWidgets.QCheckBox("chunk length strip")
+        self.chunk_check.setChecked(True)
+
+        self.out_edit = QtWidgets.QLineEdit()
+        self.render_btn = QtWidgets.QPushButton("Render")
+        self.render_btn.clicked.connect(self._on_render)
+        self.stats_btn = QtWidgets.QPushButton("Stats")
+        self.stats_btn.setToolTip("Commitment lengths, latency, the critic's decision, and the splice at each replan")
+        self.stats_btn.clicked.connect(self._on_stats)
+
+        self.info = QtWidgets.QLabel("—")
+        self.info.setWordWrap(True)
+        self.info.setStyleSheet(f"color:{theme.MUTED};")
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(True)
+        self.progress.setVisible(False)
+        self.status = QtWidgets.QLabel("")
+        self.status.setWordWrap(True)
+
+        form = QtWidgets.QFormLayout()
+        root_row = QtWidgets.QHBoxLayout()
+        root_row.addWidget(self.root_edit, 1)
+        root_row.addWidget(browse)
+        form.addRow("root", root_row)
+        form.addRow("dataset", self.dataset_combo)
+        form.addRow("episode", self.episode_combo)
+        form.addRow("overlay", self.source_combo)
+        opts = QtWidgets.QHBoxLayout()
+        opts.addWidget(QtWidgets.QLabel("speed"))
+        opts.addWidget(self.speed_spin)
+        opts.addWidget(QtWidgets.QLabel("panel height"))
+        opts.addWidget(self.height_spin)
+        opts.addWidget(self.value_check)
+        opts.addWidget(self.chunk_check)
+        opts.addStretch(1)
+        form.addRow("options", opts)
+        form.addRow("output", self.out_edit)
+
+        lay = QtWidgets.QVBoxLayout(self)
+        box = QtWidgets.QGroupBox("Render a recorded rollout")
+        box.setLayout(form)
+        lay.addWidget(box)
+        lay.addWidget(self.info)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.render_btn, 3)
+        buttons.addWidget(self.stats_btn, 1)
+        lay.addLayout(buttons)
+        lay.addWidget(self.progress)
+        lay.addWidget(self.status)
+        lay.addStretch(1)
+        self.resize(760, 380)
+
+        self._refresh_datasets()
+
+    # ------------------------------------------------------------------ dataset discovery
+    def _browse(self) -> None:
+        chosen = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Datasets root", os.path.expanduser(self.root_edit.text().strip() or "~")
+        )
+        if chosen:
+            self.root_edit.setText(chosen)
+            self._refresh_datasets()
+
+    def _refresh_datasets(self) -> None:
+        names = list_datasets(self.root_edit.text().strip() or DEFAULT_ROOT)
+        current = self.dataset_combo.currentText()
+        self.dataset_combo.blockSignals(True)
+        self.dataset_combo.clear()
+        self.dataset_combo.addItems(names)
+        if current in names:
+            self.dataset_combo.setCurrentText(current)
+        self.dataset_combo.blockSignals(False)
+        self.dataset_combo.setEnabled(bool(names))
+        if not names:
+            self.info.setText(f"No dataset folders under {os.path.expanduser(self.root_edit.text().strip())}.")
+            self.episode_combo.clear()
+            return
+        self._refresh_episodes()
+
+    def _reader(self) -> DatasetReader:
+        """A metadata-only reader for the selected dataset (no frames, no video index)."""
+        from misc.dataset_reader import DatasetReader
+
+        name = self.dataset_combo.currentText().strip()
+        reader = DatasetReader(name, self.root_edit.text().strip() or DEFAULT_ROOT)
+        reader.load()
+        return reader
+
+    def _refresh_episodes(self) -> None:
+        self.episode_combo.blockSignals(True)
+        self.episode_combo.clear()
+        self._episodes = []
+        try:
+            reader = self._reader()
+            for ep in range(reader.num_episodes):
+                frames = reader.episode_length(ep)
+                self._episodes.append((ep, frames))
+            if self._episodes:
+                # First, so it is reachable without scrolling past forty episodes.
+                self.episode_combo.addItem(BULK_LABEL)
+            for ep, frames in self._episodes:
+                self.episode_combo.addItem(f"episode {ep}  ·  {frames} frames  ({frames / max(reader.fps, 1):.0f}s)")
+            self._describe(reader)
+        except Exception as e:
+            self.info.setText(f"Could not read this dataset: {e}")
+        self.episode_combo.blockSignals(False)
+        self.episode_combo.setEnabled(bool(self._episodes))
+        self._sync_out()
+
+    def _describe(self, reader: DatasetReader) -> None:
+        """Say what the recording carries, so the operator does not have to remember it."""
+        self._fps = int(reader.fps or 30)
+        bits = [f"{reader.num_episodes} episode(s) at {reader.fps} fps"]
+        samples = reader.feature_shape("action_samples")
+        if samples:
+            bits.append(f"{samples[0]} candidates")
+            self.source_combo.setCurrentText("samples")
+        else:
+            bits.append("no action_samples — executed trajectory only")
+            self.source_combo.setCurrentText("action")
+        if reader.has_feature("critic_scores"):
+            bits.append("critic scores")
+        if reader.feature_shape("action_samples_full"):
+            bits.append("ADAPTIVE (full candidates recorded)")
+        if reader.has_feature("policy.chunk_index"):
+            bits.append("replan boundaries from the run")
+        self.info.setText(" · ".join(bits))
+        self.source_combo.setEnabled(bool(samples))
+
+    def _sync_out(self) -> None:
+        name = self.dataset_combo.currentText().strip() or "rollout"
+        if self._bulk_selected():
+            # A folder, not a file: the mp4s go in it and the zip lands beside it.
+            self.out_edit.setText(str(pathlib.Path.home() / f"{name}_renders"))
+            return
+        ep = self._current_episode()
+        if ep is None:
+            self.out_edit.clear()
+            return
+        self.out_edit.setText(str(pathlib.Path.home() / f"{name}_ep{ep}.mp4"))
+
+    def _dataset_fps(self) -> int:
+        """The selected recording's own rate; 30 if it cannot be read yet."""
+        return self._fps or 30
+
+    def _bulk_selected(self) -> bool:
+        return bool(self._episodes) and self.episode_combo.currentIndex() == 0
+
+    def _current_episode(self) -> int | None:
+        """The chosen episode, or None when nothing (or the bulk entry) is selected."""
+        row = self.episode_combo.currentIndex() - (1 if self._episodes else 0)
+        return self._episodes[row][0] if 0 <= row < len(self._episodes) else None
+
+    # ------------------------------------------------------------------ rendering
+    def _build_args(self) -> argparse.Namespace:
+        """The same Namespace the CLI builds -- defaults included, so the renderer sees one shape.
+
+        Everything the recording knows is left as None for the renderer to recover: candidates from
+        the action_samples column, chunk boundaries from policy.chunk_index.
+        """
+        return argparse.Namespace(
+            repo_id=self.dataset_combo.currentText().strip(),
+            root=self.root_edit.text().strip() or DEFAULT_ROOT,
+            config=None,
+            episode=self._current_episode(),
+            wrists=["left", "right"],
+            agentview_arms=["left", "right"],
+            source=self.source_combo.currentText(),
+            horizon=None,
+            candidates=None,
+            no_value_plot=not self.value_check.isChecked(),
+            no_chunk_plot=not self.chunk_check.isChecked(),
+            replans=0,
+            hold=1,
+            height=self.height_spin.value(),
+            # Speed is the written frame rate relative to the DATASET's own rate: one rendered
+            # frame per recorded tick means 1.0 is real time. It used to multiply a fixed 10,
+            # so "1.0" against 30 fps footage silently produced a third-speed video.
+            fps=max(1, round(self._dataset_fps() * self.speed_spin.value())),
+            out=self.out_edit.text().strip(),
+            fx=430.0,
+            fy=430.0,
+            cx=320.0,
+            cy=240.0,
+            agent_fx=390.0,
+            agent_fy=390.0,
+            agent_cx=320.0,
+            agent_cy=240.0,
+        )
+
+    def _on_render(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        bulk = self._bulk_selected()
+        if not bulk and self._current_episode() is None:
+            self.status.setText("Pick an episode first.")
+            return
+        args = self._build_args()
+        if not args.out:
+            self.status.setText("Set an output path first.")
+            return
+        self.render_btn.setEnabled(False)
+        self.status.setStyleSheet(f"color:{theme.MUTED};")
+        name = self.dataset_combo.currentText().strip() or "rollout"
+        episodes = [ep for ep, _ in self._episodes] if bulk else None
+        if bulk:
+            self.status.setText(f"Rendering {len(episodes)} episode(s) → {args.out} (then zipping) …")
+        else:
+            self.status.setText(f"Rendering episode {args.episode} → {args.out} …")
+        self.progress.setValue(0)
+        self.progress.setVisible(True)
+        self._worker = _RenderWorker(args, episodes=episodes, name=name)
+        self._worker.progressed.connect(self._on_progress)
+        self._worker.done.connect(self._on_done)
+        self._worker.start()
+
+
+    def _on_stats(self) -> None:
+        """Numbers for the whole selected dataset -- every episode, regardless of the episode row.
+
+        The episode picker chooses what to RENDER; a summary of one episode would mostly be its own
+        row repeated, and the comparison that makes these numbers useful is across episodes.
+        """
+        name = self.dataset_combo.currentText().strip()
+        if not name:
+            self.status.setText("Pick a dataset first.")
+            return
+        if self._stats_worker is not None and self._stats_worker.isRunning():
+            return
+        self.stats_btn.setEnabled(False)
+        self.status.setStyleSheet(f"color:{theme.MUTED};")
+        self.status.setText(f"Summarizing {name} …")
+        self._stats_worker = _StatsWorker(name, self.root_edit.text().strip() or DEFAULT_ROOT)
+        self._stats_worker.done.connect(self._on_stats_done)
+        self._stats_worker.start()
+
+    def _on_stats_done(self, ok: bool, text: str) -> None:
+        self.stats_btn.setEnabled(True)
+        self.status.setText("" if ok else "Stats failed - see the window.")
+        self.status.setStyleSheet(f"color:{theme.MUTED if ok else theme.BAD if hasattr(theme, 'BAD') else theme.MUTED};")
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Rollout statistics" if ok else "Stats failed")
+        view = QtWidgets.QPlainTextEdit(text)
+        view.setReadOnly(True)
+        # Monospace, or the columns stop lining up and the table stops being a table.
+        view.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+        view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        box = QtWidgets.QVBoxLayout(dlg)
+        box.addWidget(view)
+        row = QtWidgets.QHBoxLayout()
+        copy = QtWidgets.QPushButton("Copy")
+        copy.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(text))
+        close = QtWidgets.QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        row.addStretch(1)
+        row.addWidget(copy)
+        row.addWidget(close)
+        box.addLayout(row)
+        dlg.resize(1000, 620)
+        dlg.exec_()
+
+    def _on_progress(self, written: int, total: int) -> None:
+        self.progress.setValue((100 * written) // max(total, 1))
+        # The batch reports percent-of-batch; a single render reports frames, which is the more
+        # useful number when there is only one of them.
+        self.progress.setFormat("%p%  (whole batch)" if self._bulk_selected() else f"%p%  ({written} / {total} frames)")
+
+    def _on_done(self, ok: bool, message: str) -> None:
+        self.render_btn.setEnabled(True)
+        self.progress.setVisible(False)
+        if ok:
+            size = pathlib.Path(message).stat().st_size / 1e6 if pathlib.Path(message).exists() else 0.0
+            self.status.setStyleSheet(f"color:{theme.OK if hasattr(theme, 'OK') else theme.ACCENT};")
+            self.status.setText(f"Wrote {message}  ({size:.0f} MB)")
+        else:
+            self.status.setStyleSheet(f"color:{theme.BAD};")
+            self.status.setText(message)
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--root", default=DEFAULT_ROOT, help="datasets root to open with")
+    args = p.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    gui = RenderGUI(args.root)
+    gui.show()
+    app.exec_()
+
+
+if __name__ == "__main__":
+    main()

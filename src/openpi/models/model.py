@@ -3,6 +3,8 @@ from collections.abc import Sequence
 import dataclasses
 import enum
 import logging
+import math
+import os
 import pathlib
 from typing import Generic, TypeVar
 
@@ -298,12 +300,41 @@ class BaseModel(nnx.Module, abc.ABC):
     def sample_actions(self, rng: at.KeyArrayLike, observation: Observation, **kwargs) -> Actions: ...
 
 
+# How much of a checkpoint may be in flight in HOST memory at once, during a restore.
+#
+# Orbax defaults to 96 GB, which is no limit at all for any real checkpoint: it reads the whole
+# thing into host RAM before anything is cast or moved to the device. A pi05 checkpoint is ~12 GB
+# on disk (float32), so `dtype=bfloat16` does not help -- the cast happens after the peak. On a
+# 32 GB workstation that peak is what gets the process OOM-killed, mid-restore, with no traceback.
+#
+# Reads are still parallel below this bound, and the restore is disk-bound rather than
+# concurrency-bound, so the wall-clock cost of capping it is small.
+DEFAULT_RESTORE_CONCURRENT_GB = int(os.environ.get("OPENPI_RESTORE_CONCURRENT_GB", "2"))
+
+
+def _largest_leaf_gb(metadata) -> float:
+    """Size of the biggest single array in the checkpoint, in GB (orbax's 10**9 units).
+
+    A restore reads one array at a time into a whole buffer, so the in-flight bound cannot go
+    below this: orbax raises `Requested more bytes than we reserved space for` rather than
+    reading the array in pieces. pi05's embedding table alone is ~2.4 GB.
+    """
+    largest = 0
+    for leaf in jax.tree.leaves(metadata):
+        shape, dtype = getattr(leaf, "shape", None), getattr(leaf, "dtype", None)
+        if shape is None or dtype is None:
+            continue
+        largest = max(largest, int(np.prod(shape)) * np.dtype(dtype).itemsize)
+    return largest / 10**9
+
+
 def restore_params(
     params_path: pathlib.Path | str,
     *,
     restore_type: type[np.ndarray] | type[jax.Array] = jax.Array,
     dtype: jnp.dtype | None = None,
     sharding: jax.sharding.Sharding | None = None,
+    concurrent_gb: int | None = None,
 ) -> at.Params:
     """Restores unstructured params PyTree from a checkpoint.
 
@@ -315,6 +346,9 @@ def restore_params(
         restore_type: The type to restore the params as. Can be set to `np.ndarray` to load the params as a numpy array.
         dtype: The dtype to restore all params as. If not provided, will use the original dtype from the checkpoint.
         sharding: The sharding to use for the params. If not provided, the params will be replicated across all devices.
+        concurrent_gb: Max GB held in host memory at once while reading. Defaults to
+            `DEFAULT_RESTORE_CONCURRENT_GB` (override with `$OPENPI_RESTORE_CONCURRENT_GB`); see that
+            constant for why the orbax default is unusable on a workstation.
 
     Returns:
         The restored params.
@@ -325,10 +359,24 @@ def restore_params(
         mesh = jax.sharding.Mesh(jax.devices(), ("x",))
         sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
+    # Read the metadata first: it carries every array's shape and dtype but none of the data, and
+    # the in-flight bound has to be at least as large as the biggest array (see _largest_leaf_gb).
     with ocp.PyTreeCheckpointer() as ckptr:
         metadata = ckptr.metadata(params_path)
-        item = {"params": metadata["params"]}
+    item = {"params": metadata["params"]}
 
+    if concurrent_gb is None:
+        concurrent_gb = DEFAULT_RESTORE_CONCURRENT_GB
+    concurrent_gb = max(concurrent_gb, math.ceil(_largest_leaf_gb(item)))
+    logging.info("restoring %s with at most %d GB in flight", params_path, concurrent_gb)
+
+    # PyTreeCheckpointer takes no handler, so build the equivalent Checkpointer by hand. Its
+    # defaults (use_ocdbt=True, use_zarr3=False) are mirrored here so only the bound changes.
+    checkpointer = ocp.Checkpointer(
+        ocp.PyTreeCheckpointHandler(use_ocdbt=True, use_zarr3=False, restore_concurrent_gb=concurrent_gb)
+    )
+
+    with checkpointer as ckptr:
         params = ckptr.restore(
             params_path,
             ocp.args.PyTreeRestore(

@@ -1,0 +1,43 @@
+<!doctype html><meta charset='utf-8'><title>TITLE — AC-RFT report</title>
+<!-- House template for reports on the jellyho/acrft-reports Space (worker-B / Seohong Park style).
+     Light warm-white theme with auto dark-mode; per-experiment structure is:
+     spec table (.spec) -> question -> figures -> prose interpretation.
+     Status chips: <span class='chip done'>완결</span> / <span class='chip run'>진행중</span> / <span class='chip live'>살아있음</span>.
+     Numeric tables get class 'num' (right-aligned tabular figures).
+     Plots: scripts/report_style.py (despined, muted palette, English sentence-case titles). -->
+<style>
+:root{--bg:#fafaf9;--ink:#1c1917;--muted:#64748b;--line:#e7e5e4;--acc:#3730a3;--accink:#eef2ff;--panel:#fff}
+@media (prefers-color-scheme: dark){:root{--bg:#131316;--ink:#e7e5e4;--muted:#94a3b8;--line:#33333a;--acc:#818cf8;--accink:#1e1b4b;--panel:#1b1b1f}}
+:root[data-theme="dark"]{--bg:#131316;--ink:#e7e5e4;--muted:#94a3b8;--line:#33333a;--acc:#818cf8;--accink:#1e1b4b;--panel:#1b1b1f}
+:root[data-theme="light"]{--bg:#fafaf9;--ink:#1c1917;--muted:#64748b;--line:#e7e5e4;--acc:#3730a3;--accink:#eef2ff;--panel:#fff}
+body{font-family:system-ui,sans-serif;max-width:1100px;margin:0 auto;padding:20px 16px;color:var(--ink);background:var(--bg);line-height:1.65}
+h1{font-size:1.45em;margin:0 0 4px}h2{font-size:1.2em;margin:0.2em 0 0.6em}
+.sub{color:var(--muted);font-size:.92em;margin-bottom:14px}
+.dbar,.ebar{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.dbtn,.ebtn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:9px;padding:7px 13px;font-size:.92em;cursor:pointer}
+.dbtn.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.ebtn.on{background:var(--accink);border-color:var(--acc);color:var(--ink)}
+.ebar{display:none;border-top:1px solid var(--line);padding-top:8px}.ebar.on{display:flex}
+.pane{display:none;padding:14px 0}.pane.on{display:block}
+img{max-width:100%;border:1px solid var(--line);border-radius:6px;margin:8px 0}
+table{border-collapse:collapse;font-size:.9em;margin:10px 0;max-width:100%}
+td,th{border:1px solid var(--line);padding:5px 10px;text-align:left;vertical-align:top}
+th{background:var(--accink)}.spec th{width:110px}.num td:nth-child(n+2){text-align:right;font-variant-numeric:tabular-nums}
+.chip{font-size:.72em;border-radius:99px;padding:2px 8px;margin-left:6px;vertical-align:middle}
+.chip.done{background:#dcfce7;color:#15803d}.chip.run{background:#fef9c3;color:#a16207}
+:root[data-theme="dark"] .chip.done{background:#14532d;color:#bbf7d0}
+:root[data-theme="dark"] .chip.run{background:#713f12;color:#fef08a}
+.tl{position:relative;margin:14px 0 14px 8px;border-left:3px solid var(--acc);padding-left:22px}
+.node{position:relative;margin-bottom:20px}
+.node:before{content:'';position:absolute;left:-31px;top:6px;width:13px;height:13px;border-radius:50%;background:var(--acc)}
+.when{font-size:.82em;color:var(--muted);margin-bottom:2px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.card h3{margin:0 0 6px;font-size:1.02em}.card p{margin:0;font-size:.95em}
+.next{margin-top:8px;font-size:.88em;color:var(--acc);font-weight:600}
+.now{border:2px solid var(--acc);border-radius:12px;padding:14px 18px;margin-top:10px;background:var(--accink)}
+.chip.live{background:#e0e7ff;color:#3730a3}
+.good{color:#15803d}.bad{color:#b91c1c}.missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
+code{background:var(--accink);padding:1px 5px;border-radius:4px}
+</style>
+<h1>TITLE</h1><div class='sub'>SUBTITLE</div>
+<div class='card'><h3>Section</h3><p>...</p></div>

@@ -14,12 +14,15 @@ from typing_extensions import override
 import tyro
 
 import openpi.models.model as _model
+import openpi.models.pi0_alphaflow as pi0_alphaflow
+import openpi.models.pi0_cfgrl as pi0_cfgrl
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.pi0_rlt as pi0_rlt
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
+import openpi.policies.gr1_policy as gr1_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.robocasa_policy as robocasa_policy
 import openpi.policies.yam_policy as yam_policy
@@ -73,6 +76,12 @@ class DataConfig:
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
     norm_stats: dict[str, _transforms.NormStats] | None = None
+    # Optional provenance.json contents found next to norm_stats.json: which dataset (repo_id,
+    # total_episodes/frames) the stats were computed on. Checked against the live dataset at
+    # loader construction -- stale stats from an older dataset generation fail loudly instead of
+    # silently normalizing with the wrong quantiles (the alpha-Flow 08-23 incident: right asset
+    # name, 08-03 content, action q99 ~37% off).
+    norm_stats_provenance: dict | None = None
 
     # Used to adopt the inputs from a dataset specific format to a common format
     # which is expected by the data transforms.
@@ -181,6 +190,10 @@ class DataConfigFactory(abc.ABC):
     assets: AssetsConfig = dataclasses.field(default_factory=AssetsConfig)
     # Base config that will be updated by the factory.
     base_config: tyro.conf.Suppress[DataConfig | None] = None
+    # Force mean/std normalization even for pi05. Needed to serve checkpoints trained with mean/std
+    # norm stats (e.g. the official RoboCasa 365 pi05_pretrain_human300 release), whose norm_stats
+    # carry no q01/q99 quantiles. Default False preserves the model-type-derived behavior.
+    force_mean_std_norm: bool = False
 
     @abc.abstractmethod
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -194,7 +207,10 @@ class DataConfigFactory(abc.ABC):
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
-            use_quantile_norm=model_config.model_type != ModelType.PI0,
+            norm_stats_provenance=self._load_norm_stats_provenance(
+                epath.Path(self.assets.assets_dir or assets_dirs), asset_id
+            ),
+            use_quantile_norm=(model_config.model_type != ModelType.PI0) and not self.force_mean_std_norm,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
@@ -208,6 +224,17 @@ class DataConfigFactory(abc.ABC):
         except FileNotFoundError:
             logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
         return None
+
+    def _load_norm_stats_provenance(self, assets_dir: epath.Path, asset_id: str | None) -> dict | None:
+        if asset_id is None:
+            return None
+        p = assets_dir / asset_id / "provenance.json"
+        try:
+            import json
+
+            return json.loads(p.read_text())
+        except (FileNotFoundError, ValueError):
+            return None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -434,6 +461,52 @@ class LeRobotRoboCasaDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             # RoboCasa's action column is named "action" (singular), unlike the default "actions".
+            action_sequence_keys=("action",),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotGR1DataConfig(DataConfigFactory):
+    """GR1 tabletop Teleop-Sim (LeRobot layout): one ego_view camera, 44-d state/action.
+
+    Point HF_LEROBOT_HOME at the downloaded LeRobot root (e.g. /scratch/.../gr1_data/LeRobot) and
+    use the dataset dir name as repo_id (e.g. "gr1_unified.PnPCanToDrawerClose").
+    """
+
+    include_progress: bool = False
+    reward_key: str = "next.reward"
+    include_episode_index: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        structure = {
+            "observation/image": "observation.images.ego_view",
+            "observation/state": "observation.state",
+            "actions": "action",
+            "prompt": "prompt",
+        }
+        if self.include_episode_index:
+            structure["episode_index"] = "episode_index"
+        repack_inputs = []
+        if self.include_progress:
+            structure["progress"] = "progress"
+            repack_inputs.append(
+                _progress.AddProgress(_progress.compute_progress_labels(self.repo_id, reward_key=self.reward_key))
+            )
+        repack_inputs.append(_transforms.RepackTransform(structure))
+        repack_transform = _transforms.Group(inputs=repack_inputs)
+
+        data_transforms = _transforms.Group(
+            inputs=[gr1_policy.GR1Inputs(model_type=model_config.model_type)],
+            outputs=[gr1_policy.GR1Outputs()],
+        )
+        model_transforms = ModelTransformFactory()(model_config)
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            # GR1's action column is also named "action" (singular).
             action_sequence_keys=("action",),
         )
 
@@ -992,6 +1065,57 @@ _CONFIGS = [
         save_interval=10_000,
         action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     ),
+    # Baseline ladder rung B1: success-filtered fine-tuning of the OFFICIAL RoboCasa-365 pi05 on its
+    # OWN rollouts. The dataset is built by examples/robocasa/convert_rollouts.py from a collection
+    # that recorded successes and failures alike, so B1 (--filter success), B2 (weighted) and the
+    # unfiltered control all read one collection; the repo_id selects which. Set
+    # HF_LEROBOT_HOME=/scratch/jellyho/acrft/rollout_v3 so the local dataset resolves.
+    #
+    # Continuing from the released checkpoint (not pi05_base) is the point: the comparison is
+    # "does outcome-filtered imitation of its own behaviour improve the released policy", so the
+    # weights, the norm stats convention and the action order all have to match the server that
+    # produced the rollouts.
+    TrainConfig(
+        name="pi05_robocasa_b1",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id="jellyho/rc_b1_PickPlaceSinkToCounter",
+            base_config=DataConfig(prompt_from_task=True),
+            force_mean_std_norm=True,  # the released checkpoint's norm_stats carry no quantiles
+            # Reuse the RELEASED checkpoint's normalization rather than computing new stats from the
+            # rollouts. Recomputing would renormalize states and actions under weights trained with
+            # the old statistics, which silently corrupts the policy we are trying to continue.
+            assets=AssetsConfig(
+                assets_dir="/scratch/jellyho/acrft/assets/official",
+                asset_id="robocasa365_official",
+            ),
+        ),
+        batch_size=32,
+        # short, low-LR continuation: the run must not relearn the task, only re-weight what the
+        # policy already does. A long schedule here would confound "filtering helped" with
+        # "more training helped".
+        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=200, peak_lr=1e-5, decay_steps=10_000, decay_lr=1e-5),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/scratch/jellyho/acrft/checkpoints/robocasa365_official/pi05_pretrain_human300/multitask_learning/75000/params"
+        ),
+        num_train_steps=10_000,
+        save_interval=2_000,
+        action_dist_interval=0,
+    ),
+    # Serving config for the OFFICIAL RoboCasa 365 pi05 release (robocasa/robocasa365_checkpoints,
+    # pi05_pretrain_human300/multitask_learning/75000). Same architecture as pi05_robocasa but that
+    # checkpoint was trained with mean/std norm (its norm_stats carry no quantiles), so force it.
+    TrainConfig(
+        name="pi05_robocasa_pretrained",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id="jellyho/robocasa365-PrepareCoffee",
+            base_config=DataConfig(prompt_from_task=True),
+            force_mean_std_norm=True,
+        ),
+        batch_size=32,
+        num_train_steps=1,
+    ),
     # RLT ("RL Token") variant of pi05_robocasa: learns the compact RL-token bottleneck jointly with
     # the BC finetune (language-conditioned token, single forward). Same data/optimizer as pi05_robocasa;
     # the RLT loss (reconstruction + proprio) is added on top and monitored. Variant switches live on
@@ -1028,6 +1152,34 @@ _CONFIGS = [
         action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
         rlt_monitor_interval=1_000,
         rlt_vis_interval=10_000,
+    ),
+    # GR1 tabletop (Teleop-Sim) RLT finetune - the pilot for the GR1 port (see slurm/gr1_config_draft.py).
+    # Data: HF_LEROBOT_HOME must point at the downloaded LeRobot root; repo_id is the dataset dir name.
+    TrainConfig(
+        name="pi05_gr1_rlt",
+        model=pi0_rlt.Pi0RLTConfig(
+            pi05=True,
+            action_horizon=16,
+            action_dim=48,  # GR1 action is 44-d; pad to 48 (pi05_base was 32 - projections re-init fresh)
+            discrete_state_input=False,
+            rlt_backbone_gradient=False,
+        ),
+        data=LeRobotGR1DataConfig(
+            repo_id="gr1_unified.PnPCanToDrawerClose",
+            include_progress=True,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=30_000,  # pilot: enough for the headroom/spread measurement
+        save_interval=10_000,
+        action_dist_interval=0,
+        rlt_monitor_interval=1_000,
     ),
     #
     # Fine-tuning Aloha configs.
@@ -1377,7 +1529,47 @@ def _robocasa_rlt_task_config(task: str) -> TrainConfig:
 _CONFIGS.extend(_robocasa_rlt_task_config(_t) for _t in _ROBOCASA_TARGET_TASKS)
 
 
-def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
+_CONFIGS.append(
+    # Plain BC finetune of pi05 on the cable-tie YAM teleop set - no RLT bottleneck, so this is the
+    # baseline the RLT runs are compared against and the policy to deploy on the real arm.
+    #
+    # The dataset is already cleaned (rl_specialist/build_cable_tie_clean.py): 100 success episodes
+    # of the source 105, and each episode cut at the first `observation.control_mode == 4` frame,
+    # which is where the operator's homing motion (and their hand) enters the cameras. So
+    # success_only is left off here - there is nothing left to filter.
+    #
+    # repo_id resolves under HF_LEROBOT_HOME; point that at
+    # /NHNHOME/WORKSPACE/gwanwoo/rl_specialist/cache/huggingface/lerobot to use the local copy, or
+    # override with --data.repo-id Gwanwoo/lerobot_cable_tie_100_clean to pull from the Hub.
+    TrainConfig(
+        name="pi05_yam_cable_tie",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            # 30 frames at 30 fps = a one-second chunk, matching the YAM RLT configs.
+            action_horizon=30,
+            discrete_state_input=False,
+        ),
+        data=LeRobotYAMDataConfig(
+            repo_id="rl_specialist/lerobot_cable_tie_100_clean",
+            delta_mode="joint",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=100_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
+        # There is no launcher script for this config, so the lab entity is set here rather than
+        # passed on the command line the way run_train_yam.sh does it.
+        wandb_entity="RSS-PFT_RLLAB",
+    )
+)
+
+
+def _yam_rlt_config(delta_mode: str = "joint", horizon: int = 30) -> TrainConfig:
     """Pi0RLT on the YAM bimanual dataset (real teleop data).
 
     Defaults chosen for this setting: the parallel decoder and no-proprio token (the best RLT variant
@@ -1391,14 +1583,18 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
     The RLT bottleneck is judged by its reconstruction loss and the BC loss alone.
     """
     tag = "" if delta_mode == "joint" else f"_{delta_mode}"
+    # A non-default horizon gets its own config name, which also keys its own norm stats and
+    # checkpoint dir: relative-joint deltas widen with lookahead, so a 60-frame chunk must not
+    # normalise with (or resume from) the 30-frame statistics.
+    hsuf = "" if horizon == 30 else f"_h{horizon}"
     return TrainConfig(
-        name=f"pi05_yam_lego_taxi{tag}_rlt",
+        name=f"pi05_yam_lego_taxi{tag}_rlt{hsuf}",
         model=pi0_rlt.Pi0RLTConfig(
             pi05=True,
             # 30 frames at YAM's 30 fps is exactly a one-second window. The 16 this started with was
             # carried over from the RoboCasa configs and covers only 0.53 s - short for a bimanual
             # chunk, and it is also the window the RLT bottleneck has to summarise into one token.
-            action_horizon=30,
+            action_horizon=horizon,
             discrete_state_input=False,
             rlt_backbone_gradient=False,
             rlt_decoder_mode="parallel",  # pardec: best on RoboCasa, un-bypassable bottleneck
@@ -1429,6 +1625,183 @@ def _yam_rlt_config(delta_mode: str = "joint") -> TrainConfig:
 
 
 _CONFIGS.extend(_yam_rlt_config(_m) for _m in ("joint", "none"))
+_CONFIGS.append(_yam_rlt_config("joint", horizon=60))  # 2-second chunk ablation
+
+
+def _yam_bc_config(
+    delta_mode: str = "joint", horizon: int = 30, fsdp_devices: int = 1, num_train_steps: int = 100_000
+) -> TrainConfig:
+    """Plain pi05 BC finetune on the YAM bimanual dataset -- NO RLT bottleneck.
+
+    The RLT token only existed to feed a sim probe / adaptive-chunk critic; we now train a SEPARATE
+    patch critic, so the base policy is just a pi05 BC finetune. This is the default going forward.
+    delta_mode joint (relative) or none (absolute); fsdp_devices>1 shards the model for multi-GPU.
+    """
+    tag = "" if delta_mode == "joint" else f"_{delta_mode}"
+    hsuf = "" if horizon == 30 else f"_h{horizon}"
+    return TrainConfig(
+        name=f"pi05_yam_lego_taxi{tag}{hsuf}",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=horizon, discrete_state_input=False),
+        data=LeRobotYAMDataConfig(
+            repo_id="jellyho/yam_lego_taxi",
+            delta_mode=delta_mode,
+            include_progress=False,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        fsdp_devices=fsdp_devices,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=num_train_steps, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        num_train_steps=num_train_steps,
+        save_interval=25_000,
+        # Default keep_period is 5_000, which divides every saved step, so nothing is ever pruned: a
+        # 500k run would hold 20 checkpoints at 42 GB each. Keep the 100k milestones plus the latest.
+        keep_period=100_000,
+        action_dist_interval=0,
+    )
+
+
+_CONFIGS.extend(_yam_bc_config(_m, num_train_steps=500_000) for _m in ("joint", "none"))
+# Chunk-length ablation for the BC policy. The adaptive-chunking work needs a base policy whose chunk
+# is long enough that stopping early is a real choice; at horizon 30 the longest commitment the critic
+# can score is one second.
+_CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=500_000))
+
+
+def _yam_alphaflow_config(
+    *,
+    delta_mode: str = "joint",
+    horizon: int = 30,
+    fsdp_devices: int = 1,
+    init_checkpoint: str = "gs://openpi-assets/checkpoints/pi05_base/params",
+) -> TrainConfig:
+    """alpha-Flow finetune of pi05 on YAM: turn the 10-step flow policy into a few/one-step one.
+
+    This exists for offline RL, not for inference speed. Every actor-critic update has to draw an
+    action from the policy, and a 10-step ODE per update is the single biggest reason RL on a VLA is
+    expensive; a one-step generator makes the actor update cost one forward. Unlike distillation,
+    alpha-Flow gets there by pure regression on the data -- the VLA never samples during training.
+
+    ONE run; the curriculum is a function of the training step (state.step reaches the loss via the
+    `wants_step` hook), so the whole anneal happens inside this config with no checkpoint chaining:
+
+        progress 0 - ~0.29     alpha = 1 (sigmoid still above the 1 - 5e-3 clamp). Trajectory flow
+                               matching -- the BC objective with an extra r input. The pretrained
+                               pi05 IS this model at init (zero-init r MLP), so this stretch is a
+                               plain BC finetune warm-up.
+        progress ~0.29 - ~0.71 alpha anneals (sigmoid, gamma 25, centred mid-run). Consistency
+                               targets ramp up as flow matching hands over.
+        progress ~0.71 - 1     alpha = 5e-3 (the clamp floor). Discrete MeanFlow-limit training;
+                               the JVP branch stays off (pi0_alphaflow.py explains that default).
+
+    This is the OFFICIAL alpha-Flow schedule (sigmoid over the whole run; the clamps carve the
+    phases), in progress fractions: train.py passes progress = step / num_train_steps into the
+    loss, so overriding --num-train-steps rescales the whole curriculum with it.
+
+    The alpha = 1 stretch pays for the second (stop-gradient, no-backward) forward it does not yet
+    need -- that is the price of a single run, ~15% of a BC step, and it buys not having to chain
+    checkpoints or split wandb curves across runs. Watch `alpha` and `delta2` in wandb: the loss
+    itself sits pinned near 1.0 by MeanFlow's adaptive weight and is NOT the progress signal.
+
+    An optional pure-MeanFlow (JVP) polish stays available as a followup run via
+    Pi0AlphaFlowConfig(alpha_init=0, alpha_final=0, meanflow_jvp=True) pointed at this run's output;
+    it is deliberately not registered as a config until the discrete floor proves insufficient.
+    """
+    tag = "" if delta_mode == "joint" else f"_{delta_mode}"
+    hsuf = "" if horizon == 30 else f"_h{horizon}"
+    steps = 200_000  # schedule is in progress fractions, so the curriculum stretches with this
+    return TrainConfig(
+        name=f"pi05_yam_lego_taxi{tag}{hsuf}_alphaflow",
+        # Schedule defaults ARE the official alpha-Flow recipe (sigmoid over the whole run, gamma
+        # 25, clamp 5e-3, fm_ratio 0.5), expressed in progress fractions so --num-train-steps
+        # rescales the curriculum -- nothing here to keep in sync.
+        model=pi0_alphaflow.Pi0AlphaFlowConfig(
+            pi05=True,
+            action_horizon=horizon,
+            discrete_state_input=False,
+        ),
+        data=LeRobotYAMDataConfig(
+            repo_id="jellyho/yam_lego_taxi",
+            delta_mode=delta_mode,
+            include_progress=False,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        fsdp_devices=fsdp_devices,
+        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=1_000, peak_lr=5e-5, decay_steps=steps, decay_lr=5e-5),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(init_checkpoint),
+        num_train_steps=steps,
+        save_interval=10_000,
+        action_dist_interval=0,
+    )
+
+
+_CONFIGS.append(_yam_alphaflow_config())
+
+
+def with_cfgrl(base: TrainConfig, *, cfg_w: float = 1.5, suffix: str = "cfgrl") -> TrainConfig:
+    """CFGRL variant OF ANY pi0.5 task config — a method transform, not a task config.
+
+    Policy-extraction methods are orthogonal to the task: the same CFGRL recipe should apply to
+    YAM, LIBERO, RoboCasa or anything added later, so it is expressed as base -> variant rather
+    than copied per task. Everything task-shaped (data config, norm stats, horizon, action dim,
+    optimizer) is inherited from `base`; only the model class changes, because the optimality
+    embedding and guided sampling are model properties (kvfrans/cfgrl iql_diffusion.py:105,213).
+
+        _CONFIGS.append(with_cfgrl(_yam_bc_config()))            # pi05_yam_lego_taxi_cfgrl
+        _CONFIGS.append(with_cfgrl(some_libero_cfg, cfg_w=3.0))  # ... and any other task
+
+    The other weight-bearing extraction arms (awr, flowdpg, qam, dql) need no variant at all: they
+    fine-tune the plain pi0.5 action expert, so an exported checkpoint is served by the BASE config
+    unchanged. CFGRL is the one arm whose network differs.
+    """
+    if not isinstance(base.model, pi0_config.Pi0Config):
+        raise TypeError(f"with_cfgrl needs a pi0.5 base config, got {type(base.model).__name__}")
+    return dataclasses.replace(
+        base,
+        name=f"{base.name}_{suffix}",
+        model=pi0_cfgrl.Pi0CFGRLConfig(
+            **{f.name: getattr(base.model, f.name) for f in dataclasses.fields(base.model)},
+            cfg_w=cfg_w,
+        ),
+    )
+
+
+_CONFIGS.append(with_cfgrl(_yam_bc_config()))
+
+
+def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:
+    """Official-style RoboCasa 365 pi05 MULTITASK PRETRAINING on the Human300 split (300 tasks).
+
+    Trains on ONE merged LeRobot dataset built from the 300 converted pretrain tasks with
+    examples/robocasa/merge_pretrain.py (LeRobot aggregate_datasets). Load it locally by setting
+    HF_LEROBOT_HOME to the merged dataset's parent dir; repo_id is the merged dataset's name.
+    Official recipe: pi05, action_horizon 16, batch 128, 120k steps; fsdp_devices for multi-GPU.
+    """
+    return TrainConfig(
+        name="pi05_robocasa_pretrain",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=16, discrete_state_input=False),
+        data=LeRobotRoboCasaDataConfig(
+            repo_id="robocasa365_pretrain_human300",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=128,
+        fsdp_devices=fsdp_devices,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000, peak_lr=5e-5, decay_steps=120_000, decay_lr=5e-5
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=120_000,
+        save_interval=10_000,
+        action_dist_interval=0,
+    )
+
+
+_CONFIGS.append(_robocasa365_pretrain_config())
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 

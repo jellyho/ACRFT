@@ -82,7 +82,7 @@ def main() -> None:
         if (args.params.parent / "config.json").exists()
         else {}
     )
-    if _tcfg.get("use_proprio"):
+    if _tcfg.get("use_proprio") is not False:
         pdim = meta["proprio_dim"]
         pro = _load(args.data, "proprio", (T, pdim), np.float32)
         mu, sd = pro.mean(0), pro.std(0)
@@ -125,6 +125,22 @@ def main() -> None:
         v_min=tcfg.get("v_min", args.v_min), v_max=tcfg.get("v_max", args.v_max), num_atoms=max(num_atoms, 2)
     )
     params = flax.serialization.msgpack_restore(args.params.read_bytes())
+    a_norm = tcfg.get("action_norm")
+    if a_norm:
+        # New checkpoints train on normalised actions; score them on the same scale.
+        _amu, _asd = np.asarray(a_norm["mean"], np.float32), np.asarray(a_norm["std"], np.float32)
+        chunk = (np.asarray(chunk) - _amu) / _asd
+        cand = (np.asarray(cand) - _amu) / _asd
+    v_apply = None
+    if tcfg.get("dueling"):
+        # Dueling checkpoints store the ADVANTAGE head; every metric here is about Q, so V must be
+        # recomposed or rho/bias measure a different (and meaningless) quantity.
+        vp = args.params.parent / args.params.name.replace("params", "vparams")
+        v_params = flax.serialization.msgpack_restore(vp.read_bytes())
+        v_net = _critic.ValueNet(hidden_dims=tuple(tcfg.get("hidden_dims", [512, 512, 512])))
+
+        def v_apply(z):
+            return v_net.apply(v_params, z)
 
     rng = np.random.default_rng(args.seed)
     idx = np.sort(rng.choice(T, size=min(args.num_states, T), replace=False))
@@ -133,8 +149,11 @@ def main() -> None:
     def q_of(actions):
         """[S, M, H, A] -> ensemble-min Q, reduced over prefixes to the full-chunk value."""
         m = actions.shape[1]
-        out = net.apply(params, jnp.repeat(z[:, None], m, axis=1), jnp.asarray(np.asarray(actions, np.float32)))
+        zz = jnp.repeat(z[:, None], m, axis=1)
+        out = net.apply(params, zz, jnp.asarray(np.asarray(actions, np.float32)))
         out = hl.from_logits(out) if num_atoms > 1 else out
+        if v_apply is not None:
+            out = out - out.mean(axis=-1, keepdims=True) + v_apply(zz)[..., None]
         return jnp.min(out, axis=0)  # ensemble -> [S, M] for qc, [S, M, P] for arq
 
     q_cand = np.asarray(q_of(np.asarray(cand[idx])))
@@ -175,6 +194,14 @@ def main() -> None:
     res["action_sensitivity"] = within / (between + 1e-12)
     res["within_state_std"] = float(np.mean(np.std(q_full, axis=1)))
     res["between_state_std"] = float(np.sqrt(between))
+    # Discount-corrected resolution (user-prompted fix, 2026-08-10): the TRUE value gap between
+    # same-state chunks is bounded by dQ ~ V*|ln(gamma)|*dt, so the raw variance ratio has a
+    # gamma-dependent ceiling (a perfect critic at gamma=.9998 scores ~1e-4). Convert to TIME:
+    # how many steps of time-to-success the critic resolves between candidates. Perfect ~ H/2.
+    # EXCEEDING the ceiling means the spread is a conservatism margin, not value information.
+    _v = res.get("mc_return_mean") or 1e-6
+    res["time_resolution_steps"] = res["within_state_std"] / (_v * abs(np.log(meta["discount"])) + 1e-12)
+    res["time_resolution_ceiling"] = H / 2
 
     # Demonstrated chunk vs a chunk borrowed from a different state, scored at the SAME state.
     other = np.asarray(chunk[rng.permutation(T)[: len(idx)]])

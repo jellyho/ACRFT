@@ -52,10 +52,25 @@ class CameraProjector:
         self._h, self._w = height, width
 
     def project(self, points_world: np.ndarray) -> np.ndarray:
-        """[n, 3] world → [n, 2] (row, col), row 0 = top, matching the displayed frame."""
+        """[n, 3] world → [n, 2] (row, col), row 0 = top; NaN rows for points the camera cannot see.
+
+        robosuite's helper divides by the projective depth WITHOUT checking its sign and then clips
+        to the border, so a point behind the camera lands at a mirrored in-frame position and an
+        out-of-view point piles on the edge - both drew wild strokes, worst on the wrist camera,
+        which the path routinely passes behind. Projecting manually exposes the depth: behind-camera
+        and out-of-frame points become NaN, and the drawing side truncates at the first NaN.
+        """
         w2p = self._cu.get_camera_transform_matrix(self._sim, self._cam, self._h, self._w)
-        px = self._cu.project_points_from_world_to_camera(np.asarray(points_world), w2p, self._h, self._w)
-        return np.asarray(px, dtype=np.float64)
+        pts = np.asarray(points_world, dtype=np.float64)
+        hom = np.concatenate([pts, np.ones((len(pts), 1))], axis=1) @ w2p.T  # [n, 4]
+        depth = hom[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            col = hom[:, 0] / depth
+            row = hom[:, 1] / depth
+        ok = (depth > 1e-9) & (row >= 0) & (row <= self._h - 1) & (col >= 0) & (col <= self._w - 1)
+        out = np.stack([row, col], axis=1)
+        out[~ok] = np.nan
+        return out
 
 
 def _base_rotation(base_quat) -> np.ndarray:
@@ -100,9 +115,11 @@ EE_METRES_PER_UNIT = 0.0054
 # EE position, so the anchor is unaffected and the enlarged path still projects with correct
 # perspective). A 16-step chunk really moves ~3 cm - about 5 px on this camera - so an unmagnified
 # fan is smaller than its own endpoint dot. x6 makes the spread legible; the HUD prints the factor
-# on every frame so the length is never mistaken for a real distance. 6.0 read as visually too
-# large; 4.0 keeps the fan legible while staying closer to the true span.
-PATH_GAIN = 4.0
+# on every frame so the length is never mistaken for a real distance. The base constant already IS
+# the control-frequency-corrected effective displacement (the config's 0.05 m is the COMMANDED
+# offset per step; what one control period actually achieves is the measured 0.0054), so the gain is
+# purely a legibility knob - and 2x proved enough once the fans were anchored and world-scaled.
+PATH_GAIN = 2.0
 
 
 def _adaptive_scale(chunk, target_len: float) -> float:

@@ -1,0 +1,88 @@
+% Introduction (v14, 2026-08-19). natbib + paper/references.bib. Style: no em-dashes, no prose
+% colons, no numbers. v14 flow per user: P1 recipe + shared suboptimality -> P2 the SECOND axis
+% (non-Markovian/reactive structure of human demonstrations) elevates commitment to an optimization
+% dimension -> P3 prior lines each miss one or both dimensions, incl. adaptive chunking itself ->
+% P4 our method optimizes both, directly on the policy -> contributions.
+
+\section{Introduction}
+\label{sec:intro}
+
+Vision-language-action models (VLAs) have made large-scale pretraining the dominant recipe for robot
+manipulation~\citep{rt2, openvla, pi0}. A pretrained backbone is adapted to a target task by
+supervised fine-tuning on teleoperated demonstrations. The weakness of this recipe is the data it
+imitates. Demonstrations interleave expert behavior with hesitation, detours, and failure, and their
+quality varies even within a single trajectory~\citep{grrl, reinbot}; because an imitation objective
+treats every transition as an equally valid target, the policy converges to the average of this
+mixture. Additional data reproduces the same average more faithfully, filtering discards the scarce
+experience the recipe depends on, and refining the policy through online interaction remains costly
+and unsafe at this scale.
+
+The suboptimality of demonstrations is widely recognized, and offline reinforcement learning (RL) is
+its natural remedy. Because outcomes are recorded with every trajectory, a learned value can prefer
+the good segments of mediocre demonstrations and stitch them into behavior that no single
+demonstration exhibits~\citep{levine2020offline, fu2020d4rl}. We argue, however, that human data
+poses a second problem along an axis that data quality does not capture. A teleoperator does not
+emit a Markovian stream of state-conditioned actions. Skilled human control alternates between
+committed, non-Markovian stretches executed from an internal plan without consulting the scene, and
+reactive phases in which delayed feedback drives intermittent
+corrections~\citep{woodworth1899, todorov2002, gawthrop2011}. How long to commit is therefore itself
+part of the behavior the data records, and it varies from state to state. Nor is this an artifact
+of imperfect learning. In the idealized limit of deterministic dynamics and full observability every
+execution length performs identically, and that tie is broken precisely by what real tasks contain,
+with stochastic branching rewarding frequent replanning on one side, and error re-injection under
+frequent feedback together with partial observability rewarding longer commitment on the
+other~\citep{zhang2025chunking, metelli2020persistence}. Offline RL for VLAs should
+accordingly optimize not only which actions to take but also this second dimension, the commitment,
+and adaptive action chunking is exactly the machinery for it.
+
+Existing adaptations of RL to VLAs serve neither dimension fully. Most retain the supervised
+objective and let outcome signals reshape it~\citep{pistar06, arfm, arm, reinbot, nora15}, inheriting
+its ceiling. Methods that learn a value tend to apply it around the policy rather than to it,
+filtering the dataset~\citep{grrl} or selecting among sampled chunks at test
+time~\citep{vgps, deas}; the value then only chooses among options that already exist, and
+sampling-based selection is bounded by what the sampler proposes and biased toward overestimated
+candidates~\citep{emaq}.
+
+A more direct line of work lets the value train the policy itself, yet still stops short.
+Actor-critic fine-tuning over chunks exists~\citep{corft}, but treats
+the chunk as a fixed, indivisible action, even though a critic scoring whole chunks of closed-loop
+demonstrations conflates skill with fortunate outcomes~\citep{dqc}. Adaptive chunking itself has been
+developed within RL~\citep{qc, aqc, acsac}, resting on the classical semi-Markov treatment of
+temporally extended actions~\citep{sutton1999options, bradtke1994smdp}; chunk-level TD makes long
+horizons tractable and prefix values let the commitment vary. Yet the commitment is still selected
+by scoring candidates at deployment rather than optimized jointly with the actions. Selection alone
+also cannot shrink the share of the commitment trade-off that stems from policy error, which only
+updating the policy removes, and recent execution-length methods indeed resort to attaching a
+separate policy-improvement stage to move past the frozen action distribution~\citep{exrl}.
+Moreover, no such construction has been developed into a purely offline post-training stage that
+leaves a VLA better than its supervised starting point. What is missing is a method that
+optimizes both dimensions at once, directly on the policy, at VLA scale.
+
+We present such a method, an offline reinforcement fine-tuning stage that improves the policy over
+the joint space of what to do and how long to commit. A causal-transformer critic valuing every
+prefix of the action chunk is learned entirely offline on the VLA's frozen representations with
+conservative in-sample targets~\citep{iql, deas}, and the policy is updated against it in both
+dimensions of its output; the actions within the chunk are pulled toward what the value prefers, and
+the commitment length becomes a state-dependent decision rather than a constant. Nothing is sampled
+and ranked at deployment. Freezing the backbone constrains where knowledge resides, not the quality
+of the resulting behavior; the support of the demonstrations contains better behavior than their
+average, which imitation blurs and extraction recovers.
+
+In summary, our main contributions are threefold:
+\begin{itemize}
+    \item We analyze why the prevailing mechanisms for applying a learned value to a VLA,
+    sampling-based selection and fixed-length execution, cannot surpass the policy they start from,
+    and locate the missing piece in direct policy optimization over both actions and
+    commitments~\citep{emaq, dqc, park2024bottleneck}, an argument we make precise in
+    Appendix~\ref{app:theory}.
+    \item We present a complete offline reinforcement fine-tuning method for VLAs that jointly
+    optimizes the policy over actions and commitment lengths through a single learned value,
+    together with a training recipe that keeps chunk-level value learning stable at this scale,
+    identifying which components are essential and which fail silently.
+    \item Through experiments on challenging manipulation tasks in both simulation~\citep{robocasa}
+    and the real world, with every design choice isolated against its alternatives in controlled
+    ablations, we show that the resulting policies surpass supervised fine-tuning using only the
+    demonstrations it already had, without a single additional rollout.
+\end{itemize}
+Together, these findings establish offline value learning, applied where the value can genuinely act,
+as a practical path to improving VLAs beyond the quality of their demonstrations.

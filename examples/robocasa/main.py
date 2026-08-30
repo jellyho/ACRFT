@@ -79,9 +79,25 @@ def main() -> None:
         "this policy degrades badly on partial-chunk execution.",
     )
     ap.add_argument("--camera-size", type=int, default=256, help="Camera height/width for the env.")
+    ap.add_argument(
+        "--env-action-order",
+        action="store_true",
+        help="Treat the policy's 12-d action as ALREADY in env/HDF5 order [ee_pos(3), ee_rot(3), "
+        "gripper(1), base_motion(4), control_mode(1)] and pass it straight through, skipping the "
+        "LeRobot->env reorder. Needed for checkpoints trained on RoboCasa's official LeRobot layout "
+        "(e.g. the pi05_pretrain_human300 release), whose action column is already HDF5-ordered.",
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
         "--video-dir", type=pathlib.Path, default=None, help="If set, save mp4 rollouts here (needs imageio)."
+    )
+    ap.add_argument(
+        "--traj-dir",
+        type=pathlib.Path,
+        default=None,
+        help="If set, record every rollout for training: per-step frames as one mp4 per camera plus "
+        "an npz of states/actions/decision boundaries. Successes AND failures are written; the "
+        "filter belongs at dataset-build time so one collection feeds the whole ladder.",
     )
     ap.add_argument(
         "--num-videos",
@@ -150,6 +166,10 @@ def main() -> None:
             projector = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
 
         frames = []
+        # per-STEP recording (LeRobot consumes per-step frames; decision boundaries are kept
+        # separately so chunk structure survives)
+        rec_frames = {k: [] for k in _CAMERAS} if args.traj_dir is not None else {}
+        rec_state, rec_act, rec_decision = [], [], []
         success = False
         step = 0
         while step < max_steps and not success:
@@ -161,6 +181,8 @@ def main() -> None:
                 "prompt": prompt,
             }
             action_chunk = np.asarray(client.infer(element)["actions"])
+            if args.traj_dir is not None:
+                rec_decision.append(step)  # this step is where the policy was queried
 
             # Action-distribution overlay: sample extra chunks (the distribution at THIS replan) and,
             # on every frame of the chunk, draw their predicted EE paths anchored at the LIVE EE so
@@ -174,7 +196,15 @@ def main() -> None:
             # the chunk length keeps the client config-free: no hardcoded horizon here.
             replan = args.replan_steps if args.replan_steps is not None else len(action_chunk)
             for action in action_chunk[:replan]:
-                obs, _, _, _ = env.step(_lerobot_action_to_env(np.asarray(action)))
+                a = np.asarray(action)
+                if args.traj_dir is not None:
+                    # the observation the action was applied to, and the action itself
+                    rec_state.append(_state(obs))
+                    rec_act.append(np.asarray(a, np.float32))
+                    for key, cam in _CAMERAS.items():
+                        rec_frames[key].append(_image(obs, cam))
+                env_action = a[:12] if args.env_action_order else _lerobot_action_to_env(a)
+                obs, _, _, _ = env.step(env_action)
                 step += 1
                 if record:
                     frame = _image(obs, _CAMERAS["observation/image"])
@@ -198,6 +228,26 @@ def main() -> None:
         successes += success
         trials.append({"trial": trial, "success": bool(success), "steps": step})
         print(f"[trial {trial + 1}] {'SUCCESS' if success else 'failure'} in {step} steps")
+
+        if args.traj_dir is not None and rec_act:
+            import imageio
+
+            ep_dir = args.traj_dir / f"{args.task}_seed{args.seed}_trial{trial:04d}"
+            ep_dir.mkdir(parents=True, exist_ok=True)
+            for key, frames_k in rec_frames.items():
+                # h264 keeps a 250-step, 3-camera episode near 15 MB instead of ~150 MB of raw npz
+                imageio.mimwrite(ep_dir / f"{key.split('/')[-1]}.mp4", frames_k, fps=20, quality=8)
+            np.savez_compressed(
+                ep_dir / "traj.npz",
+                state=np.asarray(rec_state, np.float32),
+                action=np.asarray(rec_act, np.float32),
+                decision_steps=np.asarray(rec_decision, np.int32),
+                success=np.asarray(success),
+                steps=np.asarray(step),
+                prompt=np.asarray(prompt),
+                task=np.asarray(args.task),
+                replan=np.asarray(args.replan_steps if args.replan_steps is not None else -1),
+            )
 
         if record and frames:
             import imageio

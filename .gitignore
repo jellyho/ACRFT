@@ -174,3 +174,6 @@ cython_debug/
 # NFS temp files
 .nfs*
 **/.nfs*
+third_party/robocasa-gr1-tabletop-tasks/
+third_party/robosuite-gr1/
+.venv-gr1/

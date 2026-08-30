@@ -1,0 +1,24 @@
+{
+  "gamma": 0.997,
+  "interval": [
+    -0.5,
+    1.0
+  ],
+  "K": 10,
+  "hlg_atoms": 51,
+  "scalar_arq": {
+    "spearman_Q_mc": 0.398,
+    "action_sensitivity": 0.01792,
+    "demo_winrate": 0.2255
+  },
+  "hlgauss_arq": {
+    "spearman_Q_mc": 0.5937,
+    "action_sensitivity": 0.01064,
+    "demo_winrate": 0.9051
+  },
+  "floq_arq": {
+    "spearman_Q_mc": 0.5176,
+    "action_sensitivity": 0.28142,
+    "demo_winrate": 0.8505
+  }
+}

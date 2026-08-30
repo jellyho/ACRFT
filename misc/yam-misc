@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# Rollout analysis tools. Self-contained: nothing here imports the robot repo.
+#
+# i2rt is the robot -- arms, controllers, teleop, capture. Rendering a finished rollout is
+# analysis, so it lives with the policy work instead. What it needs from the robot is copied in
+# and pinned: models/yam_kinematics.xml (the YAM + linear-4310 kinematic tree, meshes stripped --
+# verified to give bit-identical FK) and agentview_extrinsics.yaml (a snapshot of the rig's
+# calibrated base_T_agentview). Both are snapshots: re-copy them after a recalibration or a
+# change to the arm model.
+#
+#   misc/yam-misc render-gui [args]      pick a dataset and an episode, press Render
+#   misc/yam-misc render-samples [args]  the same render from the command line
+#   misc/yam-misc render-bulk [args]     every episode of a dataset, zipped
+#   misc/yam-misc stats [args]           what a run did, in numbers (compare several)
+#   misc/yam-misc plots [args]           figures from those numbers
+#
+# Runs in the workstation conda env (default yam_ws), which has PyQt5 / lerobot / mujoco / mink;
+# ACRFT's own .venv does not. Override with YAM_WS_ENV.
+set -eo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO"
+export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+
+ENV="${YAM_WS_ENV:-yam_ws}"
+if command -v conda >/dev/null 2>&1; then
+    CONDA_BASE="$(conda info --base 2>/dev/null || echo "$HOME/miniconda3")"
+    # shellcheck disable=SC1091
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+    conda activate "$ENV" 2>/dev/null || echo "yam-misc: conda env '$ENV' not found" >&2
+fi
+
+cmd="${1:-}"
+shift || true
+case "$cmd" in
+    render-gui)     exec python -m misc.render_gui "$@" ;;
+    render-samples) exec python -m misc.render_deploy_samples "$@" ;;
+    render-bulk)    exec python -m misc.render_bulk "$@" ;;
+    stats)          exec python -m misc.rollout_stats "$@" ;;
+    plots)          exec python -m misc.stats_plots "$@" ;;
+    *)
+        echo "usage: misc/yam-misc {render-gui|render-samples|render-bulk|stats|plots} [args]" >&2
+        exit 2
+        ;;
+esac

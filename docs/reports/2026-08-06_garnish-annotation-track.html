@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>태스크 2 확장(GarnishPancake) + mae0.5 annotation</title>
+<style>
+:root{--bg:#0f1117;--card:#181c25;--card2:#1f2430;--text:#e6e9ef;--muted:#9aa3b2;--line:#2a3140;
+--green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#60a5fa;--purple:#c084fc}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Pretendard',-apple-system,'Segoe UI',sans-serif;line-height:1.7;padding:40px 16px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:24px;margin-bottom:6px} h2{font-size:18px;margin:22px 0 10px 0;color:var(--blue)}
+.date{color:var(--muted);font-size:13px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px}
+p{margin-bottom:10px;font-size:14.5px} ul{padding-left:20px;margin-bottom:10px} li{margin-bottom:5px;font-size:14px}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+th{text-align:left;color:var(--muted);padding:7px 9px;border-bottom:1px solid var(--line);font-size:12px}
+td{padding:7px 9px;border-bottom:1px solid #222836}
+tr.win td{background:rgba(74,222,128,.07)}
+code{background:#232937;padding:1px 6px;border-radius:5px;font-size:12px;color:#a5d6ff}
+.g{color:var(--green);font-weight:600}.r{color:var(--red);font-weight:600}.y{color:var(--yellow);font-weight:600}.b{color:var(--blue);font-weight:600}
+.tag{display:inline-block;padding:1px 9px;border-radius:20px;font-size:11.5px;font-weight:700;margin-right:6px;background:rgba(96,165,250,.13);color:var(--blue);border:1px solid rgba(96,165,250,.35)}
+.back{font-size:13px;margin-bottom:18px}.back a{color:var(--muted);text-decoration:none}
+.qa{background:var(--card2);border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:11px 15px;margin:10px 0;font-size:13.5px}
+.qa .q{color:var(--purple);font-weight:700;margin-bottom:3px}
+</style></head><body><div class="wrap">
+<div class="back"><a href="index.html">← 실험 리포트 허브</a></div>
+<h1>태스크 2 확장(GarnishPancake) + mae0.5 annotation</h1><div class="date">2026-08-06 ~ 진행 중 · <span class="tag">RoboCasa</span><span class="tag">RLT</span><span class="tag">진행중</span></div>
+
+<div class="card"><h2>왜</h2>
+<p>"하나의 태스크(PrepareCoffee)로만 보니 몰린다" — 경향성 확인을 위한 두 번째 태스크와,
+mae0.5 임베딩 비교용 annotation.</p>
+<h2>상태</h2>
+<ul>
+<li><b>GarnishPancake mae0.5 학습</b>: PrepareCoffee와 동일 레시피(rlt7_pardec_noprop_mae0.5),
+B200에서 진행 중. 런처의 NUM_WORKERS 미전달 버그를 고친 뒤라 1.2s/it로 쾌속.</li>
+<li><b>mae0.5@70k annotation</b>: 4회 실패 (L40S OOM ×2 — 프레임당 후보 24개 샘플링이 원인;
+B200 cudnn autotune 무한 hang ×2). 임베딩 비교엔 z만 필요하므로 <b>z-only(N=1) 경량판</b>으로 우회 재제출.
+완료 시 HF(<code>jellyho/acrft-annot-mae05</code>) 자동 업로드 예약.</li>
+</ul>
+<p class="qa"><span class="q">메모</span> torch 작업은 node200(B200) 배제 필수 — torch 2.7.1+cu126에 sm_100 커널 없음.</p>
+</div>
+</div></body></html>

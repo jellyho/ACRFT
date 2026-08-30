@@ -63,6 +63,7 @@ class Replan:
     best_prefix: int  # 0-indexed macro prefix
     n_exec: int  # real steps committed to
     value: float  # the winning value
+    v: float | None = None  # IQL state value V(z) at this replan, when the run trained one
 
 
 class VLA:
@@ -72,7 +73,9 @@ class VLA:
     params every evaluation, instead of reloading the 3B model each time.
     """
 
-    def __init__(self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None):
+    def __init__(
+        self, config_name, checkpoint, *, num_samples, flow_steps, seed, model_overrides=None, noise_scale=1.0
+    ):
         train_config = _config.get_config(config_name)
         if model_overrides:
             # Some checkpoints were trained with model flags that are NOT baked into the registered
@@ -108,14 +111,20 @@ class VLA:
         )
         model = self.model_config.load(_model.restore_params(checkpoint / "params", dtype=jnp.bfloat16))
         model.eval()
+        self._model = model  # probes rebuild _extract with different sampling settings on ONE loaded model
         self.H = self.model_config.action_horizon
         self._rng = [jax.random.key(seed)]
 
         @jax.jit
         def _extract(rng, obs):
-            return model.extract_token_and_base_actions(rng, obs, num_samples=num_samples, num_steps=flow_steps)
+            return model.extract_token_and_base_actions(
+                rng, obs, num_samples=num_samples, num_steps=flow_steps, noise_scale=noise_scale
+            )
 
         self._extract = _extract
+        # Optional post-extraction transform of the token (e.g. the HILP phi readout, so a critic
+        # trained on phi(z) can be evaluated at rollout without touching the VLA side).
+        self.token_transform = None
         probe = self._out(
             {
                 "state": np.zeros((1, self.model_config.action_dim), np.float32),
@@ -141,7 +150,10 @@ class VLA:
         obs = _model.Observation.from_dict(inp)
         self._rng[0], k = jax.random.split(self._rng[0])
         z, base = self._extract(k, obs)
-        return np.asarray(z, np.float32), self._decode(np.asarray(base[0], np.float32))
+        z = np.asarray(z, np.float32)
+        if self.token_transform is not None:
+            z = self.token_transform(z)
+        return z, self._decode(np.asarray(base[0], np.float32))
 
 
 def proprio_stats(critic_path):
@@ -157,13 +169,70 @@ def proprio_stats(critic_path):
     if not cfg_p.exists():
         return None
     cfg = json.loads(cfg_p.read_text())
-    if not cfg.get("use_proprio"):
+    if cfg.get("use_proprio") is False:  # only legacy token-only runs recorded False
         return None
-    meta = json.loads((pathlib.Path(cfg["data"]) / "meta.json").read_text())
-    return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
+    annot = pathlib.Path(cfg["data"])
+    meta = json.loads((annot / "meta.json").read_text())
+    if "proprio_mean" in meta:
+        return np.asarray(meta["proprio_mean"], np.float32), np.asarray(meta["proprio_std"], np.float32)
+    # Older annotations carry the raw proprio column but not its statistics - recompute them the way
+    # the trainer z-scores (per-dim over the frames), so the rollout normalises identically.
+    pd_ = meta["proprio_dim"]
+    pr = np.memmap(annot / "proprio.dat", dtype=np.float32, mode="r", shape=(meta["num_frames"], pd_))
+    return np.asarray(pr.mean(0), np.float32), np.asarray(pr.std(0), np.float32)
 
 
-def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0, seed=0, proprio=None):
+def load_token_transform(critic_path):
+    """The embedding map a ladder critic was trained on (annot meta token_transform), or None.
+
+    Live rollout tokens must pass through the SAME map (PCA / HILP phi) the training annot did.
+    """
+    import json as _json
+
+    cfg = _json.loads((pathlib.Path(critic_path).parent / "config.json").read_text())
+    annot = pathlib.Path(cfg["data"])
+    meta = _json.loads((annot / "meta.json").read_text())
+    tf = meta.get("token_transform")
+    if not tf:
+        return None
+    if not (annot / tf["file"]).exists() and meta.get("source_annot"):
+        annot = pathlib.Path(meta["source_annot"])  # discount-derived variants carry .dat only
+    if tf["kind"] == "pca":
+        z = np.load(annot / tf["file"])
+        mu, comps = z["mean"], z["components"]
+        return lambda x: (np.asarray(x, np.float32) - mu) @ comps.T
+    if tf["kind"] == "phi":
+        import sys as _sys
+
+        _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+        import flax.serialization as _fser
+        from train_hilp_readout import Phi as _Phi
+
+        params = _fser.msgpack_restore((annot / tf["file"]).read_bytes())
+        net = _Phi(dim=tf["dim"])
+        fn = jax.jit(lambda x: net.apply(params, x))
+        return lambda x: np.asarray(fn(jnp.asarray(x, jnp.float32)))
+    raise ValueError(f"unknown token_transform kind {tf['kind']}")
+
+
+def make_policy_fn(
+    vla,
+    score,
+    macro,
+    *,
+    mode,
+    query_noise=0.0,
+    softmax_temp=0.0,
+    seed=0,
+    proprio=None,
+    vfn=None,
+    bfn=None,
+    gamma=0.99,
+    history=0,
+    history_stride=8,
+    token_tf=None,
+    sigma_veto=0.0,
+):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
 
@@ -175,11 +244,24 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
                     near-tie is not always resolved toward the noisiest estimate. 0 = hard arg-max.
     """
     rng = np.random.default_rng(seed)
+    hist_state = {"t": 0, "buf": []}  # (env_step, raw 2048d token) at each replan of THIS episode
 
     def fn(element):
         z, cand = vla.token_and_candidates(element)
+        z_raw = np.asarray(z, np.float32)[0]  # [2048] pre-proprio token, for the history buffer
+        if token_tf is not None:
+            z = token_tf(z)  # ladder critics see the SAME embedding the annot was transformed with
         if mode == "vla":
             return cand[0], vla.H, None
+        if mode == "randh":
+            # The honest null for the JOINT arg-max: uniform over the critic's whole decision space,
+            # candidate AND commit length. `rand` alone always commits the full chunk, so it nulls
+            # only the candidate axis; a critic that beats rand but not randh is winning on
+            # commitment-length luck, not on scoring.
+            i = int(rng.integers(len(cand)))
+            pnum = vla.H // macro
+            n_exec = int((int(rng.integers(pnum)) + 1) * macro)
+            return cand[i], n_exec, None
         if mode == "rand":
             # The control the other modes were missing. `bon` beating `vla` would only show that
             # picking a different sample helps — not that the CRITIC picked it. Drawing uniformly
@@ -193,6 +275,22 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
             p = np.asarray(element["observation/state"], np.float32) - mu
             p = np.where(sd > 1e-6, p / np.where(sd > 1e-6, sd, 1.0), 0.0)
             z = np.concatenate([np.asarray(z, np.float32), p[None, :]], axis=-1)
+        if history > 0:
+            # Mirror training's obs_at: K slots at t-k*stride, clamped to episode start (here: the
+            # oldest buffered token). Buffer holds tokens from past replans of this episode.
+            t_now = hist_state["t"]
+            hist_state["buf"].append((t_now, z_raw))
+            slots = []
+            for k in range(history, 0, -1):
+                want = t_now - k * history_stride
+                best = hist_state["buf"][0][1]
+                for ts, tok in hist_state["buf"]:
+                    if ts <= want:
+                        best = tok
+                    else:
+                        break
+                slots.append(best)
+            z = np.concatenate([np.concatenate(slots)[None, :], np.asarray(z, np.float32)], axis=-1)
         scored = cand
         if query_noise > 0:
             # Temporally coherent offset+drift per candidate, scaled by the chunk's own spread, so the
@@ -203,24 +301,80 @@ def make_policy_fn(vla, score, macro, *, mode, query_noise=0.0, softmax_temp=0.0
             drift = rng.standard_normal((scored.shape[0], 1, scored.shape[2])) * ramp
             scored = scored + query_noise * sd * (off + drift)
         zc = jnp.repeat(jnp.asarray(z)[:, None], cand.shape[0], axis=1)  # [1, N, D]
-        q = np.asarray(score(zc, jnp.asarray(scored)[None]))
-        q = np.min(q, axis=0)[0]  # ensemble-min -> [N, P]
+        q_ens = np.asarray(score(zc, jnp.asarray(scored)[None]))  # [K, 1, N, P]
+        q = np.min(q_ens, axis=0)[0]  # ensemble-min -> [N, P]
+        if sigma_veto > 0:
+            # sigma-veto: the winner's curse harvests overestimation where the ensemble disagrees.
+            # Veto the top fraction by disagreement at each candidate's own best column, but never
+            # veto candidate 0 (the pure policy sample) - the fallback must stay executable.
+            dis = np.abs(q_ens[:, 0] - q_ens[:, 0].mean(axis=0)).mean(axis=0).max(axis=-1)  # [N]
+            n_veto = int(sigma_veto * len(dis))
+            if n_veto > 0:
+                order = np.argsort(-dis)
+                veto = [i for i in order[:n_veto] if i != 0]
+                q[veto, :] = -np.inf
         flat = q[:, -1] if mode == "bon" else (q[0] if mode == "prefix" else q.reshape(-1))
         if softmax_temp > 0:  # sample instead of arg-max
             w = np.exp((flat - flat.max()) / softmax_temp)
             choice = rng.choice(len(flat), p=w / w.sum())
         else:
             choice = int(np.argmax(flat))
-        if mode == "bon":
+        if mode == "aqc":
+            # Adaptive Q-Chunking selection (arXiv:2605.05544), reduced to the two ingredients
+            # that matter here: per-prefix baseline subtraction, then an epsilon'd z-score per
+            # column. Candidate ranking inside a column is unchanged (affine) - the h axis is
+            # the target.
+            # Two of the paper's three ingredients carry all the weight here: the per-prefix
+            # baseline (cancels each head's own bias) and the epsilon'd z-score (fair cross-scale
+            # comparison). The gamma^h division is dropped - at our discounts it rescales columns by
+            # at most 17% (0.99^16), far below run noise, and post-z-score its only residue was a
+            # slight epsilon-threshold tilt better controlled explicitly.
+            b = np.asarray(bfn(jnp.asarray(z))).reshape(-1)  # [P]
+            score_m = q - b[None, :]
+            # The epsilon is load-bearing (paper Eq 16): columns whose spread clears it behave as
+            # z-scores, columns collapsed below it are damped toward zero instead of being amplified
+            # to unit variance - with a tiny epsilon the per-column affine (Q-b)/gamma^h would cancel
+            # entirely and pure-noise scales would shout as loudly as real ones.
+            score_m = (score_m - score_m.mean(0, keepdims=True)) / (score_m.std(0, keepdims=True) + 1e-3)
+            i, pp = np.unravel_index(int(np.argmax(score_m)), score_m.shape)
+            i, pp = int(i), int(pp)
+        elif mode == "softcand":
+            # The two-stage rule the paired-comparison decomposition argues for: the candidate is
+            # SAMPLED (softmax over row-maxima - sampling breaks the winner's curse of executing
+            # whichever chunk the critic most over-values), and h is that row's ARG-MAX (safe: the
+            # 8 prefix values share ~88% of their error, so the within-row comparison is paired).
+            row = q.max(axis=1)
+            t = softmax_temp if softmax_temp > 0 else max(float(row.std()), 1e-6)
+            w = np.exp((row - row.max()) / t)
+            i = int(rng.choice(len(row), p=w / w.sum()))
+            pp = int(np.argmax(q[i]))
+        elif mode == "bon":
             i, pp = choice, q.shape[1] - 1
         elif mode == "prefix":
             i, pp = 0, choice
         else:
             i, pp = np.unravel_index(choice, q.shape)
         n_exec = int((pp + 1) * macro)
-        return cand[i], n_exec, Replan(q, cand, int(i), int(pp), n_exec, float(q[i, pp]))
+        hist_state["t"] += n_exec
+        v = float(np.asarray(vfn(jnp.asarray(z))).reshape(-1)[0]) if vfn is not None else None
+        return cand[i], n_exec, Replan(q, cand, int(i), int(pp), n_exec, float(q[i, pp]), v)
 
+    def _reset():
+        hist_state["t"] = 0
+        hist_state["buf"].clear()
+
+    fn.reset = _reset
     return fn
+
+
+def _parse_noise_scales(spec, num_samples):
+    """'1.0x8,1.5x8' -> [1.0]*8+[1.5]*8; must sum to num_samples."""
+    out = []
+    for part in spec.split(","):
+        sc, cnt = part.lower().split("x")
+        out += [float(sc)] * int(cnt)
+    assert len(out) == num_samples, f"noise-scales counts {len(out)} != num_samples {num_samples}"
+    return out
 
 
 def build_policy(
@@ -236,6 +390,8 @@ def build_policy(
     softmax_temp=0.0,
     model_overrides=None,
     vla=None,
+    noise_scales=None,
+    sigma_veto=0.0,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
 
@@ -257,6 +413,7 @@ def build_policy(
         flow_steps=flow_steps,
         seed=seed,
         model_overrides=model_overrides,
+        noise_scale=_parse_noise_scales(noise_scales, num_samples) if noise_scales else 1.0,
     )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
     if mode == "vla":
@@ -265,7 +422,35 @@ def build_policy(
     pro = proprio_stats(critic_path)
     if pro is not None:
         logger.info(f"critic reads proprio: +{len(pro[0])} dims appended to the token")
-    return make_policy_fn(vla, jax.jit(score), macro, mode=mode, proprio=pro, **kw), vla.H, macro
+    vfn = _critic.load_value_net(critic_path)
+    if vfn is not None:
+        logger.info("run has an IQL value net: V(z) will ride along in the HUD trace")
+        vfn = jax.jit(vfn)
+    bfn = _critic.load_prefix_baselines(critic_path)
+    if mode == "aqc" and bfn is None:
+        raise ValueError("mode=aqc needs a critic trained with --aqc-baseline (per-prefix baseline heads)")
+    if bfn is not None:
+        bfn = jax.jit(bfn)
+    _ccfg = json.loads((pathlib.Path(critic_path).parent / "config.json").read_text())
+    return (
+        make_policy_fn(
+            vla,
+            jax.jit(score),
+            macro,
+            mode=mode,
+            proprio=pro,
+            vfn=vfn,
+            bfn=bfn,
+            gamma=_ccfg.get("discount", 0.99),
+            history=_ccfg.get("history", 0) or 0,
+            history_stride=_ccfg.get("history_stride", 8) or 8,
+            token_tf=load_token_transform(critic_path),
+            sigma_veto=sigma_veto,
+            **kw,
+        ),
+        vla.H,
+        macro,
+    )
 
 
 def main() -> None:
@@ -277,12 +462,19 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--checkpoint", required=True, type=pathlib.Path)
     ap.add_argument("--critic", type=pathlib.Path, default=None, help="Trained critic params.msgpack.")
+    ap.add_argument(
+        "--phi",
+        type=pathlib.Path,
+        default=None,
+        help="HILP phi readout (phi.pt): apply phi to the extracted token before the "
+        "critic, for critics trained on the phi space.",
+    )
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
         "--modes",
         nargs="+",
         default=["critic", "bon", "prefix", "rand", "vla"],
-        choices=["critic", "bon", "prefix", "rand", "vla"],
+        choices=["critic", "bon", "prefix", "rand", "randh", "vla", "softcand", "aqc"],
     )
     ap.add_argument("--num-trials", type=int, default=20)
     ap.add_argument("--num-samples", type=int, default=16, help="Candidates per replan.")
@@ -303,7 +495,45 @@ def main() -> None:
         "_pardec_noprop checkpoint needs rlt_decoder_mode=parallel and rlt_include_proprio=False.",
     )
     ap.add_argument("--seed", type=int, default=0, help="Scene seed; identical across modes and runs.")
+    ap.add_argument(
+        "--sigma-veto",
+        type=float,
+        default=0.0,
+        help="axis-2 conservatism at selection: drop the fraction of candidates with the LARGEST "
+        "ensemble disagreement (|Q1-Q2| at the joint-argmax column) before the argmax - the "
+        "high-sigma candidates are where the winner's curse harvests overestimation.",
+    )
+    ap.add_argument(
+        "--noise-scales",
+        default=None,
+        help="candidate-pool diversification: 'SCALExCOUNT,...' e.g. '1.0x8,1.5x8'. Sample 0 keeps "
+        "scale of its slot, so keep the first group at 1.0: the vla baseline (candidate 0) stays the "
+        "pure policy sample while the critic selects over the mixed pool.",
+    )
+    ap.add_argument(
+        "--policy-seed",
+        type=int,
+        default=None,
+        help="Sampling seed for the VLA (and rand modes), decoupled from the scene seed. Running the "
+        "SAME scene seed under different policy seeds yields multiple rollouts per kitchen - the "
+        "mixture that stops a critic from reading outcomes off scene identity.",
+    )
     ap.add_argument("--camera-size", type=int, default=256)
+    ap.add_argument(
+        "--scenes-from-extras",
+        type=pathlib.Path,
+        default=None,
+        help="Directory of demo extras (episode_XXXXXX/ep_meta.json). Trial i replays training "
+        "episode i's exact scene instead of sampling a fresh one - the in-distribution eval.",
+    )
+    ap.add_argument(
+        "--dump-traj",
+        type=pathlib.Path,
+        default=None,
+        help="Save every trial's per-step (images, state, action, success) as one npz here — the "
+        "raw material annotate_rollouts.py turns into critic training data. Failures included; "
+        "that is the point.",
+    )
     ap.add_argument("--video-dir", type=pathlib.Path, default=None)
     ap.add_argument("--num-videos", type=int, default=4)
     ap.add_argument("--fps", type=int, default=20)
@@ -325,6 +555,16 @@ def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, default=None, help="Write the per-trial traces here.")
     args = ap.parse_args()
 
+    # The HUD's "steps left" relabelling is log V / log gamma - with the wrong gamma it is wrong by
+    # the ratio of the logs (10x for 0.999 vs 0.99), which is exactly how it presented.
+    _crit_discount = 0.99
+    if args.critic is not None:
+        import contextlib as _ctx
+        import json as _json
+
+        with _ctx.suppress(Exception):
+            _crit_discount = float(_json.loads((args.critic.parent / "config.json").read_text())["discount"])
+
     if "vla" not in args.modes and args.critic is None:
         ap.error("--critic is required unless --modes vla")
 
@@ -336,6 +576,7 @@ def main() -> None:
     results = {}
     # One VLA for every mode. See build_policy: a per-mode rebuild leaks the previous model onto the
     # device and breaks offscreen rendering for every mode after the first.
+    _pseed = args.policy_seed if args.policy_seed is not None else args.seed
     _vla_ov = {}
     for kv in args.vla_override:
         k, _, v = kv.partition("=")
@@ -345,9 +586,34 @@ def main() -> None:
         args.checkpoint,
         num_samples=args.num_samples,
         flow_steps=args.num_flow_steps,
-        seed=args.seed,
+        seed=_pseed,
         model_overrides=_vla_ov,
     )
+
+    if args.phi is not None:
+        import torch as _torch
+
+        _sd = _torch.load(args.phi, map_location="cpu")
+        # phi was trained on STANDARDIZED tokens (train_hilp_readout normalizes its input);
+        # feeding raw tokens shifted phi outputs by ~45% relative error and invalidated the
+        # first round of phi rollout arms. Standardize with the training cache's statistics.
+        _cache_dir = args.phi.parent.parent / f"rlt_cache_{args.task}"
+        _tok = np.load(_cache_dir / "features.npy", mmap_mode="r")
+        _tsub = np.array(_tok[:: max(1, len(_tok) // 20000)])
+        _tmu, _tsd = _tsub.mean(0).astype(np.float32), (_tsub.std(0) + 1e-6).astype(np.float32)
+        _w0 = _sd["0.weight"].numpy()
+        _b0 = _sd["0.bias"].numpy()
+        _w2 = _sd["2.weight"].numpy()
+        _b2 = _sd["2.bias"].numpy()
+
+        def _phi_fn(z, _w0=_w0, _b0=_b0, _w2=_w2, _b2=_b2, _mu=_tmu, _sdv=_tsd):
+            z = (np.asarray(z, np.float32) - _mu) / _sdv
+            h = z @ _w0.T + _b0
+            h = 0.5 * h * (1.0 + np.tanh(0.7978845608 * (h + 0.044715 * h**3)))  # gelu(tanh approx)
+            return (h @ _w2.T + _b2).astype(np.float32)
+
+        shared_vla.token_transform = _phi_fn
+        logger.info(f"phi adapter active: token {_w0.shape[1]} -> {_w2.shape[0]}")
 
     for mode in args.modes:
         policy, H, macro = build_policy(
@@ -357,13 +623,15 @@ def main() -> None:
             mode=mode,
             num_samples=args.num_samples,
             flow_steps=args.num_flow_steps,
-            seed=args.seed,
+            seed=_pseed,
             query_noise=args.query_noise,
+            noise_scales=args.noise_scales,
+            sigma_veto=args.sigma_veto,
             model_overrides=_vla_ov,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
         )
-        trace, frames, box = [], [], {"trial": 0, "proj": None}
+        trace, frames, box = [], [], {"trial": 0, "proj": None, "wproj": None}
         record = args.video_dir is not None
 
         def on_step(obs, info, step, *, _trace=trace, _frames=frames, _box=box, _mode=mode, _rec=record, _hz=H):
@@ -378,13 +646,18 @@ def main() -> None:
                 # env.sim is only populated by the first reset, so the projector cannot be built
                 # alongside the env - it is built on the first recorded frame instead.
                 _box["proj"] = _ov.CameraProjector(env.sim, "robot0_agentview_left", args.camera_size, args.camera_size)
-            paths = None
+                # The wrist camera rides the arm; CameraProjector recomputes its matrix per call,
+                # so one object per camera is enough.
+                _box["wproj"] = _ov.CameraProjector(env.sim, "robot0_eye_in_hand", args.camera_size, args.camera_size)
+            paths = wrist_paths = None
             if info is not None:
                 # Anchor every candidate at the LIVE end-effector so the fan stays attached to the
                 # gripper as it moves, rather than to wherever the replan happened.
                 ee, bq = np.asarray(obs["robot0_eef_pos"]), np.asarray(obs["robot0_base_quat"])
                 sc = args.path_scale * _ov.PATH_GAIN  # world-space magnification; HUD labels it
-                paths = [_box["proj"].project(_ov.predict_path(ee, bq, c, sc)) for c in info.cand]
+                world = [_ov.predict_path(ee, bq, c, sc) for c in info.cand]
+                paths = [_box["proj"].project(w) for w in world]
+                wrist_paths = [_box["wproj"].project(w) for w in world]
             _agent = _ro.image_from_obs(obs, _ro.CAMERAS["observation/image"])
             if _os.environ.get("ACRFT_DEBUG_FRAMES"):
                 # Is the camera image already wrong when it reaches us, or does the HUD break it?
@@ -407,6 +680,7 @@ def main() -> None:
                     "info": info,
                     "step": step,
                     "paths": paths,
+                    "wrist_paths": wrist_paths,
                     "chosen": (info.best_cand if info is not None else 0),
                     "success": bool(env._check_success()),
                 }
@@ -429,7 +703,7 @@ def main() -> None:
                 # Render every panel now, with the simulator and the policy both idle.
                 import hud as _hud2
 
-                dash = _hud2.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size)
+                dash = _hud2.Dashboard(mode=_mode, horizon=_hz, camera_size=args.camera_size, discount=_crit_discount)
                 composed = [
                     dash.frame(
                         r["agent"],
@@ -437,6 +711,7 @@ def main() -> None:
                         r["info"],
                         r["step"],
                         paths=r["paths"],
+                        wrist_paths=r.get("wrist_paths"),
                         chosen=r["chosen"],
                         success=r["success"],
                     )
@@ -455,8 +730,66 @@ def main() -> None:
             # the dead handle raises 'MjSim' object has no attribute 'model'. Rebuild from the fresh
             # sim on the next frame.
             _box["proj"] = None
+            _box["wproj"] = None
             _box["trial"] = trial + 1
 
+        on_transition = None
+        if args.dump_traj is not None:
+            args.dump_traj.mkdir(parents=True, exist_ok=True)
+            _tb = {"imgs": [], "wrist": [], "right": [], "states": [], "actions": [], "stages": [], "trial": 0}
+
+            def on_transition(obs, action, step, *, _tb=_tb, _mode=mode):
+                import io as _io
+
+                from PIL import Image as _Image
+
+                el = _ro.obs_to_element(obs, "")
+                for key, buf in (
+                    ("observation/image", _tb["imgs"]),
+                    ("observation/wrist_image", _tb["wrist"]),
+                    ("observation/image_right", _tb["right"]),
+                ):
+                    b = _io.BytesIO()
+                    _Image.fromarray(np.asarray(el[key])).save(b, format="JPEG", quality=90)
+                    buf.append(b.getvalue())
+                _tb["states"].append(np.asarray(el["observation/state"], np.float32))
+                _tb["actions"].append(np.asarray(action, np.float32))
+                _tb.setdefault("stages", []).append(_ro.stage_flags(env))
+
+            _orig_on_trial = on_trial
+
+            def on_trial(trial, success, steps, *, _tb=_tb, _mode=mode, _prev=_orig_on_trial):
+                f = args.dump_traj / f"{args.task}_{_mode}_seed{args.seed}_t{trial:02d}.npz"
+                np.savez_compressed(
+                    f,
+                    images=np.array(_tb["imgs"], dtype=object),
+                    wrist=np.array(_tb["wrist"], dtype=object),
+                    right=np.array(_tb["right"], dtype=object),
+                    states=np.stack(_tb["states"]),
+                    actions=np.stack(_tb["actions"]),
+                    stages=np.array(_tb.get("stages", []), dtype=object),
+                    success=bool(success),
+                    steps=int(steps),
+                    task=args.task,
+                    mode=_mode,
+                    seed=int(args.seed),
+                    prompt=str(env.get_ep_meta().get("lang", args.task)),
+                )
+                logger.info(f"  traj -> {f.name} ({steps} steps, {'succ' if success else 'FAIL'})")
+                for k in ("imgs", "wrist", "right", "states", "actions", "stages"):
+                    _tb[k].clear()
+                if _prev is not None:
+                    _prev(trial, success, steps)
+
+        ep_metas = None
+        if args.scenes_from_extras is not None:
+            import json as _json
+
+            # seed picks the episode block, so different jobs replay different demo scenes
+            _all = sorted(args.scenes_from_extras.glob("episode_*"))
+            dirs = _all[args.seed % max(len(_all) - args.num_trials, 1) :][: args.num_trials]
+            ep_metas = [_json.loads((d / "ep_meta.json").read_text()) for d in dirs]
+            logger.info(f"replaying {len(ep_metas)} recorded demo scenes from {args.scenes_from_extras}")
         res = _ro.run_trials(
             env,
             policy,
@@ -466,6 +799,8 @@ def main() -> None:
             replan_steps=H,
             on_trial=on_trial,
             on_step=on_step,
+            on_transition=on_transition,
+            ep_metas=ep_metas,
         )
         res["trace"] = trace
         results[mode] = res

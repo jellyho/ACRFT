@@ -8,7 +8,6 @@ pfx_curve.json), so re-running refreshes every number without editing this file.
 
 import argparse
 import contextlib
-import glob
 import html
 import json
 import math
@@ -90,19 +89,23 @@ def wilson(k, n, z=1.96):
 
 def load_sweep(root, sweep):
     out = {}
-    for d in sorted(glob.glob(str(root / f"critic_runs/{sweep}/*/"))):
-        r = os.path.basename(d.rstrip("/"))
+    # NOT `glob(".../*/")`: pathlib normalises away the trailing slash, so the old string
+    # concatenation quietly produced ".../baserollout/*.json" and every rollout table came out
+    # empty while the prose around it (hand-computed) looked fine.
+    for d in sorted((root / "critic_runs" / sweep).glob("*")):
+        if not d.is_dir():
+            continue
         e = {}
         for name in ("diag.json", "config.json"):
-            p = pathlib.Path(d) / name
-            if p.exists():
+            f = d / name
+            if f.exists():
                 with contextlib.suppress(json.JSONDecodeError):
-                    e[name.split(".")[0]] = json.loads(p.read_text())
-        rolls = sorted(glob.glob(d + "rollout/*.json"))
+                    e[name.split(".")[0]] = json.loads(f.read_text())
+        rolls = sorted((d / "rollout").glob("*.json"))
         if rolls:
-            e["rollout"] = json.loads(pathlib.Path(rolls[-1]).read_text())
+            e["rollout"] = json.loads(rolls[-1].read_text())
         if e:
-            out[r] = e
+            out[d.name] = e
     return out
 
 
@@ -175,6 +178,108 @@ def rollout_table(emit, runs):
     return tot
 
 
+# ---------------------------------------------------------------- charts
+# Static inline SVG: CSP-safe, theme-aware via CSS vars. One axis per chart, series directly
+# labelled at their last point - the tables stay underneath as the precise backup.
+PAL = {"td": "#c0563f", "e50": "#3b78ae", "e70": "#2f855a", "e90": "#b9892e", "e95": "#8168b3"}
+
+
+def _sv(tag, **kw):
+    a = " ".join(f'{k.replace("_", "-")}="{v}"' for k, v in kw.items())
+    return f"<{tag} {a}/>"
+
+
+def _tx(x, y, t, *, size=11, color="var(--mut)", anchor="start", mono=True, weight=""):
+    fam = "ui-monospace,Menlo,monospace" if mono else "inherit"
+    w = f' font-weight="{weight}"' if weight else ""
+    return (
+        f'<text x="{x:.1f}" y="{y:.1f}" fill="{color}" font-size="{size}" '
+        f'text-anchor="{anchor}" font-family="{fam}"{w}>{t}</text>'
+    )
+
+
+def dot_intervals(rows, *, w=680, rowh=34, pad_l=76, x_lo=0.3, x_hi=0.85, title=""):
+    """rows = [(label, [(series_name, color, k, n)])] - a dot with a Wilson CI per series per row."""
+    h = len(rows) * rowh + 56
+    iw = w - pad_l - 60
+    X = lambda p: pad_l + iw * (p - x_lo) / (x_hi - x_lo)  # noqa: E731
+    out = [f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{title}">']
+    for gx in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8):
+        out.append(_sv("line", x1=f"{X(gx):.1f}", y1=26, x2=f"{X(gx):.1f}", y2=h - 30, stroke="var(--line)"))
+        out.append(_tx(X(gx), h - 14, f"{gx * 100:.0f}%", anchor="middle", size=10))
+    for i, (lab, pts) in enumerate(rows):
+        y = 40 + i * rowh
+        out.append(_tx(pad_l - 10, y + 4, lab, anchor="end", size=12, color="var(--ink)"))
+        for j, (name, color, k, n) in enumerate(pts):
+            if not n:
+                continue
+            pr = k / n
+            lo, hi = wilson(k, n)
+            yy = y + (j - (len(pts) - 1) / 2) * 9
+            out.append(
+                _sv(
+                    "line",
+                    x1=f"{X(lo):.1f}",
+                    y1=yy,
+                    x2=f"{X(hi):.1f}",
+                    y2=yy,
+                    stroke=color,
+                    stroke_width=2,
+                    opacity=0.55,
+                )
+            )
+            out.append(_sv("circle", cx=f"{X(pr):.1f}", cy=yy, r=4.2, fill=color))
+            if i == 0:
+                out.append(_tx(X(pr), 18, name, anchor="middle", size=10.5, color=color, weight=600))
+    out.append("</svg>")
+    return "".join(out)
+
+
+def line_chart(series, xticks, *, w=680, h=300, pad_l=64, pad_b=42, ylabel="", zero_line=True, title=""):
+    """series = [(name, color, [y...])] over the shared xticks (band or h labels)."""
+    ys = [v for _, _, vv in series for v in vv if v is not None]
+    lo = min([*ys, 0.0]) if zero_line else min(ys)
+    hi = max(ys)
+    span = (hi - lo) or 1.0
+    lo -= span * 0.04
+    hi += span * 0.08
+    span = hi - lo
+    iw, ih = w - pad_l - 78, h - pad_b - 20
+    X = lambda i: pad_l + iw * i / max(len(xticks) - 1, 1)  # noqa: E731
+    Y = lambda v: 20 + ih * (1 - (v - lo) / span)  # noqa: E731
+    out = [f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{title}">']
+    for t in range(5):
+        v = lo + span * t / 4
+        out.append(_sv("line", x1=pad_l, y1=f"{Y(v):.1f}", x2=pad_l + iw, y2=f"{Y(v):.1f}", stroke="var(--line)"))
+        out.append(_tx(pad_l - 8, Y(v) + 4, f"{v:+.2f}" if abs(hi) < 10 else f"{v:.1f}", anchor="end", size=10))
+    if zero_line and lo < 0 < hi:
+        out.append(
+            _sv(
+                "line",
+                x1=pad_l,
+                y1=f"{Y(0):.1f}",
+                x2=pad_l + iw,
+                y2=f"{Y(0):.1f}",
+                stroke="var(--mut)",
+                stroke_dasharray="3 3",
+            )
+        )
+    for i, lab in enumerate(xticks):
+        out.append(_tx(X(i), h - 26, str(lab), anchor="middle", size=10))
+    if ylabel:
+        out.append(_tx(pad_l, h - 8, ylabel, size=10.5))
+    for name, color, vv in series:
+        pts = " ".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(vv) if v is not None)
+        out.append(
+            f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+        )
+        last = max(i for i, v in enumerate(vv) if v is not None)
+        out.append(_tx(X(last) + 7, Y(vv[last]) + 4, name, size=10.5, color=color, weight=600))
+    out.append("</svg>")
+    return "".join(out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", type=pathlib.Path, default=None)
@@ -207,31 +312,109 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------------- summary
-    P("<h2>Summary — six things now settled</h2>")
+    P("<h2>Summary — what is now settled</h2>")
     P(
         "<ol>"
-        "<li><b>The critic is harmful, not merely useless.</b> Success falls monotonically with how much "
-        "authority it gets (vla 74% → critic 46%, 13 runs × 30 trials, non-overlapping confidence "
-        "intervals). Candidate selection alone does worse than picking at random.</li>"
-        "<li><b>The cause is the bootstrap's arg-max.</b> The target's V is systematically over-estimated "
-        "far from the goal — 5.07× beyond 250 steps. The true value is known in closed form (γ^d), so "
-        "this is computed, not estimated.</li>"
-        "<li><b>IQL (expectile regression) removes the inflation — by 19–38×.</b> Raising the expectile "
-        "brings the bias back monotonically (e50 ≈ e70 &lt; e90 &lt; e95), a dose-response that settles "
-        "causality.</li>"
-        "<li><b>An action-ranking signal still does not exist in the data.</b> With one action per state, "
-        "the target depends on neither the action nor the prefix; act_sens ≈ 0 holds across all 26 runs. "
-        "The one offline exception (IQL+QC, rank_c 0.571) was rejected in rollout: bon−vla = 0.</li>"
-        "<li><b>The prefix axis was measuring critic error, not commitment length.</b> Per-prefix targets "
-        "at one state should all equal γ^d; the distance-structured V bias tilted them into the monotone "
-        "decline visible in the videos.</li>"
-        "<li><b>IQL cured the prefix axis (rollout verdict).</b> The worst mode under TD — prefix — went "
-        "from 0.528 to <b>0.733, at parity with the raw VLA</b>. Overall critic harm halved (−0.285 → "
-        "−0.142), the expectile dose-response reproduced in success rates (e50 −0.067 &lt; e90 −0.233, "
-        "p=0.016), and what remains is the deployment best-of-N's candidate arg-max — unfixable by "
-        "algorithm while the data carries no action contrast. The safe deployment on this data is "
-        "<b>prefix-only</b>: the IQL critic sets the commitment length, the first sample is executed.</li>"
+        "<li><b>The critic is harmful, not merely useless</b> — and unanimously so under TD: "
+        "critic−vla is negative in 14/14 runs (sign test p≈1e-4). Candidate selection alone does "
+        "worse than picking at random.</li>"
+        "<li><b>The cause is the bootstrap's arg-max</b>: the target's V is over-estimated with a "
+        "distance structure (5.07× beyond 250 steps; the truth γ^d is known in closed form).</li>"
+        "<li><b>IQL removes the inflation (19–38×) with a clean expectile dose-response</b>, offline "
+        "and in rollout — causality settled.</li>"
+        "<li><b>IQL cures the prefix axis</b>: 0.528 → 0.733 in rollout, at parity with the raw VLA "
+        "(TD-vs-IQL across runs: Mann-Whitney z=2.6). Safe deployment today = <b>prefix-only</b>.</li>"
+        "<li><b>The candidate axis stays dead because the signal is absent from the data</b>: with "
+        "one action per state the target is action-independent (act_sens ≈ 0 across 30+ runs), and "
+        "dueling — the cleanest possible conditions — still ranked candidates at chance while "
+        "memorising the trained pair (rank_c 0.96 with zero similarity gradient). Dueling also "
+        "hurts deployment (p=0.021): untrained candidates' advantage profiles are noise.</li>"
+        "<li><b>Larger discounts calibrate but do not select</b>: γ=.999 puts b(d) within ±0.01 at "
+        "every distance and lifts cross-state ranking (rank_o 0.56→0.65), yet rollout matches "
+        "IQL γ=.99 — calibration cannot substitute for a ranking signal.</li>"
+        "<li><b>The episode ladder shows the value model is generalisation, not memorisation</b>: "
+        "trained on 1/4/16/64 episodes, whole-dataset ρ(Q,MC) climbs 0.48→0.58→0.74→0.78 — most of "
+        "the state-value skill comes from cross-episode structure, converging toward the full-data "
+        "0.82.</li>"
+        "<li><b>Ensembles and target networks are not the lever</b>: K 2→3 changed nothing "
+        "measurable (ρ 0.816→0.814, rank_c 0.521→0.532); K=5 / no-target / τ-ladder still running "
+        "after two infrastructure losses, but the candidate-side knobs that already failed (topm/"
+        "soft/lcb/bc) bound how much variance-softening alone can give.</li>"
         "</ol>"
+    )
+    # ---------------------------------------------------------------- figures
+    P("<h2>The results in six figures</h2>")
+    figs = [
+        (
+            "1_success_by_mode.png",
+            "Each method as the critic gains authority (thin line = one run, bold = family median, "
+            "dashed = that family's own vla level). TD declines monotonically; IQL γ=.99 holds parity "
+            "through prefix and only drops at the joint arg-max; dueling collapses at prefix.",
+        ),
+        (
+            "2_value_bias.png",
+            "Value bias b(d) = V̂ − γ^d by distance to goal. Left: TD inflates with distance and the "
+            "IQL expectile ladder re-inflates toward it. Right (same scale): γ=.999 / .9995 and "
+            "dueling sit on the zero line everywhere.",
+        ),
+        ("3_dose_response.png", "The expectile dose-response, offline and in rollout — the causal pin on the arg-max."),
+        (
+            "4_prefix_targets.png",
+            "TD per-prefix targets over truth (log scale): every distance band slopes down in h, and "
+            "the far band floats at 5×.",
+        ),
+        ("5_per_run_harm.png", "critic − vla for every rollout run (filled = McNemar p<0.05). No run above zero yet."),
+        ("6_success_vs_steps.png", "v8 success vs training steps, 30 trials per point — trends only."),
+    ]
+    import base64 as _b64
+
+    for fn, cap in figs:
+        fp = root / "plots" / fn
+        if not fp.exists():
+            continue
+        b64 = _b64.b64encode(fp.read_bytes()).decode()
+        P(
+            f"<figure><img src='data:image/png;base64,{b64}' alt='{html.escape(cap)}' "
+            f"style='width:100%;height:auto;border:1px solid var(--line);border-radius:3px'>"
+            f"<figcaption style='font-size:.85rem;color:var(--mut);margin-top:.4rem'>{cap}</figcaption></figure>"
+        )
+    P(
+        "<p class='mut' style='font-size:.88rem'>Statistical honesty notes: every job replays the same "
+        "30 scenes, and rollouts are not bit-deterministic across jobs (different GPU models × chaotic "
+        "contacts — measured: identical vla policies agree on only 20–25/30 trials between jobs), so "
+        "family claims rest on run-level tests, not pooled CIs: critic−vla is negative in 14/14 TD "
+        "runs (sign test p≈1e-4); prefix under IQL beats TD across runs (Mann-Whitney z=2.6).</p>"
+    )
+
+    # ---------------------------------------------------------------- why
+    P("<h2>Why more critic authority fails — the causal chain</h2>")
+    P(
+        "<p>There are <b>two arg-maxes</b>, and the eval modes touch only one of them. Training-time: "
+        "the TD target maxes Q over N×P candidate cells at the next state (IQL deletes this). "
+        "Deployment-time: best-of-N maxes over candidates at the current state (present in bon/critic "
+        "whatever the objective). The modes are pure inference rules — training is identical within "
+        "a run.</p>"
+    )
+    P(
+        "<ol>"
+        "<li><b>There is nothing to choose between candidates.</b> The VLA imitates the demos, so its "
+        "16 samples share the same true value to within 1/150 of the between-state spread; dueling "
+        "proved the ranking signal is absent from the DATA, not from capacity (its advantage head, "
+        "freed of state-value variance, still ranked candidates at exactly chance while memorising "
+        "the trained pair at 0.96).</li>"
+        "<li><b>An arg-max over equal-mean noisy scores picks the largest error.</b> And the error is "
+        "a FIXED function, not fresh noise — the critic consistently over-values particular kinds of "
+        "chunks, so the tilt repeats every replan. That is why bon (0.64) is worse than rand (0.70): "
+        "rand samples the average error, bon samples the maximum, systematically.</li>"
+        "<li><b>Under TD the prefix axis measured critic error, not commitment.</b> The distance-"
+        "structured inflation tilted per-prefix targets monotonically, so the joint arg-max collapsed "
+        "to the shortest commit. IQL flattened the targets and the prefix mode recovered to vla "
+        "parity — the one axis with a real signal, cured.</li></ol>"
+    )
+    P(
+        "<div class='key'><p><b>One sentence:</b> failure scales not with authority but with the "
+        "number of arg-maxes taken over noise. Where the axis has signal (IQL's prefix), authority is "
+        "harmless; where it has none (candidates), authority is harm.</p></div>"
     )
 
     # ---------------------------------------------------------------- timeline
@@ -312,10 +495,7 @@ def main() -> None:
         )
 
     # ---------------------------------------------------------------- 2. decomposition
-    P(
-        "<h2>2. Per-prefix target decomposition — the structure of the bias "
-        "<span class='pill p-done'>done</span></h2>"
-    )
+    P("<h2>2. Per-prefix target decomposition — the structure of the bias <span class='pill p-done'>done</span></h2>")
     P(
         "<p>The reward is sparse and terminal, so the true value is exactly <code>γ^d</code> (d = steps to "
         "goal). Expanding the target: <code>y_h = γ^d + γ^h·b</code> — if V̂ were exact, all eight per-prefix "
@@ -337,6 +517,23 @@ def main() -> None:
         P(
             "<p class='mut' style='font-size:.9rem'>Values are <code>y_h / γ^d</code> (1.0 = exact). "
             "TD base critic, 400 states per band.</p>"
+        )
+    if pfx.get("buckets"):
+        bands_lab = [f"{b['lo']}–{b['hi']}" for b in pfx["buckets"]]
+        pl2 = pfx.get("pfx", [2, 4, 6, 8, 10, 12, 14, 16])
+        shade = ["#3b78ae", "#2f855a", "#b9892e", "#c0563f", "#8168b3", "#666a5e"]
+        P(
+            "<figure>"
+            + line_chart(
+                [(bands_lab[i], shade[i % 6], list(b["ratio"])) for i, b in enumerate(pfx["buckets"])],
+                pl2,
+                ylabel="y_h / γ^d   (1.0 = exact)",
+                zero_line=False,
+                title="per-prefix target over truth, by distance band",
+            )
+            + "<figcaption>Per-prefix target ÷ true value, one line per distance-to-goal band "
+            "(TD base critic). Every line slopes down in h and the far bands float far above 1.0 — "
+            "the two facts that make the joint arg-max prefer short commits.</figcaption></figure>"
         )
     P(
         "<p>Monotone decline in h within every band — the 'prefix values fall monotonically' seen in the "
@@ -392,6 +589,28 @@ def main() -> None:
         "does not contain.</p>"
     )
     P("<h3>Observed — value bias</h3>")
+    if vb6:
+        bands_lab = [f"{a}–{b}" for a, b in BANDS]
+        ser = []
+        base_row = vb3.get("base", {}).get("rows")
+        if base_row:
+            ser.append(("TD base", PAL["td"], [x["b"] if x else None for x in base_row]))
+        for r, key in (("iql_e50", "e50"), ("iql_e70", "e70"), ("iql_e90", "e90"), ("iql_e95", "e95")):
+            if r in vb6:
+                ser.append((key, PAL[key], [x["b"] if x else None for x in vb6[r]["rows"]]))
+        P(
+            "<figure>"
+            + line_chart(
+                ser,
+                bands_lab,
+                ylabel="b(d) = V̂ − γ^d   (0 = exact)",
+                title="value bias by distance, TD vs IQL expectiles",
+            )
+            + "<figcaption>Deployment-side value bias by distance to goal. The TD curve is the "
+            "inflation the arg-max feeds on; the IQL curves collapse toward zero and re-inflate "
+            "monotonically as the expectile approaches a max — the dose-response that pins "
+            "causality.</figcaption></figure>"
+        )
     if vb6:
         P(
             "<div class='scroll'><table><thead><tr><th>run</th>"
@@ -541,8 +760,7 @@ def main() -> None:
         ("Wilson interval", "95% CI for a binomial rate; stable near 0 and 1."),
         (
             "expectile τ",
-            "IQL's asymmetric-regression parameter. 0.5 = the mean (no improvement); approaching 1 "
-            "approaches max_a Q.",
+            "IQL's asymmetric-regression parameter. 0.5 = the mean (no improvement); approaching 1 approaches max_a Q.",
         ),
     ]:
         P(f"<dt>{html.escape(dt)}</dt><dd>{dd}</dd>")

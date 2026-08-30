@@ -953,7 +953,7 @@ class Pi0RLT(Pi0):
         z, img_mask = self._split_image_tokens(observation, outs[0], prefix_mask)
         return z, img_mask, prefix_mask, kv_cache
 
-    def _denoise_from_cache(self, rng, observation, prefix_mask, kv_cache, *, num_samples, num_steps):
+    def _denoise_from_cache(self, rng, observation, prefix_mask, kv_cache, *, num_samples, num_steps, noise_scale=1.0):
         """Flow-matching sampling of ``num_samples`` action chunks off an existing prefix KV cache.
 
         Same distribution as ``Pi0.sample_actions`` (π_vla), just drawn many times per state. The
@@ -985,12 +985,21 @@ class Pi0RLT(Pi0):
             x_0, _ = jax.lax.while_loop(lambda c: c[1] >= -dt / 2, step, (noise, 1.0))
             return x_0
 
-        noises = jax.random.normal(rng, (num_samples, b, self.action_horizon, self.action_dim))
+        # noise_scale > 1 widens the flow init, spreading the candidate set (diversity knob).
+        # Scalar = uniform; per-sample array = mixed pool (e.g. safe core at 1.0 + diverse tail).
+        scale = jnp.reshape(jnp.asarray(noise_scale, dtype=jnp.float32), (-1, 1, 1, 1))
+        noises = scale * jax.random.normal(rng, (num_samples, b, self.action_horizon, self.action_dim))
         chunks = jax.vmap(denoise)(noises)  # [n, b, H, D]
         return jnp.transpose(chunks, (1, 0, 2, 3))  # [b, n, H, D]
 
     def extract_token_and_base_actions(
-        self, rng: at.KeyArrayLike, observation: _model.Observation, *, num_samples: int, num_steps: int = 10
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        num_samples: int,
+        num_steps: int = 10,
+        noise_scale: float = 1.0,
     ) -> tuple[at.Float[at.Array, "b t"], at.Float[at.Array, "b n ah ad"]]:
         """RL token AND ``num_samples`` base-policy action chunks from ONE backbone forward.
 
@@ -1002,7 +1011,13 @@ class Pi0RLT(Pi0):
         z, img_mask, prefix_mask, kv_cache = self._prefix_forward(observation)
         z_rl = self._encode_rl_token(z, img_mask, observation.state)
         base = self._denoise_from_cache(
-            rng, observation, prefix_mask, kv_cache, num_samples=num_samples, num_steps=num_steps
+            rng,
+            observation,
+            prefix_mask,
+            kv_cache,
+            num_samples=num_samples,
+            num_steps=num_steps,
+            noise_scale=noise_scale,
         )
         return z_rl, base
 

@@ -142,5 +142,28 @@ def load(directory: pathlib.Path | str) -> dict[str, NormStats]:
     """Load the normalization stats from a directory."""
     path = pathlib.Path(directory) / "norm_stats.json"
     if not path.exists():
-        raise FileNotFoundError(f"Norm stats file not found at: {path}")
+        # This directory is named by asset_id, which defaults to the data config's repo_id --
+        # so the usual cause is not missing stats but stats filed under a different asset_id
+        # (the data-scaling study gives each point its own). Naming what the checkpoint does
+        # carry turns that into a one-line fix instead of a hunt through the config.
+        raise FileNotFoundError(
+            f"Norm stats file not found at: {path}\n" f"{_available_assets_hint(pathlib.Path(directory))}"
+        )
     return deserialize_json(path.read_text())
+
+
+def _available_assets_hint(missing: pathlib.Path) -> str:
+    """List the asset dirs that *do* hold norm stats near ``missing``, if any."""
+    # assets/<asset_id>/norm_stats.json, where asset_id may itself contain a "/" (e.g. an
+    # org-prefixed repo id), so search the whole assets tree rather than one level.
+    for root in missing.parents:
+        if root.name == "assets":
+            found = sorted(str(p.parent.relative_to(root)) for p in root.rglob("norm_stats.json"))
+            if found:
+                return (
+                    f"This checkpoint has norm stats under: {', '.join(found)}\n"
+                    f"Serve with --policy.asset-id <one of those>, or set "
+                    f"AssetsConfig(asset_id=...) in the train config."
+                )
+            return f"No norm stats anywhere under {root} -- the checkpoint may be incomplete."
+    return ""

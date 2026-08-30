@@ -142,3 +142,8 @@ acrft_exclude_list() {
 }
 
 acrft_mkdirs() { mkdir -p "$ANNOT_ROOT" "$CRITIC_RUNS" "$SLURM_LOGS" "$JAX_COMPILATION_CACHE_DIR"; }
+
+# Nodes measured at ~1 it/s on the TD critic workload (13-19 it/s elsewhere; IQL unaffected).
+# Not faults - the bad-node ledger is for failures - but TD training submitted there will blow any
+# reasonable time limit, so exclude them for TD-heavy jobs.
+export ACRFT_SLOW_NODES="node26,node27,node29,node44,node45,node47,node51"

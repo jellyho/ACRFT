@@ -1,0 +1,48 @@
+# base_T_agentview per arm, copied from the rig's config.yaml (board-on-gripper solve).
+# Re-copy after a recalibration -- this is a snapshot, not the live rig file.
+right:
+  matrix:
+  - - 0.12475
+    - -0.846504
+    - 0.517559
+    - -0.055319
+  - - -0.992124
+    - -0.100494
+    - 0.074773
+    - 0.228083
+  - - -0.011284
+    - -0.522811
+    - -0.852374
+    - 0.821709
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+  method: eye_to_hand
+  n_captures: 41
+  translation_rms_mm: 21.207
+  rotation_rms_deg: 3.0368
+  calibrated_at: '2026-08-17 00:00:58'
+left:
+  matrix:
+  - - 0.104733
+    - -0.792011
+    - 0.601457
+    - -0.097547
+  - - -0.994393
+    - -0.0923
+    - 0.051614
+    - -0.234307
+  - - 0.014636
+    - -0.60349
+    - -0.797236
+    - 0.803219
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+  method: eye_to_hand
+  n_captures: 51
+  translation_rms_mm: 15.565
+  rotation_rms_deg: 2.1784
+  calibrated_at: '2026-08-17 00:12:51'

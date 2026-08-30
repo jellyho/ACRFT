@@ -139,6 +139,25 @@ def main(
     output_path = config.assets_dirs / (data_config.asset_id or data_config.repo_id)
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
+    # provenance stamp: which dataset generation these stats describe -- the training loader
+    # cross-checks this against the live dataset and refuses stale stats (data_loader.py).
+    import json as _json
+
+    try:
+        import lerobot.datasets.lerobot_dataset as _lds
+
+        _meta = _lds.LeRobotDatasetMetadata(data_config.repo_id)
+        _prov = {
+            "computed_on": {
+                "repo_id": data_config.repo_id,
+                "total_episodes": _meta.total_episodes,
+                "total_frames": _meta.total_frames,
+                "episodes_subset": sorted(data_config.episodes) if data_config.episodes else "all",
+            }
+        }
+        (output_path / "provenance.json").write_text(_json.dumps(_prov, indent=2))
+    except Exception as e:  # provenance is best-effort; stats themselves are already saved
+        print(f"provenance stamp skipped: {e}")
 
 
 if __name__ == "__main__":

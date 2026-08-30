@@ -1,0 +1,252 @@
+"""Build the fixed, data-driven index.html for the AC-RFT reports Space — by MINIMAL SURGERY on the
+existing hub, so every feature (chronological feed, daily grouping, tag chips + search, KO/EN toggle,
+the xref mind-map / connections graph, and all body styling) is preserved exactly.
+
+The only change vs the live hub: the report DATA (the ``REPORTS`` metadata array and the inline
+``<section class="report" id="rN">`` bodies) is loaded from an external ``entries.json`` at runtime
+instead of being baked into the HTML. Plus a white/light palette override. Workers then only ever
+append to entries.json; this template never changes.
+
+    uv run python scripts/space_build.py --out space_v2 [--from index_legacy_backup.html] [--preview]
+"""
+
+import argparse
+import json
+import pathlib
+import re
+
+from huggingface_hub import hf_hub_download
+
+SPACE = "jellyho/acrft-reports"
+
+WHITE_OVERRIDE = """
+/* --- white/light palette override (worker-A) --- */
+:root{--bg:#ffffff;--card:#f9f9f7;--card2:#f2f1ec;--text:#0b0b0b;--muted:#6b6560;--line:#e1e0d9;
+  --green:#008300;--red:#c0392b;--yellow:#c98a00;--blue:#2a78d6;--purple:#7c3aed}
+body{background:#ffffff}
+/* MathJax display equations: journal-style, centered, black, breathing room */
+mjx-container[display="true"]{margin:1.05em 0!important;overflow-x:auto;overflow-y:hidden}
+mjx-container{color:var(--text)}
+"""
+
+# Real math typesetting (MathJax v3, SVG so glyphs are self-contained & inherit text colour).
+# Only \(...\) and \[...\] are active delimiters — never $...$, so existing worker bodies are untouched.
+MATHJAX_HEAD = (
+    "<script>window.MathJax={tex:{inlineMath:[['\\\\(','\\\\)']],displayMath:[['\\\\[','\\\\]']],"
+    "tags:'none'},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code'],"
+    "ignoreHtmlClass:'no-mathjax'},svg:{fontCache:'global'}};</script>"
+    '<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>'
+)
+
+_INJECT = (
+    "D.sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});"
+    # keep each entry's stable eid alongside the feed metadata (used for eid-based navigation)
+    "REPORTS=D.map(function(e){return{eid:e.eid,date:e.date,title:e.title,summary:e.summary,tags:e.tags,status:e.status};});"
+    "window.EID2I={};REPORTS.forEach(function(r,i){if(r.eid)window.EID2I[r.eid]=i;});"
+    "var rd=document.getElementById('reader');"
+    "D.forEach(function(e,i){var s=document.createElement('section');s.className='report';"
+    # DOM id stays r{index} for the reader, but the stable eid rides along as data-eid so
+    # cross-links resolve by eid regardless of how the merged feed is re-sorted.
+    "s.id='r'+i;s.setAttribute('data-eid',e.eid||('r'+i));s.hidden=true;s.innerHTML=e.body_html||'';rd.appendChild(s);});"
+    "render();"
+    "if(window.buildThread){window.buildThread();}"
+    # feed the mindmap live graph data (nodes/links/phases) before it is first drawn
+    "if(window.buildGraphData){var _gd=document.getElementById('wb-graph-data');"
+    "if(_gd)_gd.textContent=JSON.stringify(window.buildGraphData());}"
+    # if the mindmap tab was opened before the fetch resolved, it drew an empty graph and bailed
+    # (no gate); now that data is in, redraw it.
+    "if(window.wbGraphInit){var _wm=document.getElementById('wb-map');if(_wm&&!_wm.hidden)wbGraphInit();}"
+    # delegated navigation: any [data-eid] link (xref, thread item) opens that entry by eid
+    "if(!window.__eidnav){window.__eidnav=1;document.addEventListener('click',function(ev){"
+    "var el=ev.target.closest('[data-eid]');if(!el||el.classList.contains('report'))return;"
+    "var eid=el.getAttribute('data-eid');if(!eid)return;ev.preventDefault();openReport(eid);});}"
+    # typeset math once bodies are in the DOM (MathJax loads async → poll until ready)
+    "(function tj(){if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetPromise();}"
+    "else{setTimeout(tj,150);}})();"
+)
+
+# eid-first openReport: accepts a stable eid string OR a numeric array index (back-compat).
+# This is what makes two-worker cross-links survive re-sorting of the merged feed.
+OPENREPORT_EID = (
+    "function openReport(ref){"
+    "var i=(typeof ref==='number')?ref:((window.EID2I&&(ref in window.EID2I))?window.EID2I[ref]"
+    ":(/^\\d+$/.test(ref)?+ref:-1));"
+    "if(i<0||!REPORTS[i])return;"
+    'document.getElementById("home").hidden=true;'
+    'document.getElementById("reader").hidden=false;'
+    'document.querySelectorAll(".report").forEach(function(s){s.hidden=true;});'
+    'var sec=document.getElementById("r"+i);if(sec)sec.hidden=false;'
+    'document.getElementById("rtitle").textContent=REPORTS[i].title;'
+    'document.getElementById("rdate").textContent=REPORTS[i].date;'
+    "window.scrollTo(0,0);}"
+)
+
+# The 🧵 daily thread is regenerated client-side from the live feed (it used to be a frozen
+# snapshot that went stale + carried stale index links). Links target eids → never break.
+THREAD_JS = (
+    "<script>window.buildThread=function(){"
+    "var el=document.getElementById('wb-thread');if(!el)return;"
+    "var esc=function(x){return (x||'').replace(/</g,'&lt;');};"
+    "var byDay={};REPORTS.forEach(function(r){var d=(r.date||'').slice(0,10);(byDay[d]=byDay[d]||[]).push(r);});"
+    "var days=Object.keys(byDay).sort(function(a,b){return b.localeCompare(a);});"
+    "var html=\"<div class='wbx'><p>일자별로 올라온 리포트 전부(양쪽 워커 포함). 제목을 누르면 해당 리포트로 이동한다.</p>\";"
+    "days.forEach(function(d){"
+    "var items=byDay[d].slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});"
+    'html+="<div class=\'day\'><h3>"+d+" <span class=\'sm\'>("+items.length+"건)</span></h3><ul>";'
+    "items.forEach(function(r){var t=(r.date||'').slice(11);"
+    'html+="<li><span class=\'sm\'>"+t+"</span> <a data-eid=\'"+r.eid+"\' style=\'cursor:pointer\'>"+esc(r.title)+"</a>"'
+    "+\"<div class='sm'>\"+esc((r.summary||'').slice(0,120))+\"</div></li>\";});"
+    'html+="</ul></div>";});'
+    'html+="</div>";el.innerHTML=html;};</script>'
+)
+
+# The 🗺️ mindmap graph is regenerated client-side from the live feed too (it used to read a
+# frozen JSON snapshot with stale array-index links). Nodes are keyed by eid; edges come from
+# each entry's `links: [eid,...]`; the column/colour comes from its `phase`. New entries with
+# no phase land in the '신규' column automatically.
+GRAPH_JS = (
+    "<script>window.buildGraphData=function(){"
+    'var PHASES=["기반 탐색","정합성 검증","진단·방법","판정·종합","표현·설계","논문·교차","이식·인프라","신규"];'
+    'var COLORS=["#4c72b0","#dd8452","#55a868","#c44e52","#8172b3","#937860","#da8bc3","#64b5cd"];'
+    # only entries that belong on the graph: connected (has links) OR carrying a real phase (not '신규').
+    # this drops legacy uncurated entries (no links, no phase) that would otherwise pile into one column.
+    "var keep=REPORTS.filter(function(r){return (r.links&&r.links.length)||(r.phase&&r.phase!=='신규');});"
+    "var known={};keep.forEach(function(r){known[r.eid]=1;});"
+    "var nodes=keep.map(function(r){var ci=PHASES.indexOf(r.phase||'신규');if(ci<0)ci=PHASES.length-1;"
+    "return{id:r.eid,cat:ci,date:r.date,what:r.title,sum:r.summary};});"
+    "var seen={},links=[];"
+    "keep.forEach(function(r){(r.links||[]).forEach(function(t){if(!known[t])return;"
+    "var k=r.eid<t?r.eid+'|'+t:t+'|'+r.eid;if(seen[k])return;seen[k]=1;links.push([r.eid,t]);});});"
+    "return{nodes:nodes,links:links,colors:COLORS,phases:PHASES};};</script>"
+)
+
+# The 🧭 experiment board is a real template-level tab (worker B's request), rendered client-side
+# from a SHARED experiments.json so both workers only ever update rows. Planned / Running / Done,
+# each with owner, note, a wandb link, and a report chip that navigates by eid.
+EXP_JS = (
+    "<script>window.buildExperiments=function(){"
+    "var el=document.getElementById('wb-exp-body');if(!el)return;"
+    "function esc(x){return (x||'').replace(/</g,'&lt;');}"
+    "function render(D){"
+    "var groups=[['running','🟡 진행중 (Running)'],['planned','🔵 계획 (Planned)'],['done','🟢 완료 (Done)']];"
+    "var html='';groups.forEach(function(g){var rows=D.filter(function(r){return r.status===g[0];});"
+    'html+="<h3>"+g[1]+" <span class=\'sm\'>("+rows.length+")</span></h3>";'
+    "if(!rows.length){html+=\"<p class='sm'>없음</p>\";return;}"
+    "html+=\"<div class='tblwrap'><table><thead><tr><th>실험</th><th>담당</th><th>메모</th><th>wandb</th><th>리포트</th></tr></thead><tbody>\";"
+    "rows.forEach(function(r){"
+    "var wb=r.wandb?(\"<a href='\"+r.wandb+\"' target='_blank' rel='noopener'>wandb</a>\"):\"—\";"
+    'var rep=r.report?("<a data-eid=\'"+r.report+"\' style=\'cursor:pointer\'>리포트</a>"):"—";'
+    'html+="<tr><td>"+esc(r.title)+"</td><td>"+esc(r.owner)+"</td><td>"+esc(r.note)+"</td><td>"+wb+"</td><td>"+rep+"</td></tr>";});'
+    'html+="</tbody></table></div>";});el.innerHTML=html;}'
+    "if(window.__EXP){render(window.__EXP);return;}"
+    "fetch('experiments.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){"
+    'window.__EXP=D;render(D);}).catch(function(e){el.innerHTML="<p style=\'color:var(--red)\'>experiments.json load failed: "+e+"</p>";});'
+    "};</script>"
+)
+BOOTSTRAP = (
+    "fetch('entries.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){"
+    + _INJECT
+    + "}).catch(function(err){document.getElementById('list').innerHTML="
+    "'<p style=\"color:var(--red)\">entries.json load failed: '+err+'</p>';});"
+)
+
+
+def build(src_html: str, inline_entries=None) -> str:
+    h = src_html
+    # 1) strip the inline report bodies (all <section class="report" id="rN"> up to the block end)
+    first = h.find('<section class="report" id="r0"')
+    if first < 0:
+        raise SystemExit("no inline report sections found")
+    tail = h.find("<script>", first)
+    wrapper_close = h[h.rfind("</section>", first, tail) + len("</section>") : tail]  # keep closing </div>s
+    h = h[:first] + wrapper_close + h[tail:]
+    # 2) REPORTS array -> empty (filled at runtime)
+    h = re.sub(r"const REPORTS\s*=\s*\[.*?\];", "let REPORTS = [];", h, count=1, flags=re.DOTALL)
+    # 3) the load-time render() call -> data bootstrap (or inline data for a fetch-free preview)
+    boot = (
+        ("var D=" + json.dumps(inline_entries, ensure_ascii=False) + ";" + _INJECT)
+        if inline_entries is not None
+        else BOOTSTRAP
+    )
+    last = h.rfind("render();")
+    h = h[:last] + boot + h[last + len("render();") :]
+    # 4) eid-based navigation: stable cross-links that survive re-sorting the merged feed
+    # replacement passed as a callable so backslashes (e.g. \d) aren't treated as regex escapes
+    h, n_or = re.subn(r"function openReport\(i\)\{.*?\n\}", lambda _m: OPENREPORT_EID, h, count=1, flags=re.DOTALL)
+    if n_or != 1:
+        raise SystemExit("could not patch openReport for eid navigation")
+    h = h.replace("b.onclick=()=>openReport(r.idx);", "b.onclick=()=>openReport(r.eid||r.idx);", 1)
+    # mindmap: click a node by eid (was a stale array index), and empty the frozen graph snapshot
+    # so the client-side buildGraphData() repopulates it from the live feed.
+    h = h.replace("openReport(n.idx)", "openReport(n.id)", 1)
+    h, n_gd = re.subn(
+        r"(<script id='wb-graph-data'[^>]*>).*?(</script>)",
+        lambda _m: _m.group(1) + '{"nodes":[],"links":[],"colors":[],"phases":[]}' + _m.group(2),
+        h,
+        count=1,
+        flags=re.DOTALL,
+    )
+    if n_gd != 1:
+        raise SystemExit("could not empty the baked wb-graph-data snapshot")
+    # race guard: if wbGraphInit runs before the feed is fetched, bail on empty data WITHOUT setting
+    # the once-only gate, so the post-fetch redraw (in the bootstrap) can draw the real graph.
+    gd_read = "const D=JSON.parse(document.getElementById('wb-graph-data').textContent);"
+    if gd_read not in h:
+        raise SystemExit("could not find wbGraphInit data read for the race guard")
+    h = h.replace(gd_read, gd_read + "if(!D.nodes||!D.nodes.length)return;", 1)
+    # 4b) experiment board tab (worker B's request): a real template-level tab rendered from a
+    # shared experiments.json. Insert the tab button, the view container, and the wbView branch.
+    h, n_tab = re.subn(
+        r'(<button id="wb-lang")',
+        lambda _m: '<button class="wb-tab" data-v="exp" onclick="wbView(\'exp\')">🧭 실험 보드</button>' + _m.group(1),
+        h,
+        count=1,
+    )
+    h = h.replace(
+        "<!--/wb-views-->",
+        '<div id="wb-exp" hidden><div class="wbx"><p>계획 → 진행중 → 완료. 두 워커가 각자 행을 갱신한다'
+        ' (<code>experiments.json</code>). 리포트 칩을 누르면 이동.</p><div id="wb-exp-body"></div></div></div>'
+        "<!--/wb-views-->",
+        1,
+    )
+    h = h.replace(
+        "document.getElementById('wb-map').hidden=(v!=='map');",
+        "document.getElementById('wb-map').hidden=(v!=='map');"
+        "var _ex=document.getElementById('wb-exp');if(_ex)_ex.hidden=(v!=='exp');"
+        "if(v==='exp'&&window.buildExperiments)window.buildExperiments();",
+        1,
+    )
+    if n_tab != 1:
+        raise SystemExit("could not insert the experiment-board tab button")
+    # 5) white/light override (append inside <style> so it wins the cascade)
+    h = h.replace("</style>", WHITE_OVERRIDE + "</style>", 1)
+    # 6) real math typesetting (MathJax) + the client-side view builders. The builders go in <head>
+    # so window.buildThread/buildGraphData/buildExperiments are DEFINED before the bootstrap runs —
+    # otherwise the fetch-free preview (a synchronous bootstrap) calls them before their <script>
+    # at end-of-body has parsed, and the mindmap/thread/board silently render nothing.
+    return h.replace("</head>", MATHJAX_HEAD + THREAD_JS + GRAPH_JS + EXP_JS + "</head>", 1)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("space_v2"))
+    ap.add_argument("--from", dest="src", default="index_legacy_backup.html")
+    ap.add_argument("--preview", action="store_true", help="inline entries.json for a fetch-free preview")
+    a = ap.parse_args()
+    a.out.mkdir(parents=True, exist_ok=True)
+
+    src = pathlib.Path(hf_hub_download(SPACE, a.src, repo_type="space", force_download=True)).read_text()
+    inline = None
+    if a.preview:
+        ent = json.loads((a.out / "entries.json").read_text())
+        ent.sort(key=lambda e: e.get("date", ""), reverse=True)
+        inline = ent[:10]
+    html = build(src, inline_entries=inline)
+    name = "preview.html" if a.preview else "index.html"
+    (a.out / name).write_text(html)
+    kind = " · inline preview" if a.preview else " · fetches entries.json"
+    print(f"wrote {a.out / name}  ({len(html) / 1000:.0f} KB{kind})")
+
+
+if __name__ == "__main__":
+    main()

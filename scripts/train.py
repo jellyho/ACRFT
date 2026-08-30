@@ -61,8 +61,10 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
+        # "allow" (not "must"): resume the run if it exists, else create it under this id. "must" fails
+        # a resume when the original run is not resumable (e.g. finished/deleted, or on another entity).
         wandb.init(
-            id=run_id, resume="must", project=config.project_name, entity=config.wandb_entity, group=config.wandb_group
+            id=run_id, resume="allow", project=config.project_name, entity=config.wandb_entity, group=config.wandb_group
         )
     else:
         wandb.init(
@@ -156,7 +158,13 @@ def train_step(
     ):
         # Some models (e.g. Pi0RLT) return (per-sample loss, aux-metrics dict); the rest return just the
         # per-sample loss. Normalize to (loss, aux) so extra diagnostics can be logged for free.
-        out = model.compute_loss(rng, observation, actions, train=True)
+        # Curriculum-driven models (e.g. Pi0AlphaFlow, whose alpha schedule is a function of how far
+        # through the run we are) opt in by declaring `wants_progress`; everyone else keeps the old
+        # signature. Progress (not the raw step) so the curriculum rescales with --num-train-steps.
+        step_kwargs = (
+            {"progress": state.step / max(config.num_train_steps, 1)} if getattr(model, "wants_progress", False) else {}
+        )
+        out = model.compute_loss(rng, observation, actions, train=True, **step_kwargs)
         chunked_loss, aux = out if isinstance(out, tuple) else (out, {})
         return jnp.mean(chunked_loss), aux
 

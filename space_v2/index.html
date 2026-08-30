@@ -1,0 +1,282 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AC-RFT 실험 리포트 허브</title>
+<style>
+:root{--bg:#0f1117;--card:#181c25;--card2:#1f2430;--text:#e6e9ef;--muted:#9aa3b2;--line:#2a3140;
+--green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#60a5fa;--purple:#c084fc}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Pretendard',-apple-system,'Segoe UI',sans-serif;line-height:1.65;padding:34px 16px}
+.wrap{max-width:900px;margin:0 auto}
+h1{font-size:25px;margin-bottom:4px} h2{font-size:18px;margin:20px 0 10px 0;color:var(--blue)}
+h3{font-size:14.5px;color:var(--blue);margin:16px 0 8px 0}
+.sub{color:var(--muted);font-size:13.5px;margin-bottom:22px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+#search{flex:1;min-width:200px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 13px;color:var(--text);font-size:14px;outline:none}
+#search:focus{border-color:var(--blue)}
+.chip{padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;background:var(--card);border:1px solid var(--line);color:var(--muted);user-select:none}
+.chip:hover{border-color:var(--blue);color:var(--blue)}
+.chip.on{background:rgba(96,165,250,.15);border-color:var(--blue);color:var(--blue)}
+.entry{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px 20px;margin-bottom:10px;color:var(--text);cursor:pointer;font-family:inherit}
+.entry:hover{border-color:var(--blue)}
+.entry .top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.entry .title{font-size:16px;font-weight:700}
+.entry .date{color:var(--muted);font-size:12.5px;white-space:nowrap}
+.entry .summary{color:var(--muted);font-size:13.5px;margin:5px 0 7px 0;line-height:1.55}
+.tag{display:inline-block;padding:1px 9px;border-radius:20px;font-size:11px;font-weight:700;margin-right:5px;background:rgba(96,165,250,.13);color:var(--blue);border:1px solid rgba(96,165,250,.35)}
+.tag.done{background:rgba(74,222,128,.13);color:var(--green);border-color:rgba(74,222,128,.35)}
+.tag.ongoing{background:rgba(251,191,36,.13);color:var(--yellow);border-color:rgba(251,191,36,.35)}
+.tag.finding{background:rgba(192,132,252,.13);color:var(--purple);border-color:rgba(192,132,252,.35)}
+.count{color:var(--muted);font-size:12.5px;margin-bottom:8px}
+.back-btn{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:8px 16px;font-size:13.5px;cursor:pointer;margin-bottom:16px;font-family:inherit}
+.back-btn:hover{border-color:var(--blue)}
+.report .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px}
+.report p{margin-bottom:10px;font-size:14.5px} .report ul{padding-left:20px;margin-bottom:10px} .report li{margin-bottom:5px;font-size:14px}
+.report table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+.report th{text-align:left;color:var(--muted);padding:7px 9px;border-bottom:1px solid var(--line);font-size:12px}
+.report td{padding:7px 9px;border-bottom:1px solid #222836}
+.report tr.win td{background:rgba(74,222,128,.07)}
+code{background:#232937;padding:1px 6px;border-radius:5px;font-size:12px;color:#a5d6ff}
+.g,.hl-g{color:var(--green);font-weight:600}.r,.hl-r{color:var(--red);font-weight:600}
+.y,.hl-y{color:var(--yellow);font-weight:600}.b,.hl-b{color:var(--blue);font-weight:600}
+.qa{background:var(--card2);border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:11px 15px;margin:10px 0;font-size:13.5px}
+.qa .q{color:var(--purple);font-weight:700;margin-bottom:3px}
+.num{display:inline-flex;width:26px;height:26px;border-radius:50%;background:var(--blue);color:#0b0e14;font-weight:700;font-size:13px;align-items:center;justify-content:center}
+.tldr{background:linear-gradient(135deg,#1a2436,#16202e);border:1px solid #2e4160}
+.tldr h2{color:var(--yellow)}
+.bar-row{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:13px}
+.bar-label{width:150px;flex-shrink:0;color:var(--muted)}
+.bar-track{flex:1;background:#232937;height:18px;border-radius:9px;overflow:hidden}
+.bar-fill{height:100%;border-radius:9px;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;font-size:11px;font-weight:700;color:#0b0e14}
+.verdict{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700}
+.v-pass{background:rgba(74,222,128,.15);color:var(--green);border:1px solid rgba(74,222,128,.4)}
+.v-fail{background:rgba(248,113,113,.15);color:var(--red);border:1px solid rgba(248,113,113,.4)}
+.v-partial{background:rgba(251,191,36,.15);color:var(--yellow);border:1px solid rgba(251,191,36,.4)}
+.flow{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap;margin:14px 0}
+.flow-box{flex:1;min-width:150px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:13px;text-align:center}
+.flow-box .t{font-weight:700;margin-bottom:4px}
+.flow-arrow{display:flex;align-items:center;color:var(--muted);font-size:18px}
+.phase{display:flex;gap:12px;margin:10px 0}
+.phase-badge{flex-shrink:0;width:74px;text-align:center;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px 4px;font-size:12px;font-weight:700;color:var(--blue);height:fit-content}
+.muted{color:var(--muted);font-size:13.5px}
+.footnote{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;margin-top:8px}
+.report-title{font-size:21px;font-weight:700;margin-bottom:2px}
+.report-date{color:var(--muted);font-size:13px;margin-bottom:18px}
+
+/* --- white/light palette override (worker-A) --- */
+:root{--bg:#ffffff;--card:#f9f9f7;--card2:#f2f1ec;--text:#0b0b0b;--muted:#6b6560;--line:#e1e0d9;
+  --green:#008300;--red:#c0392b;--yellow:#c98a00;--blue:#2a78d6;--purple:#7c3aed}
+body{background:#ffffff}
+/* MathJax display equations: journal-style, centered, black, breathing room */
+mjx-container[display="true"]{margin:1.05em 0!important;overflow-x:auto;overflow-y:hidden}
+mjx-container{color:var(--text)}
+</style><style id='wa-global-tables'>
+.wbx .tblwrap{overflow-x:visible !important}
+.wbx table{max-width:100% !important}
+.wbx td,.wbx th{overflow-wrap:anywhere;white-space:normal !important}
+</style><style id="wbx-style">
+/* ===== 허브 전면 백색 테마 (2026-08-08 지시: 메인 페이지·버튼까지 전부 라이트) =====
+   허브 공통 CSS 변수를 라이트 팔레트로 오버라이드 — 구조·콘텐츠는 불변, 색만 교체 */
+:root{--bg:#ffffff !important;--card:#f4f5f8 !important;--card2:#fafafa !important;
+  --text:#1a1a1a !important;--muted:#5f6b7a !important;--line:#e2e2e2 !important;
+  --green:#15803d !important;--red:#b91c1c !important;--yellow:#a16207 !important;--blue:#3730a3 !important}
+body{background:#ffffff}
+/* 워커B 리포트 = 흰 종이 카드 (프로페셔널·깔끔) */
+.wbx{line-height:1.68;background:#ffffff;color:#1a1a1a;border:1px solid #e2e2e2;border-radius:12px;
+  padding:26px 30px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.wbx a{color:#3730a3}
+.wbx h2,.wbx h3{margin:.7em 0 .4em;letter-spacing:-.01em;color:#111;font-family:Georgia,'Times New Roman',serif}
+.wbx table{border-collapse:collapse;font-size:.9em;margin:10px 0;background:#fff;color:#1a1a1a}
+/* 호스트 페이지가 .num을 26px 원형 배지(inline-flex)로 정의 — 우리 <table class='num'>이 그 규칙에
+   잡히면 표 전체가 26×26 상자로 붕괴해 산문과 겹친다. 표 display를 강제 복원한다. */
+.wbx table.num,.wbx table.spec{display:table !important;width:auto !important;height:auto !important;
+  border-radius:0 !important;flex:none !important}
+.wbx .tblwrap{overflow-x:auto !important;max-width:100%}.wbx .tblwrap table{margin:10px 2px}
+.wbx td,.wbx th{border:1px solid #e2e2e2;padding:5px 10px;text-align:left;vertical-align:top}
+.wbx th{background:#f3f4f8}.wbx img{max-width:100%;border:1px solid #e2e2e2;border-radius:8px;margin:8px 0;background:#fff}
+.wbx .missing{background:#fef9c3;color:#713f12;padding:6px 10px;border-radius:6px}
+.wbx code{background:#f3f4f8;padding:1px 5px;border-radius:4px;color:#1a1a1a}
+/* 떠 있는 내비 버튼: 리포트를 한참 스크롤한 뒤 목록/맨위로 바로 이동 */
+#wb-float{position:fixed;right:18px;bottom:18px;z-index:80;display:none;flex-direction:column;gap:8px}
+#wb-float button{width:46px;height:46px;border-radius:50%;border:1px solid #cfd4dd;background:#fff;
+  color:#1f2430;font-size:18px;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.18);line-height:1}
+#wb-float button:hover{border-color:#3730a3;color:#3730a3}
+.wbx .tl{position:relative;margin:14px 0 14px 8px;border-left:3px solid #3730a3;padding-left:22px}
+.wbx .node{position:relative;margin-bottom:18px}
+.wbx .node:before{content:'';position:absolute;left:-31px;top:6px;width:12px;height:12px;border-radius:50%;background:#3730a3}
+.wbx .when{font-size:.82em;color:#5f6b7a}.wbx .card{background:#fafafa;border:1px solid #e2e2e2;border-radius:10px;padding:10px 14px}
+.wbx .next{margin-top:6px;font-size:.88em;color:#3730a3;font-weight:600}
+.wbx .now{border:2px solid #3730a3;border-radius:10px;padding:12px 16px;margin-top:8px;background:#eef2ff}
+.wbx .good{color:#15803d}.wbx .bad{color:#b91c1c}.wbx .chip{display:none}
+.wbx .sub{color:#5f6b7a;font-size:.92em}
+.wbx .w6{border-left:3px solid #3730a3}.wbx .w6 th{width:64px}
+.wbx td.pending{color:#5f6b7a;font-style:italic}
+.wbx .xrefs{margin-top:14px;border-top:1px dashed #e2e2e2;padding-top:8px}
+.wbx .xref{display:inline-block;border:1px solid #3730a3;color:#3730a3;border-radius:99px;padding:2px 11px;margin:2px 4px 2px 0;font-size:.85em;cursor:pointer;background:#fff}
+.wbx .xref:hover{background:#eef2ff}
+.wbx .day{margin-bottom:18px}.wbx .day h3{border-bottom:1px solid #e2e2e2;padding-bottom:4px}
+.wbx .day li{margin:6px 0}.wbx .day .sm{color:#5f6b7a;font-size:.88em}
+.wbx .day a{color:#3730a3;cursor:pointer;text-decoration:none}.wbx .day a:hover{text-decoration:underline}
+.wbx svg text{fill:#1a1a1a}
+/* 와이드 레이아웃 + 상단 탭 (2026-08-08 지시: 가로로 넓게, 스레드·관계도는 별도 탭) */
+.wrap{max-width:1560px !important;padding-left:28px;padding-right:28px}
+.wb-tab{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;
+  padding:9px 18px;font-size:.95em;cursor:pointer}
+.wb-tab.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+#wb-thread .wbx,#wb-map .wbx{margin-top:4px}
+body:not([data-wblang=en]) .wbx-en{display:none}
+body[data-wblang=en] .wbx-ko{display:none}
+</style><script>window.MathJax={tex:{inlineMath:[['\\(','\\)']],displayMath:[['\\[','\\]']],tags:'none'},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code'],ignoreHtmlClass:'no-mathjax'},svg:{fontCache:'global'}};</script><script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script><script>window.buildThread=function(){var el=document.getElementById('wb-thread');if(!el)return;var esc=function(x){return (x||'').replace(/</g,'&lt;');};var byDay={};REPORTS.forEach(function(r){var d=(r.date||'').slice(0,10);(byDay[d]=byDay[d]||[]).push(r);});var days=Object.keys(byDay).sort(function(a,b){return b.localeCompare(a);});var html="<div class='wbx'><p>일자별로 올라온 리포트 전부(양쪽 워커 포함). 제목을 누르면 해당 리포트로 이동한다.</p>";days.forEach(function(d){var items=byDay[d].slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});html+="<div class='day'><h3>"+d+" <span class='sm'>("+items.length+"건)</span></h3><ul>";items.forEach(function(r){var t=(r.date||'').slice(11);html+="<li><span class='sm'>"+t+"</span> <a data-eid='"+r.eid+"' style='cursor:pointer'>"+esc(r.title)+"</a>"+"<div class='sm'>"+esc((r.summary||'').slice(0,120))+"</div></li>";});html+="</ul></div>";});html+="</div>";el.innerHTML=html;};</script><script>window.buildGraphData=function(){var PHASES=["기반 탐색","정합성 검증","진단·방법","판정·종합","표현·설계","논문·교차","이식·인프라","신규"];var COLORS=["#4c72b0","#dd8452","#55a868","#c44e52","#8172b3","#937860","#da8bc3","#64b5cd"];var keep=REPORTS.filter(function(r){return (r.links&&r.links.length)||(r.phase&&r.phase!=='신규');});var known={};keep.forEach(function(r){known[r.eid]=1;});var nodes=keep.map(function(r){var ci=PHASES.indexOf(r.phase||'신규');if(ci<0)ci=PHASES.length-1;return{id:r.eid,cat:ci,date:r.date,what:r.title,sum:r.summary};});var seen={},links=[];keep.forEach(function(r){(r.links||[]).forEach(function(t){if(!known[t])return;var k=r.eid<t?r.eid+'|'+t:t+'|'+r.eid;if(seen[k])return;seen[k]=1;links.push([r.eid,t]);});});return{nodes:nodes,links:links,colors:COLORS,phases:PHASES};};</script><script>window.buildExperiments=function(){var el=document.getElementById('wb-exp-body');if(!el)return;function esc(x){return (x||'').replace(/</g,'&lt;');}function render(D){var groups=[['running','🟡 진행중 (Running)'],['planned','🔵 계획 (Planned)'],['done','🟢 완료 (Done)']];var html='';groups.forEach(function(g){var rows=D.filter(function(r){return r.status===g[0];});html+="<h3>"+g[1]+" <span class='sm'>("+rows.length+")</span></h3>";if(!rows.length){html+="<p class='sm'>없음</p>";return;}html+="<div class='tblwrap'><table><thead><tr><th>실험</th><th>담당</th><th>메모</th><th>wandb</th><th>리포트</th></tr></thead><tbody>";rows.forEach(function(r){var wb=r.wandb?("<a href='"+r.wandb+"' target='_blank' rel='noopener'>wandb</a>"):"—";var rep=r.report?("<a data-eid='"+r.report+"' style='cursor:pointer'>리포트</a>"):"—";html+="<tr><td>"+esc(r.title)+"</td><td>"+esc(r.owner)+"</td><td>"+esc(r.note)+"</td><td>"+wb+"</td><td>"+rep+"</td></tr>";});html+="</tbody></table></div>";});el.innerHTML=html;}if(window.__EXP){render(window.__EXP);return;}fetch('experiments.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){window.__EXP=D;render(D);}).catch(function(e){el.innerHTML="<p style='color:var(--red)'>experiments.json load failed: "+e+"</p>";});};</script></head><body><div class="wrap">
+<div id="home"><h1>🧪 AC-RFT 실험 리포트 허브</h1>
+<div class="sub">리포트를 클릭하면 이 페이지 안에서 열립니다.</div><!--wb-tabs--><div id="wb-tabbar" style="display:flex;gap:8px;margin:14px 0"><button class="wb-tab on" data-v="list" onclick="wbView('list')">📋 리포트 목록</button><button class="wb-tab" data-v="thread" onclick="wbView('thread')">🧵 데일리 스레드</button><button class="wb-tab" data-v="map" onclick="wbView('map')">🗺️ 관계도</button><button class="wb-tab" data-v="exp" onclick="wbView('exp')">🧭 실험 보드</button><button id="wb-lang" class="wb-tab" style="margin-left:auto" onclick="wbLang()">EN</button></div><!--/wb-tabs-->
+<div class="controls"><input id="search" type="text" placeholder="검색…"><span class="chip on" data-tag="__all">전체</span></div>
+<div id="chips" class="controls" style="margin-top:-6px"></div><div class="count" id="count"></div><div id="list"></div><!--wb-views--><div id="wb-thread" hidden><div class="wbx"><p>일자별로 올라온 리포트 전부(양쪽 워커 포함). 제목을 누르면 해당 리포트로 이동한다.</p><div class='day'><h3>2026-08-13 <span class='sm'>(1건)</span></h3><ul><li><span class='sm'>02:00</span> <a onclick='openReport(0);return false'>🧪 [워커B] DEAS 재현·정정 — critic은 VLA와 동률(못 이기고 안 해침), 지난 'critic 유해' 판정은 n=25 노이즈였다</a><div class='sm'>DEAS("DEtached value learning with Action Sequence", Changyeon Kim·Younggyo Seo·Kimin Lee·Yuke Zhu)는 VLA + Rob</div></li></ul></div><div class='day'><h3>2026-08-12 <span class='sm'>(3건)</span></h3><ul><li><span class='sm'>19:00</span> <a onclick='openReport(1);return false'>🧪 [워커B] 부트스트랩 교정 — per-prefix TD-max + joint argmax로도 critic은 VLA를 못 이긴다</a><div class='sm'></div></li><li><span class='sm'>15:30</span> <a onclick='openReport(2);return false'>🧪 [워커B] critic head 3종 (scalar/HL-Gauss/floq) — 오프라인 랭킹 vs closed-loop BoN 판정</a><div class='sm'>우리 표준 AQC critic(ARQCritic: [obs 토큰, action-macro 토큰] 위 causal transformer, macro_group_size=2, full-chunk pre</div></li><li><span class='sm'>03:00</span> <a onclick='openReport(3);return false'>🧪 [워커B] floq — flow-matching critic 실증·시각화 (원본 충실 구현)</a><div class='sm'>⑪ floq 직접 구현·테스트 (08-12, 사용자 지시 — 원본 충실). 토이를 폐기하고 우리 ARQ critic 아키텍처를 그대로 두고 bootstrap+head만 floq로 교체: 같은 cau</div></li></ul></div><div class='day'><h3>2026-08-11 <span class='sm'>(5건)</span></h3><ul><li><span class='sm'>13:06</span> <a onclick='openReport(61);return false'>📄 [워커A] 논문 리뷰 — floq & 'What does flow matching bring to TD?' (critic를 velocity field로)</a><div class='sm'>critic을 스칼라 회귀 대신 velocity field로 두고 노이즈를 K스텝 적분해 값을 읽는 floq(OGBench hard 1.8×) + 후속 해부. 후속 핵심: 이득은 distributi</div></li><li><span class='sm'>06:30</span> <a onclick='openReport(4);return false'>🧪 [워커B] 임베딩 구조 비교 — raw/PCA/phi/BYOL-gamma/TD-JEPA (무엇이 궤적을 가로질러 붙이나)</a><div class='sm'>TD-JEPA·BYOL-gamma를 φ(HILP)가 쓴 같은 frozen RLT 토큰 위에 readout으로 학습(모두 같은 MLP 구조 — 목적식만 다름). φ는 goal-조건 expectile </div></li><li><span class='sm'>05:10</span> <a onclick='openReport(5);return false'>🧪 [워커B] 논문 리뷰 — DBC(bisimulation): 우리가 원하는 invariance의 정면 정의</a><div class='sm'>bisimulation은 두 상태를 "픽셀이 비슷한가"가 아니라 "행동적으로 구분 불가능한가"로 같다고 본다: 같은 보상을 주고, 어떤 행동에도 (다음 상태의) bisimulation-등가 분포로 </div></li><li><span class='sm'>03:30</span> <a onclick='openReport(6);return false'>🧪 [워커B] 설계 — 커버리지가 범인인가: OGBench에서 역방향 ablation (반사실 다이얼)</a><div class='sm'>TD-BoN이 OGBench에서 잘 된다는 사실은 "우리 파이프라인이 신호가 있을 때 잡는가?"에 이미 답한다: 잡는다. 따라서 PrepareCoffee·YAM의 null은 임베딩/critic 결함</div></li><li><span class='sm'>02:40</span> <a onclick='openReport(7);return false'>🧪 [워커B] 논문 리뷰 — BYOL-γ, TD-JEPA의 선조 (그리고 우리 A단계의 MC 팔)</a><div class='sm'>goal-조건 BC는 학습에서 본 (상태,목표) 조합은 잘하지만 데이터에 완결 궤적이 없는 새 조합엔 약하다. 궤적 s₀→s_h와 s_b→s_f가 w에서 교차하는 데이터로 학습, s₀→s_f(조각 </div></li></ul></div><div class='day'><h3>2026-08-10 <span class='sm'>(9건)</span></h3><ul><li><span class='sm'>23:00</span> <a onclick='openReport(60);return false'>🔬 [워커A] BoN 사전등록 검정 종결 — 90쌍 합산 null (p=0.65), test-time BoN은 무익 확정</a><div class='sm'>r50에서 사전등록한 BoN 파워 확장의 결말. seed 0의 첫 양(+) 신호(.800 vs .700)는 노이즈였다: seed 30·60은 각각 정확히 동률, 합산 bon .711 vs vla .</div></li><li><span class='sm'>22:34</span> <a onclick='openReport(59);return false'>🤖 [워커A] YAM π0.5 실기 스케일링 — 완주 0/50, 200k는 쉬운 구간만 확실해지고 어려운 구간 전멸</a><div class='sm'>실기 lego_taxi, 체크포인트 50k–200k × 10 trials, milestone 0–4. 완주 0/50. 평균 progress는 50k/100k 1.7에서 늘지 않음(잠정 n=10). </div></li><li><span class='sm'>21:20</span> <a onclick='openReport(8);return false'>🧪 [워커B] TD-SF-ARQ 설계 — 벡터 SF 타깃의 단일태스크 critic (사전등록)</a><div class='sm'>이틀간의 판정으로 확정된 사실: ① 후보 chunk 간 가치 차이는 demo-only 데이터에서 극도로 희미하다 (σ_signal≈0, 압축 좌표에서만 행동 정보 +7.3%). ② 그 희미한 신호마</div></li><li><span class='sm'>20:27</span> <a onclick='openReport(58);return false'>🔬 [워커A] 재실행 판정 — 전권 파국은 실재(.133, p=.0002), BoN 첫 양(+) 신호는 사전등록 후 검증</a><div class='sm'>φ 정규화 버그 retraction의 결말: 동일 시드 재실행에서 전권(full-authority) 파국이 유효한 φ로 재현 (.133, +2/−19, p=.0002 — 무효였던 .300보다 심함)</div></li><li><span class='sm'>18:33</span> <a onclick='openReport(57);return false'>🔬 [워커A] 교차-궤적 이웃 판정 — φ는 stage가 아니라 관계 기하로 bridging한다</a><div class='sm'>사용자 반례('배경은 다 다르고 블럭-팔 상대 위치만 비슷한 궤적 간 stitching')를 측정으로 전환: expert action chunk를 관계 상태의 증인으로 쓰는 교차-에피소드 kNN 판</div></li><li><span class='sm'>18:10</span> <a onclick='openReport(9);return false'>🧪 [워커B] 논문 리뷰 — TD-JEPA, HILP의 상위호환인가</a><div class='sm'>보상 없는 전이 데이터 D={(s,a,s′)}만으로 사전학습해 두고, 테스트 시점에 임의의 보상 r이 주어지면 추가 학습 없이 그 보상을 최대화하는 정책을 내놓는 것이 목표다. 이걸 가능하게 하는 </div></li><li><span class='sm'>13:40</span> <a onclick='openReport(56);return false'>🚨 [워커A] 정정 — φ rollout 정규화 버그: φ-소비 arm 전체 무효(p=.004 포함), 재실행 중</a><div class='sm'>phi.pt는 표준화된 토큰으로 학습됐는데 rollout 어댑터가 raw 토큰을 주입(출력 오차 45%). φ bon/prefix/전권(p=.004)과 mbac 계열 rollout 무효. 오프라인 </div></li><li><span class='sm'>11:30</span> <a onclick='openReport(55);return false'>📏 [워커A] sensitivity 지표 보정 — γ-천장과 시간 해상도 (사용자 질문발)</a><div class='sm'>참 가치차의 상한 ΔQ≈V·|lnγ|·Δt를 무시한 기존 sensitivity의 결함 교정. 보정 결과: calswap의 .29-.52는 전부 천장 초과 = CQL 인공 마진('오프라인 통과, 롤아</div></li><li><span class='sm'>08:40</span> <a onclick='openReport(54);return false'>🧱 [워커A] 배제 매트릭스 완결 + GP 학습 곡선 — on-policy만 남았다</a><div class='sm'>900-rollout GP 곡선(90k=.560 표준 체크포인트 확정). 후보 구분의 오프라인 경로 5종(표현/목적식/다양성/모델합성/혼합데이터) 전부 측정으로 닫힘 — mae0.5 판별 프로브(s</div></li></ul></div><div class='day'><h3>2026-08-09 <span class='sm'>(1건)</span></h3><ul><li><span class='sm'>14:30</span> <a onclick='openReport(53);return false'>🔬 [워커A] 3-태스크 critic 교차 판정 — V는 완성, Q는 spread 퍼즐</a><div class='sm'>YAM(혼합성과, γ.9998): Spearman .966 역대 최고 V — 그러나 sens 0(후보 spread 1.8%로 붕괴, 실측). GP(calswap): binding .938인데 sen</div></li></ul></div><div class='day'><h3>2026-08-08 <span class='sm'>(17건)</span></h3><ul><li><span class='sm'>17:30</span> <a onclick='openReport(52);return false'>📖 [워커A] 용어·지표 사전 — 워커A 엔트리를 읽기 위한 모든 개념</a><div class='sm'>RLT 토큰·φ readout·IQL·Cal-QL·swap negatives·binding·action sensitivity·σ-disagreement·AUSE·McNemar 등 워커A 실험에 등장</div></li><li><span class='sm'>16:00</span> <a onclick='openReport(50);return false'>⚗️ [워커A] MVE critic — policy 없이 '해상도 있고 과대평가 없는' critic, 4-변형 대기중</a><div class='sm'>MAC·IQL-TD-MPC 정독 후 설계. V는 in-sample IQL(OOD 질의 원천 차단), Q는 저장된 후보 16개마다 dynamics가 예측한 도착지의 V(5-앙상블 min)로 타겟 제조</div></li><li><span class='sm'>15:20</span> <a onclick='openReport(10);return false'>🧪 [워커B] Conservatism 스펙트럼 — 전체 null의 통일 해석과 다음 수</a><div class='sm'>주장. 지금까지의 모든 판정(FINAL 14팔·v14·calql·randh·워커A 밤샘)은 "보수성 다이얼 위의 어디에 서 있었는가"로 한 번에 설명된다. 그리고 위험은 축이 두 개라서, 한 축의 </div></li><li><span class='sm'>15:00</span> <a onclick='openReport(51);return false'>🥞 [워커A] GarnishPancake 개시 — 100k 완주, 3×50 CI 프로토콜 사전등록</a><div class='sm'>GP mae0.5 VLA 100k 완주(체크포인트 전부 HF 아카이브). 평가는 seed set 3개×50 trials=150 paired로 사전등록(PC의 ±.1 잡음 교훈). VLA 기준선+체크</div></li><li><span class='sm'>14:10</span> <a onclick='openReport(11);return false'>🧪 [워커B] 교차 워커 리뷰 — 워커A에게서 배운 것 (08-08)</a><div class='sm'>워커A는 전혀 다른 표현(HILP φ 128d, TD readout)·다른 critic(Cal-QL+swap negatives, 오프라인 action-sensitivity 0→0.524 통과)으로 </div></li><li><span class='sm'>13:30</span> <a onclick='openReport(12);return false'>🧪 [워커B] 논문 리뷰 — Robo-ValueRL + 가치 기반 VLA 조향 3편</a><div class='sm'>구도. 오프라인→온라인 로봇 RL에서 가치함수를 "데이터 활용 인터페이스"로 쓴다. 3단: ① 히스토리 조건부 가치 추정, ② 품질 조건부 정책 사전학습, ③ 온라인 잔차(residual) 적응. </div></li><li><span class='sm'>12:50</span> <a onclick='openReport(13);return false'>🧪 [워커B] FINAL 캠페인 — 전 요인 사전등록 스윕</a><div class='sm'>BoN (Best-of-N). VLA에서 행동 후보 N개(우리는 16)를 샘플링하고 critic 점수가 가장 높은 것을 실행하는 배포 방식. VLA 자체는 그중 아무거나 하나를 실행하는 것과 같으므</div></li><li><span class='sm'>11:30</span> <a onclick='openReport(47);return false'>🎰 [워커A] PC 롤아웃 대작전 — critic 권한 7-arm + bounded-authority 4-arm, 재현까지</a><div class='sm'>유일한 유의 결과는 부정: 오프라인 전 조건 통과한 φ Cal-QL+swap critic이 전권 모드에서 .300 (vla .700, McNemar p=.004). 첫 30-trial의 모든 양성은</div></li><li><span class='sm'>09:00</span> <a onclick='openReport(14);return false'>🧪 [워커B] HUD 롤아웃 비디오 갤러리</a><div class='sm'>대표 롤아웃 영상. HUD 읽는 법: 오른쪽 trace의 회색 밴드 = 후보 16개 Q 분포(q01–q99), 파란 선 = 실행된 chunk의 Q, 빨간 선 = V(z), 왼쪽 grid = Q[후보</div></li><li><span class='sm'>08:45</span> <a onclick='openReport(15);return false'>🧪 [워커B] CalQL(CO-RFT) — 후보축 학습 신호의 성공률 판정</a><div class='sm'>calql_noprop(n=8): Δ̄=−0.018 CI[−0.103,+0.068] — null (초기 n=4의 쌍봉 ±0.1 분산은 시드가 쌓이며 씻김). calql_mixed(n=4): Δ̄=+</div></li><li><span class='sm'>08:40</span> <a onclick='openReport(16);return false'>🧪 [워커B] v14 — 장면 지름길 제거 데이터 판정</a><div class='sm'>iql_v14(n=4): Δ̄=−0.035 CI[−0.083,+0.013] — null, CI가 좁아 "큰 효과가 숨어있다"고 볼 여지도 작다. td_max_v14(n=4): Δ̄=−0.110 CI</div></li><li><span class='sm'>06:45</span> <a onclick='openReport(17);return false'>🧪 [워커B] 밤샘 종합 보고 (08-08 아침) — 무엇이 풀렸고 무엇이 남았나</a><div class='sm'>한 줄 요약. 닷새를 막던 TD+mixed 학습 불능이 근본 원인(int32 초과 후보 버퍼) 수준에서 해결되어 FINAL 스윕 전 팔이 재가동됐고, 장면 암기 지름길을 차단한 v14 데이터가 완성</div></li><li><span class='sm'>06:40</span> <a onclick='openReport(18);return false'>🧪 [워커B] 전체 흐름 · Takeaways</a><div class='sm'>어노테이션(RL토큰+후보16) → critic 학습 → 페어드 롤아웃 평가의 3단 파이프라인 완성.</div></li><li><span class='sm'>06:40</span> <a onclick='openReport(49);return false'>🧭 [워커A] MB-AC 오프라인 배터리 — σ는 binding하고, 모델-가치는 역전한다</a><div class='sm'>held-out 8000 anchors: 앙상블 disagreement만으로 '이 상태의 진짜 행동 vs 딴 상태 행동' 구분 정확도 .817 (보수화 손실 없이). 반면 모델이 예측한 도착지의 g</div></li><li><span class='sm'>06:00</span> <a onclick='openReport(48);return false'>🌀 [워커A] φ-공간 dynamics — 같은 모델, 표현만 바꿔 전 구간 압승</a><div class='sm'>미래 상태 예측 모델을 DINO 공간 대신 HILP φ(128d)에서 학습: R² .66@16스텝(DINO .52), 캘리브레이션 AUSE .07, 틀린 행동에 대한 앙상블 불안 1.54배(DINO</div></li><li><span class='sm'>02:50</span> <a onclick='openReport(19);return false'>🧪 [워커B] TD+mixed 침묵사 규명 — XLA 컴파일 segfault</a><div class='sm'>mixed 데이터의 후보 배열이 807,634×16×16×12 = 2.48×10⁹ 원소로 INT32_MAX(2.147×10⁹)를 15% 초과. 이 버퍼를 인덱싱하는 XLA gather의 코드젠이 s</div></li><li><span class='sm'>00:40</span> <a onclick='openReport(20);return false'>🧪 [워커B] K-per-scene 수집 완료 — 장면 정체성 지름길 제거 데이터</a><div class='sm'>주방의 45%에서 같은 장면이 성공도 실패도 한다 — 이 68개 주방에서는 critic이 장면 정체성으로 결과를 맞힐 수 없고, 상태·행동에서 신호를 찾아야만 한다. held-out 프로브에서 확인</div></li></ul></div><div class='day'><h3>2026-08-07 <span class='sm'>(8건)</span></h3><ul><li><span class='sm'>10:00</span> <a onclick='openReport(21);return false'>🧪 [워커B] v12 혼합 데이터 — 밴드 개방과 성공률 심판</a><div class='sm'>기전 지표 두 개가 예측 방향으로 움직였다. ① 후보 밴드 10~30배 개방(초록) — 후보를 처음으로 구분한다. ② 실패 롤아웃 궤적 fit(위 그림): 데모-only critic이 실패 궤적에서</div></li><li><span class='sm'>03:00</span> <a onclick='openReport(22);return false'>🧪 [워커B] v11 공정 비교 — 16시드 CI 완결</a><div class='sm'>TD는 16/16런 음수, CI 전체가 0 아래 — 조건을 완전히 통제한 인과 수준의 해악 판정 (파손은 placed_no_press에 집중: h-붕괴 디더링의 서명). IQL/QC/AQC는 CI가</div></li><li><span class='sm'></span> <a onclick='openReport(23);return false'>🧪 [워커B] 아침 종합 (08-09) — 수렴의 밤: 모든 갈래가 닫히고 남은 것</a><div class='sm'>한 줄 요약. 밤새 열려 있던 모든 갈래가 정직하게 닫혔다 — 트릭 계열(v17b), 임베딩 계열(φ·φ+proprio), 히스토리, model-based 오프라인 합성까지. 이틀의 수렴 결론은 하</div></li><li><span class='sm'></span> <a onclick='openReport(24);return false'>🧪 [워커B] GR1 tabletop 이식 계획 — 질문이 유효한 무대로</a><div class='sm'>해석 두 갈래 — (a) 20k 학습 부족, (b) 하네스 행동 실행 의미론 불일치. 조사: env 컨트롤러는 control_delta=False(절대 관절각), action_space 선언은 명목</div></li><li><span class='sm'></span> <a onclick='openReport(25);return false'>🧪 [워커B] Model-based로 본질 회귀 — Q(z,a)=γ^h·V(f(z,a))</a><div class='sm'>방향 정리 (2026-08-09 00:40, 사용자 지시). 지난 이틀 실험 축이 너무 벌어졌다(다양화·veto·φ결합·히스토리…). 트릭을 덧대는 대신 간단한 방식 하나로 집중한다: 측정으로 확정</div></li><li><span class='sm'></span> <a onclick='openReport(26);return false'>🧪 [워커B] 임베딩 사다리 — 차원인가 기하인가 (HILP φ 재현)</a><div class='sm'>동기. RLT 토큰의 episode-정체성 병리(장면 암기 지름길의 표현 측 원인)를 워커A는 HILP식 TD readout(φ)으로 공격했다. 사용자 질문 두 개가 설계를 정했다: "φ의 이점이 </div></li><li><span class='sm'></span> <a onclick='openReport(41);return false'>🔬 Phase 0: RLT-HILP φ 발견과 critic action-감각 부활</a><div class='sm'>frozen RLT 토큰 위 TD-only φ(readout)가 판을 뒤집음: stitch 0.78, 선형 episode-판별 붕괴(0.28), 값 VLA-z 이상. Cal-QL이 critic ac</div></li><li><span class='sm'></span> <a onclick='openReport(42);return false'>🌙 밤샘: cheap-z가 VLA 토큰을 이기다 + critic action-blind 발견</a><div class='sm'>22M frozen DINOv2 + 15분 헤드가 3B VLA hidden 토큰을 모든 값-probe에서 상회 (mc R² 0.762 vs 0.734). 성공-only 데모에선 IQL critic이</div></li></ul></div><div class='day'><h3>2026-08-06 <span class='sm'>(7건)</span></h3><ul><li><span class='sm'>22:00</span> <a onclick='openReport(27);return false'>🧪 [워커B] 실패 데이터 파이프라인 + in-distribution 장면 재현</a><div class='sm'>AQC 논문이 후보 선택에 성공한 조건(혼합 롤아웃 학습, per-step −1 + 성공창 보상)을 우리 스택에 이식하기 위한 기반 공사. 보상 규약은 우리 관례(성공 프레임 1, 실패 전부 0 —</div></li><li><span class='sm'>19:00</span> <a onclick='openReport(28);return false'>🧪 [워커B] 장면 풀 효과 — 평가 방법론의 교정</a><div class='sm'>30장면 비교는 풀 간 변동(±0.1)이 모드 간 차이(±0.05)를 압도한다. 구풀 적자의 해부: 특정 시드(s100) 주방들에서 critic이 '배치 후 버튼' 단계를 부수는 것(placed_n</div></li><li><span class='sm'>17:00</span> <a onclick='openReport(29);return false'>🧪 [워커B] 실패 부검 — env 술어 단계 로그</a><div class='sm'>파지 실패 0. 실패의 ~2/3가 배치 이후 엔드게임. 모드 간 차이보다 태스크 병목이 지배적. press후 실패의 하위모드: critic은 전부 '머그 이탈'(관측 가능→학습 가능), vla는 이</div></li><li><span class='sm'>14:00</span> <a onclick='openReport(30);return false'>🧪 [워커B] AQC 구현과 데모-only 판정</a><div class='sm'>aqc 79/120 vs vla 83/120 (p=0.64) — 못 이겼지만, critic의 능동 손실(0.542)을 동전던지기 밴드(0.658)로 복원했고, h 선택 분포가 61% 최단-붕괴에서 </div></li><li><span class='sm'>10:00</span> <a onclick='openReport(31);return false'>🧪 [워커B] 동전던지기 실험 — critic의 능동 손실</a><div class='sm'>critic이 무작위 후보 선택보다 유의하게 나쁨(vs rand p=0.019) — winner's curse의 행동적 확정. vla↔rand는 이론상 동일(후보는 iid 교환가능 — 코드 검증)하</div></li><li><span class='sm'></span> <a onclick='openReport(43);return false'>태스크 2 확장(GarnishPancake) + mae0.5 annotation 트랙</a><div class='sm'>경향성 확인용 두 번째 태스크 학습 시작(동일 mae0.5 레시피). mae0.5 annotation은 4회 실패 후 z-only 경량판으로 우회 — 완료 시 HF 자동 업로드.</div></li><li><span class='sm'></span> <a onclick='openReport(44);return false'>YAM 데이터-스케일링 s100/s200 완주</a><div class='sm'>성공 데모 100 vs 200 × delta joint/none = 4 run 전부 100k 완주. success-only 필터·점별 norm stats 신규 구현. 체크포인트 50k~100k 전부</div></li></ul></div><div class='day'><h3>2026-08-05 <span class='sm'>(4건)</span></h3><ul><li><span class='sm'>21:00</span> <a onclick='openReport(32);return false'>🧪 [워커B] 고검정력 롤아웃 판정 (softcand / e70 재현 / softmax)</a><div class='sm'>"argmax 대신 샘플링"류의 추론 기교로는 무신호 순위를 구제할 수 없음을 검정력 있게 확정. 한 시드의 +0.033은 노이즈였다. 이 판정이 "학습 신호 주입(실패 데이터)"으로의 전환점.</div></li><li><span class='sm'>15:00</span> <a onclick='openReport(33);return false'>🧪 [워커B] Full-data 실전 critic 검수</a><div class='sm'>IQL 계열은 자기 학습 궤적을 0.002~0.031로 맞춘다(캘리브레이션 완치). TD는 full-data 200k에도 +0.03~0.08 낙관이 남는다. 그러나 다섯 모두 후보 밴드(회색)가 d</div></li><li><span class='sm'>11:00</span> <a onclick='openReport(34);return false'>🧪 [워커B] 데이터 사다리 (1→64 에피소드) × objective × γ</a><div class='sm'>IQL γ0.999 (위). held-out 오차 0.157→0.056 단조 개선. 액션을 안 보는 V(빨강)가 Q보다 모든 rung에서 잘 일반화(0.036 vs 0.056) — 관측 표현은 전이</div></li><li><span class='sm'>04:00</span> <a onclick='openReport(35);return false'>🧪 [워커B] 단일 궤적 fit — terminal 처리 검증</a><div class='sm'>전 prefix 헤드가 참값 곡선을 따라가고 terminal 직전 20프레임 오차 0.002 — 타깃/terminal 계산이 정확함을 사용자 검수용으로 확정한 실험. 원거리의 ~0.06 바닥은 HL</div></li></ul></div><div class='day'><h3>2026-08-04 <span class='sm'>(1건)</span></h3><ul><li><span class='sm'></span> <a onclick='openReport(45);return false'>RLT 토큰 진단: episode-identity 병리</a><div class='sm'>z_rl은 phase를 잘 담지만(progress R² 0.82+) episode 정체가 완벽히 들어있고(probe 1.00) 학습할수록 악화 — stitching 불가의 실측 원인. MAE로는 안</div></li></ul></div><div class='day'><h3>2026-08-03 <span class='sm'>(3건)</span></h3><ul><li><span class='sm'>18:00</span> <a onclick='openReport(36);return false'>🧪 [워커B] Dueling 게이지 실패 두 번과 zero-mean 해법</a><div class='sm'>Q = V + A 분해는 게이지 자유도((V+c, A−c))가 있어 두 번 실패했다: ① detach-V 판은 |V|~200으로 표류, ② sigmoid 바운드 판은 V가 0에서 죽음. 해법은 pr</div></li><li><span class='sm'>15:00</span> <a onclick='openReport(37);return false'>🧪 [워커B] Winner's curse 해부 — 분산 분해와 두 개의 argmax</a><div class='sm'>후보 간 Q 차이의 대부분이 상태와 무관한 고정 함수 노이즈였다 — critic은 후보의 정체성에 점수를 매길 뿐 결과를 예측하지 않는다. 그 위의 argmax는 가장 과대평가된 후보를 체계적으로 </div></li><li><span class='sm'></span> <a onclick='openReport(46);return false'>YAM 데이터셋 프레임 결손 진단·수리</a><div class='sm'>mp4가 메타데이터보다 짧은 결손을 내부 join 지점까지 특정하고 수리 도구 제작. 이후 수리판 235-ep 재업로드의 기반.</div></li></ul></div><div class='day'><h3>2026-08-02 <span class='sm'>(1건)</span></h3><ul><li><span class='sm'>20:00</span> <a onclick='openReport(38);return false'>🧪 [워커B] 방법 패밀리별 롤아웃 총결산 (TD→IQL 전환 근거)</a><div class='sm'>TD 패밀리는 critic−vla −0.26~−0.32로 일관 열세, IQL 도입(v6)으로 −0.06까지 회복, prefix-only 모드는 유일하게 0 위(+0.02). 이 그림이 "IQL로 가</div></li></ul></div><div class='day'><h3>2026-08-01 <span class='sm'>(1건)</span></h3><ul><li><span class='sm'>14:00</span> <a onclick='openReport(39);return false'>🧪 [워커B] TD 타깃의 거리-구조 바이어스 (b(d) 프로브)</a><div class='sm'>TD critic의 b(d)는 원거리에서 크게 양수(최대 5.07× 팽창) — 타깃이 거리 구조로 기울어 있었다. 이 기울기는 커밋 길이 선택(h축)을 오염시켜, 이후 측정에서 joint argma</div></li></ul></div><div class='day'><h3>2026-07-30 <span class='sm'>(1건)</span></h3><ul><li><span class='sm'>22:00</span> <a onclick='openReport(40);return false'>🧪 [워커B] TD critic 초기 세대와 첫 적자</a><div class='sm'>위 그림의 각 점이 한 평가 런의 critic−vla 차이다 — 전부 0 아래로 몰려 있어 "설정 노이즈"로는 설명이 안 됐다. 이 적자의 원인 추적이 이후 2주의 서사를 만든다: 타깃 바이어스(h</div></li></ul></div></div></div><div id="wb-map" hidden><div class="wbx"><p>실험 리포트의 관계도 — 간선은 각 리포트의 '연결된 리포트'에서 자동 생성된다. <b>노드를 드래그</b>해 재배치하고, <b>호버</b>로 연결을 강조하고, <b>클릭</b>하면 리포트가 열린다.</p><p class='sub'><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#4c72b0;margin-right:5px'></span>기반 탐색</span><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#dd8452;margin-right:5px'></span>정합성 검증</span><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#55a868;margin-right:5px'></span>진단·방법</span><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#c44e52;margin-right:5px'></span>판정·종합</span><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#8172b3;margin-right:5px'></span>표현·설계</span><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#937860;margin-right:5px'></span>논문·교차</span><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#da8bc3;margin-right:5px'></span>이식·인프라</span><span style='display:inline-block;margin-right:14px'><span style='display:inline-block;width:11px;height:11px;border-radius:50%;background:#64b5cd;margin-right:5px'></span>신규</span></p><div id='wb-graph' style='width:100%;height:640px;border:1px solid #e2e2e2;border-radius:10px;background:#fff'></div><script id='wb-graph-data' type='application/json'>{"nodes":[],"links":[],"colors":[],"phases":[]}</script></div></div><div id="wb-exp" hidden><div class="wbx"><p>계획 → 진행중 → 완료. 두 워커가 각자 행을 갱신한다 (<code>experiments.json</code>). 리포트 칩을 누르면 이동.</p><div id="wb-exp-body"></div></div></div><!--/wb-views--></div>
+<div id="reader" hidden><button class="back-btn" onclick="goHome()">← 목록으로</button>
+<div class="report-title" id="rtitle"></div><div class="report-date" id="rdate"></div>
+
+</div></div>
+<script>
+let REPORTS = [];
+const statusLabel={done:"완료",ongoing:"진행중",finding:"핵심발견"};
+const allTags=[...new Set(REPORTS.flatMap(r=>r.tags))];
+let activeTag="__all",query="";
+const chipsEl=document.getElementById("chips");
+allTags.forEach(t=>{const c=document.createElement("span");c.className="chip";c.dataset.tag=t;c.textContent=t;chipsEl.appendChild(c);});
+function render(){
+  const q=query.toLowerCase();
+  const rows=REPORTS.map((r,i)=>({...r,idx:i}))
+    .filter(r=>activeTag==="__all"||r.tags.includes(activeTag))
+    .filter(r=>!q||(r.title+r.summary+r.tags.join(" ")).toLowerCase().includes(q))
+    .sort((a,b)=>b.date.localeCompare(a.date));
+  document.getElementById("count").textContent=rows.length+"개 리포트";
+  const list=document.getElementById("list");
+  list.innerHTML="";
+  rows.forEach(r=>{
+    const b=document.createElement("button");
+    b.className="entry";
+    b.innerHTML=`<div class="top"><span class="title">${r.title}</span><span class="date">${r.date}</span></div>
+      <div class="summary">${r.summary}</div>
+      <div><span class="tag ${r.status}">${statusLabel[r.status]||r.status}</span>${r.tags.map(t=>`<span class="tag">${t}</span>`).join("")}</div>`;
+    b.onclick=()=>openReport(r.eid||r.idx);
+    list.appendChild(b);
+  });
+}
+function openReport(ref){var i=(typeof ref==='number')?ref:((window.EID2I&&(ref in window.EID2I))?window.EID2I[ref]:(/^\d+$/.test(ref)?+ref:-1));if(i<0||!REPORTS[i])return;document.getElementById("home").hidden=true;document.getElementById("reader").hidden=false;document.querySelectorAll(".report").forEach(function(s){s.hidden=true;});var sec=document.getElementById("r"+i);if(sec)sec.hidden=false;document.getElementById("rtitle").textContent=REPORTS[i].title;document.getElementById("rdate").textContent=REPORTS[i].date;window.scrollTo(0,0);}
+function goHome(){
+  document.getElementById("reader").hidden=true;
+  document.getElementById("home").hidden=false;
+  window.scrollTo(0,0);
+}
+document.addEventListener("click",e=>{
+  if(e.target.classList.contains("chip")){
+    document.querySelectorAll(".chip").forEach(x=>x.classList.remove("on"));
+    e.target.classList.add("on");activeTag=e.target.dataset.tag;render();
+  }
+});
+document.getElementById("search").addEventListener("input",e=>{query=e.target.value;render();});
+fetch('entries.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(D){D.sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});REPORTS=D.map(function(e){return{eid:e.eid,date:e.date,title:e.title,summary:e.summary,tags:e.tags,status:e.status};});window.EID2I={};REPORTS.forEach(function(r,i){if(r.eid)window.EID2I[r.eid]=i;});var rd=document.getElementById('reader');D.forEach(function(e,i){var s=document.createElement('section');s.className='report';s.id='r'+i;s.setAttribute('data-eid',e.eid||('r'+i));s.hidden=true;s.innerHTML=e.body_html||'';rd.appendChild(s);});render();if(window.buildThread){window.buildThread();}if(window.buildGraphData){var _gd=document.getElementById('wb-graph-data');if(_gd)_gd.textContent=JSON.stringify(window.buildGraphData());}if(window.wbGraphInit){var _wm=document.getElementById('wb-map');if(_wm&&!_wm.hidden)wbGraphInit();}if(!window.__eidnav){window.__eidnav=1;document.addEventListener('click',function(ev){var el=ev.target.closest('[data-eid]');if(!el||el.classList.contains('report'))return;var eid=el.getAttribute('data-eid');if(!eid)return;ev.preventDefault();openReport(eid);});}(function tj(){if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetPromise();}else{setTimeout(tj,150);}})();}).catch(function(err){document.getElementById('list').innerHTML='<p style="color:var(--red)">entries.json load failed: '+err+'</p>';});
+</script><script id="wb-tabs-js">
+function wbLang(){
+  const b=document.body, to=(b.dataset.wblang==='en')?'ko':'en';
+  b.dataset.wblang=to; localStorage.setItem('wblang',to);
+  document.getElementById('wb-lang').textContent=(to==='en')?'한국어':'EN';
+}
+(function(){const s=localStorage.getItem('wblang'); if(s==='en'){document.body.dataset.wblang='en';
+  addEventListener('DOMContentLoaded',()=>{const e=document.getElementById('wb-lang'); if(e) e.textContent='한국어';});}})();
+function wbView(v){
+  document.querySelectorAll('.wb-tab').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
+  const listy=['list','count','chips'];
+  listy.forEach(id=>{const e=document.getElementById(id); if(e) e.hidden=(v!=='list');});
+  document.querySelectorAll('#home .controls').forEach(e=>e.hidden=(v!=='list'));
+  document.getElementById('wb-thread').hidden=(v!=='thread');
+  document.getElementById('wb-map').hidden=(v!=='map');var _ex=document.getElementById('wb-exp');if(_ex)_ex.hidden=(v!=='exp');if(v==='exp'&&window.buildExperiments)window.buildExperiments();
+  if(v==='map') wbGraphInit();
+}
+// ---- 인터랙티브 관계도: 자체 force-directed 시뮬레이션 (드래그·호버·클릭)
+let _wbG=null;
+function wbGraphInit(){
+  if(_wbG) return; const box=document.getElementById('wb-graph'); if(!box) return;
+  const D=JSON.parse(document.getElementById('wb-graph-data').textContent);if(!D.nodes||!D.nodes.length)return;
+  const Wd=box.clientWidth||1200, H=box.clientHeight||640, NS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(NS,'svg'); svg.setAttribute('width','100%'); svg.setAttribute('height','100%');
+  box.style.position='relative'; box.appendChild(svg);
+  const tip=document.createElement('div'); tip.id='wb-tip';
+  tip.style.cssText='position:absolute;display:none;max-width:300px;background:#fff;border:1px solid #cfd4dd;'+
+    'border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.14);padding:10px 13px;font-size:.85em;'+
+    'line-height:1.5;color:#1a1a1a;pointer-events:none;z-index:10';
+  box.appendChild(tip);
+  const ncat=D.phases.length;
+  const N=D.nodes.map((n,i)=>({...n,
+    x:(Wd*0.12)+(n.cat+0.5)*(Wd*0.76)/ncat+40*(Math.random()-0.5),
+    y:H*0.18+H*0.64*Math.random(), vx:0, vy:0}));
+  const byId={}; N.forEach(n=>byId[n.id]=n);
+  const L=D.links.map(([a,b])=>({a:byId[a],b:byId[b]})).filter(l=>l.a&&l.b);
+  const adj={}; L.forEach(l=>{(adj[l.a.id]=adj[l.a.id]||new Set()).add(l.b.id);(adj[l.b.id]=adj[l.b.id]||new Set()).add(l.a.id);});
+  const eEls=L.map(l=>{const p=document.createElementNS(NS,'line');
+    p.setAttribute('stroke',D.colors[l.a.cat]); p.setAttribute('stroke-width','1.3'); p.setAttribute('opacity','.38');
+    svg.appendChild(p); return p;});
+  const nEls=N.map(n=>{
+    const g=document.createElementNS(NS,'g'); g.style.cursor='grab';
+    const c=document.createElementNS(NS,'circle');
+    c.setAttribute('r', 14+3*((adj[n.id]&&adj[n.id].size)||0));
+    c.setAttribute('fill','#fff'); c.setAttribute('stroke',D.colors[n.cat]); c.setAttribute('stroke-width','2.4');
+    const t=document.createElementNS(NS,'text'); t.textContent=n.id;
+    t.setAttribute('text-anchor','middle'); t.setAttribute('dy','-1.4em');
+    t.setAttribute('font-size','12'); t.setAttribute('font-weight','600'); t.setAttribute('fill','#1a1a1a');
+    g.appendChild(c); g.appendChild(t); svg.appendChild(g);
+    g.addEventListener('mouseenter',()=>{
+      eEls.forEach((e,i)=>e.setAttribute('opacity',(L[i].a===n||L[i].b===n)?'0.95':'0.08'));
+      nEls.forEach((m,i)=>m.g.setAttribute('opacity',(N[i]===n||(adj[n.id]&&adj[n.id].has(N[i].id)))?'1':'0.25'));
+      tip.innerHTML='<b>'+n.id+'</b> <span style="color:#5f6b7a">'+n.date+'</span>'+
+        '<div style="margin-top:3px">'+n.what+'</div>'+
+        (n.sum?'<div style="margin-top:5px;color:#5f6b7a">'+n.sum+'</div>':'');
+      tip.style.display='block';});
+    g.addEventListener('mousemove',ev=>{const r=box.getBoundingClientRect();
+      let tx=ev.clientX-r.left+16, ty=ev.clientY-r.top+14;
+      if(tx+310>r.width) tx=ev.clientX-r.left-316; if(ty+140>r.height) ty=ev.clientY-r.top-120;
+      tip.style.left=tx+'px'; tip.style.top=ty+'px';});
+    g.addEventListener('mouseleave',()=>{
+      eEls.forEach(e=>e.setAttribute('opacity','.38')); nEls.forEach(m=>m.g.setAttribute('opacity','1'));
+      tip.style.display='none';});
+    return {g,c,t,n};});
+  let drag=null, moved=0, alpha=1;
+  nEls.forEach(({g,n})=>{
+    g.addEventListener('pointerdown',ev=>{drag={n,dx:n.x-ev.clientX,dy:n.y-ev.clientY}; moved=0; alpha=Math.max(alpha,.35); g.setPointerCapture(ev.pointerId);});
+    g.addEventListener('pointermove',ev=>{if(!drag||drag.n!==n)return; n.x=ev.clientX+drag.dx; n.y=ev.clientY+drag.dy; n.vx=n.vy=0; moved++; alpha=Math.max(alpha,.3);});
+    g.addEventListener('pointerup',()=>{if(moved<4) openReport(n.id); drag=null;});});
+  function tick(){
+    if(alpha>0.005){
+      for(let i=0;i<N.length;i++) for(let j=i+1;j<N.length;j++){
+        const a=N[i],b=N[j]; let dx=b.x-a.x,dy=b.y-a.y; let d2=dx*dx+dy*dy||1; if(d2<40000){
+          const f=1800/d2; const d=Math.sqrt(d2); dx/=d; dy/=d;
+          a.vx-=f*dx; a.vy-=f*dy; b.vx+=f*dx; b.vy+=f*dy;}}
+      L.forEach(({a,b})=>{const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1,f=0.012*(d-130);
+        a.vx+=f*dx/d; a.vy+=f*dy/d; b.vx-=f*dx/d; b.vy-=f*dy/d;});
+      N.forEach(n=>{ n.vx+=0.004*((Wd*0.12)+(n.cat+0.5)*(Wd*0.76)/ncat-n.x); n.vy+=0.002*(H/2-n.y);
+        if(drag&&drag.n===n) return;
+        n.x+=n.vx*=0.86; n.y+=n.vy*=0.86;
+        n.x=Math.max(30,Math.min(Wd-30,n.x)); n.y=Math.max(34,Math.min(H-24,n.y));});
+      alpha*=0.985;}
+    eEls.forEach((e,i)=>{e.setAttribute('x1',L[i].a.x);e.setAttribute('y1',L[i].a.y);e.setAttribute('x2',L[i].b.x);e.setAttribute('y2',L[i].b.y);});
+    nEls.forEach(({g,n})=>g.setAttribute('transform','translate('+n.x+','+n.y+')'));
+    requestAnimationFrame(tick);}
+  _wbG=true; tick();
+}
+// ---- 떠 있는 내비: 리포트 열람 중 목록으로/맨위로 즉시 이동
+(function(){
+  function ensure(){
+    if(document.getElementById('wb-float')) return;
+    const box=document.createElement('div'); box.id='wb-float';
+    const home=document.createElement('button'); home.textContent='☰'; home.title='목록으로';
+    home.onclick=function(){ if(typeof goHome==='function') goHome(); else location.hash=''; window.scrollTo(0,0); };
+    const top=document.createElement('button'); top.textContent='↑'; top.title='맨 위로';
+    top.onclick=function(){ window.scrollTo({top:0,behavior:'smooth'}); };
+    box.appendChild(home); box.appendChild(top); document.body.appendChild(box);
+  }
+  function inReader(){ const r=document.getElementById('reader'); return r && !r.hidden; }
+  function upd(){ ensure(); const f=document.getElementById('wb-float');
+    f.style.display=(inReader() && window.scrollY>320)?'flex':'none'; }
+  addEventListener('scroll',upd,{passive:true});
+  addEventListener('click',()=>setTimeout(upd,60));
+  addEventListener('DOMContentLoaded',()=>{ensure();upd();});
+  ensure();
+})();
+</script></body></html>
