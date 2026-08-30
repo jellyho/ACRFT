@@ -79,3 +79,32 @@ def test_kstar_is_the_choice_and_the_chunk_is_what_ran():
     kstar = np.array([6, 2, 6])
     assert lengths.tolist() == [30, 10, 12]
     assert float(np.mean(lengths < kstar * 5)) == pytest.approx(1 / 3)
+
+
+def test_drift_is_measured_against_the_twin_and_scaled_by_the_spread():
+    """action_samples is laid out [executed, unsteered twin, uncond...]. The twin shares the
+    executed draw's noise, so their distance IS the steering displacement; the unconditional spread
+    is what turns it into a number with a scale. 0.1 rad is small inside a spread of 0.5 and
+    enormous inside 0.02, and the raw value cannot tell you which."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    uncond = rng.normal(size=(4, 8, 14)) * 0.5
+    executed = uncond[:, 0] + 0.1
+    twin = uncond[:, 0]
+    samples = np.concatenate([executed[:, None], twin[:, None], uncond], axis=1)
+
+    drift = np.abs(samples[:, 0] - samples[:, 1]).max(axis=-1)
+    spread = samples[:, 2:].std(axis=1).mean(axis=-1)
+    assert np.allclose(drift, 0.1, atol=1e-9)
+    assert float(np.median(drift / spread)) < 0.5, "inside its own spread"
+
+    tight = np.concatenate([executed[:, None], twin[:, None], uncond * 0.02], axis=1)
+    tight_spread = tight[:, 2:].std(axis=1).mean(axis=-1)
+    assert float(np.median(drift / tight_spread)) > 5.0, "the same 0.1 rad, far outside a tight one"
+
+
+def test_the_advantage_tripwire_separates_the_two_critics():
+    """0.204 is the fixed critic's reference; 0.277 is what the raw-proprio bug produced, and Q
+    stayed in range the whole time. A deploy run near 0.28 is a signal, not a result."""
+    assert abs(0.204 - 0.277) > 0.05, "the two distributions are far enough apart to act on"

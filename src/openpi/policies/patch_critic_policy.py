@@ -85,6 +85,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         *,
         mode: str = "bon",
         steer_alpha: float | None = None,
+        drift_samples: int = 0,
         camera_keys=YAM_CAMERA_KEYS,
         state_key: str = YAM_STATE_KEY,
         img_size: int = 224,
@@ -110,6 +111,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         # Modes whose CHUNKS come from an extraction arm rather than the base sampler. They reuse
         # everything else in this class (patch features, robot-space decode, scoring, HUD).
         self._arm = mode if mode in ("qpilots", "lps", "lpsd", "flowdagger") else None
+        self._drift_samples = 0
         self._extraction_head = extraction_head
         self._camera_keys = tuple(camera_keys)
         self._state_key = state_key
@@ -345,6 +347,18 @@ class PatchCriticSelectPolicy(BasePolicy):
                 **({"steering_head": pathlib.Path(extraction_head)} if self._arm == "flowdagger" else {}),
             )
             self._arm_sampler = _serving.ArmChunkSampler(spec, policy._model)
+            self._drift_samples = int(drift_samples)
+            if self._drift_samples:
+                if self._arm != "qpilots":
+                    # Only steering has an "unsteered twin"; for the other arms the reference draws
+                    # would still be recorded, but the twin would be meaningless, so say so.
+                    logging.warning("drift reference draws requested on %s; only qpilots has a twin", self._arm)
+                self._arm_sampler.pair_unsteered = self._arm == "qpilots"
+                logging.info(
+                    "recording %d unconditional reference draw(s)%s alongside the executed chunk",
+                    self._drift_samples,
+                    " and the unsteered twin" if self._arm == "qpilots" else "",
+                )
             logging.info("critic mode %s: chunks from the %s sampler", self._mode_label, self._arm)
 
     def _patches_of(self, obs):
@@ -404,6 +418,20 @@ class PatchCriticSelectPolicy(BasePolicy):
             chunks_model = np.asarray(
                 self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(arm_proprio)), np.float32
             )
+            if self._drift_samples and self._extract is not None:
+                # Reference draws recorded ALONGSIDE the arm's chunk, never selected between (see
+                # `best` below). Two different questions, and the arm sampler already returned the
+                # first one's other half:
+                #   the unsteered twin  -> how far steering displaced THIS draw (same noise)
+                #   N unconditional     -> how wide the policy's own spread is, i.e. whether that
+                #                          displacement left the distribution or moved inside it
+                # The displacement is only interpretable against that spread; in radians alone it
+                # is a number with no scale.
+                self._rng, ref_rng = jax.random.split(self._rng)
+                _tok, uncond = self._extract(
+                    ref_rng, observation, num_samples=self._drift_samples, num_steps=self._flow_steps
+                )
+                chunks_model = np.concatenate([chunks_model, np.asarray(uncond[0], np.float32)], axis=0)
         else:
             _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
             chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
@@ -462,6 +490,12 @@ class PatchCriticSelectPolicy(BasePolicy):
             w = np.where(adv > 0, self._expectile, 1.0 - self._expectile)
             self._rng, pick_rng = jax.random.split(self._rng)
             best = int(jax.random.choice(pick_rng, pv.shape[0], p=jnp.asarray(w / w.sum())))
+        elif self._arm is not None:
+            # An arm BROUGHT its chunk; the critic is here to score it, not to overrule it. Index 0
+            # is the arm's own output (and, when the unsteered twin and the unconditional draws ride
+            # along for the drift readout, they are references rather than candidates). Taking the
+            # argmax here would silently turn every arm into best-of-N over its own reference set.
+            best = 0
         else:
             best = int(np.argmax(pv[:, -1]))  # argmax full-chunk value
         if self._mode == "adaptive":

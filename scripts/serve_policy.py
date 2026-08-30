@@ -103,6 +103,12 @@ class Args:
     # because this file already talks about alpha-Flow a few options down. Unused by other modes.
     steer_alpha: float | None = None
 
+    # Record N unconditional draws (and, for qpilots, the unsteered twin from the same noise)
+    # alongside the chunk the arm actually executes, so a recording can say how far the arm moved
+    # from the BC policy and whether that move stayed inside the policy's own spread. They are
+    # references, never candidates -- the arm's chunk is what runs. 0 (default) records nothing.
+    drift_samples: int = 0
+
     # How many action chunks to draw per observation. This is what the server DOES, not what a
     # client may ask for: it is both what gets sampled and what the handshake declares the
     # `action_samples` column for, so the two cannot disagree. The robot client sends nothing about
@@ -274,6 +280,7 @@ def _build_critic_policy(policy, args: Args):
             mode=mode,
             extraction_head=args.extraction_head,
             steer_alpha=args.steer_alpha,
+            drift_samples=args.drift_samples,
             **samples,
             **steps,
         )

@@ -147,6 +147,11 @@ class ArmChunkSampler:
     served BC policy), so it is loaded here; for qpilots the served policy's own model is used.
     """
 
+    #: Also return the unsteered twin (qpilots only), so a deploy recording can say how far
+    #: steering displaced the action. Off by default: it changes the returned N, and every caller
+    #: that only wants the chunk should keep getting one.
+    pair_unsteered: bool = False
+
     def __init__(self, spec: ArmSpec, served_model=None):
         self.spec = spec
         if spec.arm == "qpilots" and served_model is not None:
@@ -215,6 +220,36 @@ class ArmChunkSampler:
             return q.min(axis=0)
         return q.mean(axis=0) - self.spec.rho * q.std(axis=0)  # pessimistic, QPILOTS Eq. 12
 
+    def _steer(self, model, obs, kv, pm, feats, proprio, ad, x, alpha):
+        """QPILOTS-U Euler integration at steering strength `alpha`. alpha=0 is the base sampler.
+
+        Kept as ONE path rather than a steered and an unsteered variant: the twin only measures
+        the steering term if everything else about the two draws is identical, and two code paths
+        cannot be identical by inspection for long.
+        """
+        n = self.spec.ode_steps
+        dt = 1.0 / n
+        for i in range(n):
+            tv = jnp.full((x.shape[0],), 1.0 - i * dt)
+            if i == 0 or alpha == 0.0:
+                # i == 0: no state-dependent signal at t=0 (paper Sec. 4). alpha == 0: the base
+                # sampler, and skipping the grad makes it cost a plain velocity eval per step.
+                v = self._velocity(model, obs, kv, pm, x, tv)
+            else:
+
+                def q_of(x_, tv_=tv):
+                    v_ = self._velocity(model, obs, kv, pm, x_, tv_)
+                    a_hat = x_ - tv_[:, None, None] * v_  # Tweedie projection, Eq. 14
+                    a_hat = a_hat + jax.lax.stop_gradient(jnp.clip(a_hat, -1, 1) - a_hat)  # straight-through
+                    return self._q(feats, a_hat[..., :ad], proprio, reduce="pess").sum(), v_
+
+                g, v = jax.grad(q_of, has_aux=True)(x)
+                vn = jnp.linalg.norm(v.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
+                gn = jnp.linalg.norm(g.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
+                v = v - alpha * (vn / (gn + 1e-8)) * g  # drift-norm-matched, Eq. 17
+            x = x - dt * v
+        return jnp.clip(x, -1.0, 1.0)
+
     def __call__(self, rng, observation, patches, proprio):
         """-> chunk [N, H, AD] in the model's normalized space (N=1 for these arms).
 
@@ -247,27 +282,17 @@ class ArmChunkSampler:
 
         if spec.arm == "qpilots":
             ad = self.critic.config["action_dim"]
-            n = spec.ode_steps
-            dt = 1.0 / n
-            x = jax.random.normal(rng, (b, self.H, self.AD))
-            for i in range(n):
-                tv = jnp.full((b,), 1.0 - i * dt)
-                if i == 0:  # no state-dependent signal at t=0 (paper Sec. 4)
-                    v = self._velocity(model, obs, kv, pm, x, tv)
-                else:
-
-                    def q_of(x_, tv_=tv):
-                        v_ = self._velocity(model, obs, kv, pm, x_, tv_)
-                        a_hat = x_ - tv_[:, None, None] * v_  # Tweedie projection, Eq. 14
-                        a_hat = a_hat + jax.lax.stop_gradient(jnp.clip(a_hat, -1, 1) - a_hat)  # straight-through
-                        return self._q(feats, a_hat[..., :ad], proprio, reduce="pess").sum(), v_
-
-                    g, v = jax.grad(q_of, has_aux=True)(x)
-                    vn = jnp.linalg.norm(v.reshape(b, -1), axis=-1).reshape(b, 1, 1)
-                    gn = jnp.linalg.norm(g.reshape(b, -1), axis=-1).reshape(b, 1, 1)
-                    v = v - spec.alpha * (vn / (gn + 1e-8)) * g  # drift-norm-matched, Eq. 17
-                x = x - dt * v
-            return jnp.clip(x, -1.0, 1.0)
+            x0 = jax.random.normal(rng, (b, self.H, self.AD))
+            steered = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, spec.alpha)
+            if not self.pair_unsteered:
+                return steered
+            # The unsteered twin: SAME noise, SAME cached prefix, alpha = 0. One code path with
+            # alpha as a parameter, so the two differ by the steering term and by nothing else --
+            # comparing against an independently drawn sample would measure the policy's own
+            # spread on top of the displacement, which is a different quantity. This is how
+            # eval_extraction.py pairs offline, so deploy numbers stay commensurable with it.
+            base = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, 0.0)
+            return jnp.concatenate([steered, base], axis=0)  # index 0 is what executes
 
         raise ValueError(
             f"{spec.arm!r} is not sampled here: bon/idql are the wrapper's own selection path, and "
