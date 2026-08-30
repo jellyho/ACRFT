@@ -15,6 +15,7 @@ import tyro
 
 import openpi.models.model as _model
 import openpi.models.pi0_alphaflow as pi0_alphaflow
+import openpi.models.pi0_cfgrl as pi0_cfgrl
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.pi0_rlt as pi0_rlt
@@ -75,6 +76,12 @@ class DataConfig:
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
     norm_stats: dict[str, _transforms.NormStats] | None = None
+    # Optional provenance.json contents found next to norm_stats.json: which dataset (repo_id,
+    # total_episodes/frames) the stats were computed on. Checked against the live dataset at
+    # loader construction -- stale stats from an older dataset generation fail loudly instead of
+    # silently normalizing with the wrong quantiles (the alpha-Flow 08-23 incident: right asset
+    # name, 08-03 content, action q99 ~37% off).
+    norm_stats_provenance: dict | None = None
 
     # Used to adopt the inputs from a dataset specific format to a common format
     # which is expected by the data transforms.
@@ -200,6 +207,9 @@ class DataConfigFactory(abc.ABC):
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            norm_stats_provenance=self._load_norm_stats_provenance(
+                epath.Path(self.assets.assets_dir or assets_dirs), asset_id
+            ),
             use_quantile_norm=(model_config.model_type != ModelType.PI0) and not self.force_mean_std_norm,
         )
 
@@ -214,6 +224,17 @@ class DataConfigFactory(abc.ABC):
         except FileNotFoundError:
             logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
         return None
+
+    def _load_norm_stats_provenance(self, assets_dir: epath.Path, asset_id: str | None) -> dict | None:
+        if asset_id is None:
+            return None
+        p = assets_dir / asset_id / "provenance.json"
+        try:
+            import json
+
+            return json.loads(p.read_text())
+        except (FileNotFoundError, ValueError):
+            return None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1720,6 +1741,37 @@ def _yam_alphaflow_config(
 
 
 _CONFIGS.append(_yam_alphaflow_config())
+
+
+def with_cfgrl(base: TrainConfig, *, cfg_w: float = 1.5, suffix: str = "cfgrl") -> TrainConfig:
+    """CFGRL variant OF ANY pi0.5 task config — a method transform, not a task config.
+
+    Policy-extraction methods are orthogonal to the task: the same CFGRL recipe should apply to
+    YAM, LIBERO, RoboCasa or anything added later, so it is expressed as base -> variant rather
+    than copied per task. Everything task-shaped (data config, norm stats, horizon, action dim,
+    optimizer) is inherited from `base`; only the model class changes, because the optimality
+    embedding and guided sampling are model properties (kvfrans/cfgrl iql_diffusion.py:105,213).
+
+        _CONFIGS.append(with_cfgrl(_yam_bc_config()))            # pi05_yam_lego_taxi_cfgrl
+        _CONFIGS.append(with_cfgrl(some_libero_cfg, cfg_w=3.0))  # ... and any other task
+
+    The other weight-bearing extraction arms (awr, flowdpg, qam, dql) need no variant at all: they
+    fine-tune the plain pi0.5 action expert, so an exported checkpoint is served by the BASE config
+    unchanged. CFGRL is the one arm whose network differs.
+    """
+    if not isinstance(base.model, pi0_config.Pi0Config):
+        raise TypeError(f"with_cfgrl needs a pi0.5 base config, got {type(base.model).__name__}")
+    return dataclasses.replace(
+        base,
+        name=f"{base.name}_{suffix}",
+        model=pi0_cfgrl.Pi0CFGRLConfig(
+            **{f.name: getattr(base.model, f.name) for f in dataclasses.fields(base.model)},
+            cfg_w=cfg_w,
+        ),
+    )
+
+
+_CONFIGS.append(with_cfgrl(_yam_bc_config()))
 
 
 def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:

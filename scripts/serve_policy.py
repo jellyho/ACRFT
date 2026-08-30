@@ -72,8 +72,16 @@ class Args:
     # serving entry points was two things to keep in step and the difference is in the checkpoint.
     critic: str | None = None
 
-    # Patch critics only: "bon" executes the whole winning chunk, "adaptive" executes just its
-    # highest-value commitment prefix and replans -- so the chunk length varies per reply.
+    # Patch critics only. Selection modes: "bon" executes the whole winning chunk, "adaptive"
+    # executes just its highest-value commitment prefix and replans (so the chunk length varies per
+    # reply), "idql" is bon under the name of the method it reproduces (philippe-eecs/IDQL
+    # ddpm_iql_learner.py:360-374 is exactly argmax of min-ensemble full-chunk Q).
+    #
+    # Extraction modes, where the CHUNK comes from a policy-extraction arm and this wrapper still
+    # does the scoring/decode: "qpilots" steers the served policy's own sampler with the critic
+    # gradient (arXiv 2606.14801, no weights of its own), while "lps", "lpsd" and "flowdagger" need
+    # their small head passed in --extraction-head. The weight-only arms (awr, cfgrl, flowdpg, qam,
+    # dql) are NOT modes: they are exported to ordinary checkpoints and served through --policy.
     #
     # Left unset, it follows the critic: one trained with `macro_group_size == horizon` has a
     # single commitment group and can only ever return the whole chunk, so adaptive would be bon
@@ -81,6 +89,10 @@ class Args:
     # Set it explicitly to run the other mode -- bon on a multi-group critic is a real comparison,
     # and the artifact cannot know which of the two you meant to run today.
     critic_mode: str | None = None
+
+    # The extraction head for --critic-mode lps/lpsd (a latent-actor msgpack) or flowdagger (the
+    # run directory holding steering_head.msgpack + dct_basis.npy). Unused by the other modes.
+    extraction_head: str | None = None
 
     # How many action chunks to draw per observation. This is what the server DOES, not what a
     # client may ask for: it is both what gets sampled and what the handshake declares the
@@ -224,6 +236,8 @@ def _build_critic_policy(policy, args: Args):
 
         groups = max(1, int(cfg.get("horizon", 0)) // max(1, int(cfg.get("macro_group_size", 0) or 1)))
         mode = args.critic_mode or ("adaptive" if groups > 1 else "bon")
+        if mode in ("lps", "lpsd", "flowdagger") and not args.extraction_head:
+            raise ValueError(f"--critic-mode {mode} needs --extraction-head (see its ArmSpec in extraction/serving.py)")
         if args.critic_mode == "adaptive" and groups <= 1:
             logging.warning(
                 "critic-mode=adaptive but %s has one commitment group (macro_group_size == horizon)"
@@ -241,7 +255,9 @@ def _build_critic_policy(policy, args: Args):
         # charged per CANDIDATE, so it is the difference between BoN-8 costing 8 suffix passes and
         # 80. Unset keeps the wrapper's own default (10, the pi05 flow default).
         steps = {"flow_steps": int(args.num_steps)} if args.num_steps is not None else {}
-        return _pcp.PatchCriticSelectPolicy(policy, str(critic_dir), mode=mode, **samples, **steps)
+        return _pcp.PatchCriticSelectPolicy(
+            policy, str(critic_dir), mode=mode, extraction_head=args.extraction_head, **samples, **steps
+        )
     logging.info("critic: RLT-token critic (%s)", critic_dir.name)
     return _policy.CriticSelectPolicy(policy, str(critic_dir), **samples)
 

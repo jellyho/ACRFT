@@ -227,6 +227,12 @@ class Pi0FQL(nnx.Module):
         x0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x0
 
+    def flow_velocity(self, x_t, time, kv_cache, prefix_mask):
+        """One velocity eval of the flow expert (for continued flow-matching BC training)."""
+        act_tok, ar, time_emb = self._embed_flow_suffix(x_t, time)
+        out = self._run_suffix(kv_cache, prefix_mask, _FLOW, act_tok, ar, time_emb)
+        return self.action_out_proj(out[:, -self.action_horizon :])
+
     # ---- one-step actor mu_omega -------------------------------------------------------------------
 
     def actor(self, obs: _model.Observation, noise: at.Float[at.Array, "b ah ad"], kv_cache=None, prefix_mask=None):

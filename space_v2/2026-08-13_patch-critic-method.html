@@ -1,0 +1,324 @@
+<title>The patch-critic — method</title>
+<style>
+  :root{
+    --paper:#f9f9f7;--card:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
+    --line:#e1e0d9;--accent:#2a78d6;--orange:#eb6834;--green:#008300;--accent-soft:#e8f1fc;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --paper:#0d0d0d;--card:#1a1a19;--ink:#ffffff;--ink2:#c3c2b7;--muted:#898781;
+    --line:#2c2c2a;--accent:#3987e5;--orange:#d95926;--green:#3ba33b;--accent-soft:#1d2a3a;
+  }}
+  :root[data-theme="dark"]{
+    --paper:#0d0d0d;--card:#1a1a19;--ink:#ffffff;--ink2:#c3c2b7;--muted:#898781;
+    --line:#2c2c2a;--accent:#3987e5;--orange:#d95926;--green:#3ba33b;--accent-soft:#1d2a3a;
+  }
+  :root[data-theme="light"]{
+    --paper:#f9f9f7;--card:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
+    --line:#e1e0d9;--accent:#2a78d6;--orange:#eb6834;--green:#008300;--accent-soft:#e8f1fc;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--paper);color:var(--ink);margin:0;
+    font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;padding:2.6rem 1.25rem 5rem;
+    -webkit-font-smoothing:antialiased}
+  main{max-width:60rem;margin:0 auto;display:flex;flex-direction:column;gap:2.1rem}
+  .eyebrow{font:600 .7rem/1 ui-monospace,Menlo,monospace;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--accent)}
+  h1{font-size:1.72rem;margin:.4rem 0 .55rem;letter-spacing:-.012em;text-wrap:balance;line-height:1.18;font-weight:800}
+  .lede{color:var(--ink2);font-size:1.04rem;margin:0 0 .3rem;max-width:48rem}
+  .byline{font:.78rem/1 ui-monospace,Menlo,monospace;color:var(--muted);display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.7rem}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:.18rem .55rem;color:var(--accent)}
+  h2{font-size:1.16rem;margin:0 0 .2rem;letter-spacing:-.008em;font-weight:750;text-wrap:balance}
+  h2 .n{font:600 .82rem ui-monospace,Menlo,monospace;color:var(--muted);margin-right:.55em}
+  h3{font-size:.98rem;margin:1.25rem 0 .2rem;font-weight:700;color:var(--ink)}
+  section{display:flex;flex-direction:column;gap:.55rem}
+  p{margin:0;max-width:46rem}
+  a{color:var(--accent)}
+  strong{font-weight:680}
+  em.t{font-style:italic}
+  code{font:.85em ui-monospace,Menlo,monospace;background:var(--accent-soft);padding:.08em .35em;border-radius:4px;color:var(--ink)}
+  ul{margin:.1rem 0 .2rem;padding-left:1.2rem}li{margin-bottom:.3rem;max-width:44rem}li::marker{color:var(--accent)}
+  hr{border:none;border-top:1px solid var(--line);margin:.4rem 0}
+  /* math */
+  .math{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-style:italic}
+  sub,sup{font-size:.72em;font-style:normal}
+  .eq{display:grid;grid-template-columns:1fr auto;align-items:center;gap:14px;
+    background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:8px;padding:.8rem 1.1rem;overflow-x:auto}
+  .eq .b{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:1.1rem;white-space:nowrap}
+  .eq .tag{font:.8rem ui-monospace,Menlo,monospace;color:var(--muted)}
+  .mo{font-style:normal;padding:0 .1em}
+  /* cards / figures / tiles */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.05rem 1.2rem;display:flex;flex-direction:column;gap:.55rem}
+  figure{margin:0;display:flex;flex-direction:column;gap:.6rem}
+  .fig{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.2rem 1rem .7rem;overflow-x:auto}
+  figcaption{font-size:.85rem;color:var(--ink2);max-width:48rem}
+  figcaption b{color:var(--ink);font-weight:680}
+  svg{display:block;max-width:100%;height:auto;margin:0 auto}
+  .svgtext{font-family:system-ui,sans-serif;fill:var(--ink)}
+  .callout{background:var(--accent-soft);border-radius:10px;padding:.9rem 1.15rem;max-width:48rem}
+  .callout .k{font:600 .72rem ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.25rem}
+  .tiles{display:flex;gap:.7rem;flex-wrap:wrap}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.7rem 1rem;min-width:8.5rem;flex:1}
+  .tile .v{font-size:1.35rem;font-weight:750;font-variant-numeric:tabular-nums}
+  .tile .k{color:var(--ink2);font-size:.78rem}.tile .d{color:var(--muted);font-size:.72rem}
+  table{border-collapse:collapse;font-size:.88rem;width:100%}
+  td,th{border:1px solid var(--line);padding:.35rem .7rem;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft);font-weight:650}
+  .spec th{width:9.5rem;color:var(--ink2);font-weight:600}
+  /* review */
+  #review label{display:flex;gap:.55rem;align-items:baseline;margin:.3rem 0;max-width:46rem}
+  #review .note{color:var(--ink2);font-size:.9rem}
+  .small{font-size:.82rem;color:var(--muted);max-width:48rem}
+  a.focusable:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+</style>
+
+<main>
+<header style="display:flex;flex-direction:column;gap:.15rem">
+  <div class="eyebrow">ac-rft · method · patch-critic</div>
+  <h1>The patch-critic: a VLA-independent distributional value function for adaptive action chunking</h1>
+  <p class="lede">A frozen dense-vision critic that scores a policy's candidate action chunks and decides how far to commit to each — trained with distributional IQL on offline rollouts, never touching the VLA's weights.</p>
+  <div class="byline"><span class="pill">work in progress</span><span>RoboCasa 365</span><span>π0.5 actor</span><span>logged · jellyho_/acrft</span></div>
+</header>
+
+<section>
+  <p>Adaptive-chunking RFT asks a value function two questions at every decision point: <em class="t">which</em> of the chunks a vision–language–action (VLA) policy proposes is best, and <em class="t">how far</em> to commit to it before re-planning. This note describes the critic we use to answer both — the <strong>patch-critic</strong> — as a self-contained method: its observation, architecture, distributional objective, and deployment rule. The critic is deliberately independent of the VLA: it reads a <em class="t">frozen</em> dense visual representation rather than the policy's internal tokens, so it can be trained and swapped without retraining the actor.</p>
+</section>
+
+<section>
+  <h2><span class="n">1</span>Setup — the chunked MDP</h2>
+  <p>The actor is a fixed VLA policy <span class="math">π</span> that, at state <span class="math">s<sub>t</sub></span>, samples an <em class="t">action chunk</em>: a length-<span class="math">H</span> sequence <span class="math">a=(a<sub>1</sub>,…,a<sub>H</sub>)</span>, here <span class="math">H=16</span>. We work in the induced <em class="t">chunked MDP</em> — an action is a chunk, and the environment returns the discounted reward accumulated while it executes. Reward is sparse and binary: <span class="math">r=1</span> on task success, else <span class="math">0</span>.</p>
+  <p>Adaptive chunking lets the executed length vary. For a chunk <span class="math">a</span> at <span class="math">s<sub>t</sub></span> and a <em class="t">commitment horizon</em> <span class="math">h</span>, the value of committing to the first <span class="math">h</span> steps and then acting on-policy is</p>
+  <div class="eq"><span class="b math">Q<sub>h</sub>(s<sub>t</sub>,a) = 𝔼<span class="mo">[</span> ∑<sub>i=0</sub><sup>h−1</sup> γ<sup>i</sup> r<sub>t+i</sub> + γ<sup>h</sup> V(s<sub>t+h</sub>) <span class="mo">]</span></span><span class="tag">(1)</span></div>
+  <p>The critic emits <span class="math">Q<sub>h</sub></span> for a fixed set of horizons <span class="math">h∈𝒦={2,4,…,16}</span> in a single pass, on one shared discounted scale — so both questions are answered at once: the best chunk maximises the full-horizon value, the best commitment maximises value across horizons (§6).</p>
+  <table class="spec">
+    <tr><th>Actor</th><td>π0.5 (frozen), RoboCasa 365 <code>pi05_pretrain_human300</code>, 16-step chunks</td></tr>
+    <tr><th>Critic input</th><td>frozen DINOv2 patch grid + 16-d proprio + candidate chunk</td></tr>
+    <tr><th>Value head</th><td>HL-Gauss categorical, 51 atoms on [0,1], one per horizon</td></tr>
+    <tr><th>Objective</th><td>distributional IQL — expectile <span class="math">V</span>, distributional-Bellman <span class="math">Q</span>, Polyak target</td></tr>
+    <tr><th>Data</th><td>offline π0.5 sim rollouts, per-step transitions, sparse success reward</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2><span class="n">2</span>Observation — a frozen dense-patch grid</h2>
+  <p>Most VLA critics compress an observation into a single pooled vector. We found such a global token to be nearly <em class="t">action-blind</em> — it cannot separate a good chunk from a bad one, so selecting by it is inert or harmful. Following the Patch Policy insight, the patch-critic keeps the <em class="t">full spatial grid</em> of a frozen self-supervised ViT (DINOv2), whose patch tokens carry strong local geometry: where each object is, where contact will happen — exactly the signal a manipulation value function needs.</p>
+  <p>Each of three camera views is encoded by the frozen backbone into a 16×16 patch grid; we 2×2 average-pool to 8×8 to make attention affordable, then concatenate:</p>
+  <div class="eq"><span class="b math">ϕ(s) = <span class="mo">concat</span><sub>c∈{L,W,R}</sub> <span class="mo">pool</span><sub>2×2</sub><span class="mo">(</span>DINOv2(x<sup>c</sup>)<span class="mo">)</span> ∈ ℝ<sup>192×384</sup></span><span class="tag">(2)</span></div>
+  <p>The backbone is never updated (<span class="math">∇ϕ=0</span>), so <span class="math">ϕ(s)</span> is a fixed, cacheable map. The critic below is the only trained part.</p>
+  <figure>
+    <div class="fig">
+    <svg viewBox="0 0 760 200" role="img" aria-label="Three cameras through frozen DINOv2 to a pooled 192-token patch grid.">
+      <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L8,4.5 L0,9 z" fill="var(--muted)"/></marker></defs>
+      <g class="svgtext" font-size="10.5">
+        <rect x="16" y="26" width="86" height="46" rx="6" fill="var(--paper)" stroke="var(--line)"/>
+        <rect x="16" y="80" width="86" height="46" rx="6" fill="var(--paper)" stroke="var(--line)"/>
+        <rect x="16" y="134" width="86" height="42" rx="6" fill="var(--paper)" stroke="var(--line)"/>
+        <text x="59" y="53" text-anchor="middle">agentview L</text>
+        <text x="59" y="107" text-anchor="middle">eye-in-hand</text>
+        <text x="59" y="159" text-anchor="middle">agentview R</text>
+      </g>
+      <line x1="106" y1="49" x2="190" y2="92" stroke="var(--muted)" marker-end="url(#ar)"/>
+      <line x1="106" y1="103" x2="190" y2="100" stroke="var(--muted)" marker-end="url(#ar)"/>
+      <line x1="106" y1="155" x2="190" y2="108" stroke="var(--muted)" marker-end="url(#ar)"/>
+      <rect x="194" y="66" width="120" height="72" rx="9" fill="var(--accent-soft)" stroke="var(--accent)"/>
+      <text x="254" y="96" text-anchor="middle" class="svgtext" font-size="13" font-weight="700">DINOv2</text>
+      <text x="254" y="114" text-anchor="middle" class="svgtext" font-size="10" fill="var(--muted)">frozen ❄</text>
+      <text x="254" y="153" text-anchor="middle" class="svgtext" font-size="9.5" fill="var(--orange)">∇ϕ = 0</text>
+      <line x1="318" y1="102" x2="360" y2="102" stroke="var(--muted)" marker-end="url(#ar)"/>
+      <g stroke="var(--line)" fill="none"><rect x="366" y="70" width="64" height="64" fill="var(--paper)"/>
+        <g stroke-width=".55"><line x1="366" y1="86" x2="430" y2="86"/><line x1="366" y1="102" x2="430" y2="102"/><line x1="366" y1="118" x2="430" y2="118"/>
+        <line x1="382" y1="70" x2="382" y2="134"/><line x1="398" y1="70" x2="398" y2="134"/><line x1="414" y1="70" x2="414" y2="134"/></g></g>
+      <text x="398" y="152" text-anchor="middle" class="svgtext" font-size="9.5" fill="var(--muted)">16×16 / cam</text>
+      <line x1="434" y1="102" x2="476" y2="102" stroke="var(--muted)" marker-end="url(#ar)"/>
+      <text x="455" y="94" text-anchor="middle" class="svgtext" font-size="9" fill="var(--muted)">pool 2×2</text>
+      <g><rect x="482" y="76" width="52" height="52" fill="var(--paper)" stroke="var(--line)"/>
+        <g stroke="var(--accent)" stroke-width=".8" opacity=".5"><line x1="482" y1="89" x2="534" y2="89"/><line x1="482" y1="102" x2="534" y2="102"/><line x1="482" y1="115" x2="534" y2="115"/>
+        <line x1="495" y1="76" x2="495" y2="128"/><line x1="508" y1="76" x2="508" y2="128"/><line x1="521" y1="76" x2="521" y2="128"/></g></g>
+      <text x="508" y="146" text-anchor="middle" class="svgtext" font-size="9.5" fill="var(--muted)">8×8 / cam</text>
+      <line x1="538" y1="102" x2="580" y2="102" stroke="var(--muted)" marker-end="url(#ar)"/>
+      <rect x="586" y="78" width="116" height="50" rx="8" fill="var(--card)" stroke="var(--accent)"/>
+      <text x="644" y="100" text-anchor="middle" class="svgtext" font-size="12" font-weight="700">ϕ(s)</text>
+      <text x="644" y="117" text-anchor="middle" class="svgtext" font-size="9.5" fill="var(--muted)">192 × 384</text>
+    </svg>
+    </div>
+    <figcaption><b>Figure 1 — Observation.</b> Three views pass through one frozen DINOv2; each 16×16 grid is 2×2 pooled to 8×8, and the three concatenate into a 192-token dense map <span class="math">ϕ(s)</span>. Fixed and cached.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="n">2</span>Architecture — a per-horizon value transformer</h2>
+  <p>The critic <span class="math">f<sub>θ</sub></span> is a small transformer over one token sequence: the 192 patch tokens, a proprio token, and the chunk cut into <span class="math">M=H/g</span> <em class="t">macro-group</em> action tokens (group size <span class="math">g=2</span> ⇒ <span class="math">M=8</span>). A <strong>block-causal mask</strong> lets every context token (patches, proprio) be seen by all action tokens, while action token <span class="math">j</span> attends only to macro-groups <span class="math">≤j</span>. The value at position <span class="math">j</span> is thus the value of committing to exactly the first <span class="math">j</span> groups — one value per horizon, all comparable because they share the network and the discounted target scale.</p>
+  <figure>
+    <div class="fig">
+    <svg viewBox="0 0 760 210" role="img" aria-label="ARQ critic token sequence, block-causal mask, per-horizon heads.">
+      <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L8,4.5 L0,9 z" fill="var(--muted)"/></marker></defs>
+      <g font-size="10" class="svgtext">
+        <rect x="16" y="18" width="28" height="24" rx="4" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="30" y="34" text-anchor="middle">p₁</text>
+        <rect x="46" y="18" width="28" height="24" rx="4" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="60" y="34" text-anchor="middle">p₂</text>
+        <text x="90" y="34" text-anchor="middle" fill="var(--muted)">···</text>
+        <rect x="104" y="18" width="40" height="24" rx="4" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="124" y="34" text-anchor="middle">p₁₉₂</text>
+        <rect x="150" y="18" width="30" height="24" rx="4" fill="var(--paper)" stroke="var(--line)"/><text x="165" y="34" text-anchor="middle">st</text>
+        <rect x="192" y="18" width="30" height="24" rx="4" fill="var(--card)" stroke="var(--orange)"/><text x="207" y="34" text-anchor="middle">m₁</text>
+        <rect x="224" y="18" width="30" height="24" rx="4" fill="var(--card)" stroke="var(--orange)"/><text x="239" y="34" text-anchor="middle">m₂</text>
+        <text x="270" y="34" text-anchor="middle" fill="var(--muted)">···</text>
+        <rect x="284" y="18" width="30" height="24" rx="4" fill="var(--card)" stroke="var(--orange)"/><text x="299" y="34" text-anchor="middle">m₈</text>
+        <text x="90" y="56" text-anchor="middle" font-size="9.5" fill="var(--muted)">patches + proprio · context</text>
+        <text x="253" y="56" text-anchor="middle" font-size="9.5" fill="var(--muted)">macro-group action tokens</text>
+      </g>
+      <line x1="165" y1="42" x2="165" y2="70" stroke="var(--muted)" marker-end="url(#ar2)"/>
+      <rect x="16" y="72" width="298" height="30" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"/>
+      <text x="165" y="92" text-anchor="middle" class="svgtext" font-size="11.5" font-weight="700">3× transformer (block-causal)</text>
+      <g>
+        <line x1="207" y1="102" x2="207" y2="126" stroke="var(--muted)" marker-end="url(#ar2)"/>
+        <line x1="239" y1="102" x2="239" y2="126" stroke="var(--muted)" marker-end="url(#ar2)"/>
+        <line x1="299" y1="102" x2="299" y2="126" stroke="var(--muted)" marker-end="url(#ar2)"/>
+        <rect x="186" y="128" width="42" height="22" rx="5" fill="var(--card)" stroke="var(--line)"/><text x="207" y="143" text-anchor="middle" class="svgtext" font-size="9.5">Q₂</text>
+        <rect x="224" y="128" width="42" height="22" rx="5" fill="var(--card)" stroke="var(--line)"/><text x="245" y="143" text-anchor="middle" class="svgtext" font-size="9.5">Q₄</text>
+        <text x="282" y="143" text-anchor="middle" class="svgtext" fill="var(--muted)">···</text>
+        <rect x="290" y="128" width="44" height="22" rx="5" fill="var(--card)" stroke="var(--line)"/><text x="312" y="143" text-anchor="middle" class="svgtext" font-size="9.5">Q₁₆</text>
+        <text x="255" y="168" text-anchor="middle" class="svgtext" font-size="9.5" fill="var(--muted)">per-horizon categorical value · 51 atoms</text>
+      </g>
+      <!-- mask -->
+      <g transform="translate(474,20)">
+        <text x="120" y="4" text-anchor="middle" class="svgtext" font-size="10.5" font-weight="700">block-causal attention</text>
+        <text x="52" y="20" text-anchor="middle" class="svgtext" font-size="9" fill="var(--accent)">context</text>
+        <text x="156" y="20" text-anchor="middle" class="svgtext" font-size="9" fill="var(--orange)">m₁ → m₈</text>
+        <rect x="18" y="26" width="70" height="132" fill="var(--accent-soft)"/>
+        <g fill="var(--orange)" opacity=".45">
+          <rect x="90" y="26" width="16.5" height="16.5"/><rect x="90" y="42.5" width="33" height="16.5"/><rect x="90" y="59" width="49.5" height="16.5"/><rect x="90" y="75.5" width="66" height="16.5"/><rect x="90" y="92" width="82.5" height="16.5"/><rect x="90" y="108.5" width="99" height="16.5"/><rect x="90" y="125" width="115.5" height="16.5"/><rect x="90" y="141.5" width="132" height="16.5"/>
+        </g>
+        <g stroke="var(--card)" stroke-width=".8">
+          <line x1="106.5" y1="26" x2="106.5" y2="158"/><line x1="123" y1="26" x2="123" y2="158"/><line x1="139.5" y1="26" x2="139.5" y2="158"/><line x1="156" y1="26" x2="156" y2="158"/><line x1="172.5" y1="26" x2="172.5" y2="158"/><line x1="189" y1="26" x2="189" y2="158"/><line x1="205.5" y1="26" x2="205.5" y2="158"/>
+          <line x1="90" y1="42.5" x2="222" y2="42.5"/><line x1="90" y1="59" x2="222" y2="59"/><line x1="90" y1="75.5" x2="222" y2="75.5"/><line x1="90" y1="92" x2="222" y2="92"/><line x1="90" y1="108.5" x2="222" y2="108.5"/><line x1="90" y1="125" x2="222" y2="125"/><line x1="90" y1="141.5" x2="222" y2="141.5"/>
+        </g>
+        <g stroke="var(--line)" fill="none"><rect x="18" y="26" width="204" height="132"/></g>
+        <text x="120" y="174" text-anchor="middle" class="svgtext" font-size="9" fill="var(--muted)">key →   ·   query ↓</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption><b>Figure 2 — ARQ value transformer.</b> Patch/proprio tokens are visible to every action token; among action tokens the mask is causal, so the head at macro-group <span class="math">j</span> reads the value of committing to the first <span class="math">j</span> groups only. One network emits every horizon at once — the "any-prefix" property that makes adaptive-<span class="math">K</span> a single forward pass.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="n">3</span>Distributional value with HL-Gauss</h2>
+  <p>Both <span class="math">Q</span> and <span class="math">V</span> are <em class="t">distributional</em>: each head predicts a categorical distribution over a fixed grid of <span class="math">m=51</span> value atoms <span class="math">z<sub>1</sub><⋯<z<sub>m</sub></span> on <span class="math">[0,1]</span>. To turn a scalar target <span class="math">y</span> into a soft label we use the HL-Gauss projection <span class="math">Φ</span> — a Gaussian of width <span class="math">σ</span> centred at <span class="math">y</span>, integrated over each atom cell of width <span class="math">Δ</span>:</p>
+  <div class="eq"><span class="b math">Φ(y)<sub>i</sub> ∝ ∫<sub>z<sub>i</sub>−Δ/2</sub><sup>z<sub>i</sub>+Δ/2</sup> 𝒩(z;y,σ<sup>2</sup>) dz , &nbsp; ∑<sub>i</sub> Φ(y)<sub>i</sub>=1</span><span class="tag">(3)</span></div>
+  <p>The scalar mean is <span class="math">V̄=∑<sub>i</sub> p<sub>i</sub> z<sub>i</sub></span>. Keeping the whole distribution matters twice: it stabilises value learning under sparse binary reward, and it lets the backup carry <span class="math">V</span>'s <em class="t">law</em> forward — not just its mean (§4). Under aliased states whose returns genuinely branch between success and failure, only a distributional target can hold that spread.</p>
+</section>
+
+<section>
+  <h2><span class="n">4</span>Objective — distributional IQL</h2>
+  <p>We train offline from a fixed set of π0.5 rollouts with implicit Q-learning, so the critic never queries an out-of-data action. Three pieces are learned: the per-horizon critic <span class="math">f<sub>θ</sub></span>, a state-value <span class="math">V<sub>ψ</sub></span>, and a Polyak target <span class="math">θ̄</span>.</p>
+  <h3>Distributional Bellman target for Q</h3>
+  <p>For a transition at frame <span class="math">t</span> and horizon <span class="math">h</span>, the target is the pushforward of <span class="math">V<sub>ψ</sub></span>'s categorical law at <span class="math">s<sub>t+h</sub></span> under the affine map <span class="math">z↦G<sub>h</sub>+γ<sup>h</sup>z</span>, re-projected onto the fixed atoms:</p>
+  <div class="eq"><span class="b math">G<sub>h</sub> = ∑<sub>i=0</sub><sup>h−1</sup> γ<sup>i</sup> r<sub>t+i</sub></span><span class="tag">(4)</span></div>
+  <div class="eq"><span class="b math">𝒯<sub>h</sub> = ∑<sub>j=1</sub><sup>m</sup> p<sub>ψ,j</sub>(s<sub>t+h</sub>) · Φ<span class="mo">(</span>G<sub>h</sub> + γ<sup>h</sup> z<sub>j</sub><span class="mo">)</span></span><span class="tag">(5)</span></div>
+  <p>Terminal successors put all mass at their reward; where the behaviour policy's realised Monte-Carlo return <span class="math">G<sub>t</sub><sup>MC</sup></span> exceeds the bootstrap mean we floor the target to it — a Cal-QL-style correction success-only data needs. The critic is fit by cross-entropy to this soft target over valid horizons and the <span class="math">K</span>-critic ensemble:</p>
+  <div class="eq"><span class="b math">ℒ<sub>Q</sub>(θ) = − ∑<sub>h∈𝒦</sub> 𝟙<sub>valid</sub> · <span class="mo">sg</span>[𝒯<sub>h</sub>]<sup>⊤</sup> log <span class="mo">softmax</span> f<sub>θ</sub>(ϕ(s<sub>t</sub>),a)<sub>h</sub></span><span class="tag">(6)</span></div>
+  <h3>Expectile value for V</h3>
+  <p>IQL fits <span class="math">V</span> to an <em class="t">expectile</em> of <span class="math">Q</span> over data actions — pushing it toward <span class="math">max<sub>a</sub>Q</span> without proposing an action. With residual <span class="math">u=Q̄<sub>θ̄</sub>(s,a)−V̄<sub>ψ</sub>(s)</span> (ensemble-min <span class="math">Q̄</span>) and expectile weight <span class="math">|τ−𝟙(u<0)|</span>, and because <span class="math">V</span> is distributional, we train it by expectile-weighted cross-entropy toward <span class="math">Q</span>'s demonstrated-action law — so <span class="math">V</span> learns the upper-quantile <em class="t">distribution</em>, not just its mean:</p>
+  <div class="eq"><span class="b math">ℒ<sub>V</sub>(ψ) = <span class="mo">|</span>τ − 𝟙(u<0)<span class="mo">|</span> · <span class="mo">CE</span><span class="mo">(</span>p<sub>ψ</sub>(s), <span class="mo">sg</span>[p<sub>θ̄</sub>(s,a)]<span class="mo">)</span></span><span class="tag">(7)</span></div>
+  <p>The target follows by Polyak averaging <span class="math">θ̄←(1−ρ)θ̄+ρθ</span>. Detaching <span class="math">Q<sub>θ̄</sub></span> in (7) and <span class="math">V<sub>ψ</sub></span> in (5) keeps the halves from chasing each other through the shared optimiser.</p>
+  <div class="callout"><span class="k">Why V had to become distributional</span><span><span class="math">V</span> lives <em class="t">inside</em> the <span class="math">Q</span> target (Eq. 5): a mis-calibrated <span class="math">V</span> mean poisons every bootstrap, and deployment reads <span class="math">Q</span>. Making <span class="math">V</span> distributional and bootstrapping its full law is what lets a return's branching survive the backup instead of being averaged away step by step.</span></div>
+</section>
+
+<section>
+  <h2><span class="n">5</span>Deployment — best-of-N and adaptive-K</h2>
+  <p>At state <span class="math">s</span> the frozen actor samples <span class="math">N</span> candidate chunks <span class="math">{a<sup>(1)</sup>,…,a<sup>(N)</sup>}</span> (stochastic flow-matching draws). The critic scores all of them in one batched pass, returning each candidate's per-horizon value <span class="math">Q̄(s,a<sup>(n)</sup>)<sub>h</sub></span>. Two rules follow:</p>
+  <div class="eq"><span class="b math">n<sup>★</sup> = <span class="mo">argmax</span><sub>n</sub> Q̄(s,a<sup>(n)</sup>)<sub>H</sub> &nbsp;<span style="font-style:normal;font-size:.8em;color:var(--muted)">(best-of-N)</span> ,&nbsp; K<sup>★</sup> = <span class="mo">argmax</span><sub>h∈𝒦</sub> Q̄(s,a<sup>(n<sup>★</sup>)</sup>)<sub>h</sub> &nbsp;<span style="font-style:normal;font-size:.8em;color:var(--muted)">(adaptive-K)</span></span><span class="tag">(8)</span></div>
+  <p><strong>Best-of-N</strong> commits to the full winning chunk. <strong>Adaptive-K</strong> executes only the winner's most-valuable prefix <span class="math">K<sup>★</sup></span>, then re-plans — short chunks near contact events where value falls off fast, long chunks in free space where committing further is safe. Candidates are never stored; they are re-sampled from the actor at decision time, exactly as the offline IQL objective assumes.</p>
+  <figure>
+    <div class="fig">
+    <svg viewBox="0 0 760 190" role="img" aria-label="Sample N chunks, score per horizon, pick candidate and commitment.">
+      <defs><marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L8,4.5 L0,9 z" fill="var(--muted)"/></marker></defs>
+      <rect x="14" y="70" width="82" height="44" rx="8" fill="var(--paper)" stroke="var(--line)"/>
+      <text x="55" y="88" text-anchor="middle" class="svgtext" font-size="11" font-weight="700">π0.5</text>
+      <text x="55" y="104" text-anchor="middle" class="svgtext" font-size="9" fill="var(--muted)">actor · frozen</text>
+      <g class="svgtext" font-size="10">
+        <line x1="98" y1="84" x2="142" y2="42" stroke="var(--muted)" marker-end="url(#ar3)"/>
+        <line x1="98" y1="92" x2="142" y2="92" stroke="var(--muted)" marker-end="url(#ar3)"/>
+        <line x1="98" y1="100" x2="142" y2="142" stroke="var(--muted)" marker-end="url(#ar3)"/>
+        <rect x="146" y="28" width="66" height="24" rx="5" fill="var(--card)" stroke="var(--line)"/><text x="179" y="44" text-anchor="middle">a⁽¹⁾</text>
+        <rect x="146" y="80" width="66" height="24" rx="5" fill="var(--card)" stroke="var(--accent)" stroke-width="2"/><text x="179" y="96" text-anchor="middle">a⁽²⁾</text>
+        <rect x="146" y="132" width="66" height="24" rx="5" fill="var(--card)" stroke="var(--line)"/><text x="179" y="148" text-anchor="middle">a⁽ᴺ⁾</text>
+        <text x="179" y="176" text-anchor="middle" fill="var(--muted)" font-size="9">N candidate chunks</text>
+      </g>
+      <line x1="214" y1="40" x2="256" y2="76" stroke="var(--muted)" marker-end="url(#ar3)"/>
+      <line x1="214" y1="92" x2="256" y2="92" stroke="var(--muted)" marker-end="url(#ar3)"/>
+      <line x1="214" y1="144" x2="256" y2="108" stroke="var(--muted)" marker-end="url(#ar3)"/>
+      <rect x="260" y="70" width="94" height="44" rx="9" fill="var(--accent-soft)" stroke="var(--accent)"/>
+      <text x="307" y="89" text-anchor="middle" class="svgtext" font-size="11" font-weight="700">patch-critic</text>
+      <text x="307" y="105" text-anchor="middle" class="svgtext" font-size="9" fill="var(--muted)">Q̄(s,·)ₕ</text>
+      <line x1="356" y1="92" x2="398" y2="92" stroke="var(--muted)" marker-end="url(#ar3)"/>
+      <g transform="translate(404,34)">
+        <text x="120" y="4" text-anchor="middle" class="svgtext" font-size="9.5" fill="var(--muted)">value per horizon · chosen a⁽²⁾</text>
+        <rect x="16" y="26" width="20" height="26" fill="var(--accent)" opacity=".4"/>
+        <rect x="46" y="18" width="20" height="34" fill="var(--accent)" opacity=".55"/>
+        <rect x="76" y="10" width="20" height="42" fill="var(--accent)"/>
+        <rect x="106" y="24" width="20" height="28" fill="var(--accent)" opacity=".4"/>
+        <rect x="136" y="32" width="20" height="20" fill="var(--accent)" opacity=".3"/>
+        <rect x="166" y="38" width="20" height="14" fill="var(--accent)" opacity=".25"/>
+        <line x1="12" y1="52" x2="196" y2="52" stroke="var(--line)"/>
+        <line x1="86" y1="6" x2="86" y2="10" stroke="var(--orange)" stroke-width="2"/>
+        <text x="86" y="4" text-anchor="middle" class="svgtext" font-size="9" fill="var(--orange)" font-weight="700">K★</text>
+        <text x="26" y="63" text-anchor="middle" class="svgtext" font-size="8" fill="var(--muted)">2</text>
+        <text x="86" y="63" text-anchor="middle" class="svgtext" font-size="8" fill="var(--muted)">8</text>
+        <text x="176" y="63" text-anchor="middle" class="svgtext" font-size="8" fill="var(--muted)">16</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption><b>Figure 3 — Deployment.</b> The frozen actor proposes <span class="math">N</span> chunks; the critic scores each across all horizons in one pass. Best-of-N picks the highest full-horizon value (a⁽²⁾); adaptive-K then executes only its peak prefix <span class="math">K<sup>★</sup></span> before re-planning.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="n">6</span>What is being tested</h2>
+  <p>The method makes one falsifiable promise: a value function trained this way should let chunk selection <em class="t">beat</em> the raw actor. The current experiment measures exactly that on RoboCasa 365 — the actor's own success rate (no selection) versus best-of-N and adaptive-K under the same critic, across four atomic tasks — and pits the scalar-<span class="math">V</span> ablation against the distributional-<span class="math">V</span> model of this note. Training curves are logged under <code>jellyho_/acrft</code>; the first (scalar-<span class="math">V</span>) run did <em class="t">not</em> yet clear the baseline, which is what motivated the distributional <span class="math">V</span> here.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v">3</div><div class="k">cameras · frozen DINOv2</div><div class="d">192 pooled patch tokens</div></div>
+    <div class="tile"><div class="v">4</div><div class="k">commitment horizons</div><div class="d">K = 2 / 4 / 8 / 16</div></div>
+    <div class="tile"><div class="v">51</div><div class="k">value atoms</div><div class="d">HL-Gauss, Q and V</div></div>
+    <div class="tile"><div class="v">~9M</div><div class="k">trainable params</div><div class="d">backbone frozen (22M)</div></div>
+  </div>
+</section>
+
+<hr>
+<p class="small">Notation. <span class="math">ϕ</span> frozen patch encoder · <span class="math">f<sub>θ</sub></span> per-horizon critic · <span class="math">V<sub>ψ</sub></span> state value · <span class="math">θ̄</span> Polyak target · <span class="math">Φ</span> HL-Gauss projection · <span class="math">z<sub>i</sub></span> value atoms · <span class="math">γ</span> discount · <span class="math">g</span> macro-group size · <span class="math">τ</span> expectile · <span class="math">sg</span> stop-gradient. Code: <code>src/openpi/patch_critic/</code>, <code>scripts/train_patch_critic.py</code>.</p>
+
+<section class="card" id="review">
+  <h2>Review</h2>
+  <p class="note"><strong>Your ask, as I understood it:</strong> Write a paper-style Method section for the patch-critic learning method as a standalone post, with the equations and figures carried properly — in your preferred report/figure style.</p>
+  <div id="claims"></div>
+  <div style="margin:.7rem 0 .1rem">
+    <span class="note" style="margin-right:.6rem"><strong>Same page?</strong></span>
+    <label style="display:inline-flex;margin-right:.9rem"><input type="radio" name="samepage" value="yes"> yes, this is what I asked</label>
+    <label style="display:inline-flex"><input type="radio" name="samepage" value="no"> not quite — tell me what to change</label>
+  </div>
+</section>
+</main>
+
+<script>
+const CLAIMS = [
+  "Observation is a FROZEN DINOv2 patch grid (192 pooled tokens), not a VLA token — the critic is VLA-independent and trained offline.",
+  "The ARQ critic is one transformer with a block-causal mask that emits every commitment horizon's value at once (adaptive-K in a single pass).",
+  "Both Q and V are distributional (HL-Gauss, 51 atoms); the Q backup projects V's WHOLE distribution (distributional Bellman), not just its mean.",
+  "V is fit by expectile-weighted cross-entropy to Q's demonstrated-action distribution; Polyak target; Cal-QL floor for success-only data.",
+  "Deployment: sample N actor chunks, score all, pick best chunk (BoN) and its peak commitment prefix (adaptive-K).",
+  "Honest status: the scalar-V version did NOT beat the baseline yet; distributional V is the fix under test."
+];
+const RKEY = 'patch-critic-method-review';
+const saved = JSON.parse(localStorage.getItem(RKEY) || '{}');
+const box = document.getElementById('claims');
+CLAIMS.forEach((c,i)=>{
+  const l=document.createElement('label');
+  const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!saved['c'+i];
+  cb.addEventListener('change',()=>{saved['c'+i]=cb.checked;localStorage.setItem(RKEY,JSON.stringify(saved));});
+  const s=document.createElement('span'); s.className='note'; s.textContent=c;
+  l.appendChild(cb); l.appendChild(s); box.appendChild(l);
+});
+document.querySelectorAll('input[name=samepage]').forEach(r=>{
+  if(saved.samepage===r.value)r.checked=true;
+  r.addEventListener('change',()=>{saved.samepage=r.value;localStorage.setItem(RKEY,JSON.stringify(saved));});
+});
+</script>
