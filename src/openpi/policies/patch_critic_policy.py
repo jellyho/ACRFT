@@ -436,8 +436,7 @@ class PatchCriticSelectPolicy(BasePolicy):
             # normalized by the critic's own stats, then sliced -- the same array the scoring block
             # below builds. Handing it the policy-normalized state instead would be silently off by
             # a normalization whenever the two stat sets differ.
-            arm_state = state if self._pre is None else self._pre.state(state)
-            arm_proprio = arm_state if self._proprio_idx is None else arm_state[self._proprio_idx]
+            arm_proprio = self._critic_proprio(state)
             chunks_model = np.asarray(
                 self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(arm_proprio)), np.float32
             )
@@ -492,15 +491,12 @@ class PatchCriticSelectPolicy(BasePolicy):
             scored_actions = self._pre.actions(robot_actions, state)[
                 :, : self._critic_horizon, : self._critic_action_dim
             ]
-            # Normalize the FULL state, then slice: proprio_indices point into the 42-wide state, so
-            # slicing first would pair those channels with the first-14 statistics.
-            critic_state = self._pre.state(state)
-            scored_state = critic_state if self._proprio_idx is None else critic_state[self._proprio_idx]
         else:
             # Legacy raw-units critic: it was trained on absolute joint targets, so it scores the
-            # same array the robot will execute, against the raw state those units live in.
+            # same array the robot will execute. Only the ACTION space differs here -- the proprio
+            # is built the same way for both, which is why it is hoisted out of the branch.
             scored_actions = robot_actions[:, : self._critic_horizon]
-            scored_state = state if self._proprio_idx is None else state[self._proprio_idx]
+        scored_state = self._critic_proprio(state)
         scored = np.asarray(scored_actions, np.float32)  # [N, H, *] in the CRITIC's space
         decoded = robot_actions  # [N, H, A] in ROBOT space -- executed and recorded
 
@@ -573,6 +569,25 @@ class PatchCriticSelectPolicy(BasePolicy):
         if want_hud:
             out["critic_grid"] = np.broadcast_to(pv, (x, *pv.shape)).copy()  # (X, N, mh)
         return out
+
+    def _critic_proprio(self, raw_state):
+        """RAW state -> the proprio vector the CRITIC was trained on. THE single expression.
+
+        Two steps whose ORDER is the whole content: normalize the FULL state, then slice. Slicing
+        first pairs channels 21..27 with the first-14 statistics, and nothing catches it -- same
+        shape, same range, Q still sensible. Worse, the proprio indices are two arms ([0..6,
+        21..27]), so under the bug the LEFT arm is still exactly right and only the right arm is
+        wrong; a spot check on one arm shows a perfect match. That cost this ring nine retrained
+        arms (grad_a Q cosine 0.85 mean, -0.69 min against the correct direction).
+
+        Matches train_patch_critic_cached.py:340-342 via critic_q.CacheView.rows -- asserted
+        numerically in patch_critic/train_serve_contract_test.py rather than by reading the two.
+
+        `self._pre` is None for a legacy raw-units critic, where the raw state IS what it trained
+        on. Supersedes three independent derivations of this in `infer`.
+        """
+        s = raw_state if self._pre is None else self._pre.state(raw_state)
+        return s if self._proprio_idx is None else s[..., self._proprio_idx]
 
     def _candidate_count(self, num_samples: int | None = None) -> int:
         """How many chunks a reply's per-step arrays carry.
