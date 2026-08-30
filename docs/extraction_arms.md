@@ -71,7 +71,10 @@ uv run scripts/serve_policy.py --port 8000 --critic $CRITIC --critic-mode qpilot
 uv run scripts/serve_policy.py --port 8000 --critic $CRITIC --critic-mode lpsd \
     --extraction-head <latent_actor_*.msgpack> $BASE
 
-# flowdagger — a head predicts the DCT coefficients of the sampler's initial noise
+# flowdagger — a head predicts the DCT coefficients of the sampler's initial noise.
+# --extraction-head is a DIRECTORY here, not a file: the head is meaningless without the DCT basis
+# it was fitted against, so the two travel together or the coefficients decode into a different
+# chunk. (lps/lpsd point at a single file for the same reason inverted -- they store one array set.)
 uv run scripts/serve_policy.py --port 8000 --critic $CRITIC --critic-mode flowdagger \
     --extraction-head <run dir with steering_head.msgpack + dct_basis.npy> $BASE
 ```

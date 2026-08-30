@@ -15,14 +15,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from openpi.extraction import serving as S
+from openpi.extraction import serving
 
 
 class _FakeSampler:
     """ArmChunkSampler's steering loop, reduced to the part under test: one code path, alpha as a
     parameter, so the twin differs from the steered draw by the steering term and nothing else."""
 
-    def __init__(self, pair: bool):
+    def __init__(self, *, pair: bool):
         self.pair_unsteered = pair
         self.spec = type("S", (), {"ode_steps": 4, "alpha": 0.2})()
         self.H, self.AD = 4, 8
@@ -90,4 +90,4 @@ def test_drift_needs_a_scale_to_mean_anything():
 def test_only_qpilots_has_a_twin(arm):
     """The other arms have no alpha to zero out, so there is no same-noise unsteered counterpart.
     Their reference draws are still recorded; the twin is not invented for them."""
-    assert arm in S.LATENT_ARMS or arm == "flowdagger"
+    assert arm in serving.LATENT_ARMS or arm == "flowdagger"
