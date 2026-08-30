@@ -105,6 +105,27 @@ def load(critic_dir) -> CriticQ:
     )
 
 
+def critic_proprio(pre, proprio_idx, raw_state):
+    """RAW state -> the proprio vector the CRITIC was trained on. THE single expression.
+
+    Two steps whose ORDER is the whole content: normalize the FULL state, then slice. Slicing
+    first pairs channels 21..27 with the first-14 statistics, and the failure is silent -- Q still
+    comes back in range. Getting this wrong cost this ring nine retrained arms: the extraction
+    pipeline fed raw proprio to a critic trained on normalized proprio, and the only visible
+    symptom was that grad_a Q pointed somewhere else (cosine 0.85 mean, -0.69 min, 40% of states
+    below 0.9 against the correct direction).
+
+    It is a function rather than a convention because a convention has to be re-derived at every
+    call site, and three sites that agree by coincidence are three chances to diverge. Callers:
+    CacheView.rows (training/annotation), and the serving wrapper's arm and scoring paths.
+
+    `pre` is the critic's Pi05Preproc (None for a legacy raw-units critic, where the raw state IS
+    what it was trained on); `proprio_idx` its proprio_indices (None = the whole state).
+    """
+    s = raw_state if pre is None else pre.state(raw_state)
+    return s if proprio_idx is None else s[..., proprio_idx]
+
+
 class CacheView:
     """Row access to the DINO feature cache the critic was trained on (pc_cache/yam_s347)."""
 
@@ -129,9 +150,7 @@ class CacheView:
         """
         f = np.asarray(self.feats[idx], np.float32)
         s = np.asarray(self.states[idx])
-        s_norm = s if critic.pre is None else critic.pre.state(s)
-        pr = s_norm if critic.proprio_idx is None else s_norm[:, critic.proprio_idx]
-        return f, s, pr
+        return f, s, critic_proprio(critic.pre, critic.proprio_idx, s)
 
 
 def grad_q_chunk(critic: CriticQ):
