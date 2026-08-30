@@ -168,7 +168,7 @@ demo-MSE assumes demo-likeness is good (near-tautological for BC); n={n_states} 
 
 entry = {
     "eid": "extraction-suite-yam",
-    "date": "2026-08-30 01:55",
+    "date": "2026-08-30 10:55",  # KST (machine clock is UTC)
     "worker": "B",
     "title": "🧪 [워커B] policy-extraction 10 arms 링 — 구현·검증 완료, wave-1: 조향은 세지만 비싸고, 선택은 정직하다",
     "summary": f"AWR·CFGRL·FlowDPG·QAM·LPS/LPSD·FlowDAgger·DQL·QPILOTS-U·IDQL/BoN을 π0.5 스케일에 라인 단위 provenance로 구현, 스모크 6라운드에 10/10 통과. 무학습 arms 오프라인 비교(paired n={n_states}): QPILOTS-U ΔQ {q3:+.1f}(α=.3)로 압도하나 demo-MSE ~5배·jerk +28%의 분포 이탈을 치르고, IDQL/BoN은 +1.5~2.7로 겸손하되 무비용, FlowDAgger 오프라인 치환은 무효. ΔQ는 자기 심판 — 판정은 로봇 롤아웃으로.",
