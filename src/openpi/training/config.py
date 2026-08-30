@@ -1743,32 +1743,35 @@ def _yam_alphaflow_config(
 _CONFIGS.append(_yam_alphaflow_config())
 
 
-def _yam_cfgrl_config(horizon: int = 30, delta_mode: str = "joint") -> TrainConfig:
-    """CFGRL extraction arm — the ONLY extraction arm needing its own config.
+def with_cfgrl(base: TrainConfig, *, cfg_w: float = 1.5, suffix: str = "cfgrl") -> TrainConfig:
+    """CFGRL variant OF ANY pi0.5 task config — a method transform, not a task config.
 
-    The other weight-bearing arms (awr, flowdpg, qam, dql) fine-tune the plain pi0.5 action expert,
-    so an exported checkpoint of theirs is served by `pi05_yam_lego_taxi` unchanged. CFGRL's model
-    additionally carries the optimality embedding and samples with classifier-free guidance
-    (kvfrans/cfgrl iql_diffusion.py:170-179, :213), which is a model property, not a serving flag —
-    so it travels in the config, and `serve_policy.py --policy.config pi05_yam_lego_taxi_cfgrl`
-    needs to know nothing about extraction.
+    Policy-extraction methods are orthogonal to the task: the same CFGRL recipe should apply to
+    YAM, LIBERO, RoboCasa or anything added later, so it is expressed as base -> variant rather
+    than copied per task. Everything task-shaped (data config, norm stats, horizon, action dim,
+    optimizer) is inherited from `base`; only the model class changes, because the optimality
+    embedding and guided sampling are model properties (kvfrans/cfgrl iql_diffusion.py:105,213).
 
-    `cfg_w` is the guidance weight the sampler runs at; the official sweep is {1, 1.5, 3, 5, 10,
-    30, 100} and 1.0 reduces to the conditioned policy.
+        _CONFIGS.append(with_cfgrl(_yam_bc_config()))            # pi05_yam_lego_taxi_cfgrl
+        _CONFIGS.append(with_cfgrl(some_libero_cfg, cfg_w=3.0))  # ... and any other task
+
+    The other weight-bearing extraction arms (awr, flowdpg, qam, dql) need no variant at all: they
+    fine-tune the plain pi0.5 action expert, so an exported checkpoint is served by the BASE config
+    unchanged. CFGRL is the one arm whose network differs.
     """
-    base = _yam_bc_config(delta_mode, horizon=horizon)
+    if not isinstance(base.model, pi0_config.Pi0Config):
+        raise TypeError(f"with_cfgrl needs a pi0.5 base config, got {type(base.model).__name__}")
     return dataclasses.replace(
         base,
-        name=f"{base.name}_cfgrl",
+        name=f"{base.name}_{suffix}",
         model=pi0_cfgrl.Pi0CFGRLConfig(
-            pi05=True,
-            action_horizon=horizon,
-            action_dim=base.model.action_dim,
+            **{f.name: getattr(base.model, f.name) for f in dataclasses.fields(base.model)},
+            cfg_w=cfg_w,
         ),
     )
 
 
-_CONFIGS.append(_yam_cfgrl_config())
+_CONFIGS.append(with_cfgrl(_yam_bc_config()))
 
 
 def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:

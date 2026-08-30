@@ -24,6 +24,7 @@ def main():
     ap.add_argument("--arm", required=True, choices=["awr", "cfgrl", "flowdpg", "qam", "dql"])
     ap.add_argument("--step", type=int, default=None, help="checkpoint step (default: latest)")
     ap.add_argument("--run", default="run1")
+    ap.add_argument("--base-config", default="pi05_yam_lego_taxi", help="the task config the arm was trained on")
     ap.add_argument("--out", type=pathlib.Path, default=None)
     a = ap.parse_args()
 
@@ -42,10 +43,12 @@ def main():
     expert_dir = src / str(step)
     out = a.out or serving.CKPT_ROOT / "exported" / f"{a.arm}_{step}"
 
-    cfg_name = "pi05_yam_lego_taxi_cfgrl" if a.arm == "cfgrl" else "pi05_yam_lego_taxi"
+    # base task config, or its CFGRL variant (config.with_cfgrl) -- the arm never picks a
+    # task-specific name itself, so exporting an arm trained on another task changes one flag
+    cfg_name = f"{a.base_config}_cfgrl" if a.arm == "cfgrl" else a.base_config
     cfg = _config.get_config(cfg_name)
     model = cfg.model.create(jax.random.key(0))
-    graphdef, state = nnx.split(model)
+    _graphdef, state = nnx.split(model)
     params = CheckpointWeightLoaderKeepMissing(str(serving.BC_CKPT / "params")).load(state.to_pure_dict())
 
     import orbax.checkpoint as ocp
