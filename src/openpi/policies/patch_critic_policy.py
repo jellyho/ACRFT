@@ -25,6 +25,7 @@ import numpy as np
 from typing_extensions import override
 
 from openpi.models import model as _model
+from openpi.patch_critic import preproc as critic_preproc_mod
 from openpi.policies import policy as _policy_mod
 from openpi.policies.policy import BasePolicy
 from openpi.policies.policy import Policy
@@ -571,23 +572,11 @@ class PatchCriticSelectPolicy(BasePolicy):
         return out
 
     def _critic_proprio(self, raw_state):
-        """RAW state -> the proprio vector the CRITIC was trained on. THE single expression.
-
-        Two steps whose ORDER is the whole content: normalize the FULL state, then slice. Slicing
-        first pairs channels 21..27 with the first-14 statistics, and nothing catches it -- same
-        shape, same range, Q still sensible. Worse, the proprio indices are two arms ([0..6,
-        21..27]), so under the bug the LEFT arm is still exactly right and only the right arm is
-        wrong; a spot check on one arm shows a perfect match. That cost this ring nine retrained
-        arms (grad_a Q cosine 0.85 mean, -0.69 min against the correct direction).
-
-        Matches train_patch_critic_cached.py:340-342 via critic_q.CacheView.rows -- asserted
-        numerically in patch_critic/train_serve_contract_test.py rather than by reading the two.
-
-        `self._pre` is None for a legacy raw-units critic, where the raw state IS what it trained
-        on. Supersedes three independent derivations of this in `infer`.
-        """
-        s = raw_state if self._pre is None else self._pre.state(raw_state)
-        return s if self._proprio_idx is None else s[..., self._proprio_idx]
+        """The critic's proprio for this state. Partial application of
+        ``patch_critic.preproc.critic_proprio``, which is where the expression lives and where its
+        docstring explains why the order matters -- this binds the two settings, it does not
+        restate the logic."""
+        return critic_preproc_mod.critic_proprio(self._pre, self._proprio_idx, raw_state)
 
     def _candidate_count(self, num_samples: int | None = None) -> int:
         """How many chunks a reply's per-step arrays carry.

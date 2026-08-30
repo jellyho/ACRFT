@@ -78,7 +78,7 @@ def test_slicing_first_is_a_different_answer_and_nothing_would_raise(spec_and_pr
     assert np.any(d[7:] > 0.5), "and the right arm is wrong by a lot"
 
 
-def test_the_action_delta_is_taken_against_the_FULL_state(spec_and_pre):
+def test_the_action_delta_is_taken_against_the_whole_state(spec_and_pre):
     """train_patch_critic_cached.py:339 takes the delta before the state is normalized or sliced,
     because joint_delta_reference indexes 21..27 of the 42-wide state. Serving does the same
     (`self._pre.actions(robot_actions, state)` with the raw full state). Handing it the SLICED
