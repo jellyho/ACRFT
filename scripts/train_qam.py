@@ -69,7 +69,6 @@ def main():
     from openpi.extraction import critic_q
     from openpi.extraction import data as exdata
     import openpi.models.model as _model
-    from openpi.models.pi0 import make_attn_mask
     import openpi.shared.nnx_utils as nnx_utils
     from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
@@ -111,36 +110,23 @@ def main():
     h = 1.0 / T
 
     def prefix_kv(model, obs):
-        prefix_tokens, prefix_mask, prefix_ar = model.embed_prefix(obs)
-        attn = make_attn_mask(prefix_mask, prefix_ar)
-        pos = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv = model.PaliGemma.llm([prefix_tokens, None], mask=attn, positions=pos)
-        return kv, prefix_mask
+        """(mask, kv) -- Pi0._prefix_forward's order, kept at every call site below."""
+        return model._prefix_forward(obs)
 
-    def suffix_v(model, obs, kv, pm, x, tau):
-        """pi0.5 velocity via the cached prefix (pi0.py sample_actions step body)."""
-        import einops
+    def suffix_v(model, obs, pm, kv, x, tau):
+        """pi0.5 velocity via the cached prefix -- Pi0._velocity, the shared implementation."""
+        return model._velocity(obs, pm, kv, x, tau)
 
-        suffix_tokens, suffix_mask, suffix_ar, adarms = model.embed_suffix(obs, x, tau)
-        suffix_attn = make_attn_mask(suffix_mask, suffix_ar)
-        pref_attn = einops.repeat(pm, "b p -> b s p", s=suffix_tokens.shape[1])
-        full_attn = jnp.concatenate([pref_attn, suffix_attn], axis=-1)
-        pos = jnp.sum(pm, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-        (_, out), _ = model.PaliGemma.llm(
-            [None, suffix_tokens], mask=full_attn, positions=pos, kv_cache=kv, adarms_cond=[None, adarms]
-        )
-        return model.action_out_proj(out[:, -H:])
-
-    def _v_qam_p(p_exp, p_rest, obs, kv, pm, x, t_qam):
+    def _v_qam_p(p_exp, p_rest, obs, pm, kv, x, t_qam):
         # QAM's data-pointing velocity from openpi's noise-pointing one: v_qam = -v_openpi(1 - t)
         tau = jnp.broadcast_to(1.0 - t_qam, x.shape[0])
-        return -suffix_v(nnx.merge(graphdef_m, p_exp, p_rest), obs, kv, pm, x, tau)
+        return -suffix_v(nnx.merge(graphdef_m, p_exp, p_rest), obs, pm, kv, x, tau)
 
     # remat: T fast + T slow forward passes plus the VJP recursion held every suffix activation
     # live at once (round-3 smoke OOM). Recompute per step instead; math unchanged.
     v_qam = jax.checkpoint(_v_qam_p)
 
-    def rollout(exp_f_const, exp_s, p_rest, obs, kv_s, pm, rng):
+    def rollout(exp_f_const, exp_s, p_rest, obs, pm, kv_s, rng):
         """qam.py:49-77 verbatim structure; runs under stop-grad (constants for the loss)."""
         b = pm.shape[0]
         x = jax.random.normal(rng, (b, H, AD))
@@ -151,12 +137,12 @@ def main():
             xs.append(x)
             ts.append(t)
             if i < T - 1:
-                v = v_qam(exp_f_const, p_rest, obs, kv_s, pm, x, t)  # rollout uses the CURRENT fast field (:68-70)
+                v = v_qam(exp_f_const, p_rest, obs, pm, kv_s, x, t)  # rollout uses the CURRENT fast field (:68-70)
                 rng, nk = jax.random.split(rng)
                 noise = jax.random.normal(nk, x.shape)
                 x = x + h * (2 * v - x / (t + h)) + jnp.sqrt(h) * sig * noise  # qam.py:71
             else:
-                v = v_qam(exp_s, p_rest, obs, kv_s, pm, x, t)  # deterministic last step, slow field (:72-73)
+                v = v_qam(exp_s, p_rest, obs, pm, kv_s, x, t)  # deterministic last step, slow field (:72-73)
                 x = x + h * v
         # ts is a STATIC python time grid (i*h): keep it host-side — jnp.asarray stages it into a
         # tracer under jit and float(ts[i]) then fails (round-2 smoke)
@@ -164,7 +150,7 @@ def main():
 
     grad_q = critic_q.grad_q_chunk(critic)  # ensemble MEAN grad + in-call clip (qam.py:80-83)
 
-    def adjoints(exp_s, p_rest, obs, kv_s, pm, xs, ts, x_final, feats, proprio):
+    def adjoints(exp_s, p_rest, obs, pm, kv_s, xs, ts, x_final, feats, proprio):
         """Terminal adj = -grad Q * inv_temp (qam.py:85); backward VJP recursion (:92-101)."""
         g = grad_q(x_final[..., :robot_ad], feats, proprio)
         g = jnp.concatenate([g, jnp.zeros((*g.shape[:-1], AD - robot_ad))], axis=-1)
@@ -174,7 +160,7 @@ def main():
             t = float(ts[i])
 
             def fn(x, t=t):
-                return 2 * v_qam(exp_s, p_rest, obs, kv_s, pm, x, t) - x / (t + h)  # qam.py:95-97
+                return 2 * v_qam(exp_s, p_rest, obs, pm, kv_s, x, t) - x / (t + h)  # qam.py:95-97
 
             _, vjp = jax.vjp(fn, xs[i])
             adj = adj + h * vjp(adj)[0]  # qam.py:98-100
@@ -182,13 +168,13 @@ def main():
         adjs.reverse()  # align with xs[0..T-1]; matches qam.py:102 ordering
         return jax.lax.stop_gradient(jnp.stack(adjs))
 
-    def loss_fn(exp_f_train, exp_s, p_rest, obs, kv_s, pm, xs, ts, adjs):
+    def loss_fn(exp_f_train, exp_s, p_rest, obs, pm, kv_s, xs, ts, adjs):
         total = 0.0
         for i in range(T):
             t = float(ts[i])
             sig = jnp.sqrt(2 * (1 - t + h) / (t + h))
-            vf = v_qam(exp_f_train, p_rest, obs, kv_s, pm, xs[i], t)
-            vs = jax.lax.stop_gradient(v_qam(exp_s, p_rest, obs, kv_s, pm, xs[i], t))
+            vf = v_qam(exp_f_train, p_rest, obs, pm, kv_s, xs[i], t)
+            vs = jax.lax.stop_gradient(v_qam(exp_s, p_rest, obs, pm, kv_s, xs[i], t))
             # qam.py:140-142 (residual=False): ((vf - vs) * 2/sigma + sigma * adj)^2, per-dim sum
             per = jnp.sum(jnp.square((vf - vs) * (2.0 / sig) + sig * adjs[i]), axis=(-2, -1))
             total = total + per  # summed over the step axis (qam.py:145)
@@ -198,13 +184,13 @@ def main():
     def step(p_exp_f, opt, p_exp_s, p_rest, rng, obs, feats, proprio):
         obs = _model.preprocess_observation(None, obs, train=False)
         slow_m = nnx.merge(graphdef_m, p_exp_s, p_rest)
-        kv_s, pm = prefix_kv(slow_m, obs)  # one frozen prefix, shared by both fields
+        pm, kv_s = prefix_kv(slow_m, obs)  # one frozen prefix, shared by both fields
         rng, rk = jax.random.split(rng)
-        xs, ts, x_final = rollout(p_exp_f, p_exp_s, p_rest, obs, kv_s, pm, rk)
-        adjs = adjoints(p_exp_s, p_rest, obs, kv_s, pm, xs, ts, x_final, feats, proprio)
+        xs, ts, x_final = rollout(p_exp_f, p_exp_s, p_rest, obs, pm, kv_s, rk)
+        adjs = adjoints(p_exp_s, p_rest, obs, pm, kv_s, xs, ts, x_final, feats, proprio)
         # grads wrt the fast EXPERT subtree only (a full-state grad pytree was the round-4 OOM)
         (loss, info), grads = jax.value_and_grad(
-            lambda pe: loss_fn(pe, p_exp_s, p_rest, obs, kv_s, pm, xs, ts, adjs), has_aux=True
+            lambda pe: loss_fn(pe, p_exp_s, p_rest, obs, pm, kv_s, xs, ts, adjs), has_aux=True
         )(p_exp_f)
         upd, opt = tx.update(grads, opt, p_exp_f)
         return optax.apply_updates(p_exp_f, upd), opt, loss, info

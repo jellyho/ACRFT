@@ -61,7 +61,6 @@ def main():
     ap.add_argument("--wandb-name", default="extract_fqlx_run1")
     a = ap.parse_args()
 
-    import einops
     import flax.nnx as nnx
     import jax
     import jax.numpy as jnp
@@ -71,7 +70,6 @@ def main():
     from openpi.extraction import critic_q
     from openpi.extraction import data as exdata
     import openpi.models.model as _model
-    from openpi.models.pi0 import make_attn_mask
     import openpi.shared.nnx_utils as nnx_utils
     from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
@@ -106,35 +104,24 @@ def main():
     dt = 1.0 / N
 
     def prefix(p_e, obs):
-        m = nnx.merge(graphdef_m, p_e, p_rest)
-        tok, mask, ar = m.embed_prefix(obs)
-        _, kv = m.PaliGemma.llm([tok, None], mask=make_attn_mask(mask, ar), positions=jnp.cumsum(mask, axis=1) - 1)
-        return kv, mask
+        # mask FIRST, matching Pi0._prefix_forward; kept in that order at every call site here
+        return nnx.merge(graphdef_m, p_e, p_rest)._prefix_forward(obs)
 
-    def velocity(p_e, obs, kv, pm, x, tau):
-        m = nnx.merge(graphdef_m, p_e, p_rest)
-        st, sm, sar, adarms = m.embed_suffix(obs, x, tau)
-        full_attn = jnp.concatenate(
-            [einops.repeat(pm, "b p -> b s p", s=st.shape[1]), make_attn_mask(sm, sar)], axis=-1
-        )
-        pos = jnp.sum(pm, axis=-1)[:, None] + jnp.cumsum(sm, axis=-1) - 1
-        (_, out), _ = m.PaliGemma.llm(
-            [None, st], mask=full_attn, positions=pos, kv_cache=kv, adarms_cond=[None, adarms]
-        )
-        return m.action_out_proj(out[:, -H:])
+    def velocity(p_e, obs, pm, kv, x, tau):
+        return nnx.merge(graphdef_m, p_e, p_rest)._velocity(obs, pm, kv, x, tau)
 
     velocity = jax.checkpoint(velocity)  # the teacher unrolls N of these; recompute in backward
 
     def loss_fn(p_e_s, obs, feats, proprio, z):
         # teacher: the frozen BC policy's own multi-step sample from this noise (stop-grad)
-        kv_t, pm = prefix(p_exp_t, obs)
+        pm, kv_t = prefix(p_exp_t, obs)
         x = z
         for i in range(N):
-            x = x - dt * velocity(p_exp_t, obs, kv_t, pm, x, jnp.full((x.shape[0],), 1.0 - i * dt))
+            x = x - dt * velocity(p_exp_t, obs, pm, kv_t, x, jnp.full((x.shape[0],), 1.0 - i * dt))
         a_theta = jax.lax.stop_gradient(x)
         # student: ONE Euler step from the same noise (the "one-step actor")
-        kv_s, pm_s = prefix(p_e_s, obs)
-        a_omega = z - velocity(p_e_s, obs, kv_s, pm_s, z, jnp.ones((z.shape[0],)))
+        pm_s, kv_s = prefix(p_e_s, obs)
+        a_omega = z - velocity(p_e_s, obs, pm_s, kv_s, z, jnp.ones((z.shape[0],)))
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
         q = critic.q_mean(feats, jnp.clip(a_omega[..., :robot_ad], -1, 1), proprio)
         l_q = -jnp.mean(q) / jax.lax.stop_gradient(jnp.mean(jnp.abs(q)) + 1e-6)  # official normalization

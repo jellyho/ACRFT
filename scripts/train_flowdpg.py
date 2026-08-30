@@ -100,19 +100,14 @@ def main():
     H, AD = cfg.model.action_horizon, cfg.model.action_dim
 
     def velocity(model, obs, x_t, tau):
-        """One pi0.5 velocity evaluation at (x_tau, tau) — the pieces of pi0.py:200-213."""
-        from openpi.models.pi0 import make_attn_mask
+        """One pi0.5 velocity evaluation at (x_tau, tau), through the SHARED primitives.
 
-        prefix_tokens, prefix_mask, prefix_ar = model.embed_prefix(obs)
-        suffix_tokens, suffix_mask, suffix_ar, adarms = model.embed_suffix(obs, x_t, tau)
-        input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
-        ar_mask = jnp.concatenate([prefix_ar, suffix_ar], axis=0)
-        attn = make_attn_mask(input_mask, ar_mask)
-        positions = jnp.cumsum(input_mask, axis=1) - 1
-        (_, suffix_out), _ = model.PaliGemma.llm(
-            [prefix_tokens, suffix_tokens], mask=attn, positions=positions, adarms_cond=[None, adarms]
-        )
-        return model.action_out_proj(suffix_out[:, -H:])
+        Was a joint prefix+suffix pass; the cached form is the one the sampler (and therefore
+        serving) uses, and routing both through Pi0._velocity is what keeps a trained arm and its
+        deployment from drifting apart.
+        """
+        prefix_mask, kv = model._prefix_forward(obs)
+        return model._velocity(obs, prefix_mask, kv, x_t, tau)
 
     def loss_fn(model, rng, obs, actions, feats, proprio, lam):
         prng, nrng, trng = jax.random.split(rng, 3)

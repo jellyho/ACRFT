@@ -64,7 +64,6 @@ def main():
     from openpi.extraction import critic_q
     from openpi.extraction import data as exdata
     import openpi.models.model as _model
-    from openpi.models.pi0 import make_attn_mask
     import openpi.shared.nnx_utils as nnx_utils
     from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
@@ -75,7 +74,7 @@ def main():
     dataset, cfg = exdata.make_bc_dataset(str(a.init_ckpt / "assets"))
     ds = exdata.AnnotatedBC(dataset, {})
     it = exdata.make_loader(ds, batch_size=a.batch, num_workers=a.num_workers)
-    H = cfg.model.action_horizon
+    # (horizon comes from the model now that the sampler primitives are shared)
 
     model = cfg.model.create(jax.random.key(0))
     graphdef, state = nnx.split(model)
@@ -94,19 +93,6 @@ def main():
     N = a.ode_steps
     dt = 1.0 / N
 
-    def velocity(model, obs, kv, pm, x, tau):
-        import einops
-
-        suffix_tokens, suffix_mask, suffix_ar, adarms = model.embed_suffix(obs, x, tau)
-        suffix_attn = make_attn_mask(suffix_mask, suffix_ar)
-        pref_attn = einops.repeat(pm, "b p -> b s p", s=suffix_tokens.shape[1])
-        full_attn = jnp.concatenate([pref_attn, suffix_attn], axis=-1)
-        pos = jnp.sum(pm, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-        (_, out), _ = model.PaliGemma.llm(
-            [None, suffix_tokens], mask=full_attn, positions=pos, kv_cache=kv, adarms_cond=[None, adarms]
-        )
-        return model.action_out_proj(out[:, -H:])
-
     def q_ensemble(feats, chunk, proprio):
         logits = critic.net.apply({"params": critic.params}, feats, jnp.clip(chunk, -1, 1), proprio)
         return critic.hl.from_logits(logits)[..., -1]  # [K, B]
@@ -117,14 +103,11 @@ def main():
         # bc_loss: pi0.5's own flow loss (ql_diffusion.py:140 uses the policy's generative loss)
         bc = jnp.mean(model.compute_loss(brng, obs, actions, train=True))
         # a_new: full sampler WITH gradients (their diffusion.sample keeps the graph)
-        prefix_tokens, prefix_mask, prefix_ar = model.embed_prefix(obs)
-        attn = make_attn_mask(prefix_mask, prefix_ar)
-        pos = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv = model.PaliGemma.llm([prefix_tokens, None], mask=attn, positions=pos)
+        prefix_mask, kv = model._prefix_forward(obs)
         x = jax.random.normal(srng, actions.shape)
         for i in range(N):
             t = 1.0 - i * dt
-            x = x - dt * velocity(model, obs, kv, prefix_mask, x, jnp.full((x.shape[0],), t))
+            x = x - dt * model._velocity(obs, prefix_mask, kv, x, jnp.full((x.shape[0],), t))
         qk = q_ensemble(feats, x[..., :robot_ad], proprio)  # [2, B]
         # random twin for the objective, the other for the detached scale (ql_diffusion.py:143-147)
         qi = jnp.where(swap, qk[0], qk[1])

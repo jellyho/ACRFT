@@ -90,7 +90,6 @@ def main():
     from openpi.extraction import critic_q
     from openpi.extraction import data as exdata
     import openpi.models.model as _model
-    from openpi.models.pi0 import make_attn_mask
     from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
     critic = critic_q.load(a.critic)
@@ -111,39 +110,24 @@ def main():
     base_params = jax.device_put(nnx.state(model))  # frozen; passed as a jit ARG (closure constants OOM in XLA)
 
     def prefix(bp, obs):
-        m = nnx.merge(graphdef, bp)
-        prefix_tokens, prefix_mask, prefix_ar = m.embed_prefix(obs)
-        attn = make_attn_mask(prefix_mask, prefix_ar)
-        pos = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv = m.PaliGemma.llm([prefix_tokens, None], mask=attn, positions=pos)
-        return kv, prefix_mask
+        """(mask, kv) -- Pi0._prefix_forward's order, kept at every call site here."""
+        return nnx.merge(graphdef, bp)._prefix_forward(obs)
 
-    def velocity(bp, obs, kv, pm, x, tau):
-        import einops
-
-        m = nnx.merge(graphdef, bp)
-        suffix_tokens, suffix_mask, suffix_ar, adarms = m.embed_suffix(obs, x, tau)
-        suffix_attn = make_attn_mask(suffix_mask, suffix_ar)
-        pref_attn = einops.repeat(pm, "b p -> b s p", s=suffix_tokens.shape[1])
-        full_attn = jnp.concatenate([pref_attn, suffix_attn], axis=-1)
-        pos = jnp.sum(pm, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-        (_, out), _ = m.PaliGemma.llm(
-            [None, suffix_tokens], mask=full_attn, positions=pos, kv_cache=kv, adarms_cond=[None, adarms]
-        )
-        return m.action_out_proj(out[:, -H:])
+    def velocity(bp, obs, pm, kv, x, tau):
+        return nnx.merge(graphdef, bp)._velocity(obs, pm, kv, x, tau)
 
     N = a.ode_steps
     dt = 1.0 / N
 
-    def sample_from(bp, obs, kv, pm, w):
+    def sample_from(bp, obs, pm, kv, w):
         """pi0.5 Euler sampler from a given seed (pi0.py:244-260 convention: t 1 -> 0)."""
         x = w
         for i in range(N):
             t = 1.0 - i * dt
-            x = x - dt * velocity(bp, obs, kv, pm, x, jnp.full((x.shape[0],), t))
+            x = x - dt * velocity(bp, obs, pm, kv, x, jnp.full((x.shape[0],), t))
         return x
 
-    def invert(bp, obs, kv, pm, target):
+    def invert(bp, obs, pm, kv, target):
         """perstep_fp inversion of the discrete Euler map (flow_matching_inverter.py:97-180):
         walk the steps backwards; at each, fixed-point iterate x_prev = x_next + dt * v(x_est)."""
         x = target
@@ -152,7 +136,7 @@ def main():
             tv = jnp.full((x.shape[0],), t)
             est = x
             for _ in range(a.fp_per_step):
-                est = x + dt * velocity(bp, obs, kv, pm, est, tv)
+                est = x + dt * velocity(bp, obs, pm, kv, est, tv)
             x = est
         return x
 
@@ -168,11 +152,11 @@ def main():
     @jax.jit
     def collect_step(bp, obs, w0, feats, proprio):
         obs = _model.preprocess_observation(None, obs, train=False)
-        kv, pm = prefix(bp, obs)
-        a_pi = sample_from(bp, obs, kv, pm, w0)
+        pm, kv = prefix(bp, obs)
+        a_pi = sample_from(bp, obs, pm, kv, w0)
         a_star = correct(a_pi, feats, proprio)
-        w_star = invert(bp, obs, kv, pm, a_star)
-        recon = sample_from(bp, obs, kv, pm, w_star)
+        w_star = invert(bp, obs, pm, kv, a_star)
+        recon = sample_from(bp, obs, pm, kv, w_star)
         rec_mse = jnp.mean(jnp.square((recon - a_star)[..., :robot_ad]), axis=(-2, -1))
         q0 = critic.q_mean(feats, a_pi[..., :robot_ad], proprio)
         q1 = critic.q_mean(feats, a_star[..., :robot_ad], proprio)
