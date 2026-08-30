@@ -96,6 +96,9 @@ def main():
     full = nnx.state(model)
     full.replace_by_pure_dict(loaded)
     p_exp_t, p_rest = full.filter(expert_filter), full.filter(nnx.Not(expert_filter))
+    # frozen state goes through the jit BOUNDARY, never a closure: XLA bakes closure constants
+    # into the executable and a 3B-param set becomes a "new constant" allocation that OOMs
+    # (measured here at 535MB for one tensor before it gave up). Same fix as qam/lps/flowdagger.
     p_exp_t = jax.device_put(p_exp_t)  # teacher expert: frozen BC
     p_rest = jax.device_put(p_rest)  # shared frozen backbone
     p_exp_s = jax.tree.map(lambda x: x.copy(), p_exp_t)  # student starts at the teacher
@@ -105,13 +108,13 @@ def main():
     N = a.teacher_steps
     dt = 1.0 / N
 
-    def prefix(p_e, obs):
+    def prefix(p_e, p_rest, obs):
         m = nnx.merge(graphdef_m, p_e, p_rest)
         tok, mask, ar = m.embed_prefix(obs)
         _, kv = m.PaliGemma.llm([tok, None], mask=make_attn_mask(mask, ar), positions=jnp.cumsum(mask, axis=1) - 1)
         return kv, mask
 
-    def velocity(p_e, obs, kv, pm, x, tau):
+    def velocity(p_e, p_rest, obs, kv, pm, x, tau):
         m = nnx.merge(graphdef_m, p_e, p_rest)
         st, sm, sar, adarms = m.embed_suffix(obs, x, tau)
         full_attn = jnp.concatenate(
@@ -125,26 +128,26 @@ def main():
 
     velocity = jax.checkpoint(velocity)  # the teacher unrolls N of these; recompute in backward
 
-    def loss_fn(p_e_s, obs, feats, proprio, z):
+    def loss_fn(p_e_s, p_exp_t, p_rest, obs, feats, proprio, z):
         # teacher: the frozen BC policy's own multi-step sample from this noise (stop-grad)
-        kv_t, pm = prefix(p_exp_t, obs)
+        kv_t, pm = prefix(p_exp_t, p_rest, obs)
         x = z
         for i in range(N):
-            x = x - dt * velocity(p_exp_t, obs, kv_t, pm, x, jnp.full((x.shape[0],), 1.0 - i * dt))
+            x = x - dt * velocity(p_exp_t, p_rest, obs, kv_t, pm, x, jnp.full((x.shape[0],), 1.0 - i * dt))
         a_theta = jax.lax.stop_gradient(x)
         # student: ONE Euler step from the same noise (the "one-step actor")
-        kv_s, pm_s = prefix(p_e_s, obs)
-        a_omega = z - velocity(p_e_s, obs, kv_s, pm_s, z, jnp.ones((z.shape[0],)))
+        kv_s, pm_s = prefix(p_e_s, p_rest, obs)
+        a_omega = z - velocity(p_e_s, p_rest, obs, kv_s, pm_s, z, jnp.ones((z.shape[0],)))
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
         q = critic.q_mean(feats, jnp.clip(a_omega[..., :robot_ad], -1, 1), proprio)
         l_q = -jnp.mean(q) / jax.lax.stop_gradient(jnp.mean(jnp.abs(q)) + 1e-6)  # official normalization
         return l_q + a.alpha * l_distill, {"l_distill": l_distill, "l_q": l_q, "q_pi": jnp.mean(q)}
 
     @functools.partial(jax.jit, donate_argnums=(0, 1))
-    def step(p_e_s, opt, rng, obs, feats, proprio):
+    def step(p_e_s, opt, p_exp_t, p_rest, rng, obs, feats, proprio):
         obs = _model.preprocess_observation(None, obs, train=False)
         z = jax.random.normal(rng, (obs.state.shape[0], H, AD))
-        (loss, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(p_e_s, obs, feats, proprio, z)
+        (loss, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(p_e_s, p_exp_t, p_rest, obs, feats, proprio, z)
         upd, opt = tx.update(grads, opt, p_e_s)
         return optax.apply_updates(p_e_s, upd), opt, loss, info
 
@@ -175,7 +178,7 @@ def main():
         obs, _actions, ann = next(it)
         f, _st, pr = cache.rows(np.asarray(ann["idx"], np.int64), critic)
         rng, k = jax.random.split(rng)
-        p_exp_s, opt, loss, info = step(p_exp_s, opt, k, obs, jnp.asarray(f), jnp.asarray(pr))
+        p_exp_s, opt, loss, info = step(p_exp_s, opt, p_exp_t, p_rest, k, obs, jnp.asarray(f), jnp.asarray(pr))
         if s % 100 == 0:
             print(
                 f"step {s:6d}  loss {float(loss):.4f}  l_distill {float(info['l_distill']):.5f}  "
