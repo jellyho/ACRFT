@@ -142,10 +142,41 @@ def test_the_declared_count_and_the_emitted_count_come_from_one_expression():
 
     declared = inspect.getsource(pcp.PatchCriticSelectPolicy.extra_features)
     assert "self._candidate_count(" in declared, "declaration must not recompute the count"
+    # ...and the EMITTING side too. Pinning only the declaration leaves the two agreeing because
+    # the concatenation in infer happens to add up, which is the coincidence this is meant to
+    # remove -- and adding a reference draw in infer without touching the counter is the edit most
+    # likely to reintroduce it.
+    emitted = inspect.getsource(pcp.PatchCriticSelectPolicy.infer)
+    assert "self._candidate_count(" in emitted, "infer must check what it emits against the count"
+
     counter = inspect.getsource(pcp.PatchCriticSelectPolicy._candidate_count)
-    # arm chunk + twin (qpilots only) + reference draws
-    assert "1 + twin + self._drift_samples" in counter
     assert "pair_unsteered" in counter, "the twin only counts when it is actually drawn"
+
+
+def test_the_count_follows_what_is_actually_drawn():
+    """Behaviour, not text: the number depends on whether the twin is drawn and on how many
+    reference draws were asked for, so a change to either has to move it."""
+    from openpi.policies import patch_critic_policy as pcp
+
+    p = pcp.PatchCriticSelectPolicy.__new__(pcp.PatchCriticSelectPolicy)
+    p._default_samples = 8
+
+    p._arm = None  # plain selection modes: the sampler's N, references do not apply
+    p._drift_samples = 0
+    p._arm_sampler = None
+    assert p._candidate_count(None) == 8
+    assert p._candidate_count(3) == 3
+
+    p._arm = "qpilots"  # arm chunk + twin + references
+    p._drift_samples = 8
+    p._arm_sampler = type("S", (), {"pair_unsteered": True})()
+    assert p._candidate_count(None) == 10
+
+    p._arm_sampler.pair_unsteered = False  # e.g. lps/lpsd: no alpha to zero out, so no twin
+    assert p._candidate_count(None) == 9
+
+    p._drift_samples = 0  # readout off: the arm's chunk alone
+    assert p._candidate_count(None) == 1
 
 
 def test_drift_without_a_candidate_sampler_is_refused_not_skipped():

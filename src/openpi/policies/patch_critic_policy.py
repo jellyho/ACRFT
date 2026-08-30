@@ -531,6 +531,19 @@ class PatchCriticSelectPolicy(BasePolicy):
         chosen = decoded[best][: max(int(n_exec), 1)]  # (X, A)
         x = chosen.shape[0]
 
+        # The emitting side, pinned to the same expression the declaration uses. Without this the
+        # two agree because the concatenation above happens to add up, not because they share
+        # anything -- and the edit that breaks it (adding a reference draw here and forgetting the
+        # counter) is exactly the one that looks harmless. A client drops mis-shaped columns
+        # silently, every frame, so failing here is the only place it can be noticed.
+        expected = self._candidate_count(num_samples)
+        if decoded.shape[0] != expected:
+            raise RuntimeError(
+                f"emitting {decoded.shape[0]} candidates but extra_features declared {expected}; "
+                "the recorder keeps only what was declared, so this would be dropped rather than "
+                "recorded wrong. Update _candidate_count together with whatever changed here."
+            )
+
         out = {
             "actions": chosen,
             # (X, N, A), not (H, N, A): the broker slices an extra by the reply's OWN chunk length,
