@@ -213,6 +213,50 @@ class Pi0(_model.BaseModel):
 
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
 
+    def _prefix_forward(self, observation: _model.Observation):
+        """One prefix pass; its KV cache is reused by every suffix pass that follows.
+
+        Returns ``(prefix_mask, kv_cache)`` -- that order, not the reverse, because Pi0AlphaFlow
+        already returned it that way and both are two-tuples of things that look alike at a call
+        site. One convention, adopted from the one that existed first.
+        """
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=attn_mask, positions=positions)
+        return prefix_mask, kv_cache
+
+    def _velocity(self, observation: _model.Observation, prefix_mask, kv_cache, x_t, timestep):
+        """Flow velocity v(x_t, t) against a cached prefix. -> [b, ah, ad]
+
+        THE single implementation. It was hand-copied into the arm sampler and five extraction
+        trainers; a copy that drifts from this one does not fail, it silently trains or serves
+        against a different policy than the one it reports.
+
+        Shapes, spelled out because guessing them wrong is that same failure in miniature:
+          prefix_mask  [b, prefix_len] bool, as returned by _prefix_forward (mask FIRST)
+          x_t          [b, ah, ad]
+          timestep     [b] -- ALREADY broadcast. A scalar is not accepted: embed_suffix types it
+                       `Float[Array, " b"]`, so the caller broadcasts (see sample_actions'
+                       jnp.broadcast_to(time, batch_size)). Passing the scalar raises rather than
+                       silently conditioning every sample on the wrong time, which is the one mercy
+                       here.
+        """
+        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, timestep)
+        suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+        prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
+        full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
+        positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+        (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+            [None, suffix_tokens],
+            mask=full_attn_mask,
+            positions=positions,
+            kv_cache=kv_cache,
+            adarms_cond=[None, adarms_cond],
+        )
+        assert prefix_out is None
+        return self.action_out_proj(suffix_out[:, -self.action_horizon :])
+
     @override
     def sample_actions(
         self,
@@ -231,43 +275,11 @@ class Pi0(_model.BaseModel):
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         # first fill KV cache with a forward pass of the prefix
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+        prefix_mask, kv_cache = self._prefix_forward(observation)
 
         def step(carry):
             x_t, time = carry
-            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
-                observation, x_t, jnp.broadcast_to(time, batch_size)
-            )
-            # `suffix_attn_mask` is shape (b, suffix_len, suffix_len) indicating how the suffix tokens can attend to each
-            # other
-            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
-            # `prefix_attn_mask` is shape (b, suffix_len, prefix_len) indicating how the suffix tokens can attend to the
-            # prefix tokens
-            prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
-            # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
-            # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
-            full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
-            assert full_attn_mask.shape == (
-                batch_size,
-                suffix_tokens.shape[1],
-                prefix_tokens.shape[1] + suffix_tokens.shape[1],
-            )
-            # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
-            positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-
-            (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-                [None, suffix_tokens],
-                mask=full_attn_mask,
-                positions=positions,
-                kv_cache=kv_cache,
-                adarms_cond=[None, adarms_cond],
-            )
-            assert prefix_out is None
-            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
-
+            v_t = self._velocity(observation, prefix_mask, kv_cache, x_t, jnp.broadcast_to(time, batch_size))
             return x_t + dt * v_t, time + dt
 
         def cond(carry):
@@ -303,10 +315,7 @@ class Pi0(_model.BaseModel):
                 f"sample_n_actions expects a batch-1 observation (one live frame), got " f"{observation.state.shape[0]}"
             )
 
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+        prefix_mask, kv_cache = self._prefix_forward(observation)
 
         # KVCache is [layers, BATCH, ...]; the prefix is identical for every candidate, so tiling it
         # is exactly what running the prefix N times would have produced.
@@ -322,23 +331,8 @@ class Pi0(_model.BaseModel):
 
         def step(carry):
             x_t, time = carry
-            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
-                obs_n, x_t, jnp.broadcast_to(time, num_samples)
-            )
-            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
-            prefix_attn = einops.repeat(mask_n, "b p -> b s p", s=suffix_tokens.shape[1])
-            full_attn_mask = jnp.concatenate([prefix_attn, suffix_attn_mask], axis=-1)
-            positions = jnp.sum(mask_n, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-
-            (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-                [None, suffix_tokens],
-                mask=full_attn_mask,
-                positions=positions,
-                kv_cache=kv_n,
-                adarms_cond=[None, adarms_cond],
-            )
-            assert prefix_out is None
-            return x_t + dt * self.action_out_proj(suffix_out[:, -self.action_horizon :]), time + dt
+            v_t = self._velocity(obs_n, mask_n, kv_n, x_t, jnp.broadcast_to(time, num_samples))
+            return x_t + dt * v_t, time + dt
 
         def cond(carry):
             _, time = carry

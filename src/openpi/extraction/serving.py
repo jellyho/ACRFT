@@ -46,7 +46,6 @@ import dataclasses
 import pathlib
 from typing import Any
 
-import einops
 import flax.nnx as nnx
 import flax.serialization
 import jax
@@ -54,7 +53,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from openpi.models import model as _model
-from openpi.models.pi0 import make_attn_mask
 from openpi.training import config as _config
 from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
@@ -190,21 +188,18 @@ class ArmChunkSampler:
         self.params = jax.device_put(nnx.state(self.model))
 
     # ---- pi0.5 sampler pieces (same math as the trainers / eval harness) ----------------------
+    # _prefix / _velocity used to be hand-copies of pi0.py's sampler. They are now the model's own
+    # primitives: a copy that drifts from the served policy does not fail, it silently steers away
+    # from a base that is not the policy being served -- and the same math is duplicated again in
+    # five extraction trainers, so the copies have to converge on ONE implementation, not two.
     def _prefix(self, model, obs):
-        tokens, mask, ar = model.embed_prefix(obs)
-        attn = make_attn_mask(mask, ar)
-        pos = jnp.cumsum(mask, axis=1) - 1
-        _, kv = model.PaliGemma.llm([tokens, None], mask=attn, positions=pos)
-        return kv, mask
+        """``(kv_cache, prefix_mask)`` -- reversed from the model's ``(prefix_mask, kv_cache)``,
+        kept only because every call site below unpacks it this way."""
+        prefix_mask, kv = model._prefix_forward(obs)
+        return kv, prefix_mask
 
     def _velocity(self, model, obs, kv, pm, x, tau):
-        st, sm, sar, adarms = model.embed_suffix(obs, x, tau)
-        sattn = make_attn_mask(sm, sar)
-        pattn = einops.repeat(pm, "b p -> b s p", s=st.shape[1])
-        full = jnp.concatenate([pattn, sattn], axis=-1)
-        pos = jnp.sum(pm, axis=-1)[:, None] + jnp.cumsum(sm, axis=-1) - 1
-        (_, out), _ = model.PaliGemma.llm([None, st], mask=full, positions=pos, kv_cache=kv, adarms_cond=[None, adarms])
-        return model.action_out_proj(out[:, -self.H :])
+        return model._velocity(obs, pm, kv, x, tau)
 
     def _euler(self, model, obs, kv, pm, x):
         n = self.spec.ode_steps

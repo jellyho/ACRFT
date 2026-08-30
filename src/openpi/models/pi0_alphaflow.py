@@ -243,14 +243,6 @@ class Pi0AlphaFlow(Pi0):
         r_emb = self.r_mlp_out(nnx.swish(self.r_mlp_in(r_emb)))
         return t_emb + r_emb
 
-    def _prefix_forward(self, observation: _model.Observation):
-        """One prefix pass; its KV cache is reused by every suffix pass in the step."""
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=attn_mask, positions=positions)
-        return prefix_mask, kv_cache
-
     def _u(self, observation, prefix_mask, kv_cache, x_t, t, r):
         """Mean velocity u(z_t, r, t) from a cached prefix. [b, ah, ad]"""
         action_tokens = self.action_in_proj(x_t)
