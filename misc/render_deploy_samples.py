@@ -66,7 +66,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 
@@ -75,7 +75,7 @@ if TYPE_CHECKING:
     from PIL.ImageFont import FreeTypeFont
     from PIL.ImageFont import ImageFont
 
-    from misc.dataset_reader import DatasetReader
+    from misc.dataset_reader import DatasetReader, SequentialImages, dataset_dir
     from misc.viz import CameraIntrinsics
     from misc.viz import WristCameraGeometry
 
@@ -534,9 +534,20 @@ def _label(
     x, y = xy
     if "r" in anchor:
         x -= w
-    box = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    ImageDraw.Draw(box).rectangle([x - pad, y - pad, x + w + pad, y + h + pad], fill=(0, 0, 0, 140))
-    canvas.paste(Image.alpha_composite(canvas.convert("RGBA"), box).convert("RGB"), (0, 0))
+    # Darken only the box's own pixels. Compositing a full-canvas RGBA layer gives the same
+    # picture, but converts and blends 1440x606 four times a frame -- 4.5 s of a 23 s render,
+    # more than the video decoding it was drawn on top of.
+    # +1 on the far edges: PIL's rectangle() includes its end points and crop() excludes them, so
+    # without it the box comes out a pixel short on the right and bottom.
+    region = (
+        max(0, x - pad),
+        max(0, y - pad),
+        min(canvas.width, x + w + pad + 1),
+        min(canvas.height, y + h + pad + 1),
+    )
+    if region[2] > region[0] and region[3] > region[1]:
+        crop = canvas.crop(region)
+        canvas.paste(Image.blend(crop, Image.new("RGB", crop.size, (0, 0, 0)), 140 / 255), region[:2])
     ImageDraw.Draw(canvas).text((x, y), text, font=font, fill=fill, anchor="la")
 
 
@@ -565,8 +576,8 @@ def _compose_frame(
     return np.asarray(canvas)
 
 
-def render(args: argparse.Namespace) -> pathlib.Path:
-    from misc.dataset_reader import DatasetReader
+def render(args: argparse.Namespace, progress: "Optional[Callable[[int, int], None]]" = None) -> pathlib.Path:
+    from misc.dataset_reader import DatasetReader, SequentialImages, dataset_dir
     from misc.viz import CameraIntrinsics
     from misc.viz import WristCameraGeometry
 
@@ -675,9 +686,30 @@ def render(args: argparse.Namespace) -> pathlib.Path:
     # a list -- which is exactly how a full-length render got OOM-killed.
     # Browser-friendly h264: yuv420p is what every browser can decode (hf-utils encodes the same
     # way for its dataset previews); macro_block_size=1 keeps odd panel widths from being padded.
+    # One rendered frame per recorded tick, so writing at the dataset's rate plays back in real
+    # time. The old fixed default of 10 against 30 fps footage made every render a third speed --
+    # which read as the renderer being slow rather than the file being slowed down.
+    fps = args.fps or int(reader.fps or 30)
     writer = imageio.get_writer(
-        out, fps=args.fps, quality=8, macro_block_size=1, codec="libx264", pixelformat="yuv420p"
+        out, fps=fps, quality=8, macro_block_size=1, codec="libx264", pixelformat="yuv420p"
     )
+    # Frames are pulled in order, so decode in order: seeking per frame costs ~221 ms for three
+    # cameras against ~1 ms streamed, and it is the whole cost of a render. Falls back to the
+    # reader's random access if the stream cannot be opened (an unusual layout, a missing file).
+    try:
+        stream = SequentialImages(dataset_dir(args.root, args.repo_id), args.episode)
+    except Exception as e:
+        print(f"sequential decode unavailable ({e}); falling back to per-frame seeks", file=sys.stderr)
+        stream = None
+
+    # How many frames this render will write, known before it starts: every tick of every block,
+    # times --hold. A caller showing progress needs the denominator up front, and the loop below
+    # can skip a frame (missing state/images) but never add one.
+    total = sum(
+        ((blocks[i + 1] if i + 1 < len(blocks) else n_frames) - b) if recorded else min(horizon, n_frames - b)
+        for i, b in enumerate(blocks)
+    ) * max(1, args.hold)
+
     written = 0
     for block_idx, start in enumerate(blocks):
         # Each block runs to the next boundary (or the end), so a recorded chunk is drawn whole
@@ -728,7 +760,7 @@ def render(args: argparse.Namespace) -> pathlib.Path:
         for offset in range(block_len):
             frame_idx = start + offset
             state = reader.get_state(args.episode, frame_idx)
-            images = reader.get_images(args.episode, frame_idx)
+            images = stream.frame(frame_idx) if stream is not None else reader.get_images(args.episode, frame_idx)
             if state is None or not images:
                 print(f"frame {frame_idx}: no state/images, skipping", file=sys.stderr)
                 continue
@@ -823,8 +855,12 @@ def render(args: argparse.Namespace) -> pathlib.Path:
             for _ in range(max(1, args.hold)):
                 writer.append_data(composed)
                 written += 1
+            if progress is not None:
+                progress(written, total)
 
     writer.close()
+    if stream is not None:
+        stream.close()
     if not written:
         out.unlink(missing_ok=True)
         raise SystemExit("nothing to render -- no frame had both action/action_samples and images")
@@ -832,7 +868,8 @@ def render(args: argparse.Namespace) -> pathlib.Path:
     return out
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Every render option, shared with bulk mode so the two can never drift apart."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--repo-id", required=True, help="dataset repo id, as recorded (e.g. user/my_deploy_run)")
     p.add_argument("--root", default="~/lerobot_data")
@@ -890,7 +927,14 @@ def main() -> None:
     p.add_argument("--replans", type=int, default=0, help="max replans to render (0 = the whole episode)")
     p.add_argument("--hold", type=int, default=1, help="repeat each rendered tick N times (>1 = slow motion)")
     p.add_argument("--height", type=int, default=360, help="per-panel height in px (width follows the 4:3 footage)")
-    p.add_argument("--fps", type=int, default=10)
+    p.add_argument(
+        "--fps",
+        type=int,
+        default=None,
+        help="frame rate of the written file; defaults to the DATASET's rate, i.e. real time. "
+        "The renderer draws one frame per recorded tick, so this is the playback speed: half "
+        "the dataset rate is half speed, double is double",
+    )
     p.add_argument("--out", default=".scratch/deploy_samples.mp4")
     # Uncalibrated placeholder -- same numbers tests/test_wrist_view.py uses. The fan's shape is
     # meaningful before calibration; its exact pixel position is not (see module docstring).
@@ -907,7 +951,11 @@ def main() -> None:
     p.add_argument("--agent-fy", type=float, default=390.0)
     p.add_argument("--agent-cx", type=float, default=320.0)
     p.add_argument("--agent-cy", type=float, default=240.0)
-    args = p.parse_args()
+    return p
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     # --candidates is filled in from the recording when it can be (see _recorded_candidates);
     # only a dataset whose schema does not declare action_samples still needs it spelled out.
     render(args)

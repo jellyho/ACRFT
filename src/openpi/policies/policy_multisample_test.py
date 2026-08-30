@@ -216,3 +216,107 @@ def test_a_stale_critic_select_key_never_reaches_the_model():
     policy = MultiSamplePolicy(inner, action_horizon=30, action_dim=32)
     policy.infer({"state": np.zeros(42), "critic_select": True})
     assert "critic_select" not in seen
+
+
+class _Chunked:
+    """A policy that answers with a full horizon and some per-step extras."""
+
+    metadata: ClassVar[dict] = {}
+
+    def infer(self, obs):
+        return {
+            "actions": np.arange(30 * 14, dtype=np.float32).reshape(30, 14),
+            "action_samples": np.arange(30 * 8 * 14, dtype=np.float32).reshape(30, 8, 14),
+            "critic_scores": np.arange(30 * 8, dtype=np.float32).reshape(30, 8),
+            "policy_timing": {"infer_ms": 1.0},
+        }
+
+    def extra_features(self, num_samples=None):
+        return {"action_samples": [8, 14]}
+
+
+def test_truncating_a_chunk_cuts_every_per_step_array_together():
+    """A horizon-30 checkpoint run whole is open loop for a second. Cutting the reply makes the
+    robot replan sooner -- but the extras have to be cut with it, or the recorded columns would
+    describe steps that were never executed."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    result = TruncateChunkPolicy(_Chunked(), 10).infer({"state": np.zeros(42)})
+
+    assert result["actions"].shape == (10, 14)
+    assert result["action_samples"].shape == (10, 8, 14)
+    assert result["critic_scores"].shape == (10, 8)
+    # The kept steps are the FIRST ones, unchanged.
+    assert np.array_equal(result["actions"], _Chunked().infer({})["actions"][:10])
+    # Anything that is not per-step rides through untouched.
+    assert result["policy_timing"] == {"infer_ms": 1.0}
+
+
+def test_truncating_to_more_than_the_chunk_changes_nothing():
+    """K >= H is the plain policy; it must not pad, copy or re-wrap."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    assert TruncateChunkPolicy(_Chunked(), 50).infer({})["actions"].shape == (30, 14)
+
+
+def test_the_declaration_survives_truncation():
+    """The handshake describes ONE step, which truncation does not change -- and the wrapper is
+    outermost, so a declaration it dropped would never reach the client."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    assert TruncateChunkPolicy(_Chunked(), 5).extra_features() == {"action_samples": [8, 14]}
+
+
+def test_sample_kwargs_reach_the_model():
+    """--num-steps is the denoising iteration count, and it only means anything if it survives the
+    trip to sample_actions. alphaflow answers in one step where pi05 integrates over ten, so this
+    is the knob that decides what a few-step checkpoint is actually worth."""
+    import jax
+    import jax.numpy as jnp
+
+    from openpi.policies.policy import Policy
+
+    seen = {}
+
+    policy = Policy.__new__(Policy)  # no model build, no JIT: only the plumbing is under test
+    policy._is_pytorch_model = False
+    policy._rng = jax.random.key(0)
+    policy._sample_kwargs = {"num_steps": 4}
+    policy._input_transform = lambda x: x
+    policy._output_transform = lambda x: x
+    policy._metadata = {}
+
+    def _sample(rng, observation, **kwargs):
+        seen.update(kwargs)
+        return jnp.zeros((1, 30, 32), jnp.float32)
+
+    policy._sample_actions = _sample
+    policy.infer({"state": np.zeros(32, np.float32), "image": {}, "image_mask": {}})
+    assert seen == {"num_steps": 4}, seen
+
+
+def test_serve_only_passes_what_was_asked_for():
+    """Handing a model `num_steps=None` is not the same as not handing it one -- each model's own
+    default differs (alphaflow 1, pi05 10), and overriding with None would break both."""
+    import dataclasses
+
+    from scripts.serve_policy import Args, _sample_kwargs
+
+    assert _sample_kwargs(Args()) is None
+    assert _sample_kwargs(dataclasses.replace(Args(), num_steps=4)) == {"num_steps": 4}
+
+
+def test_truncate_is_inert_at_or_above_the_horizon():
+    """`--execute-steps` at least as long as the chunk is the same as not passing it. The server
+    warns instead of wrapping, because the usual reason for asking is a config/checkpoint horizon
+    mismatch -- an h50 checkpoint under an h30 config serves 30 and nothing complains."""
+    from openpi.policies.policy import TruncateChunkPolicy
+
+    class _Fixed:
+        def infer(self, obs):
+            return {"actions": np.arange(30 * 14, dtype=np.float32).reshape(30, 14)}
+
+    for steps in (30, 50):
+        out = TruncateChunkPolicy(_Fixed(), steps).infer({})["actions"]
+        assert out.shape == (30, 14), (steps, out.shape)
+    assert TruncateChunkPolicy(_Fixed(), 5).infer({})["actions"].shape == (5, 14)

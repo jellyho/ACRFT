@@ -429,3 +429,55 @@ class CriticSelectPolicy(BasePolicy):
         reuse this instead of probing the output transform a second time.
         """
         return self._robot_action_dim
+
+
+class TruncateChunkPolicy(BasePolicy):
+    """Return only the first ``steps`` of whatever the wrapped policy answered.
+
+    A policy trained at horizon 30 plans a second ahead and, executed whole, is open loop for that
+    second: it cannot react to anything that happens after the observation it planned from. Cutting
+    the reply to K steps makes the robot replan every K ticks instead, at K/H the open-loop
+    interval and H/K times the inference cost -- the closed-loop knob that a fixed-horizon
+    checkpoint otherwise does not have. (An adaptive critic picks K per replan; this is the fixed
+    version, and it needs no critic.)
+
+    Truncation happens HERE, at the outermost wrapper, and cuts every per-step array together --
+    the actions and whatever the policy sent alongside them. Doing it in the client instead would
+    leave the extras describing steps that were never executed, and the recorded columns would
+    disagree with the recorded actions.
+
+    The client is told nothing: it reads the chunk length off the reply, exactly as it does for an
+    adaptive server (see ActionChunkBroker).
+    """
+
+    def __init__(self, policy: BasePolicy, steps: int):
+        self._policy = policy
+        self._steps = int(steps)
+
+    @override
+    def infer(self, obs: dict) -> dict:  # type: ignore[misc]
+        result = self._policy.infer(obs)
+        chunk = _chunk_len(result)
+        keep = min(self._steps, chunk)
+        if keep >= chunk:
+            return result
+        return {
+            k: (v[:keep] if isinstance(v, np.ndarray) and v.ndim > 0 and v.shape[0] == chunk else v)
+            for k, v in result.items()
+        }
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._policy.metadata
+
+    def extra_features(self, *args, **kwargs) -> dict:
+        declare = getattr(self._policy, "extra_features", None)
+        return declare(*args, **kwargs) if callable(declare) else {}
+
+
+def _chunk_len(results: dict) -> int:
+    """The reply's own chunk length -- the leading axis of ``actions``, 1 when unchunked."""
+    actions = results.get("actions")
+    if isinstance(actions, np.ndarray) and actions.ndim > 1:
+        return int(actions.shape[0])
+    return 1

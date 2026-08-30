@@ -5,9 +5,9 @@ checkpoint that is not uploaded before the next save can be gone. This polls the
 uploads any step that HF does not already have, then exits once every live run has finished and its
 final step is backed up.
 
-Uploads the FULL step directory (params + train_state + assets): train_state is what a resume needs,
-and a run that has to be restarted from scratch costs days. Verifies the file list against HF before
-reporting a step as backed up.
+Uploads params + assets and skips train_state by default: train_state is 30 GB of the 42 GB step and
+is only needed to RESUME, which a milestone backup is not for. Pass --with-train-state when the backup
+has to be resumable. Verifies the file list against HF before reporting a step as backed up.
 
     uv run python scripts/sync_bc_checkpoints.py --once      # one pass
     uv run python scripts/sync_bc_checkpoints.py             # poll until the runs finish
@@ -31,6 +31,17 @@ RUNS = {
 }
 
 
+EXCLUDE = ("train_state",)  # 30 of the 42 GB per step, and only a resume needs it
+
+
+def local_files(src: pathlib.Path, exclude: tuple[str, ...]) -> list[pathlib.Path]:
+    return [
+        p
+        for p in src.rglob("*")
+        if p.is_file() and not any(str(p.relative_to(src)).startswith(e + "/") for e in exclude)
+    ]
+
+
 def steps_on_disk(run: pathlib.Path) -> list[int]:
     if not run.is_dir():
         return []
@@ -45,15 +56,19 @@ def steps_on_hf(api: HfApi, repo: str) -> set[int]:
     return {int(f.split("/")[0]) for f in files if f.split("/")[0].isdigit()}
 
 
-def verify(api: HfApi, repo: str, step: int, src: pathlib.Path) -> bool:
-    """Every local file present remotely, and the byte total within 1%."""
+def verify(api: HfApi, repo: str, step: int, src: pathlib.Path, exclude: tuple[str, ...]) -> bool:
+    """Every uploaded file present remotely, and the byte total within 1%."""
     remote = {f[len(f"{step}/") :] for f in api.list_repo_files(repo, repo_type="model") if f.startswith(f"{step}/")}
-    local = {str(p.relative_to(src)) for p in src.rglob("*") if p.is_file()}
-    if local - remote:
+    files = local_files(src, exclude)
+    if {str(p.relative_to(src)) for p in files} - remote:
         return False
     info = api.repo_info(repo, repo_type="model", files_metadata=True)
-    rb = sum(s.size or 0 for s in info.siblings if s.rfilename.startswith(f"{step}/"))
-    lb = sum(p.stat().st_size for p in src.rglob("*") if p.is_file())
+    rb = sum(
+        s.size or 0
+        for s in info.siblings
+        if s.rfilename.startswith(f"{step}/") and not any(s.rfilename.startswith(f"{step}/{e}/") for e in exclude)
+    )
+    lb = sum(p.stat().st_size for p in files)
     return rb >= lb * 0.99
 
 
@@ -65,7 +80,7 @@ def jobs_running(names=("yam_h30_500k", "yam_h50_500k")) -> bool:
         return True  # if we cannot tell, keep polling rather than stopping early
 
 
-def sync_once(api: HfApi, root: pathlib.Path, grid: int) -> int:
+def sync_once(api: HfApi, root: pathlib.Path, grid: int, exclude: tuple[str, ...] = EXCLUDE) -> int:
     uploaded = 0
     for rel, repo in RUNS.items():
         run = root / rel
@@ -79,8 +94,9 @@ def sync_once(api: HfApi, root: pathlib.Path, grid: int) -> int:
             api.create_repo(repo, repo_type="model", private=True, exist_ok=True)
         for step in todo:
             src = run / str(step)
-            size = sum(p.stat().st_size for p in src.rglob("*") if p.is_file()) / 1e9
-            print(f"  uploading {rel} step {step} ({size:.1f} GB) -> {repo}", flush=True)
+            size = sum(p.stat().st_size for p in local_files(src, exclude)) / 1e9
+            skip = f" (skipping {', '.join(exclude)})" if exclude else ""
+            print(f"  uploading {rel} step {step} ({size:.1f} GB){skip} -> {repo}", flush=True)
             try:
                 api.upload_folder(
                     repo_id=repo,
@@ -88,11 +104,12 @@ def sync_once(api: HfApi, root: pathlib.Path, grid: int) -> int:
                     folder_path=str(src),
                     path_in_repo=str(step),
                     commit_message=f"{rel.split('/')[-1]} step {step}",
+                    ignore_patterns=[pat for e in exclude for pat in (f"{e}/*", f"{e}/**")],
                 )
             except Exception as e:  # a step can vanish mid-upload if the pruner runs
                 print(f"    FAILED {type(e).__name__}: {e}", flush=True)
                 continue
-            ok = verify(api, repo, step, src) if src.is_dir() else False
+            ok = verify(api, repo, step, src, exclude) if src.is_dir() else False
             print(f"    {'verified' if ok else 'UPLOADED BUT NOT VERIFIED'} step {step}", flush=True)
             uploaded += 1
     return uploaded
@@ -104,11 +121,15 @@ def main():
     ap.add_argument("--interval", type=int, default=900, help="seconds between passes")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--grid", type=int, default=GRID, help="upload steps that are multiples of this")
+    ap.add_argument(
+        "--with-train-state", action="store_true", help="also upload train_state (resumable, 3.5x the bytes)"
+    )
     a = ap.parse_args()
+    exclude = () if a.with_train_state else EXCLUDE
 
     api = HfApi()
     while True:
-        n = sync_once(api, a.root, a.grid)
+        n = sync_once(api, a.root, a.grid, exclude)
         running = jobs_running()
         print(f"pass done: {n} uploaded; runs {'still training' if running else 'finished'}", flush=True)
         if a.once or not running:

@@ -19,6 +19,7 @@ load the rest.
 from __future__ import annotations
 
 import os
+import pathlib
 from typing import Any
 
 import numpy as np
@@ -33,13 +34,19 @@ def dataset_dir(root: str, repo_id: str) -> str:
 
 
 def list_datasets(root: str) -> list:
-    """Dataset folder names under the parent ``root`` (for the GUI's picker), sorted; [] if the
-    root does not exist."""
+    """LeRobot dataset folder names under the parent ``root`` (for the GUI's picker), sorted; [] if
+    the root does not exist.
+
+    A folder counts only if it has ``meta/info.json``. Listing every directory instead put the
+    renderer's own ``*_renders`` output folders in the picker alongside the recordings -- 14 of 62
+    entries in one root -- and bulk rendering only adds more.
+    """
     path = os.path.expanduser(root)
     try:
-        return sorted(d for d in os.listdir(path) if not d.startswith(".") and os.path.isdir(os.path.join(path, d)))
+        names = [d for d in os.listdir(path) if not d.startswith(".") and os.path.isdir(os.path.join(path, d))]
     except OSError:
         return []
+    return sorted(d for d in names if os.path.exists(os.path.join(path, d, "meta", "info.json")))
 
 
 #: Both arms x applied(7) -- the recorded action width (was imported from the recorder's config).
@@ -196,6 +203,22 @@ class DatasetReader:
         arr = np.asarray(val, dtype=np.float32).reshape(-1)
         return float(arr[0]) if arr.size else None
 
+    def column(self, episode: int, key: str) -> np.ndarray | None:
+        """A whole per-frame column at once, or None if absent. No video decode.
+
+        Statistics read every frame of every column; going through ``get_scalar`` would materialize
+        one dataset ROW per frame per column, which turns a few seconds into minutes on a long run.
+        """
+        if self.mock:
+            return None
+        self._ensure_episode(episode)
+        try:
+            if key not in self._ds.hf_dataset.column_names:
+                return None
+            return np.asarray(self._ds.hf_dataset[key], dtype=np.float32)
+        except Exception:
+            return None
+
     def get_extra(self, episode: int, frame: int, key: str, shape: tuple) -> np.ndarray | None:
         """Return a declared extra-feature column (e.g. ``action_samples``) at its declared
         shape (no video decode), or None if the frame/column is absent.
@@ -241,3 +264,93 @@ class DatasetReader:
             a = np.asarray(v, dtype=np.float32).reshape(-1)
             out[k] = a[0] if a.size else 0.0
         return out
+
+
+class SequentialImages:
+    """Stream one episode's cameras in frame order, instead of seeking per frame.
+
+    LeRobotDataset indexing decodes each requested frame independently, which for h264 means a
+    seek to the nearest keyframe and a re-decode forward. Measured on a real recording that is
+    **221 ms per frame** for three cameras -- six minutes of decoding for a 1580-frame episode,
+    and it dominates a render by a factor of hundreds over everything else.
+
+    A render walks the episode in order, so the decoder can too: opening each camera's file once
+    and pulling frames off it sequentially costs **~1 ms per camera per frame**, ~69x less. The
+    episode's own metadata says which file holds it and at what timestamp it starts, so the
+    mapping needs no guesswork.
+
+    Deliberately forward-only. `frame(i)` skips ahead when asked for a later index and raises if
+    asked to go backwards, because rewinding is exactly the seek this exists to avoid; a caller
+    that needs random access should use `DatasetReader.get_images`.
+    """
+
+    def __init__(self, root: str, episode: int, cameras: "list[str] | None" = None) -> None:
+        import pandas as pd
+
+        meta = sorted(pathlib.Path(root, "meta", "episodes").rglob("*.parquet"))
+        if not meta:
+            raise FileNotFoundError(f"no episode metadata under {root}/meta/episodes")
+        table = pd.concat([pd.read_parquet(f) for f in meta])
+        row = table[table["episode_index"] == episode]
+        if row.empty:
+            raise KeyError(f"episode {episode} not in {root}")
+        row = row.iloc[0]
+
+        prefix = "videos/observation.images."
+        keys = [c[len(prefix) : -len("/chunk_index")] for c in table.columns if c.startswith(prefix) and c.endswith("/chunk_index")]
+        self._names = [k for k in keys if cameras is None or k in cameras]
+        self._iters, self._fps = {}, None
+        for name in self._names:
+            base = f"{prefix}{name}"
+            path = pathlib.Path(
+                root, "videos", f"observation.images.{name}",
+                f"chunk-{int(row[base + '/chunk_index']):03d}", f"file-{int(row[base + '/file_index']):03d}.mp4",
+            )
+            self._iters[name] = _VideoStream(path, float(row[base + "/from_timestamp"]))
+        self._cursor = -1
+        self._current: dict = {}
+
+    def frame(self, index: int) -> dict:
+        """`{camera: HxWx3 uint8}` at this episode-relative index. Forward-only."""
+        if index < self._cursor:
+            raise ValueError(f"SequentialImages is forward-only (at {self._cursor}, asked for {index})")
+        while self._cursor < index:
+            self._cursor += 1
+            self._current = {name: it.next() for name, it in self._iters.items()}
+        return dict(self._current)
+
+    def close(self) -> None:
+        for it in self._iters.values():
+            it.close()
+
+
+class _VideoStream:
+    """One camera's file, opened once and advanced frame by frame from the episode's start."""
+
+    def __init__(self, path: pathlib.Path, from_timestamp: float) -> None:
+        import imageio.v3 as iio
+
+        self._iter = iio.imiter(path, plugin="pyav")
+        self._path = path
+        # The episode does not start at the file's first frame: several share one file, and the
+        # metadata records where this one begins. Ask the decoder to start there instead of
+        # decoding and discarding everything before it -- on a late episode that skip was 4 s,
+        # as much as the whole render's decoding.
+        meta = iio.immeta(path, plugin="pyav")
+        fps = float(meta.get("fps") or 30.0)
+        skip = int(round(from_timestamp * fps))
+        if skip:
+            try:
+                self._iter = iio.imiter(path, plugin="pyav", filter_sequence=[("trim", f"start_frame={skip}")])
+            except Exception:  # older pyav/imageio: fall back to discarding frames
+                for _ in range(skip):
+                    next(self._iter, None)
+
+    def next(self) -> "np.ndarray | None":
+        frame = next(self._iter, None)
+        return None if frame is None else np.asarray(frame)
+
+    def close(self) -> None:
+        close = getattr(self._iter, "close", None)
+        if close:
+            close()

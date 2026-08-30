@@ -118,9 +118,19 @@ class CacheView:
         self.actions = np.memmap(c / "action.dat", np.float32, "r", shape=(n, meta["ad"]))
 
     def rows(self, idx, critic: CriticQ):
+        """-> (patch features, RAW state, the critic's proprio slice).
+
+        The cache stores RAW states, and the critic was trained on NORMALIZED ones
+        (train_patch_critic_cached.py:335-340 reads the raw rows and applies `pre.state`), so the
+        normalization has to happen here too -- feeding raw proprio puts the critic's conditioning
+        channels a full normalization off, which is silent: Q still comes back in range.
+        Normalize the FULL state before slicing, because proprio_indices point into the 42-wide
+        state and slicing first would pair those channels with the first-14 statistics.
+        """
         f = np.asarray(self.feats[idx], np.float32)
         s = np.asarray(self.states[idx])
-        pr = s if critic.proprio_idx is None else s[:, critic.proprio_idx]
+        s_norm = s if critic.pre is None else critic.pre.state(s)
+        pr = s_norm if critic.proprio_idx is None else s_norm[:, critic.proprio_idx]
         return f, s, pr
 
 

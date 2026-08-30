@@ -1,0 +1,321 @@
+
+===PAGE 1===
+Reinforcement Learning Methods for 
+Continuous-Time Markov Decision 
+Problems 
+Steven J. Bradtke 
+Computer Science Department 
+University of Massachusetts 
+Amherst, MA 01003 
+bradtkeGcs.umass.edu 
+Michael O. Duff 
+Computer Science Department 
+University of Massachusetts 
+Amherst, MA 01003 
+duffGcs.umass.edu 
+Abstract 
+Semi-Markov Decision Problems are continuous time generaliza­
+tions of discrete time Markov Decision Problems. A number of 
+reinforcement learning algorithms have been developed recently 
+for the solution of Markov Decision Problems, based on the ideas 
+of asynchronous dynamic programming and stochastic approxima­
+tion. Among these are TD(,x), Q-Iearning, and Real-time Dynamic 
+Programming. After reviewing semi-Markov Decision Problems 
+and Bellman's optimality equation in that context, we propose al­
+gorithms similar to those named above, adapted to the solution of 
+semi-Markov Decision Problems. We demonstrate these algorithms 
+by applying them to the problem of determining the optimal con­
+trol for a simple queueing system. We conclude with a discussion 
+of circumstances under which these algorithms may be usefully ap­
+plied. 
+1 Introduction 
+A number of reinforcement learning algorithms based on the ideas of asynchronous 
+dynamic programming and stochastic approximation have been developed recently 
+for the solution of Markov Decision Problems. Among these are Sutton's TD(,x) 
+[10], Watkins' Q-Iearning [12], and Real-time Dynamic Programming (RTDP) [1, 
+===PAGE 2===
+394 Steven Bradtke, Michael O. Duff 
+3]. These learning alogorithms are widely used, but their domain of application 
+has been limited to processes modeled by discrete-time Markov Decision Problems 
+(MDP's). 
+This paper derives analogous algorithms for semi-Markov Decision Problems 
+(SMDP's) - extending the domain of applicability to continuous time. This ef­
+fort was originally motivated by the desire to apply reinforcement learning methods 
+to problems of adaptive control of queueing systems, and to the problem of adaptive 
+routing in computer networks in particular. We apply the new algorithms to the 
+well-known problem of routing to two heterogeneous servers [7]. We conclude with 
+a discussion of circumstances under which these algorithms may be usefully applied. 
+2 Semi-Markov Decision Problems 
+A semi-Markov process is a continuous time dynamic system consisting of a count­
+able state set, X, and a finite action set, A. Suppose that the system is originally 
+observed to be in state z EX, and that action a E A is applied. A semi-Markov 
+process [9] then evolves as follows: 
+• The next state, y, is chosen according to the transition probabilities Pz,(a) 
+• A reward rate p(z, a) is defined until the next transition occurs 
+• Conditional on the event that the next state is y, the time until the tran­
+sition from z to y occurs has probability distribution Fz,(·Ja) 
+One form of the SMDP is to find a policy the minimizes the expected infinite horizon 
+discounted cost, the "value" for each state: 
+e {IoOO e-.Bt p(z(t), a(t»dt}, 
+where z(t) and aCt) denote, respectively, the state and action at time t. 
+For a fixed policy 71', the value of a given state z must satisfy 
+v,..(z) 
+Defining 
+L Pz ,(7I'(z» (00 r e-.B· p(z, 71'(z»dsdFz,(tJ7I'(z» + 
+X 10 10 ,E 
+L Pz,(7I'(Z» fooo e-.Bt V,..(y)dFz,(tJ7I'(z». 
+,EX 
+R(z, y, a) = foOO fot e-.B· p(z, 71'(z»dsdFz, (tJ7I'(z», 
+(1) 
+the expected reward that will be received on transition from state z to state y on 
+action a, and 
+===PAGE 3===
+Reinforcement Learning Methods for Continuous-Time Markov Decision Problems 395 
+the expected discount factor to be applied to the value of state y on transition 
+from state z on action a, it is clear that equation (1) is nearly identical to the 
+value-function equation for discrete time Markov reward processes, 
+Vw(z) = R(z, 1I"(z» + "Y I: Pzr( 1I"(z»Vw (Y), 
+rEX 
+(2) 
+where R(z, a) = :ErEx Pzr(a)R(z, y, a). If transition times are identically one for 
+an SMDP, then a standard discrete-time MDP results. 
+Similarly, while the value function associated with an optimal policy for an MDP 
+satisfies the Bellman optimality equation 
+Ve(z) = max {R(Z' a) + "Y I: pzr(a)v*(y)} , (3) 
+ilEA X rE 
+the optimal value function for an SMDP satisfies the following version of the Bellman 
+optimality equation: 
+V*(z) = max { I: Pzr(a) 1
+00 
+r e-fJa p(z, a)dsdFzr(tJa) + 
+ilEA X 0 10 rE 
+I: Pzr(a) loo e-fJtv*(y)dFzr(tJa)} . (4) 
+rEX 
+3 Temporal Difference learning for SMDP's 
+Sutton's TD(O) [10] is a stochastic approximation method for finding solutions to 
+the system of equations (2). Having observed a transition from state z to state y 
+with sample reward r(z, y, 1I"(z», TD(O) updates the value function estimate V(A:)(z) 
+in the direction of the sample value r(z, y, 1I"(z»+"YV(A:)(y). The TD(O) update rule 
+for MDP's is 
+V(A:+l)(Z) = V(A:)(z) + QA:[r(z, y, 1I"(z» + "YV(A:)(y) - V(A:)(z)], (5) 
+where QA: is the learning rate. The sequence of value-function estimates generated 
+by the TD(O) proceedure will converge to the true solution, Vw , with probability 
+one [5,8, 11] under the appropriate conditions on the QA: and on the definition of the 
+MDP. 
+The TD(O) learning rule for SMDP's, intended to solve the system of equations (1) 
+given a sequence of sampled state transitions, is: 
+[ 1 -fJT ] V(A:+1)(z) = V(A:)(z) + QA: -; r(z, y, 1I"(z» + e-fJTV(A:)(y) - V(A:)(z) , (6) 
+where the sampled transition time from state z to state y was T time units, 
+I_p-tl .. r(z, y, 1I"(z» is the sample reward received in T time units, and e-fJT is the 
+sample discount on the value of the next state given a transition time of T time 
+units. The TD(>.) learning rule for SMDP's is straightforward to define from here. 
+===PAGE 4===
+396 Steven Bradtke. Michael 0. Duff 
+4 Q-Iearning for SMDP's 
+Denardo [6] and Watkins [12] define Q.f) the Q-function corresponding to the policy 
+71", as 
+Q'II"(z, a) = R(z, a) + 'Y 2: PzJ(a)V'II"(Y) (7) 
+YEX 
+Notice that a can be any action. It is not necesarily the action 7I"(z) that would be 
+chosen by policy 71". The function Q. corresponds to the optimal policy. Q'II"(z, a) 
+represents the total discounted return that can be expected if any action is taken 
+from state z, and policy 71" is followed thereafter. Equation (7) can be rewritten as 
+Q'II"(z, a) = R(z, a) + 'Y 2: PZJ(a)Q'II"(Y' 7I"(Y», 
+yEX 
+and Q. satisfies the Bellman-style optimality equation 
+Q·(z, a) = R(z, a) + 'Y 2: Pzy(a) max Q.(y, a'), 
+A'EA JEX 
+(8) 
+(9) 
+Q-Iearning, first described by Watkins [12], uses stochastic approximation to itera­
+tively refine an estimate for the function Q •. The Q-Iearning rule is very similar to 
+TD(O). Upon a sampled transition from state z to state y upon selection of a, with 
+sampled reward r(z, y, a), the Q-function estimate is updated according to 
+Q(A:+l)(Z, a) = Q(J:)(z, a) + etJ: [r(z, y, a) + 'Y ~~ Q(J:)(y, a') - Q(J:)(z, a)]. (10) 
+Q-functions may also be defined for SMDP's. The optimal Q-function for an SMDP 
+satisfies the equation 
+2: PZJ(a) roo t e-tJ• p(z, a)dsdFzJ(tla) + 
+'V 10 10 
+JE"-
+Q·(z, a) 
+2: Pz1I(a) roo e-tJt max Q.(y, a')dFzJ(tla). (11) 
+'V 10 A'EA 
+JE"-
+This leads to the following Q-Iearning rule for SMDP's: 
+Q(A:+l)(Z, a) = Q(J:)(z, a)+etJ: [1 -;-tJ'r' r(z, y, a) + e-tJ'r' ~~ Q(J:)(y, a') _ Q(J:)(z, a)] 
+(12) 
+5 RTDP and Adaptive RTDP for SMDP's 
+The TD(O) and Q-Iearning algorithms are model-free, and rely upon stochastic 
+approximation for asymptotic convergence to the desired function (V'll" and Q., re­
+spectively). Convergence is typically rather slow. Real-Time Dynamic Program­
+ming (RTDP) and Adaptive RTDP [1,3] use a system model to speed convergence. 
+===PAGE 5===
+Reinforcement Learning Methods for Continltolts-Time Markov Decision Problems 397 
+RTDP assumes that a system model is known a priori; Adaptive RTDP builds a 
+model as it interacts with the system. As discussed by Barto et al. [1], these asyn­
+chronous DP algorithms can have computational advantages over traditional DP 
+algorithms even when a system model is given. 
+Inspecting equation (4), we see that the model needed by RTDP in the SMDP 
+domain consists of three parts: 
+1. the state transition probabilities Pzy(a), 
+2. the expected reward on transition from state z to state y using action a, 
+R(z, y, a), and 
+3. the expected discount factor to be applied to the value of the next state on 
+transition from state z to state y using action a, 'Y(z, y, a). 
+If the process dynamics are governed by a continuous time Markov chain, then the 
+model needed by RTDP can be analytically derived through uniJormization [2]. In 
+general, however, the model can be very difficult to analytically derive. In these 
+cases Adaptive RTD P can be used to incrementally build a system model through 
+direct interaction with the system. One version of the Adaptive RTDP algorithm 
+for SMDP's is described in Figure 1. 
+1 Set k = 0, and set Zo to some start state. 
+2 Initialize P, R, and ~. 
+3 repeat forever { 
+4 For all actions a, compute 
+Q(Ie)(ZIe,a) = L P .. "v(a) [ R(zIe,y,a) +~(zIe,y,a)V(Ie)(y) ] 
+veX 
+5 Perform the update V(le+l)(ZIe) = minoeA Q(Ie)(zIe,a) 
+6 Select an action, ale. 
+7 Perform ale and observe the transition to ZIe+l after T time units. Update 
+P. Use the sample reward 1 __ ;;11'" r(ZIe,Zle+l,ale) and the sample discount 
+factor e- f3T to update R and ~. 
+8 k=k+l 
+9 } 
+Figure 1: Adaptive RTDP for SMDP's. P, il, and .y are the estimates maintained 
+by Adaptive RTDP of P, R, and 'Y. 
+Notice that the action selection procedure (line 6) is left unspecified. Unlike RTDP, 
+Adaptive RTDP can not always choose the greedy action. This is because it only has 
+an e8timate of the system model on which to base its decisions, and the estimate 
+could initially be quite inaccurate. Adaptive RTDP needs to explore, to choose 
+actions that do not currently appear to be optimal, in order to ensure that the 
+estimated model converges to the true model over time. 
+===PAGE 6===
+398 Steven Bradtke, Michael O. Duff 
+6 Experiment: Routing to two heterogeneous servers 
+Consider the queueing system shown in Figure 2. Arrivals are assumed to be Poisson 
+with rate ).. Upon arrival, a customer must be routed to one of the two queues, 
+whose servers have service times that are exponentially distributed with parameters 
+J.l.1 and J.l.2 respectively. The goal is compute a policy that minimizes the objective 
+function: 
+e {foOO e-tJt [c1n1(t) + C2n2(t)]dt}, 
+where C1 and C2 are scalar cost factors, and n1(t) and n2(t) denote the number of 
+customers in the respective queues at time t. The pair (n1(t), n2(t)) is the state of 
+the system at time t; the state space for this problem is countably infinite. There 
+are two actions available at every state: if an arrival occurs, route it to queue 1 or 
+route it to queue 2. 
+-.<-~ 
+___ -.J~ 
+Figure 2: Routing to two queueing systems. 
+It is known for this problem (and many like it [7]), that the optimal policy is a 
+threshold policy; i.e., the set of states Sl for which it is optimal to route to the 
+first queue is characterized by a monotonically nondecreasing threshold function F 
+via Sl = {(nl,n2)ln1 $ F(n2)}' For the case where C1 = C2 = 1 and J.l.1 = J.l.2, 
+the policy is simply to join the shortest queue, and the theshold function is a line 
+slicing diagnonally through the state space. 
+We applied the SMDP version of Q-Iearning to this problem in an attempt to find 
+the optimal policy for some subset of the state space. The system parameters were 
+set to ). = J.l.1 = J.l.2 = 1, /3 = 0.1, and C1 = C2 = 1. We used a feedforward neural 
+network trained using backpropagation as a function approximator. 
+Q-Iearning must take exploratory actions in order to adequately sample all of the 
+available state transitions. At each decision time k, we selected the action aA: to be 
+applied to state ZA: via the Boltzmann distribution 
+where TA: is the "computational temperature." The temperature is initialized to a 
+relatively high value, resulting in a uniform distribution for prospective actions. TA: 
+is gradually lowered as computation proceeds, raising the probability of selecting 
+actions with lower (and for this application, better) Q-values. In the limit, the action 
+that is greedy with respect to the Q-function estimate is selected. The temperature 
+and the learning rate erA: are decreased over time using a "search then converge" 
+method [4]. 
+===PAGE 7===
+Reinforcement Learning Methods for Continuous-Time Markov Decision Problems 399 
+Figure 3 shows the results obtained by Q-Iearning for this problem. Each square 
+denotes a state visited, with nl(t) running along the z-axis, and n2(t) along the y­
+axis. The color of each square represents the probability of choosing action 1 (route 
+arrivals to queue 1). Black represents probability 1, white represents probability o. 
+An optimal policy would be black above the diagonal, white below the diagonal, 
+and could have arbitrary colors along the diagonal. 
+== == == == = == = 
+II • II • .. 
+!m il lUll @@ ~d r2 
+it • •• E M m@ mi· 1 @ 
+w • •• ... moo mllw 
+•••••• ,.m @ll 
+A 
+== ;;= == == = == = 
+• .. III 
+~2 @ %@Ii 
+•• •• Ell =11111 
+m • . ' . •• IIIIJIIIII 
+•••••••• @w liliiii w •••••••• 
+@m ••••••••• '. 
+B 
+II 
+• • 
+;;= 
+;;;;;; 
+== == = == = 
+l1li 0 
+@oo mm oow mw m]lw 
+•• mill lUll lM]lm 
+•••••••• lIlIg!W 
+=wjin i •••••••••• 
+I'm 
+II 
+... '.' ........ '. c 
+Figure 3: Results of the Q-Iearning experiment. Panel A represents the policy after 
+50,000 total updates, Panel B represents the policy after 100,000 total updates, and 
+Panel C represents the policy after 150,000 total updates. 
+One unsatisfactory feature of the algorithm's performance is that convergence is 
+rather slow, though the schedules governing the decrease of Boltzmann temperature 
+TA: and learning rate 0A: involve design parameters whose tweakings may result in 
+faster convergence. If it is known that the optimal policies are of theshold type, 
+or that some other structural property holds, then it may be of extreme practical 
+utility to make use of this fact by constraining the value-functions in some way or 
+perhaps by representing them as a combination of appropriate basis vectors that 
+implicity realize or enforce the given structural property. 
+7 Discussion 
+In this paper we have proposed extending the applicability of well-known reinforce­
+ment learning methods developed for discrete-time MDP's to the continuous time 
+domain . We derived semi-Markov versions of TD(O), Q-Iearning, RTDP, and Adap­
+tive RTDP in a straightforward way from their discrete-time analogues. While we 
+have not given any convergence proofs for these new algorithms, such proofs should 
+not be difficult to obtain if we limit ourselves to problems with finite state spaces. 
+(Proof of convergence for these new algorithms is complicated by the fact that, in 
+general, the state spaces involved are infinite; convergence proofs for traditional 
+reinforcement learning methods assume the state space is finite.) Ongoing work 
+is directed toward applying these techniques to more complicated systems, exam­
+ining distributed control issues, and investigating methods for incorporating prior 
+===PAGE 8===
+400 Steven Bradtke, Michael 0. Duff 
+knowledge (such as structured function approximators). 
+Acknowledgements 
+Thanks to Professor Andrew Barto, Bob Crites, and to the members of the Adaptive 
+Networks Laboratory. This work was supported by the National Science Foundation 
+under Grant ECS-9214866 to Professor Barto. 
+References 
+[1] A. G. Barto, S. J. Bradtke, and S. P. Singh. Learning to act using real-time 
+dynamic programming. Artificial Intelligence. Accepted . 
+[2] D. P. Bertsekas. Dynamic Programming: Deterministic and Stochastic Models. 
+Prentice Hall, Englewood Cliffs, NJ, 1987. 
+[3] S. J. Bradtke. Incremental Dynamic Programming for On-line Adaptive Opti­
+mal Control. PhD thesis, University of Massachusetts, 1994. 
+[4] C. Darken, J. Chang, and J. Moody. Learning rate schedules for faster stochas­
+tic gradient search. In Neural Networks for Signal Processing ~ - Proceedings 
+of the 199~ IEEE Workshop. IEEE Press, 1992. 
+[5] P. Dayan and T. J. Sejnowski. Td(A): Convergence with probability 1. Machine 
+Learning, 1994. 
+[6] E. V. Denardo. Contraction mappings in the theory underlying dynamic pro­
+gramming. SIAM Review, 9(2):165-177, April 1967. 
+[7] B. Hajek. Optimal control of two interacting service stations. IEEE-TAC, 
+29:491-499, 1984. 
+[8] T. Jaakkola, M. I. Jordan, and S. P. Singh. On the convergence of stochastic 
+iterative dynamic programming algorithms. Neural Computation, 1994. 
+[9] S. M. Ross. Applied Probability Models with Optimization Applications. Holden­
+Day, San Francisco, 1970. 
+[10] R. S. Sutton. Learning to predict by the method of temporal differences. 
+Machine Learning, 3:9-44, 1988. 
+[11] J. N. Tsitsiklis. Asynchronous stochastic approximation and Q-Iearning. Tech­
+nical Report LIDS-P-2172, Laboratory for Information and Decision Systems, 
+MIT, Cambridge, MA, 1993. 
+[12] C. J. C. H. Watkins. Learning from Delayed Rewards. PhD thesis, Cambridge 
+University, Cambridge, England, 1989. 

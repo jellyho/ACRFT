@@ -1,0 +1,138 @@
+[
+ {
+  "status": "running",
+  "title": "yam patch-critic (cost-to-goal)",
+  "owner": "A",
+  "note": "변환 완료(162k프레임,63ep) → 학습 RUNNING(jid35443,node200); γ=0.99964,atoms101,cost_to_goal+floor",
+  "wandb": "https://wandb.ai/jellyho_/acrft",
+  "report": ""
+ },
+ {
+  "status": "planned",
+  "title": "latent-actor AC (spherical, meanflow-free)",
+  "owner": "A",
+  "note": "pi05에 latent-actor expert(MoT) + patch-critic Q^π(no-max); Flow-DAgger 증류. leash=동결 디코더. 사전등록",
+  "wandb": "",
+  "report": "wa-latent-actor-design"
+ },
+ {
+  "status": "planned",
+  "title": "on-policy expectile-V (τ-sweep, mean→max)",
+  "owner": "A",
+  "note": "IQL 표현력↔TD-BoN 위험을 한 축으로: V=expectile_τ(VLA샘플 Q), τ=0.5(SARSA)→1(EMaQ). ensemble-min+작은N로 hump 시작점 실측",
+  "wandb": "",
+  "report": "wa-emaq-bon"
+ },
+ {
+  "status": "planned",
+  "title": "mb-arq N-스윕 + λ-weighted min/max",
+  "owner": "B",
+  "note": "EMaQ 지침: 작은 N(5) 재검, λ로 min쪽 보수화 (기존 8~10 고정)",
+  "wandb": "",
+  "report": "deas"
+ },
+ {
+  "status": "done",
+  "title": "DEAS 재현 + 고통계력",
+  "owner": "B",
+  "note": "critic=VLA 동률(못 이기고 안 해침); n=25 판정은 노이즈였음",
+  "wandb": "",
+  "report": "deas"
+ },
+ {
+  "status": "done",
+  "title": "critic head 3종 (scalar/HLG/floq)",
+  "owner": "B",
+  "note": "categorical이 이득 대부분 — 단 closed-loop은 n=25 노이즈",
+  "wandb": "",
+  "report": "critic-heads"
+ },
+ {
+  "status": "done",
+  "title": "per-prefix td-max + joint argmax",
+  "owner": "B",
+  "note": "연산자 바꿔도 동일 — 노이즈",
+  "wandb": "",
+  "report": "critic-pfx"
+ },
+ {
+  "status": "done",
+  "title": "floq (flow-matching critic)",
+  "owner": "B",
+  "note": "용량 O·커버리지 X; 값 [−1,0] 정규화로 수렴 복구",
+  "wandb": "",
+  "report": "floq"
+ },
+ {
+  "status": "done",
+  "title": "임베딩 비교 + DiT probe",
+  "owner": "B",
+  "note": "오프라인 지표가 closed-loop를 못 예측(뒤집힘)",
+  "wandb": "",
+  "report": "embed-compare"
+ },
+ {
+  "status": "done",
+  "title": "model-based 게이트 (shelved)",
+  "owner": "B",
+  "note": "행동정보 +7.3% — 약함",
+  "wandb": "",
+  "report": "model-based"
+ },
+ {
+  "status": "done",
+  "title": "horizon 진단 (shelved)",
+  "owner": "B",
+  "note": "임베딩 결함 vs 신호부재 판별",
+  "wandb": "",
+  "report": "horizon-probe"
+ },
+ {
+  "status": "done",
+  "title": "보수화 2축 종합 (살아있음)",
+  "owner": "B",
+  "note": "분포이동 vs 추정오차 exploit — EMaQ와 정합",
+  "wandb": "",
+  "report": "conservatism"
+ },
+ {
+  "status": "done",
+  "title": "patch-critic method (동결 DINOv2 + 분포형 IQL)",
+  "owner": "A",
+  "note": "cost-to-goal reward, adaptive-K/BoN 배포",
+  "wandb": "https://wandb.ai/jellyho_/acrft",
+  "report": "wa-patchcritic-method"
+ },
+ {
+  "status": "done",
+  "title": "RoboCasa cost_to_goal 3-arm",
+  "owner": "A",
+  "note": "sparse 값 ~0 붕괴 vs cost_to_goal 음수 스프레드; method-only-diff",
+  "wandb": "https://wandb.ai/jellyho_/acrft",
+  "report": "wa-patchcritic-method"
+ },
+ {
+  "status": "done",
+  "title": "EMaQ 논문 리뷰 (BoN=Bellman)",
+  "owner": "A",
+  "note": "큰 N이 critic 오차 exploit; coverage 천장",
+  "wandb": "",
+  "report": "wa-emaq-bon"
+ },
+ {
+  "status": "done",
+  "title": "policy server / value-guided serving",
+  "owner": "A",
+  "note": "server-side BoN/adaptive, HUD provenance — serve_patch_critic.py",
+  "wandb": "",
+  "report": "wa-patchcritic-method"
+ },
+ {
+  "status": "planned",
+  "title": "policy extraction (AQC actor 추출 경로)",
+  "owner": "C",
+  "note": "branch policy-extraction. distill-ddpg 가 이 리포에서 한 번도 바뀐 적이 없다 — 대안 추출로 cube 잔여 격차(0.554 vs QC 0.674)를 공격. 0804_advantage_weighted 음성(25D 평균이 타깃 길이를 죽임)을 먼저 통과해야 함. 사전등록 전, 미제출.",
+  "wandb": "",
+  "report": "wc-ogbench-summary"
+ }
+]

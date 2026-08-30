@@ -66,6 +66,17 @@ def _policy_norm_stats(policy):
     return None
 
 
+def emits_full_candidates(mode: str, action_horizon: int, critic_horizon: int) -> bool:
+    """Does any part of a proposal go unexecuted, and so need recording separately?
+
+    `action_samples` carries the EXECUTED prefix, so a tail beyond it exists nowhere else in a
+    recording. Adaptive always leaves one. So does best-of-N when the critic is shorter than the
+    policy's chunk: the commitment is capped at what the critic actually scored, and the rest was
+    proposed but selected on by nothing.
+    """
+    return mode == "adaptive" or action_horizon > critic_horizon
+
+
 class PatchCriticSelectPolicy(BasePolicy):
     def __init__(
         self,
@@ -113,8 +124,9 @@ class PatchCriticSelectPolicy(BasePolicy):
                 model.extract_token_and_base_actions, static_argnames=("num_samples", "num_steps")
             )
         elif hasattr(model, "sample_n_actions"):
-            # Pi0AlphaFlow: same one-prefix-pass contract, no token. With its 1-step sampler
-            # (--flow-steps 1), BoN-N costs ~N single forwards instead of N*10.
+            # Pi0AlphaFlow and plain pi05 (Pi0): same one-prefix-pass contract, no token. With
+            # alpha-Flow's 1-step sampler (--num-steps 1), BoN-N costs ~N single forwards instead
+            # of N*10; plain pi05 pays its usual 10 per candidate.
             _sample_n = nnx_utils.module_jit(model.sample_n_actions, static_argnames=("num_samples", "num_steps"))
 
             def _extract(rng, obs, *, num_samples, num_steps):
@@ -127,13 +139,10 @@ class PatchCriticSelectPolicy(BasePolicy):
             # plain BC pi0.5, which is exactly the base they were trained against.
             self._extract = None
         else:
-            # Any other model (a plain pi0.5 BC checkpoint included): draw the N candidates by
-            # calling its ordinary sampler N times with split keys. That costs N prefix passes
-            # instead of one, but selection modes (bon / idql / adaptive) are defined by the draws,
-            # not by how they were batched -- and without this the wrapper simply cannot serve the
-            # BC base, which is the arm-0 baseline of the extraction comparison.
-            logging.info(
-                "%s has no batched sampler; drawing N candidates with N sequential calls", type(model).__name__
+            raise TypeError(
+                f"{type(model).__name__} offers neither extract_token_and_base_actions (RLT) nor "
+                "sample_n_actions (pi05 / alpha-Flow); the patch-critic wrapper needs one of them "
+                "to draw N candidates from a single backbone pass"
             )
             _sample = nnx_utils.module_jit(model.sample_actions, static_argnames=("num_steps",))
 
@@ -217,11 +226,46 @@ class PatchCriticSelectPolicy(BasePolicy):
             if served is not None:
                 mismatch = critic_preproc.compare(stats, served)
                 if mismatch:
-                    raise ValueError(
-                        "critic/policy norm-stats mismatch -- the critic was trained against different "
-                        "statistics than the policy being served:\n  - " + "\n  - ".join(mismatch)
+                    # Not fatal: candidates are decoded to physical units and re-normalized with the
+                    # critic's own stats (see infer), so differing statistics are handled rather
+                    # than assumed away. Still worth saying -- it means the critic is scoring a
+                    # policy other than the one it was fitted against, which is a claim about
+                    # transfer, not about units.
+                    logging.warning(
+                        "critic/policy norm-stats differ; scoring through physical units. The critic "
+                        "was fitted against a different base policy's statistics:\n  - %s",
+                        "\n  - ".join(mismatch),
                     )
         self._macro = int(cc["macro_group_size"])
+        # The critic's own horizon is baked into its weights (the positional table is sized by
+        # H / macro_group_size), so a chunk of a different length cannot be fed to it at all.
+        self._critic_horizon = int(cc["horizon"])
+        # Set once the horizons are known (below): whether any part of a proposal goes unexecuted,
+        # and so has to be recorded separately from the executed prefix.
+        self._emit_full = False
+        if self._action_horizon < self._critic_horizon:
+            raise ValueError(
+                f"the policy proposes {self._action_horizon}-step chunks but the critic scores "
+                f"{self._critic_horizon}-step ones; there is nothing to score the tail against"
+            )
+        if self._action_horizon > self._critic_horizon:
+            # Scoring the first C steps of a longer proposal is exact, not an approximation: the
+            # joint delta at step k is taken against the same base state either way, so the first C
+            # steps of an H-step chunk are distributed exactly like a C-step chunk (which is also
+            # why the critic's own action statistics are the right ones to re-normalize with).
+            # What does NOT follow is flying the rest: the tail was selected by nothing. So the
+            # commitment is capped at what the critic actually vouched for.
+            logging.info(
+                "policy horizon %d > critic horizon %d: scoring and committing the first %d steps "
+                "of each candidate (the tail is proposed but never selected on)",
+                self._action_horizon,
+                self._critic_horizon,
+                self._critic_horizon,
+            )
+        # Adaptive always leaves a tail; so does a critic shorter than the policy's chunk, which
+        # is why this is not simply `mode == "adaptive"`. Decided here rather than per reply so the
+        # declared schema and what infer actually sends cannot drift apart.
+        self._emit_full = emits_full_candidates(mode, self._action_horizon, self._critic_horizon)
         atoms = int(cc["num_atoms"])
         import flax.serialization
 
@@ -324,9 +368,15 @@ class PatchCriticSelectPolicy(BasePolicy):
             # The arm decides the chunk (steering / latent actor / seed head); everything below --
             # robot-space decode, critic scoring, HUD -- is unchanged, so an arm is served by this
             # one path exactly like bon/adaptive.
-            proprio = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
+            #
+            # Its critic queries take the proprio the CRITIC was trained on: the full state
+            # normalized by the critic's own stats, then sliced -- the same array the scoring block
+            # below builds. Handing it the policy-normalized state instead would be silently off by
+            # a normalization whenever the two stat sets differ.
+            arm_state = state if self._pre is None else self._pre.state(state)
+            arm_proprio = arm_state if self._proprio_idx is None else arm_state[self._proprio_idx]
             chunks_model = np.asarray(
-                self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(proprio)), np.float32
+                self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(arm_proprio)), np.float32
             )
         else:
             _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
@@ -353,14 +403,26 @@ class PatchCriticSelectPolicy(BasePolicy):
         # own input as the action -- for a pi05-space critic that is a normalized joint DELTA, which
         # lands in a plausible numeric range and is meaningless as a joint target.
         if self._pre is not None:
-            # Shared preprocessing: the sampler already emits normalized joint deltas, which is
-            # precisely what the critic was trained on. No conversion, so nothing to get wrong.
-            scored_actions = chunks_model[..., : self._critic_action_dim]
-            scored_state = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
+            # Route through PHYSICAL units instead of handing the critic the policy's normalized
+            # arrays. The sampler's output is normalized by the POLICY's statistics; the critic was
+            # trained under its OWN. When those agree this round trip is the identity (checked in
+            # patch_critic_preproc_test), and when they disagree it is the difference between
+            # scoring the trajectory the robot will fly and scoring a displaced one -- the same
+            # class of error as feeding the output transform a raw state.
+            #
+            # robot_actions is already the decoded absolute joint target, so the critic's own
+            # preprocessing re-derives its delta and re-normalizes with the stats it learned on.
+            scored_actions = self._pre.actions(robot_actions, state)[
+                :, : self._critic_horizon, : self._critic_action_dim
+            ]
+            # Normalize the FULL state, then slice: proprio_indices point into the 42-wide state, so
+            # slicing first would pair those channels with the first-14 statistics.
+            critic_state = self._pre.state(state)
+            scored_state = critic_state if self._proprio_idx is None else critic_state[self._proprio_idx]
         else:
             # Legacy raw-units critic: it was trained on absolute joint targets, so it scores the
             # same array the robot will execute, against the raw state those units live in.
-            scored_actions = robot_actions
+            scored_actions = robot_actions[:, : self._critic_horizon]
             scored_state = state if self._proprio_idx is None else state[self._proprio_idx]
         scored = np.asarray(scored_actions, np.float32)  # [N, H, *] in the CRITIC's space
         decoded = robot_actions  # [N, H, A] in ROBOT space -- executed and recorded
@@ -371,7 +433,9 @@ class PatchCriticSelectPolicy(BasePolicy):
             kbest = int(np.argmax(pv[best]))  # highest-value commitment prefix (macro-group index)
             n_exec = (kbest + 1) * self._macro
         else:
-            n_exec = decoded.shape[1]
+            # Commit what was scored. With a critic shorter than the policy's chunk, the tail past
+            # the critic's horizon was proposed but never selected on.
+            n_exec = min(decoded.shape[1], self._critic_horizon)
         chosen = decoded[best][: max(int(n_exec), 1)]  # (X, A)
         x = chosen.shape[0]
 
@@ -392,10 +456,12 @@ class PatchCriticSelectPolicy(BasePolicy):
         # records, so a replan's frames repeat them.
         out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
-        if self._mode == "adaptive":
-            # Only adaptive drops part of what the model proposed: `action_samples` above is the
-            # EXECUTED prefix, so the un-executed tail exists nowhere else. In `bon` the executed
-            # chunk IS the full horizon, so this would be a duplicate column.
+        if self._emit_full:
+            # `action_samples` above is the EXECUTED prefix, so whatever the model proposed beyond
+            # it exists nowhere else. Adaptive always leaves such a tail; so does bon when the
+            # critic is shorter than the policy's chunk, since the commitment is capped at what was
+            # scored. Only when the executed prefix IS the whole proposal would this duplicate a
+            # column, and then it is not sent.
             out["action_samples_full"] = np.broadcast_to(
                 np.swapaxes(decoded, 0, 1)[None], (x, decoded.shape[1], decoded.shape[0], decoded.shape[2])
             ).copy()
@@ -423,7 +489,7 @@ class PatchCriticSelectPolicy(BasePolicy):
             "critic_macro": [1],
             "critic_best_prefix": [1],
         }
-        if self._mode == "adaptive":
+        if self._emit_full:
             # The full horizon the model proposed, of which only a prefix was executed (see infer).
             declared["action_samples_full"] = [self._action_horizon, n, self._robot_action_dim]
         return declared

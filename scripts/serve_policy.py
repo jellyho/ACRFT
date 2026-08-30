@@ -102,6 +102,19 @@ class Args:
     # --critic, which samples its own candidates).
     num_samples: int = 0
 
+    # Execute only the first N steps of each reply, then replan. A checkpoint trained at horizon 30
+    # is open loop for a second when its chunk is run whole; this trades inference cost for
+    # reaction time without retraining, and the client needs no setting -- it reads the length off
+    # the reply. 0 (default) leaves the chunk as the policy returned it.
+    execute_steps: int = 0
+
+    # Denoising iterations per chunk, passed to the model's sample_actions. This is where the
+    # few-step models are worth what they cost: alphaflow is trained on mean velocity so it can
+    # answer in one step (its own default), while pi05 integrates the flow over ten. Sweeping it
+    # is how you find where quality stops paying for latency -- and the latency is per replan, so
+    # it compounds with --execute-steps. Unset leaves each model's own default alone.
+    num_steps: int | None = None
+
 
 # Default checkpoints that should be used for each environment.
 DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
@@ -124,6 +137,18 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
+def _sample_kwargs(args: Args) -> "dict | None":
+    """What to pass through to the model's own sample_actions, or None to leave its defaults.
+
+    Only set what was asked for: handing a model `num_steps=None` is not the same as not handing
+    it one, and each model's default is its own (alphaflow 1, pi05 10).
+    """
+    if args.num_steps is None:
+        return None
+    logging.info("sampling with num_steps=%d", args.num_steps)
+    return {"num_steps": int(args.num_steps)}
+
+
 def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
     """Create a policy from the given arguments, with the config it was built from.
 
@@ -144,7 +169,12 @@ def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
                     ),
                 )
             return (
-                _policy_config.create_trained_policy(train_config, args.policy.dir, default_prompt=args.default_prompt),
+                _policy_config.create_trained_policy(
+                    train_config,
+                    args.policy.dir,
+                    default_prompt=args.default_prompt,
+                    sample_kwargs=_sample_kwargs(args),
+                ),
                 train_config,
             )
         case Default():
@@ -153,7 +183,9 @@ def create_policy(args: Args) -> tuple[_policy.Policy, _config.TrainConfig]:
                 raise ValueError(f"Unsupported environment mode: {args.env}")
             train_config = _config.get_config(checkpoint.config)
             return (
-                _policy_config.create_trained_policy(train_config, checkpoint.dir, default_prompt=args.default_prompt),
+                _policy_config.create_trained_policy(
+                    train_config, checkpoint.dir, default_prompt=args.default_prompt, sample_kwargs=_sample_kwargs(args)
+                ),
                 train_config,
             )
 
@@ -219,8 +251,12 @@ def _build_critic_policy(policy, args: Args):
             "" if args.critic_mode else " (from the critic)",
             groups,
         )
+        # --num-steps means the same thing here as anywhere: denoising iterations per chunk. It is
+        # charged per CANDIDATE, so it is the difference between BoN-8 costing 8 suffix passes and
+        # 80. Unset keeps the wrapper's own default (10, the pi05 flow default).
+        steps = {"flow_steps": int(args.num_steps)} if args.num_steps is not None else {}
         return _pcp.PatchCriticSelectPolicy(
-            policy, str(critic_dir), mode=mode, extraction_head=args.extraction_head, **samples
+            policy, str(critic_dir), mode=mode, extraction_head=args.extraction_head, **samples, **steps
         )
     logging.info("critic: RLT-token critic (%s)", critic_dir.name)
     return _policy.CriticSelectPolicy(policy, str(critic_dir), **samples)
@@ -228,6 +264,12 @@ def _build_critic_policy(policy, args: Args):
 
 def main(args: Args) -> None:
     policy, train_config = create_policy(args)
+    horizon = int(train_config.model.action_horizon)
+    # Say the horizon out loud. It comes from the CONFIG, never from the checkpoint: no parameter
+    # in a pi0/pi05 tree carries a horizon axis, so an h50 checkpoint loads under an h30 config
+    # without a murmur and just serves 30-step chunks. The only signal a caller ever got was a
+    # chunk that looked wrong on the robot, hours later.
+    logging.info("serving %s: chunks of %d steps (from the config, not the checkpoint)", train_config.name, horizon)
     # Wrapped unconditionally: it is inert unless a request carries `num_samples`, so a plain
     # rollout pays nothing, and there is no server-side mode to remember to turn on before
     # looking at the action distribution.
@@ -255,6 +297,25 @@ def main(args: Args) -> None:
         robot_action_dim=robot_action_dim,
         default_samples=args.num_samples,
     )
+    if args.execute_steps > 0:
+        if args.execute_steps >= horizon:
+            # Asking for at least the whole chunk is the same as asking for the whole chunk, so
+            # this stays a warning rather than an error -- but it is worth saying, because the
+            # usual reason for asking is a config/checkpoint horizon mismatch, and clamping in
+            # silence is what lets that mismatch reach the robot.
+            logging.warning(
+                "--execute-steps %d >= the %d-step horizon: serving whole chunks. If you expected "
+                "longer chunks, check --policy.config -- the horizon comes from there.",
+                args.execute_steps,
+                horizon,
+            )
+        else:
+            # Outermost, so it cuts the actions and every per-step extra together -- see
+            # TruncateChunkPolicy. Wrapping inside MultiSamplePolicy would leave the candidates
+            # describing steps that never ran.
+            logging.info("executing %d of each %d-step chunk, then replanning", args.execute_steps, horizon)
+            policy = _policy.TruncateChunkPolicy(policy, args.execute_steps)
+
     # Config-derived spec first, so an explicit policy_metadata entry can still override it.
     policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}
     # What this policy sends alongside its actions, so the robot client records it without
