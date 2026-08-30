@@ -112,10 +112,14 @@ def main():
     gts = np.stack([gt for (_, _, _, gt) in frames])  # [N,H,14]
     for k, p in preds.items():
         results[f"mse_gt/{k}"] = float(np.mean((p - gts) ** 2))
+        # intra-chunk temporal roughness (jerk): mean ||second difference along the 30-step axis||^2.
+        # demo-MSE cannot see this (per-step errors average out); the robot feels it directly.
+        results[f"jerk/{k}"] = float(np.mean(np.diff(p, n=2, axis=-2) ** 2))
     results["self_gap/af_1_vs_10"] = float(np.mean((preds["af_1step"] - preds["af_10step"]) ** 2))
     results["self_gap/af_2_vs_10"] = float(np.mean((preds["af_2step"] - preds["af_10step"]) ** 2))
     # per-dimension scale reference so MSEs are interpretable
     results["gt_action_var"] = float(np.var(gts))
+    results["jerk/demo"] = float(np.mean(np.diff(gts, n=2, axis=-2) ** 2))
 
     a.out.mkdir(parents=True, exist_ok=True)
     (a.out / "results.json").write_text(

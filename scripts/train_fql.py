@@ -28,8 +28,11 @@ VLM backbone (prefix KV not stop-gradient'd, backbone params join the critic opt
 the backbone a frozen feature extractor; warmup lets the value signal shape it only while the target
 is the trustworthy MC return; always is full value backprop (B200-sized memory).
 
-Data: --synthetic runs a shape/consistency smoke on random transitions (no data needed). The RoboCasa
-DEAS-protocol transition loader is wired once the merged pretrain dataset + reward labels are ready.
+Data: --synthetic runs a shape/consistency smoke on random transitions (no data needed). Without it,
+trains on the real 347-episode YAM chunk-transition set (scripts/yam_fql_data.py: house patch-critic
+reward conventions -- cost_to_goal, gamma 0.99964, failure homing truncation + terminal anchor). The
+backup over a chunk is SMDP-style: y = R_chunk + gamma^H (1-done) Qbar(s_{t+H}, a'), so the discount
+applied to the bootstrap is gamma**action_horizon, not gamma.
 """
 
 from __future__ import annotations
@@ -72,6 +75,14 @@ def main():
         help="when the critic gradient may flow into the VLM backbone",
     )
     ap.add_argument("--flow-ode-steps", type=int, default=10)
+    ap.add_argument(
+        "--train-flow-bc",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="keep training the flow expert with its flow-matching BC loss (official FQL trains it "
+        "concurrently; off = frozen pretrained teacher)",
+    )
+    ap.add_argument("--flow-lr", type=float, default=5e-5, help="flow expert lr (BC finetune used 5e-5)")
     # expert variants: real by default; 'dummy' everywhere gives a CPU-runnable trainer smoke
     ap.add_argument("--paligemma-variant", default="gemma_2b")
     ap.add_argument("--flow-variant", default="gemma_300m")
@@ -81,6 +92,19 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--steps", type=int, default=100)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/fql"))
+    # ---- real-data (YAM) path: scripts/yam_fql_data.py conventions ----
+    ap.add_argument("--yam-repo-id", default="jellyho/yam_lego_taxi")
+    ap.add_argument("--yam-root", default="/data5/jellyho/yam_v2/lerobot")
+    ap.add_argument("--outcomes", default="/data5/jellyho/ACRFT/openpi/.scratch/yam_outcomes_347.jsonl")
+    ap.add_argument("--homing-onsets", default="/data5/jellyho/ACRFT/openpi/.scratch/yam_homing_onsets.json")
+    ap.add_argument("--h-goal", type=int, default=3)
+    ap.add_argument("--failure-reward", type=float, default=None, help="failure terminal anchor; default v_min")
+    ap.add_argument("--num-workers", type=int, default=8)
+    ap.add_argument("--save-every", type=int, default=10000)
+    ap.add_argument("--wandb", action="store_true")
+    ap.add_argument("--wandb-project", default="yam-rlt")
+    ap.add_argument("--wandb-entity", default="RSS-PFT_RLLAB")
+    ap.add_argument("--wandb-name", default=None)
     a = ap.parse_args()
 
     import flax.nnx as nnx
@@ -145,6 +169,13 @@ def main():
     critic_train_filter = critic_bb_filter if a.critic_backbone != "never" else critic_filter
     opt_c = tx_c.init(params.filter(critic_train_filter))
     opt_a = tx_a.init(params.filter(actor_filter))
+    # flow expert (gemma "_1") + its projections/time-MLP -- trained only under --train-flow-bc
+    flow_filter = nnx.Any(
+        nnx_utils.PathRegex(".*llm.*_1.*"),
+        nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)).*"),
+    )
+    tx_f = optax.adam(a.flow_lr)
+    opt_f = tx_f.init(params.filter(flow_filter)) if a.train_flow_bc else ()
 
     # The VLM prefix (SigLIP x3 cams + 2b attention) is by far the most expensive forward, and it is
     # FROZEN -- so each loss computes it ONCE per observation (stop-gradient) and every expert call
@@ -170,7 +201,9 @@ def main():
             zr = jax.random.normal(rng, act.shape)
             a_next = jax.lax.stop_gradient(model.actor(nobs, zr, kv_n, pm_n))  # a' ~ mu_omega(s', z')
             qn = hl.from_logits(jax.lax.stop_gradient(target_model.critic_logits(nobs, a_next, kv_n, pm_n)))
-            y = rew + a.discount * (1.0 - done) * qn
+            # SMDP chunk backup: rew is the discounted H-step sum, the successor is H steps away,
+            # so the bootstrap carries gamma**H (a plain gamma here would over-bootstrap ~H/gamma x).
+            y = rew + (a.discount**a.action_horizon) * (1.0 - done) * qn
             floor_frac = jnp.zeros(())
             if a.mc_floor:
                 # the observed discounted return from s is a certificate: a bootstrapped target below it
@@ -196,8 +229,11 @@ def main():
         a_omega = model.actor(obs, z, kv, pm)
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
         qpi = hl.from_logits(model.critic_logits(obs, a_omega, kv, pm))  # grad only to actor (filter)
-        l_q = -jnp.mean(qpi)
-        return l_q + a.alpha * l_distill, {"l_distill": l_distill, "q_pi": -l_q}
+        # official FQL normalizes the Q term by sg(E|Q|) so alpha is scale-free; without it our
+        # |Q| ~ 1e3 value scale makes alpha=10 distillation negligible and the actor bolts OOD
+        # (observed: l_distill 0.002 -> 2.35 within 10 steps of stage 2).
+        l_q = -jnp.mean(qpi) / jax.lax.stop_gradient(jnp.mean(jnp.abs(qpi)) + 1e-6)
+        return l_q + a.alpha * l_distill, {"l_distill": l_distill, "q_pi": jnp.mean(qpi)}
 
     def warmup_actor_loss_fn(model, batch, rng):
         """Stage 1 actor: distillation ONLY (the critic is not trustworthy yet, so no Q term)."""
@@ -209,6 +245,20 @@ def main():
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
         return a.alpha * l_distill, {"l_distill": l_distill, "q_pi": jnp.zeros(())}
 
+    def flow_bc_loss_fn(model, batch, rng):
+        """pi05 flow matching on the data chunk -- the BC objective, continued (moving teacher)."""
+        obs, act = batch[0], batch[1]
+        kv, pm = _kv(model, obs)
+        b = act.shape[0]
+        rt, rn = jax.random.split(rng)
+        tau = jax.random.beta(rt, 1.5, 1, (b,)) * 0.999 + 0.001
+        noise = jax.random.normal(rn, act.shape)
+        te = tau[:, None, None]
+        x_t = te * noise + (1 - te) * act
+        u_t = noise - act
+        v_t = model.flow_velocity(x_t, tau, kv, pm)
+        return jnp.mean(jnp.square(v_t - u_t)), {}
+
     # donate params/targets/opt states: without donation the jit holds input AND output copies of
     # the 3.15B-param state (~25GB just in weights), which is what OOM'd the L40S even after the
     # prefix-KV sharing fix. Donation makes the update in-place.
@@ -217,9 +267,9 @@ def main():
     # critic optimizer state; whether the backbone part of that gradient is nonzero is decided by
     # bb_grad (stop-gradient on the prefix KV), not by reshaping trees between phases.
     def _make_step(*, warmup: bool, bb_grad: bool):
-        @functools.partial(jax.jit, donate_argnums=(0, 1, 2, 3))
-        def step(params, target_critic, opt_c, opt_a, batch, rng):
-            rc, ra = jax.random.split(rng)
+        @functools.partial(jax.jit, donate_argnums=(0, 1, 2, 3, 4))
+        def step(params, target_critic, opt_c, opt_a, opt_f, batch, rng):
+            rc, ra, rf = jax.random.split(rng, 3)
             model = nnx.merge(graphdef, params)
             if warmup:
                 (lc, ci), gc = nnx.value_and_grad(
@@ -244,13 +294,30 @@ def main():
             pa = params.filter(actor_filter)
             ua, opt_a_new = tx_a.update(ga, opt_a, pa)
             nnx.update(model, optax.apply_updates(pa, ua))
+            fi = {}
+            opt_f_new = opt_f
+            if a.train_flow_bc:
+                (lf, _), gf = nnx.value_and_grad(flow_bc_loss_fn, argnums=nnx.DiffState(0, flow_filter), has_aux=True)(
+                    model, batch, rf
+                )
+                pf = params.filter(flow_filter)
+                uf, opt_f_new = tx_f.update(gf, opt_f, pf)
+                nnx.update(model, optax.apply_updates(pf, uf))
+                fi = {"l_flow_bc": lf}
             params_new = nnx.state(model)
             target_critic_new = jax.tree.map(
                 lambda t, p: a.target_tau * p + (1 - a.target_tau) * t,
                 target_critic,
                 params_new.filter(critic_filter),
             )
-            return params_new, target_critic_new, opt_c_new, opt_a_new, {"l_critic": lc, "l_actor": la, **ci, **ai}
+            return (
+                params_new,
+                target_critic_new,
+                opt_c_new,
+                opt_a_new,
+                opt_f_new,
+                {"l_critic": lc, "l_actor": la, **ci, **ai, **fi},
+            )
 
         return step
 
@@ -281,28 +348,77 @@ def main():
         mc = jax.random.uniform(k[2], (a.batch,), minval=a.v_min, maxval=a.v_max)
         return obs, act, rew, nobs, done, mc
 
+    data_iter = None
     if not a.synthetic:
-        raise NotImplementedError(
-            "RoboCasa DEAS transition loader not wired yet (waiting on the merged pretrain dataset + reward "
-            "labels). Run with --synthetic for the training-step smoke."
+        if a.init_base is None:
+            raise ValueError("real-data training needs --init-base (frozen flow expert + its norm stats)")
+        from yam_fql_data import YamFQLTransitions  # scripts/ is on sys.path when run as a script
+        from yam_fql_data import make_loader  # scripts/ is on sys.path when run as a script
+
+        ds = YamFQLTransitions(
+            repo_id=a.yam_repo_id,
+            root=a.yam_root,
+            horizon=a.action_horizon,
+            bc_assets_dir=str(pathlib.Path(a.init_base).parent / "assets"),
+            outcomes_path=a.outcomes,
+            homing_path=a.homing_onsets,
+            h_goal=a.h_goal,
+            discount=a.discount,
+            failure_reward=a.failure_reward,
         )
+        print(f"YAM transitions: {len(ds)} base frames, v_min {ds.v_min:.1f}", flush=True)
+        data_iter = make_loader(ds, batch_size=a.batch, num_workers=a.num_workers)
+
+    run = None
+    if a.wandb:
+        import wandb
+
+        run = wandb.init(
+            project=a.wandb_project,
+            entity=a.wandb_entity,
+            name=a.wandb_name,
+            group="fql-yam",
+            config={k: str(v) for k, v in vars(a).items()},
+        )
+        print(f"wandb: {run.url}", flush=True)
+
+    def save(step_i):
+        # trainable experts + EMA target only; the frozen base is reproducible from --init-base
+        import orbax.checkpoint as ocp
+
+        path = (a.out / f"{step_i}").absolute()
+        state = {
+            "actor": params.filter(actor_filter).to_pure_dict(),
+            "critic": params.filter(critic_filter).to_pure_dict(),
+            "target_critic": target_critic.to_pure_dict(),
+        }
+        if a.train_flow_bc:  # the teacher moved off its init checkpoint, so it must travel too
+            state["flow"] = params.filter(flow_filter).to_pure_dict()
+        with ocp.StandardCheckpointer() as ckptr:
+            ckptr.save(path, state, force=True)
+        print(f"saved {path}", flush=True)
 
     rng = jax.random.key(0)
     t0 = time.time()
     for s in range(a.steps):
         rng, kb, ks = jax.random.split(rng, 3)
-        batch = synthetic_batch(kb)
+        batch = synthetic_batch(kb) if a.synthetic else next(data_iter)
         step = step_warmup if (step_warmup is not None and s < a.critic_warmup_steps) else step_ac
-        params, target_critic, opt_c, opt_a, info = step(params, target_critic, opt_c, opt_a, batch, ks)
+        params, target_critic, opt_c, opt_a, opt_f, info = step(params, target_critic, opt_c, opt_a, opt_f, batch, ks)
         if s % 10 == 0 or s == a.steps - 1:
             i = {k: float(v) for k, v in info.items()}
+            if run is not None:
+                run.log({**i, "stage": 1 if (step is step_warmup) else 2}, step=s)
             print(
                 f"step {s:5d}  l_critic {i['l_critic']:.4f}  l_actor {i['l_actor']:.4f}  "
                 f"q_mean {i['q_mean']:.3f}  l_distill {i['l_distill']:.4f}  q_pi {i['q_pi']:.3f}  "
-                f"({(s + 1) / (time.time() - t0):.2f} it/s)",
+                + (f"l_flow_bc {i['l_flow_bc']:.4f}  " if "l_flow_bc" in i else "")
+                + f"({(s + 1) / (time.time() - t0):.2f} it/s)",
                 flush=True,
             )
-    print("FQL train-step smoke OK.", flush=True)
+        if not a.synthetic and ((s + 1) % a.save_every == 0 or s == a.steps - 1):
+            save(s + 1)
+    print("FQL training done." if not a.synthetic else "FQL train-step smoke OK.", flush=True)
 
 
 if __name__ == "__main__":

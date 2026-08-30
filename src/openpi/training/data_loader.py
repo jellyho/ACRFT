@@ -169,6 +169,45 @@ def _max_video_timestamp(dataset_meta: lerobot_dataset.LeRobotDatasetMetadata) -
     return max(ends, default=dataset_meta.total_frames / dataset_meta.fps)
 
 
+def _check_norm_stats_provenance(data_config: _config.DataConfig, dataset_meta) -> None:
+    """Fail loudly when the norm stats were computed on a different dataset generation.
+
+    The stats file lives at a hand-managed assets path keyed only by a NAME (asset_id), so a stale
+    file with the right name silently mis-normalizes -- quantile norm never NaNs, training loss
+    stays finite, and nothing else trips (the alpha-Flow 08-23 incident: 08-03 stats, action q99
+    ~37% narrower than the data actually trained on). compute_norm_stats writes provenance.json
+    next to the stats; when present, it must match the live dataset. When absent we can only warn.
+    """
+    prov = data_config.norm_stats_provenance
+    if data_config.norm_stats is None:
+        return
+    if prov is None:
+        logging.warning(
+            "norm stats for asset '%s' carry no provenance.json -- cannot verify they were computed "
+            "on THIS dataset generation (repo %s: %d episodes / %d frames). Recompute with "
+            "scripts/compute_norm_stats.py to stamp provenance.",
+            data_config.asset_id,
+            data_config.repo_id,
+            dataset_meta.total_episodes,
+            dataset_meta.total_frames,
+        )
+        return
+    computed = prov.get("computed_on", prov)
+    mismatches = []
+    if computed.get("repo_id") not in (None, data_config.repo_id):
+        mismatches.append(f"repo_id {computed.get('repo_id')} != {data_config.repo_id}")
+    for key, live in (("total_episodes", dataset_meta.total_episodes), ("total_frames", dataset_meta.total_frames)):
+        if key in computed and int(computed[key]) != int(live):
+            mismatches.append(f"{key} {computed[key]} != {live}")
+    if mismatches:
+        raise ValueError(
+            f"norm stats provenance mismatch for asset '{data_config.asset_id}': {'; '.join(mismatches)}. "
+            "The stats were computed on a different dataset generation -- recompute them "
+            "(scripts/compute_norm_stats.py) or point --data.assets.asset-id at the right stats."
+        )
+    logging.info("norm stats provenance OK for asset '%s': %s", data_config.asset_id, computed)
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -188,6 +227,7 @@ def create_torch_dataset(
         return FakeDataset(model_config, num_samples=1024)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    _check_norm_stats_provenance(data_config, dataset_meta)
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
         # None loads all episodes; a subset (e.g. success-only) is resolved by the data config.
