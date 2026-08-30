@@ -227,11 +227,20 @@ class Pi0(_model.BaseModel):
         return prefix_mask, kv_cache
 
     def _velocity(self, observation: _model.Observation, prefix_mask, kv_cache, x_t, timestep):
-        """Flow velocity v(x_t, t) against a cached prefix. [b, ah, ad]
+        """Flow velocity v(x_t, t) against a cached prefix. -> [b, ah, ad]
 
         THE single implementation. It was hand-copied into the arm sampler and five extraction
         trainers; a copy that drifts from this one does not fail, it silently trains or serves
         against a different policy than the one it reports.
+
+        Shapes, spelled out because guessing them wrong is that same failure in miniature:
+          prefix_mask  [b, prefix_len] bool, as returned by _prefix_forward (mask FIRST)
+          x_t          [b, ah, ad]
+          timestep     [b] -- ALREADY broadcast. A scalar is not accepted: embed_suffix types it
+                       `Float[Array, " b"]`, so the caller broadcasts (see sample_actions'
+                       jnp.broadcast_to(time, batch_size)). Passing the scalar raises rather than
+                       silently conditioning every sample on the wrong time, which is the one mercy
+                       here.
         """
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, timestep)
         suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
