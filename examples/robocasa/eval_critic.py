@@ -215,88 +215,6 @@ def load_token_transform(critic_path):
     raise ValueError(f"unknown token_transform kind {tf['kind']}")
 
 
-# Restored: a merge kept this class's call sites (mbac/mbacf modes, --dyn) and dropped the class
-# itself, so `--dyn` died with NameError and ruff had been failing on the undefined names ever
-# since. Original: db8dc2f "mbac/mbacv modes: dynamics-ensemble sigma-rule commitment at rollout".
-
-
-class DynCommit:
-    """sigma-rule commitment from a phi-space DynV1 ensemble (docs/reports/mbac_design_notes.md).
-
-    Decides HOW FAR to execute the selected chunk: roll the ensemble along it (one forward, one
-    prediction per macro-step) and cut at the first step whose disagreement spikes above
-    tau_mult x the running median of recent per-slot disagreements. The relative rule is the
-    hysteresis: persistent OOD inflates the baseline and commitment recovers, only spikes
-    relative to the current regime cut early. Torch stays on CPU - five d=288 models are
-    negligible next to the VLA and must not contend for the sim's GPU memory.
-    """
-
-    def __init__(self, ensemble_path, tau_mult=2.0, window=64):
-        import collections
-
-        import torch as _t
-
-        self._t = _t
-        ck = _t.load(ensemble_path, map_location="cpu")
-        import sys as _sys
-
-        _sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "scripts"))
-        from train_cheapz_dynamics_v1 import DynV1
-
-        cfg = ck["cfg"]
-        self.stride, self.hist = cfg["stride"], cfg["hist"]
-        self.zmu = np.asarray(ck["zmu"], np.float32)
-        self.zsd = np.asarray(ck["zsd"], np.float32)
-        zdim = len(self.zmu)
-        self.models = []
-        for sd in ck["members"]:
-            act_seg = sd["a_in.weight"].shape[1]
-            m = DynV1(
-                zdim,
-                act_seg,
-                hist=self.hist,
-                horizon_macro=len(ck["members"][0]["pos"]) - self.hist,
-                prior_scale=cfg["prior_scale"],
-            )
-            m.load_state_dict(sd)
-            m.eval()
-            self.models.append(m)
-        self.hm = self.models[0].hm
-        self.tau_mult = tau_mult
-        self.recent = collections.deque(maxlen=window)
-        self.zbuf = collections.deque(maxlen=32)  # (sim_step, standardized z) at past replans
-        self.simstep = 0  # advanced by the policy fn; reset per trial via reset()
-
-    def reset(self):
-        # per-trial: history must not leak across scene resets. The sigma baseline (self.recent)
-        # deliberately survives - it calibrates the model's noise floor, not the episode.
-        self.zbuf.clear()
-        self.simstep = 0
-
-    def commit(self, z_phi, chunk, sim_step):
-        zn = (np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd
-        self.zbuf.append((sim_step, zn))
-        # history slots at t-(hist-1)s .. t: nearest recorded replan-time z per slot (the model was
-        # trained on true stride-s history; replans land every 2-16 steps so nearest is close).
-        slots = []
-        for j in range(self.hist - 1, -1, -1):
-            want = sim_step - j * self.stride
-            near = min(self.zbuf, key=lambda p: abs(p[0] - want))
-            slots.append(near[1])
-        t = self._t
-        zh = t.from_numpy(np.stack(slots)[None])  # [1, hist, z]
-        H, A = chunk.shape
-        a = t.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32).reshape(1, self.hm, self.stride * A))
-        with t.no_grad():
-            mus = t.stack([m(zh, a)[0] for m in self.models])  # [M,1,hm,z]
-        sig = t.var(mus, dim=0).sum(-1)[0].numpy()  # [hm]
-        base = float(np.median(self.recent)) if self.recent else float(np.median(sig))
-        self.recent.extend(sig.tolist())
-        over = sig > self.tau_mult * base
-        k = int(np.argmax(over)) + 1 if over.any() else self.hm
-        return max(1, k) * self.stride, sig
-
-
 def make_policy_fn(
     vla,
     score,
@@ -314,8 +232,6 @@ def make_policy_fn(
     history_stride=8,
     token_tf=None,
     sigma_veto=0.0,
-    # Dropped by the merge that lost DynCommit; the mbac/mbacv/mbacf branches below use it.
-    dyn=None,
 ):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
@@ -332,7 +248,6 @@ def make_policy_fn(
 
     def fn(element):
         z, cand = vla.token_and_candidates(element)
-        z_phi = np.asarray(z, np.float32)  # pre-proprio: the dyn ensemble lives in phi space
         z_raw = np.asarray(z, np.float32)[0]  # [2048] pre-proprio token, for the history buffer
         if token_tf is not None:
             z = token_tf(z)  # ladder critics see the SAME embedding the annot was transformed with
@@ -435,25 +350,6 @@ def make_policy_fn(
             pp = int(np.argmax(q[i]))
         elif mode == "bon":
             i, pp = choice, q.shape[1] - 1
-        elif mode in ("mbac", "mbacf"):
-            # selection = critic at full horizon (as bon); commitment = dyn sigma rule.
-            # mbacf first vetoes the high-sigma half of the candidates: E2 measured that one-step
-            # disagreement alone tells behaviourally consistent chunks from inconsistent ones
-            # (binding .817), so the critic only ranks chunks the model recognises - bounding how
-            # far the arg-max can wander into exploitable actions.
-            qsel = np.array(q[:, -1])
-            if mode == "mbacf":
-                sig_c = dyn.sigma_candidates(z_phi, cand)
-                veto = sig_c > np.median(sig_c)
-                # candidate 0 is the pure policy sample - never veto it, so the worst case
-                # degrades to vla instead of to "best of the leftovers" (worker-B 9a8ce85).
-                veto[0] = False
-                qsel[veto] = -np.inf
-            i = int(np.argmax(qsel))
-            n_exec, _sig = dyn.commit(z_phi, cand[i], dyn.simstep)
-            dyn.simstep += n_exec
-            pp = min(n_exec // dyn.stride - 1, q.shape[1] - 1)
-            return cand[i], n_exec, Replan(q, cand, i, int(pp), n_exec, float(q[i, -1]))
         elif mode == "prefix":
             i, pp = 0, choice
         else:
@@ -496,10 +392,6 @@ def build_policy(
     vla=None,
     noise_scales=None,
     sigma_veto=0.0,
-    # Both are passed by main() and were dropped from this signature by the same merge that lost
-    # DynCommit, so every call raised TypeError before the undefined names could even be reached.
-    dyn=None,
-    probe=None,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
 
@@ -524,8 +416,8 @@ def build_policy(
         noise_scale=_parse_noise_scales(noise_scales, num_samples) if noise_scales else 1.0,
     )
     kw = {"query_noise": query_noise, "softmax_temp": softmax_temp, "seed": seed}
-    if mode in ("vla", "mbacv", "probe"):
-        return make_policy_fn(vla, None, None, mode=mode, dyn=dyn, probe=probe, **kw), vla.H, None
+    if mode == "vla":
+        return make_policy_fn(vla, None, None, mode=mode, **kw), vla.H, None
     score, _, macro = _critic.load_trained(critic_path, action_dim=vla.raw_dim, horizon=vla.H)
     pro = proprio_stats(critic_path)
     if pro is not None:
@@ -576,27 +468,6 @@ def main() -> None:
         default=None,
         help="HILP phi readout (phi.pt): apply phi to the extracted token before the "
         "critic, for critics trained on the phi space.",
-    )
-    ap.add_argument(
-        "--dyn",
-        type=pathlib.Path,
-        default=None,
-        help="DynV1 ensemble (ensemble_v1.pt) trained on the SAME phi space as --phi; "
-        "required by the mbac/mbacv modes (sigma-rule commitment).",
-    )
-    ap.add_argument(
-        "--probe",
-        type=pathlib.Path,
-        default=None,
-        help="BC probe checkpoint (probe.pt from train_bc_probe): replaces the VLA's chunk "
-        "with the probe's embedding->chunk regression in the probe mode.",
-    )
-    ap.add_argument(
-        "--dyn-tau",
-        type=float,
-        default=2.0,
-        help="Cut when a macro-step's ensemble disagreement exceeds tau x the running "
-        "median. Higher = longer commitment.",
     )
     ap.add_argument("--task", default="PrepareCoffee")
     ap.add_argument(
@@ -744,35 +615,6 @@ def main() -> None:
         shared_vla.token_transform = _phi_fn
         logger.info(f"phi adapter active: token {_w0.shape[1]} -> {_w2.shape[0]}")
 
-    probe_fn = None
-    if args.probe is not None:
-        import torch as _torch
-
-        _pk = _torch.load(args.probe, map_location="cpu", weights_only=False)
-        _pw = [(_pk["net"][f"{i}.weight"].numpy(), _pk["net"][f"{i}.bias"].numpy()) for i in (0, 2, 4, 6)]
-        _pmu, _psd = _pk["zmu"], _pk["zsd"]
-        _pproj = _pk.get("proj")
-        _pH, _pA = _pk["cfg"]["H"], _pk["cfg"]["A"]
-
-        def probe_fn(z, _w=_pw, _mu=_pmu, _sd=_psd, _hh=_pH, _aa=_pA, _proj=_pproj):
-            x = (np.asarray(z, np.float32).reshape(-1) - _mu) / _sd
-            if _proj is not None:
-                x = x @ _proj
-            for i, (w, b) in enumerate(_w):
-                x = x @ w.T + b
-                if i < len(_w) - 1:
-                    x = 0.5 * x * (1.0 + np.tanh(0.7978845608 * (x + 0.044715 * x**3)))
-            return x.reshape(_hh, _aa).astype(np.float32)
-
-        logger.info(f"probe policy active: {_pk['cfg']['z_src']} ({_pk['cfg']['in_dim']}d) -> chunk")
-
-    dyn_commit = None
-    if args.dyn is not None:
-        dyn_commit = DynCommit(args.dyn, tau_mult=args.dyn_tau)
-        logger.info(
-            f"dyn commitment active: stride {dyn_commit.stride}, hist {dyn_commit.hist}, tau x{dyn_commit.tau_mult}"
-        )
-
     for mode in args.modes:
         policy, H, macro = build_policy(
             args.config,
@@ -788,8 +630,6 @@ def main() -> None:
             model_overrides=_vla_ov,
             vla=shared_vla,
             softmax_temp=args.softmax_temp,
-            dyn=dyn_commit,
-            probe=probe_fn,
         )
         trace, frames, box = [], [], {"trial": 0, "proj": None, "wproj": None}
         record = args.video_dir is not None
@@ -850,8 +690,6 @@ def main() -> None:
             logger.info(
                 f"[{_mode}] trial {trial + 1}/{args.num_trials}: {'SUCCESS' if success else 'failure'} in {steps} steps"
             )
-            if dyn_commit is not None:
-                dyn_commit.reset()
             if _rec and trial < args.num_videos and _frames:
                 import imageio
 
