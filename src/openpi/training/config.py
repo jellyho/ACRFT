@@ -15,6 +15,7 @@ import tyro
 
 import openpi.models.model as _model
 import openpi.models.pi0_alphaflow as pi0_alphaflow
+import openpi.models.pi0_cfgrl as pi0_cfgrl
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.pi0_rlt as pi0_rlt
@@ -1740,6 +1741,34 @@ def _yam_alphaflow_config(
 
 
 _CONFIGS.append(_yam_alphaflow_config())
+
+
+def _yam_cfgrl_config(horizon: int = 30, delta_mode: str = "joint") -> TrainConfig:
+    """CFGRL extraction arm — the ONLY extraction arm needing its own config.
+
+    The other weight-bearing arms (awr, flowdpg, qam, dql) fine-tune the plain pi0.5 action expert,
+    so an exported checkpoint of theirs is served by `pi05_yam_lego_taxi` unchanged. CFGRL's model
+    additionally carries the optimality embedding and samples with classifier-free guidance
+    (kvfrans/cfgrl iql_diffusion.py:170-179, :213), which is a model property, not a serving flag —
+    so it travels in the config, and `serve_policy.py --policy.config pi05_yam_lego_taxi_cfgrl`
+    needs to know nothing about extraction.
+
+    `cfg_w` is the guidance weight the sampler runs at; the official sweep is {1, 1.5, 3, 5, 10,
+    30, 100} and 1.0 reduces to the conditioned policy.
+    """
+    base = _yam_bc_config(delta_mode, horizon=horizon)
+    return dataclasses.replace(
+        base,
+        name=f"{base.name}_cfgrl",
+        model=pi0_cfgrl.Pi0CFGRLConfig(
+            pi05=True,
+            action_horizon=horizon,
+            action_dim=base.model.action_dim,
+        ),
+    )
+
+
+_CONFIGS.append(_yam_cfgrl_config())
 
 
 def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:

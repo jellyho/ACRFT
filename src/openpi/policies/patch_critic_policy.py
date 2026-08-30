@@ -79,6 +79,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         flow_steps: int = 10,
         default_samples: int = 8,
         seed: int = 0,
+        extraction_head=None,
     ):
         from openpi.patch_critic.backbone import DinoV2Backbone
         from openpi.patch_critic.backbone import to_nchw
@@ -86,7 +87,15 @@ class PatchCriticSelectPolicy(BasePolicy):
         from openpi.patch_critic.critic import PatchCriticEnsemble
 
         self._pol = policy
-        self._mode = mode
+        # `idql` is a NAME for what bon already does: N draws, execute the argmax of the
+        # min-ensemble full-chunk Q (philippe-eecs/IDQL ddpm_iql_learner.py:360-374). Aliasing it
+        # here keeps one implementation and lets a run be labelled by the method it reproduces.
+        self._mode = "bon" if mode == "idql" else mode
+        self._mode_label = mode
+        # Modes whose CHUNKS come from an extraction arm rather than the base sampler. They reuse
+        # everything else in this class (patch features, robot-space decode, scoring, HUD).
+        self._arm = mode if mode in ("qpilots", "lps", "lpsd", "flowdagger") else None
+        self._extraction_head = extraction_head
         self._camera_keys = tuple(camera_keys)
         self._state_key = state_key
         self._img_size = int(img_size)
@@ -239,6 +248,19 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._patchify = patchify
         self._score = score
 
+        self._arm_sampler = None
+        if self._arm is not None:
+            from openpi.extraction import serving as _serving
+
+            spec = _serving.default_spec(
+                self._arm,
+                critic=pathlib.Path(critic_dir),
+                **({"latent_actor": pathlib.Path(extraction_head)} if self._arm in ("lps", "lpsd") else {}),
+                **({"steering_head": pathlib.Path(extraction_head)} if self._arm == "flowdagger" else {}),
+            )
+            self._arm_sampler = _serving.ArmChunkSampler(spec, policy._model)
+            logging.info("critic mode %s: chunks from the %s sampler", self._mode_label, self._arm)
+
     def _patches_of(self, obs):
         imgs = np.stack([_parse_image(obs[k], self._img_size) for k in self._camera_keys])  # [ncam,S,S,3]
         x = jnp.asarray(self._to_nchw(imgs), jnp.float32)[None]  # [1,ncam,3,S,S]
@@ -282,8 +304,17 @@ class PatchCriticSelectPolicy(BasePolicy):
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
         observation = _model.Observation.from_dict(inputs)
         self._rng, sample_rng = jax.random.split(self._rng)
-        _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
-        chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
+        if self._arm_sampler is not None:
+            # The arm decides the chunk (steering / latent actor / seed head); everything below --
+            # robot-space decode, critic scoring, HUD -- is unchanged, so an arm is served by this
+            # one path exactly like bon/adaptive.
+            proprio = norm_state if self._proprio_idx is None else norm_state[self._proprio_idx]
+            chunks_model = np.asarray(
+                self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(proprio)), np.float32
+            )
+        else:
+            _token, base = self._extract(sample_rng, observation, num_samples=num_samples, num_steps=self._flow_steps)
+            chunks_model = np.asarray(base[0], np.float32)  # [N, H, model_dim]
         # ROBOT-space chunks: what gets executed, and what the client records. Always through the
         # policy's own output transform, fed the NORMALIZED state -- Unnormalize runs first in that
         # transform and converts it to real units before JointAbsoluteActions adds it
