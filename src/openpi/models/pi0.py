@@ -300,8 +300,7 @@ class Pi0(_model.BaseModel):
         observation = _model.preprocess_observation(None, observation, train=False)
         if observation.state.shape[0] != 1:
             raise ValueError(
-                f"sample_n_actions expects a batch-1 observation (one live frame), got "
-                f"{observation.state.shape[0]}"
+                f"sample_n_actions expects a batch-1 observation (one live frame), got " f"{observation.state.shape[0]}"
             )
 
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)

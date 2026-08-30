@@ -215,6 +215,88 @@ def load_token_transform(critic_path):
     raise ValueError(f"unknown token_transform kind {tf['kind']}")
 
 
+# Restored: a merge kept this class's call sites (mbac/mbacf modes, --dyn) and dropped the class
+# itself, so `--dyn` died with NameError and ruff had been failing on the undefined names ever
+# since. Original: db8dc2f "mbac/mbacv modes: dynamics-ensemble sigma-rule commitment at rollout".
+
+
+class DynCommit:
+    """sigma-rule commitment from a phi-space DynV1 ensemble (docs/reports/mbac_design_notes.md).
+
+    Decides HOW FAR to execute the selected chunk: roll the ensemble along it (one forward, one
+    prediction per macro-step) and cut at the first step whose disagreement spikes above
+    tau_mult x the running median of recent per-slot disagreements. The relative rule is the
+    hysteresis: persistent OOD inflates the baseline and commitment recovers, only spikes
+    relative to the current regime cut early. Torch stays on CPU - five d=288 models are
+    negligible next to the VLA and must not contend for the sim's GPU memory.
+    """
+
+    def __init__(self, ensemble_path, tau_mult=2.0, window=64):
+        import collections
+
+        import torch as _t
+
+        self._t = _t
+        ck = _t.load(ensemble_path, map_location="cpu")
+        import sys as _sys
+
+        _sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "scripts"))
+        from train_cheapz_dynamics_v1 import DynV1
+
+        cfg = ck["cfg"]
+        self.stride, self.hist = cfg["stride"], cfg["hist"]
+        self.zmu = np.asarray(ck["zmu"], np.float32)
+        self.zsd = np.asarray(ck["zsd"], np.float32)
+        zdim = len(self.zmu)
+        self.models = []
+        for sd in ck["members"]:
+            act_seg = sd["a_in.weight"].shape[1]
+            m = DynV1(
+                zdim,
+                act_seg,
+                hist=self.hist,
+                horizon_macro=len(ck["members"][0]["pos"]) - self.hist,
+                prior_scale=cfg["prior_scale"],
+            )
+            m.load_state_dict(sd)
+            m.eval()
+            self.models.append(m)
+        self.hm = self.models[0].hm
+        self.tau_mult = tau_mult
+        self.recent = collections.deque(maxlen=window)
+        self.zbuf = collections.deque(maxlen=32)  # (sim_step, standardized z) at past replans
+        self.simstep = 0  # advanced by the policy fn; reset per trial via reset()
+
+    def reset(self):
+        # per-trial: history must not leak across scene resets. The sigma baseline (self.recent)
+        # deliberately survives - it calibrates the model's noise floor, not the episode.
+        self.zbuf.clear()
+        self.simstep = 0
+
+    def commit(self, z_phi, chunk, sim_step):
+        zn = (np.asarray(z_phi, np.float32).reshape(-1) - self.zmu) / self.zsd
+        self.zbuf.append((sim_step, zn))
+        # history slots at t-(hist-1)s .. t: nearest recorded replan-time z per slot (the model was
+        # trained on true stride-s history; replans land every 2-16 steps so nearest is close).
+        slots = []
+        for j in range(self.hist - 1, -1, -1):
+            want = sim_step - j * self.stride
+            near = min(self.zbuf, key=lambda p: abs(p[0] - want))
+            slots.append(near[1])
+        t = self._t
+        zh = t.from_numpy(np.stack(slots)[None])  # [1, hist, z]
+        H, A = chunk.shape
+        a = t.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32).reshape(1, self.hm, self.stride * A))
+        with t.no_grad():
+            mus = t.stack([m(zh, a)[0] for m in self.models])  # [M,1,hm,z]
+        sig = t.var(mus, dim=0).sum(-1)[0].numpy()  # [hm]
+        base = float(np.median(self.recent)) if self.recent else float(np.median(sig))
+        self.recent.extend(sig.tolist())
+        over = sig > self.tau_mult * base
+        k = int(np.argmax(over)) + 1 if over.any() else self.hm
+        return max(1, k) * self.stride, sig
+
+
 def make_policy_fn(
     vla,
     score,
@@ -232,6 +314,8 @@ def make_policy_fn(
     history_stride=8,
     token_tf=None,
     sigma_veto=0.0,
+    # Dropped by the merge that lost DynCommit; the mbac/mbacv/mbacf branches below use it.
+    dyn=None,
 ):
     """policy_fn(element) -> (chunk, n_exec, Replan). `score(obs, actions)` is a live critic; the vla
     is reused. mode='vla' ignores the critic entirely.
@@ -248,6 +332,7 @@ def make_policy_fn(
 
     def fn(element):
         z, cand = vla.token_and_candidates(element)
+        z_phi = np.asarray(z, np.float32)  # pre-proprio: the dyn ensemble lives in phi space
         z_raw = np.asarray(z, np.float32)[0]  # [2048] pre-proprio token, for the history buffer
         if token_tf is not None:
             z = token_tf(z)  # ladder critics see the SAME embedding the annot was transformed with
@@ -411,6 +496,10 @@ def build_policy(
     vla=None,
     noise_scales=None,
     sigma_veto=0.0,
+    # Both are passed by main() and were dropped from this signature by the same merge that lost
+    # DynCommit, so every call raised TypeError before the undefined names could even be reached.
+    dyn=None,
+    probe=None,
 ):
     """CLI path: load the VLA and (for critic modes) a critic from disk. Returns (policy_fn, H, macro).
 

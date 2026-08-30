@@ -19,11 +19,13 @@ from huggingface_hub import HfApi
 CKPT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "checkpoints/pi05_yam_cable_tie/cable_tie_bc"
 PATTERNS = ["params/**", "assets/**", "_CHECKPOINT_METADATA"]
 
+
 # One repo per checkpoint rather than step subfolders in a shared repo: each repo
 # then downloads straight into a usable --policy.dir, and uploading a second
 # checkpoint cannot disturb an upload already in flight for the first.
 def repo_for(step: int) -> str:
     return f"Gwanwoo/pi05_yam_cable_tie_bc_{step // 1000}k"
+
 
 CARD = """---
 license: apache-2.0

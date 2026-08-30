@@ -1,10 +1,10 @@
 """Figures for the latent-space AWAC note (house style, report_style).
 
-  1. shift  — the improvement moves from deploy-time (BoN) into train-time (AWR baked into the actor).
-  2. beta   — effective sample size of the exp(A/beta) weights vs beta: the usable band between
-              argmax-collapse (EMaQ) and mean/BC (no improvement). Raw vs standardized advantages.
+1. shift  — the improvement moves from deploy-time (BoN) into train-time (AWR baked into the actor).
+2. beta   — effective sample size of the exp(A/beta) weights vs beta: the usable band between
+            argmax-collapse (EMaQ) and mean/BC (no improvement). Raw vs standardized advantages.
 
-    uv run python scripts/latent_awac_figs.py --out space_v2/figs
+  uv run python scripts/latent_awac_figs.py --out space_v2/figs
 """
 
 import argparse
@@ -13,7 +13,6 @@ import pathlib
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
-
 import report_style as rs
 
 
@@ -35,8 +34,13 @@ def fig_shift(path):
     ax.set_ylim(0, 5.4)
     ax.axis("off")
     # BoN (deploy-time)
-    ax.text(0.2, 4.95, "Best-of-N  —  improvement at DEPLOY (every step, N× cost, actor unchanged)",
-            fontsize=9.5, color=rs.RED)
+    ax.text(
+        0.2,
+        4.95,
+        "Best-of-N  —  improvement at DEPLOY (every step, N× cost, actor unchanged)",
+        fontsize=9.5,
+        color=rs.RED,
+    )
     _box(ax, 0.3, 3.4, 2.3, 1.0, "actor\nsample N latents", fc="#fdeee6", ec=rs.ORANGE)
     _box(ax, 3.1, 3.4, 2.2, 1.0, "frozen D\n→ N chunks", fc="#eafaea", ec=rs.GREEN)
     _box(ax, 5.8, 3.4, 2.2, 1.0, "critic Q\nscore", fc="#f9f9f7", ec=rs.PURPLE)
@@ -45,8 +49,13 @@ def fig_shift(path):
     for x0, x1 in [(2.6, 3.1), (5.3, 5.8), (8.0, 8.5), (10.5, 11.0)]:
         _arrow(ax, x0, 3.9, x1, 3.9)
     # AWR (train-time)
-    ax.text(0.2, 2.35, "AWR  —  improvement at TRAIN (baked into the actor; deploy = 1 sample)",
-            fontsize=9.5, color=rs.GREEN)
+    ax.text(
+        0.2,
+        2.35,
+        "AWR  —  improvement at TRAIN (baked into the actor; deploy = 1 sample)",
+        fontsize=9.5,
+        color=rs.GREEN,
+    )
     _box(ax, 0.3, 0.7, 2.3, 1.0, "sampled / logged\n(s, z, a)", fc="#eef4fb")
     _box(ax, 3.1, 0.7, 2.6, 1.0, "advantage\nA = Q^π(D(z)) − V", fc="#f9f9f7", ec=rs.PURPLE)
     _box(ax, 6.2, 0.7, 3.0, 1.0, "weighted flow-matching\ne^{A/β} · ‖v_φ − (z−ε)‖²", fc="#fdeee6", ec=rs.ORANGE)

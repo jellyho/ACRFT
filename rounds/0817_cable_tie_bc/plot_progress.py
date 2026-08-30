@@ -17,7 +17,8 @@ import numpy as np
 
 plt.style.use(os.path.expanduser("~/dotfiles/claude/paper.mplstyle"))
 sys.path.insert(0, os.path.expanduser("~/dotfiles/claude"))
-from plot_palette import BLUE, ORANGE_TEXT  # noqa: E402
+from plot_palette import BLUE  # noqa: E402
+from plot_palette import ORANGE_TEXT  # noqa: E402
 
 HERE = pathlib.Path(__file__).parent
 DEFAULT_LOG = pathlib.Path(
