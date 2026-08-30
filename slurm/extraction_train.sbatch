@@ -7,11 +7,11 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=180G
 #SBATCH --time=48:00:00
-#SBATCH --chdir=/data5/jellyho/ACRFT/openpi-alphaflow
-#SBATCH --output=/data5/jellyho/ACRFT/openpi-alphaflow/extraction_%x.slurm.log
+#SBATCH --chdir=/data5/jellyho/ACRFT/openpi
+#SBATCH --output=/data5/jellyho/ACRFT/openpi/extraction_%x.slurm.log
 export LEROBOT_VIDEO_BACKEND=pyav
 export UV_PROJECT_ENVIRONMENT=/data5/jellyho/ACRFT/openpi/.venv
-export PYTHONPATH=/data5/jellyho/ACRFT/openpi-alphaflow/src
+export PYTHONPATH=/data5/jellyho/ACRFT/openpi/src
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.92
 arm=${1:?usage: sbatch slurm/extraction_train.sbatch <arm>}
 case "$arm" in
