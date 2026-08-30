@@ -9,12 +9,9 @@ but an equivalence: tiling the cached prefix must give exactly what re-running i
 """
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from openpi.models import model as _model
-from openpi.models import pi0 as _pi0
 from openpi.models import pi0_config
 
 

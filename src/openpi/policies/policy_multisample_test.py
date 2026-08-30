@@ -300,7 +300,8 @@ def test_serve_only_passes_what_was_asked_for():
     default differs (alphaflow 1, pi05 10), and overriding with None would break both."""
     import dataclasses
 
-    from scripts.serve_policy import Args, _sample_kwargs
+    from scripts.serve_policy import Args
+    from scripts.serve_policy import _sample_kwargs
 
     assert _sample_kwargs(Args()) is None
     assert _sample_kwargs(dataclasses.replace(Args(), num_steps=4)) == {"num_steps": 4}

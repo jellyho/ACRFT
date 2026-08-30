@@ -7,7 +7,6 @@ critic's own preprocessing, which is correct either way -- but only if that roun
 identity when the stats DO agree. That is what these check, with the real YAM stats on CPU.
 """
 
-import json
 import pathlib
 
 import numpy as np
@@ -19,9 +18,7 @@ _HOME = pathlib.Path.home() / "hf_utils_downloads"
 _RLT = _HOME / "acrft-yam-critics/patch_critic_yam_s347_fixed_200k/pi05_norm_stats.json"
 _BC = _HOME / "pi05_yam_lego_taxi_bc_s300_h30/200000/assets/jellyho/yam_lego_taxi/norm_stats.json"
 
-pytestmark = pytest.mark.skipif(
-    not (_RLT.exists() and _BC.exists()), reason="needs the downloaded YAM checkpoints"
-)
+pytestmark = pytest.mark.skipif(not (_RLT.exists() and _BC.exists()), reason="needs the downloaded YAM checkpoints")
 
 # YAM: 6 joints + gripper per arm; the grippers (-1) stay absolute.
 _REF = [0, 1, 2, 3, 4, 5, -1, 21, 22, 23, 24, 25, 26, -1]
@@ -94,7 +91,7 @@ def test_state_is_normalized_before_it_is_sliced():
     assert not np.allclose(correct, wrong), "the two orders must not be confusable"
 
 
-def test_the_first_C_steps_of_a_long_chunk_are_a_C_step_chunk():
+def test_the_head_of_a_long_chunk_is_a_short_chunk():
     """Why an h30 critic can score an h50 policy: the joint delta at step k is taken against the
     same base state whatever the chunk length, so the first 30 steps of a 50-step proposal are the
     same object the critic was fitted on -- and the critic's own (h30) action statistics are the
