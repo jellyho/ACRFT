@@ -58,6 +58,7 @@ def main():
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--out", type=pathlib.Path, default=None)
     ap.add_argument("--wandb", action="store_true")
+    ap.add_argument("--wandb-entity", default="jellyho_")
     a = ap.parse_args()
     out = a.out or pathlib.Path(f"/data1/jellyho/acrft_ckpts/extraction/{a.mode}_run1")
 
@@ -155,7 +156,7 @@ def main():
 
         run = wandb.init(
             project="yam-rlt",
-            entity="RSS-PFT_RLLAB",
+            entity=a.wandb_entity,
             name=f"extract_{a.mode}_run1",
             group="extraction",
             config={k: str(v) for k, v in vars(a).items()} | {"method": a.mode},
