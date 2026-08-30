@@ -98,10 +98,13 @@ class PatchCriticSelectPolicy(BasePolicy):
         from openpi.patch_critic.critic import PatchCriticEnsemble
 
         self._pol = policy
-        # `idql` is a NAME for what bon already does: N draws, execute the argmax of the
-        # min-ensemble full-chunk Q (philippe-eecs/IDQL ddpm_iql_learner.py:360-374). Aliasing it
-        # here keeps one implementation and lets a run be labelled by the method it reproduces.
-        self._mode = "bon" if mode == "idql" else mode
+        # NOTE on names: IDQL's argmax rule (ddpm_iql_learner.py:360-374 -- N draws, execute the
+        # argmax of the min-ensemble Q) is what `bon` already does, so there is no separate "idql"
+        # mode; run bon and label it by N. What IS distinct is IDQL's *implicit policy*
+        # (:377-403, critic_objective='expectile'): sample ONE candidate with probability
+        # proportional to the expectile weights of its advantage, instead of taking the best.
+        # That trades a little value for less exposure to critic error, so it is its own mode.
+        self._mode = mode
         self._mode_label = mode
         # Modes whose CHUNKS come from an extraction arm rather than the base sampler. They reuse
         # everything else in this class (patch features, robot-space decode, scoring, HUD).
@@ -308,6 +311,27 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._patchify = patchify
         self._score = score
 
+        self._v_of = None
+        if self._mode == "implicit":
+            from openpi.patch_critic.critic import PatchV
+
+            vp = pathlib.Path(critic_dir) / "v_params.msgpack"
+            if not vp.exists():
+                raise FileNotFoundError(f"--critic-mode implicit needs the V head; {vp} is missing")
+            v_net = PatchV(num_atoms=atoms)
+            v_params = flax.serialization.msgpack_restore(vp.read_bytes())
+
+            @jax.jit
+            def v_of(patches, state):  # [P,D],[state] -> scalar V(s)
+                out = v_net.apply(v_params, patches[None], state[None])
+                return jnp.sum(jax.nn.softmax(out, -1) * centers, -1).reshape(())
+
+            self._v_of = v_of
+            # the expectile the critic was FITTED with -- IDQL's critic_hyperparam is the same
+            # quantity, so it is read off the artifact instead of being passed in
+            self._expectile = float(cc.get("expectile", 0.9))
+            logging.info("critic mode implicit: expectile %.2f weights over adv = Q - V", self._expectile)
+
         self._arm_sampler = None
         if self._arm is not None:
             from openpi.extraction import serving as _serving
@@ -428,7 +452,16 @@ class PatchCriticSelectPolicy(BasePolicy):
         decoded = robot_actions  # [N, H, A] in ROBOT space -- executed and recorded
 
         pv = np.asarray(self._score(patches, jnp.asarray(scored_state), jnp.asarray(scored)))  # [N, mh]
-        best = int(np.argmax(pv[:, -1]))  # argmax full-chunk value
+        if self._mode == "implicit":
+            # IDQL implicit policy (ddpm_iql_learner.py:388-394): adv = min-ensemble Q - V, weights
+            # tau where adv > 0 else 1 - tau, then ONE categorical draw over the candidates.
+            v = float(np.asarray(self._v_of(jnp.asarray(patches), jnp.asarray(scored_state))))
+            adv = pv[:, -1] - v
+            w = np.where(adv > 0, self._expectile, 1.0 - self._expectile)
+            self._rng, pick_rng = jax.random.split(self._rng)
+            best = int(jax.random.choice(pick_rng, pv.shape[0], p=jnp.asarray(w / w.sum())))
+        else:
+            best = int(np.argmax(pv[:, -1]))  # argmax full-chunk value
         if self._mode == "adaptive":
             kbest = int(np.argmax(pv[best]))  # highest-value commitment prefix (macro-group index)
             n_exec = (kbest + 1) * self._macro

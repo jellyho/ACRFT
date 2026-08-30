@@ -72,10 +72,13 @@ class Args:
     # serving entry points was two things to keep in step and the difference is in the checkpoint.
     critic: str | None = None
 
-    # Patch critics only. Selection modes: "bon" executes the whole winning chunk, "adaptive"
-    # executes just its highest-value commitment prefix and replans (so the chunk length varies per
-    # reply), "idql" is bon under the name of the method it reproduces (philippe-eecs/IDQL
-    # ddpm_iql_learner.py:360-374 is exactly argmax of min-ensemble full-chunk Q).
+    # Patch critics only. Selection modes: "bon" executes the whole winning chunk (this is also
+    # exactly IDQL's argmax rule, ddpm_iql_learner.py:360-374, so an IDQL run is bon labelled by
+    # its N -- there is no separate mode for it); "implicit" is IDQL's *implicit policy*
+    # (:377-403), which draws ONE candidate with probability proportional to the expectile weights
+    # of its advantage instead of taking the best, trading value for less critic exploitation;
+    # "adaptive" executes just the highest-value commitment prefix and replans (so the chunk length
+    # varies per reply).
     #
     # Extraction modes, where the CHUNK comes from a policy-extraction arm and this wrapper still
     # does the scoring/decode: "qpilots" steers the served policy's own sampler with the critic
