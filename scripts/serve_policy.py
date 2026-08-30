@@ -97,6 +97,12 @@ class Args:
     # run directory holding steering_head.msgpack + dct_basis.npy). Unused by the other modes.
     extraction_head: str | None = None
 
+    # QPILOTS steering strength (arXiv 2606.14801 Eq. 17). The published sweep is {0.1, 0.2, 0.3},
+    # and until this existed the serving path was pinned to ArmSpec's 0.2 default -- two thirds of
+    # the sweep was unreachable without editing the source. Named --steer-alpha rather than --alpha
+    # because this file already talks about alpha-Flow a few options down. Unused by other modes.
+    steer_alpha: float | None = None
+
     # How many action chunks to draw per observation. This is what the server DOES, not what a
     # client may ask for: it is both what gets sampled and what the handshake declares the
     # `action_samples` column for, so the two cannot disagree. The robot client sends nothing about
@@ -258,8 +264,18 @@ def _build_critic_policy(policy, args: Args):
         # charged per CANDIDATE, so it is the difference between BoN-8 costing 8 suffix passes and
         # 80. Unset keeps the wrapper's own default (10, the pi05 flow default).
         steps = {"flow_steps": int(args.num_steps)} if args.num_steps is not None else {}
+        if args.steer_alpha is not None and mode != "qpilots":
+            # Setting it on a mode that never steers is a request that silently does nothing, and
+            # the run would be filed under an alpha it never used.
+            logging.warning("--steer-alpha is ignored by --critic-mode %s; only qpilots steers", mode)
         return _pcp.PatchCriticSelectPolicy(
-            policy, str(critic_dir), mode=mode, extraction_head=args.extraction_head, **samples, **steps
+            policy,
+            str(critic_dir),
+            mode=mode,
+            extraction_head=args.extraction_head,
+            steer_alpha=args.steer_alpha,
+            **samples,
+            **steps,
         )
     logging.info("critic: RLT-token critic (%s)", critic_dir.name)
     return _policy.CriticSelectPolicy(policy, str(critic_dir), **samples)

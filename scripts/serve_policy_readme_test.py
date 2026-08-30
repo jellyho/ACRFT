@@ -20,13 +20,23 @@ import tyro
 sys.argv = ["serve_policy.py"]
 from scripts.serve_policy import Args  # noqa: E402
 
-_README = pathlib.Path(__file__).resolve().parents[1] / "README.md"
+_ROOT = pathlib.Path(__file__).resolve().parents[1]
+#: Every doc that spells out a serve command. docs/extraction_arms.md is here because the arms had
+#: NO in-repo documentation at all -- their only run instructions lived inside a model-card string
+#: that pointed at a script which had been deleted.
+_DOCS = (_ROOT / "README.md", _ROOT / "docs" / "extraction_arms.md")
 _CMD = re.compile(r"((?:uv run [^\n]*?scripts/serve_policy\.py)(?:[^\n]*\\\n)*[^\n]*)")
 
 
 def _commands() -> list[list[str]]:
     out = []
-    for raw in _CMD.findall(_README.read_text()):
+    text = "\n".join(d.read_text() for d in _DOCS if d.exists())
+    # The docs use shell variables for the repeated parts; expand them so the parser sees a
+    # complete command rather than a literal "$BASE".
+    text = text.replace("$BASE", "policy:checkpoint --policy.config pi05_yam_lego_taxi --policy.dir /tmp/x")
+    text = text.replace("$CRITIC", "/tmp/critic")
+    text = re.sub(r"<[^>\n]+>", "/tmp/x", text)
+    for raw in _CMD.findall(text):
         cmd = raw.replace("\\\n", " ")
         if cmd.count("'") % 2:  # the srun example lives inside bash -lc '...'
             cmd = cmd.rstrip().rstrip("'")
@@ -37,7 +47,7 @@ def _commands() -> list[list[str]]:
 
 def test_the_readme_still_shows_serve_commands():
     """A regex that quietly matches nothing would make every other test in here vacuous."""
-    assert len(_commands()) >= 8
+    assert len(_commands()) >= 14
 
 
 @pytest.mark.parametrize("argv", _commands(), ids=lambda a: " ".join(a[:4]))

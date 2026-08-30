@@ -126,6 +126,14 @@ misc/yam-misc stats --root ~/lerobot_data --repo-id <run> --per-episode
 
 ---
 
+## Policy-extraction arms
+
+Ten ways to turn the frozen BC policy plus the frozen critic into a better policy — best-of-N,
+IDQL's implicit policy, QPILOTS test-time steering, latent actors, and the weight-only arms
+(AWR / CFGRL / DQL / QAM / FlowDPG / FQL-X). They all serve through the one entry point; the
+command for each is in [docs/extraction_arms.md](docs/extraction_arms.md), along with the three
+things that are easy to get wrong.
+
 ## Looking at a rollout
 
 A deployed rollout is a dataset; `misc/` turns one into a video — the candidate chunks the policy
