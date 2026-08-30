@@ -121,11 +121,27 @@ class PatchCriticSelectPolicy(BasePolicy):
                 return None, (_sample_n(rng, obs, num_samples=num_samples, num_steps=num_steps),)
 
             self._extract = _extract
+        elif self._arm is not None:
+            # Extraction modes bring their own chunk (steering / latent actor / seed head), so no
+            # candidate sampler is needed at all -- requiring one would rule out serving them on a
+            # plain BC pi0.5, which is exactly the base they were trained against.
+            self._extract = None
         else:
-            raise TypeError(
-                f"{type(model).__name__} offers neither extract_token_and_base_actions (RLT) nor "
-                "sample_n_actions (alpha-Flow); the patch-critic wrapper needs one of them"
+            # Any other model (a plain pi0.5 BC checkpoint included): draw the N candidates by
+            # calling its ordinary sampler N times with split keys. That costs N prefix passes
+            # instead of one, but selection modes (bon / idql / adaptive) are defined by the draws,
+            # not by how they were batched -- and without this the wrapper simply cannot serve the
+            # BC base, which is the arm-0 baseline of the extraction comparison.
+            logging.info(
+                "%s has no batched sampler; drawing N candidates with N sequential calls", type(model).__name__
             )
+            _sample = nnx_utils.module_jit(model.sample_actions, static_argnames=("num_steps",))
+
+            def _extract(rng, obs, *, num_samples, num_steps):
+                chunks = [_sample(jax.random.fold_in(rng, i), obs, num_steps=num_steps)[0] for i in range(num_samples)]
+                return None, (jnp.stack(chunks),)
+
+            self._extract = _extract
         self._model_action_dim = int(model.action_dim)
         self._action_horizon = int(model.action_horizon)
         # The width that actually arrives on the wire (14 for YAM), not the model's padded one
