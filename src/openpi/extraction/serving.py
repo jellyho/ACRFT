@@ -60,7 +60,7 @@ from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
 BC_CKPT = pathlib.Path("/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/100000")
 AF_CKPT = pathlib.Path("/data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000")
-CRITIC = pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_g5_tau9_min")
+CRITIC = pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_fixed_tau9_min_200k")
 CKPT_ROOT = pathlib.Path("/data1/jellyho/acrft_ckpts/extraction")
 
 EXPERT_ARMS = ("awr", "cfgrl", "flowdpg", "qam", "dql")

@@ -77,7 +77,7 @@ tags: [robotics, offline-rl, vla, pi0.5, policy-extraction]
 Policy-extraction methods applied to the same frozen pi0.5 base and the same frozen patch
 critic, as a **method-only-diff** comparison ring: identical BC init
 (`yam_bc_s300_h30_successonly/100000`), backbone frozen, **action expert only** trained, critic
-`patch_critic_yam_s347_g5_tau9_min` fixed.
+`patch_critic_yam_s347_fixed_tau9_min_200k` fixed.
 
 | folder | method | provenance | what it swaps |
 |---|---|---|---|

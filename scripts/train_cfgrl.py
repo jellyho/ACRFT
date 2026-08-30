@@ -27,7 +27,7 @@ def main():
             "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/100000"
         ),
     )
-    ap.add_argument("--advantage", type=pathlib.Path, default=R / ".scratch/extraction/advantage_g5tau9min")
+    ap.add_argument("--advantage", type=pathlib.Path, default=R / ".scratch/extraction/advantage_fixed_tau9min")
     ap.add_argument("--lr", type=float, default=5e-5)
     ap.add_argument("--batch", type=int, default=16, help="doubled internally for the two CFG branches")
     ap.add_argument("--steps", type=int, default=30000)
