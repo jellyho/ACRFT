@@ -1,8 +1,18 @@
-"""Inference for every policy-extraction arm — one loader, one servable ``Policy``.
+"""Sampler variants for the policy-extraction arms that need the CRITIC's inputs at inference.
 
-Each arm changes exactly one thing about how an action chunk is produced from the frozen BC
-pi0.5, so this module keeps the ordinary openpi serving path (transforms + norm stats from the
-BC checkpoint's assets) and swaps only the sampler:
+There is one serving entry point in this repo -- ``scripts/serve_policy.py`` -- and arms reach it
+two ways, both of them existing conventions:
+
+  weight-only arms (awr, cfgrl, flowdpg, qam, dql)
+      exported to ordinary openpi checkpoints by ``scripts/export_extraction_checkpoint.py``, so
+      they serve as any checkpoint does:  --policy.config <name> --policy.dir <exported>.
+      Nothing in the serving path knows they came from an extraction run.
+  critic-consuming arms (qpilots, idql/bon, lps, lpsd, flowdagger)
+      served through the existing ``--critic`` wrapper (PatchCriticSelectPolicy), which already
+      owns the frozen DINOv2 backbone and the critic, selected by ``--critic-mode``. This module
+      supplies only the per-mode sampling math those modes call.
+
+The samplers below take the pooled patch features + proprio the wrapper already computes:
 
   expert-overlay arms (awr, cfgrl, flowdpg, qam, dql)
       the trainer saved an orbax {"expert": ...} subtree; we overlay it on the BC params and
@@ -45,8 +55,6 @@ import numpy as np
 
 from openpi.models import model as _model
 from openpi.models.pi0 import make_attn_mask
-from openpi.policies import policy as _policy_mod
-from openpi.policies import policy_config as _policy_config
 from openpi.training import config as _config
 from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
@@ -129,38 +137,29 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
     return spec
 
 
-class _ArmSampler:
-    """Holds the (possibly overlaid) model and exposes a Policy-compatible sample_actions."""
+class ArmChunkSampler:
+    """Produces the action chunk for one critic-consuming arm.
 
-    def __init__(self, spec: ArmSpec):
+    Called by ``PatchCriticSelectPolicy`` (the ``--critic-mode`` wrapper), which already owns the
+    frozen DINOv2 backbone, the critic and the robot-space decode — this only decides the chunk.
+    ``__call__(rng, observation, patches, proprio) -> [N, H, AD]`` in the model's normalized space,
+    the same array the base sampler would have returned, so nothing downstream changes.
+
+    For lps/lpsd the base model is the frozen alpha-Flow checkpoint (a different network from the
+    served BC policy), so it is loaded here; for qpilots the served policy's own model is used.
+    """
+
+    def __init__(self, spec: ArmSpec, served_model=None):
         self.spec = spec
-        self.train_config = _config.get_config("pi05_yam_lego_taxi")
-        if spec.arm == "cfgrl":
-            from openpi.models.pi0_cfgrl import Pi0CFGRLConfig
-
-            mcfg = Pi0CFGRLConfig(
-                pi05=True,
-                action_horizon=self.train_config.model.action_horizon,
-                action_dim=self.train_config.model.action_dim,
-            )
-        elif spec.arm in LATENT_ARMS:
-            mcfg = _config.get_config("pi05_yam_lego_taxi_alphaflow").model
+        if spec.arm == "qpilots" and served_model is not None:
+            # steer the policy that is actually being served, whatever checkpoint it came from
+            self.model = served_model
+            self.graphdef = nnx.graphdef(served_model)
+            self.params = jax.device_put(nnx.state(served_model))
+            self.H = served_model.action_horizon
+            self.AD = served_model.action_dim
         else:
-            mcfg = self.train_config.model
-        self.H, self.AD = mcfg.action_horizon, mcfg.action_dim
-
-        model = mcfg.create(jax.random.key(0))
-        graphdef, state = nnx.split(model)
-        loaded = CheckpointWeightLoaderKeepMissing(str(spec.base_ckpt / "params")).load(state.to_pure_dict())
-        if spec.expert_ckpt is not None:
-            import orbax.checkpoint as ocp
-
-            with ocp.StandardCheckpointer() as c:
-                _deep_update(loaded, c.restore(pathlib.Path(spec.expert_ckpt).absolute())["expert"])
-        state.replace_by_pure_dict(loaded)
-        self.model = nnx.merge(graphdef, state)
-        self.graphdef = nnx.graphdef(self.model)
-        self.params = jax.device_put(nnx.state(self.model))
+            self._load_base(spec)
 
         self.actor = _restore_mlp(spec.latent_actor) if spec.latent_actor else None
         self.head = self.basis = None
@@ -173,6 +172,22 @@ class _ArmSampler:
             from openpi.extraction import critic_q
 
             self.critic = critic_q.load(spec.critic)
+
+    def _load_base(self, spec: ArmSpec):
+        mcfg = (
+            _config.get_config("pi05_yam_lego_taxi_alphaflow").model
+            if spec.arm in LATENT_ARMS
+            else _config.get_config("pi05_yam_lego_taxi").model
+        )
+        self.H, self.AD = mcfg.action_horizon, mcfg.action_dim
+        model = mcfg.create(jax.random.key(0))
+        graphdef, state = nnx.split(model)
+        state.replace_by_pure_dict(
+            CheckpointWeightLoaderKeepMissing(str(spec.base_ckpt / "params")).load(state.to_pure_dict())
+        )
+        self.model = nnx.merge(graphdef, state)
+        self.graphdef = nnx.graphdef(self.model)
+        self.params = jax.device_put(nnx.state(self.model))
 
     # ---- pi0.5 sampler pieces (same math as the trainers / eval harness) ----------------------
     def _prefix(self, model, obs):
@@ -205,18 +220,20 @@ class _ArmSampler:
             return q.min(axis=0)
         return q.mean(axis=0) - self.spec.rho * q.std(axis=0)  # pessimistic, QPILOTS Eq. 12
 
-    def sample_actions(self, rng, observation, **kw):
-        """Signature-compatible with model.sample_actions; critic arms take feats/proprio in kw."""
+    def __call__(self, rng, observation, patches, proprio):
+        """-> chunk [N, H, AD] in the model's normalized space (N=1 for these arms).
+
+        `patches` are the critic's pooled DINOv2 features and `proprio` its state slice, both
+        already computed by the serving wrapper for scoring — we reuse them rather than recomputing.
+        """
         spec = self.spec
         model = nnx.merge(self.graphdef, self.params)
         obs = _model.preprocess_observation(None, observation, train=False)
         b = obs.state.shape[0]
-
-        if spec.arm == "cfgrl":
-            return model.sample_actions_cfg(rng, observation, cfg_w=spec.cfg_w, num_steps=spec.ode_steps)
+        feats = patches if patches.ndim == 3 else patches[None]
+        proprio = proprio if proprio.ndim == 2 else proprio[None]
 
         if spec.arm in LATENT_ARMS:
-            feats, proprio = kw["feats"], kw["proprio"]
             rep = jnp.concatenate([feats.mean(axis=1), proprio], axis=-1)
             if spec.arm == "lpsd":
                 rep = jnp.concatenate([rep, jax.random.normal(rng, (b, self.H * self.AD))], axis=-1)
@@ -228,14 +245,12 @@ class _ArmSampler:
         kv, pm = self._prefix(model, obs)
 
         if spec.arm == "flowdagger":
-            feats, proprio = kw["feats"], kw["proprio"]
             rep = jnp.concatenate([feats.mean(axis=1), proprio], axis=-1)
             coeffs = _mlp(self.head, rep, tanh_scale=3.0).reshape(b, self.basis.shape[0], self.AD)
             seed = jnp.einsum("kh,bkd->bhd", self.basis, coeffs)
             return self._euler(model, obs, kv, pm, seed)
 
         if spec.arm == "qpilots":
-            feats, proprio = kw["feats"], kw["proprio"]
             ad = self.critic.config["action_dim"]
             n = spec.ode_steps
             dt = 1.0 / n
@@ -259,110 +274,7 @@ class _ArmSampler:
                 x = x - dt * v
             return jnp.clip(x, -1.0, 1.0)
 
-        if spec.arm in ("idql", "bon"):
-            feats, proprio = kw["feats"], kw["proprio"]
-            ad = self.critic.config["action_dim"]
-            best_c = best_q = None
-            for i in range(spec.n_samples):
-                c = jnp.clip(
-                    self._euler(
-                        model, obs, kv, pm, jax.random.normal(jax.random.fold_in(rng, i), (b, self.H, self.AD))
-                    ),
-                    -1.0,
-                    1.0,
-                )
-                q = self._q(feats, c[..., :ad], proprio, reduce="min")  # ddpm_iql_learner.py:40-43
-                if best_q is None:
-                    best_c, best_q = c, q
-                else:
-                    take = (q > best_q)[:, None, None]
-                    best_c, best_q = jnp.where(take, c, best_c), jnp.maximum(q, best_q)
-            return best_c
-
-        # bc and the expert-overlay arms: the ordinary sampler
-        return self._euler(model, obs, kv, pm, jax.random.normal(rng, (b, self.H, self.AD)))
-
-
-class ExtractionPolicy(_policy_mod.BasePolicy):
-    """Serves one arm through the BC transform chain; adds critic features when the arm needs them."""
-
-    def __init__(self, spec: ArmSpec, *, default_prompt: str | None = None):
-        self._spec = spec
-        self._sampler = _ArmSampler(spec)
-        # the ordinary served BC policy supplies transforms + norm stats (and, for arms that need
-        # no critic, the whole inference path); we only borrow its transform chain
-        self._policy = _policy_config.create_trained_policy(
-            self._sampler.train_config, spec.base_ckpt, default_prompt=default_prompt
+        raise ValueError(
+            f"{spec.arm!r} is not sampled here: bon/idql are the wrapper's own selection path, and "
+            "the weight-only arms serve as exported checkpoints (export_extraction_checkpoint.py)."
         )
-        self._input_transform = self._policy._input_transform
-        self._output_transform = self._policy._output_transform
-        self._rng = jax.random.key(0)
-        self._needs_feats = spec.critic is not None or spec.arm in (*LATENT_ARMS, "flowdagger")
-        self._patchify = None
-        if self._needs_feats:
-            self._build_patchify()
-
-    def _build_patchify(self, img_size: int = 224):
-        """DINOv2 + the critic's 2x2 mean pooling — patch_critic_policy.py:212-231 verbatim, so a
-        served arm sees exactly the feature layout the critic (and the cache) was built with."""
-        from openpi.patch_critic.backbone import DinoV2Backbone
-
-        cc = self._sampler.critic.config
-        bb = DinoV2Backbone(cc["backbone"])
-        grid = int(bb.num_patches(img_size) ** 0.5)
-        pooled = grid // 2
-        from openpi.policies import patch_critic_policy as _pcp
-
-        self._camera_keys = _pcp.YAM_CAMERA_KEYS
-        ncam = len(self._camera_keys)
-        npatch = ncam * pooled * pooled
-        self._img_size = img_size
-
-        def pool(p):
-            b, _, d = p.shape
-            return (
-                p.reshape(b, ncam, grid, grid, d)
-                .reshape(b, ncam, pooled, 2, pooled, 2, d)
-                .mean((3, 5))
-                .reshape(b, npatch, d)
-            )
-
-        @jax.jit
-        def patchify(imgs_nchw):  # [1, ncam, 3, S, S] -> [1, npatch, D]
-            return pool(bb(imgs_nchw))
-
-        self._patchify = patchify
-
-    def _critic_inputs(self, obs: dict):
-        """DINOv2 patch features + the critic's proprio slice, exactly as the critic was trained."""
-        from openpi.patch_critic.backbone import to_nchw
-        from openpi.policies import patch_critic_policy as _pcp
-
-        imgs = np.stack([_pcp._parse_image(obs[k], self._img_size) for k in self._camera_keys])
-        feats = self._patchify(jnp.asarray(to_nchw(imgs))[None])  # [1, npatch, D]
-        state = np.asarray(obs[_pcp.YAM_STATE_KEY], np.float32)[None]
-        critic = self._sampler.critic
-        idx = critic.proprio_idx if critic is not None else None
-        proprio = state if idx is None else state[:, idx]
-        return jnp.asarray(feats, jnp.float32), jnp.asarray(proprio, jnp.float32)
-
-    def infer(self, obs: dict, **_) -> dict:
-        inputs = self._input_transform(jax.tree.map(lambda x: x, obs))
-        batched = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
-        self._rng, key = jax.random.split(self._rng)
-        kw = {}
-        if self._needs_feats:
-            feats, proprio = self._critic_inputs(obs)
-            kw = {"feats": feats, "proprio": proprio}
-        actions = self._sampler.sample_actions(key, _model.Observation.from_dict(batched), **kw)
-        out = {"state": inputs["state"], "actions": np.asarray(actions[0])}
-        return self._output_transform(out)
-
-    @property
-    def metadata(self) -> dict:
-        return {"arm": self._spec.arm, **{k: str(v) for k, v in dataclasses.asdict(self._spec).items()}}
-
-
-def load_arm(arm: str, *, step: int | None = None, default_prompt: str | None = None, **over: Any):
-    """Build a servable policy for one extraction arm (see ALL_ARMS)."""
-    return ExtractionPolicy(default_spec(arm, step, **over), default_prompt=default_prompt)

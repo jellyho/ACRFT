@@ -20,10 +20,13 @@ external critic):
     #3, in favor of warm-start fidelity).
 """
 
+import dataclasses
+
 import einops
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
+from typing_extensions import override
 
 import openpi.models.model as _model
 from openpi.models.pi0 import Pi0
@@ -32,7 +35,14 @@ from openpi.models.pi0_config import Pi0Config
 import openpi.shared.array_typing as at
 
 
+@dataclasses.dataclass(frozen=True)
 class Pi0CFGRLConfig(Pi0Config):
+    # Guidance weight the SAMPLER runs at: v_u + w (v_c - v_u) (iql_diffusion.py:213). It belongs
+    # to the model, not to a serving flag, so a checkpoint served by --policy.config samples the
+    # way the config says. w = 1 reduces to the conditioned policy (no guidance); the official
+    # sweep is {1, 1.5, 3, 5, 10, 30, 100}.
+    cfg_w: float = 1.5
+
     @property
     def model_type(self) -> _model.ModelType:
         return _model.ModelType.PI05
@@ -44,6 +54,10 @@ class Pi0CFGRLConfig(Pi0Config):
 class Pi0CFGRL(Pi0):
     def __init__(self, config: Pi0Config, *, rngs: nnx.Rngs):
         super().__init__(config, rngs=rngs)
+        # sampling weight carried on the model: the ordinary serving path calls sample_actions(),
+        # so without this a served CFGRL checkpoint would silently run UNGUIDED (w = 1) while the
+        # config said otherwise -- the failure returns well-formed chunks, so nothing would catch it
+        self._cfg_w = float(getattr(config, "cfg_w", 1.5))
         width = self.action_in_proj.out_features
         # 2-entry optimality table (iql_diffusion.py:105 nn.Embed(2, 32)); zero-init (deviation #3)
         self.opt_embed = nnx.Param(jnp.zeros((2, width), jnp.float32))
@@ -86,6 +100,11 @@ class Pi0CFGRL(Pi0):
         per_cond, per_uncond = per[:b], per[b:]
         loss = jnp.mean(label * per_cond + 0.1 * per_uncond)  # iql_diffusion.py:170-179
         return loss, {"cond": jnp.mean(label * per_cond), "uncond": jnp.mean(per_uncond), "frac_pos": jnp.mean(label)}
+
+    @override
+    def sample_actions(self, rng, observation, *, num_steps: int = 10, **kw):
+        """The serving entry point: guided sampling at the config's weight (see Pi0CFGRLConfig)."""
+        return self.sample_actions_cfg(rng, observation, cfg_w=kw.pop("cfg_w", self._cfg_w), num_steps=num_steps)
 
     def sample_actions_cfg(self, rng, observation, *, cfg_w, num_steps=10):
         """Euler sampler with per-step CFG combination v_u + w (v_c - v_u) (iql_diffusion.py:205-216).
