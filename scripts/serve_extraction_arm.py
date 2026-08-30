@@ -37,14 +37,26 @@ def main():
     logging.info("arm spec: %s", dataclasses.asdict(policy._spec))
 
     if a.self_test:
+        from lerobot.datasets import lerobot_dataset
         import numpy as np
 
-        from openpi.extraction import data as exdata
+        # a frame in the CLIENT's format: the repack keys of config.py:537-540, inverted
+        ds = lerobot_dataset.LeRobotDataset("jellyho/yam_lego_taxi")
+        f = ds[0]
 
-        dataset, _cfg = exdata.make_bc_dataset(str(serving.BC_CKPT / "assets"))
-        # the raw (pre-transform) frame the server would receive from the robot client
-        raw = dataset._dataset[0] if hasattr(dataset, "_dataset") else dataset[0]
-        obs = {k: np.asarray(v) for k, v in raw.items() if k != "actions"}
+        def img(x):
+            x = np.asarray(x)
+            if x.ndim == 3 and x.shape[0] == 3:
+                x = np.moveaxis(x, 0, -1)
+            return (x * 255).astype(np.uint8) if x.dtype != np.uint8 else x
+
+        obs = {
+            "observation/image": img(f["observation.images.agentview"]),
+            "observation/wrist_image": img(f["observation.images.wrist_left"]),
+            "observation/image_right": img(f["observation.images.wrist_right"]),
+            "observation/state": np.asarray(f["observation.state"], np.float32),
+            "prompt": a.prompt or "pick up the lego and put it in the taxi",
+        }
         out = policy.infer(obs)
         act = np.asarray(out["actions"])
         print(f"chunk {act.shape}  |a| mean {np.abs(act).mean():.4f}  min {act.min():.3f}  max {act.max():.3f}")
