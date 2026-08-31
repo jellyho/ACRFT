@@ -54,6 +54,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from openpi.models import model as _model
+from openpi.models import pi0_steered as _pi0_steered
 from openpi.training import config as _config
 from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
@@ -64,6 +65,15 @@ CKPT_ROOT = pathlib.Path("/data1/jellyho/acrft_ckpts/extraction")
 
 EXPERT_ARMS = ("awr", "cfgrl", "flowdpg", "qam", "dql")
 LATENT_ARMS = ("lps", "lpsd")
+#: Arms whose CHUNK comes from ArmChunkSampler rather than the served policy's own sampler. The
+#: serving wrapper reuses everything else (patch features, robot-space decode, scoring, HUD), so
+#: it needs to know which modes route here -- and that list belongs with the arms, not in the
+#: wrapper, where it was a second hand-maintained copy of the same four names.
+SAMPLER_ARMS = ("qpilots", *LATENT_ARMS, "flowdagger")
+#: Arms that draw by steering a flow, and so have an alpha=0 twin of the same draw to compare
+#: against. Only qpilots today; the constant exists so that adding a second steering arm is a
+#: one-line change here rather than a hunt for `== "qpilots"` across the serving stack.
+STEERING_ARMS = frozenset({"qpilots"})
 CRITIC_ARMS = ("qpilots", "idql", "bon")
 ALL_ARMS = (*EXPERT_ARMS, *LATENT_ARMS, "flowdagger", *CRITIC_ARMS, "bc")
 
@@ -148,17 +158,28 @@ class ArmChunkSampler:
     served BC policy), so it is loaded here; for qpilots the served policy's own model is used.
     """
 
-    #: Also return the unsteered twin (qpilots only), so a deploy recording can say how far
-    #: steering displaced the action. Off by default: it changes the returned N, and every caller
-    #: that only wants the chunk should keep getting one.
+    #: Also return the unsteered twin, so a deploy recording can say how far steering displaced
+    #: the action. Off by default: it changes the returned N, and every caller that only wants the
+    #: chunk should keep getting one. Only meaningful where `offers_unsteered_twin` is true.
     pair_unsteered: bool = False
+
+    @property
+    def offers_unsteered_twin(self) -> bool:
+        """Whether an alpha=0 draw of this arm is a meaningful reference for its steered one.
+
+        Asked by the serving wrapper so that it does not have to know which arms steer. It knows
+        it wants a twin; which arms HAVE one is a property of the arm, and the arms live here.
+        """
+        return self.spec.arm in STEERING_ARMS
 
     def __init__(self, spec: ArmSpec, served_model=None):
         self.spec = spec
         if spec.arm == "qpilots" and served_model is not None:
-            # steer the policy that is actually being served, whatever checkpoint it came from
-            self.model = served_model
-            self.graphdef = nnx.graphdef(served_model)
+            # Steer the policy that is actually being served, whatever checkpoint it came from.
+            # Re-tagged as the subclass that owns the steered sampler; it shares the served
+            # model's parameters and leaves the served object itself untouched (see wrap()).
+            self.model = _pi0_steered.Pi0Steered.wrap(served_model)
+            self.graphdef = nnx.graphdef(self.model)
             self.params = jax.device_put(nnx.state(served_model))
             self.H = served_model.action_horizon
             self.AD = served_model.action_dim
@@ -223,71 +244,50 @@ class ArmChunkSampler:
 
     @functools.cached_property
     def _steer_jit(self):
-        """`(state, rng, obs, feats, proprio, ad, alpha) -> chunk`, compiled once.
+        """`(state, rng, obs, feats, proprio, ad, alpha, paired) -> chunk`, compiled once.
 
         Follows nnx_utils.module_jit's shape -- split the module, pass the state, merge inside --
         because that is what the rest of the repo does and why the other paths compile as one XLA
         module instead of a pile of eager kernels. `alpha` stays traced, so the steered draw and
-        its alpha=0 twin share a single compilation; `ad` and the step count are static.
+        its alpha=0 twin share a single compilation; `ad` and `paired` are static.
+
+        The integration itself is NOT here. It is `Pi0Steered.sample_steered`, next to the sampler
+        it modifies. What this layer contributes is the one thing the model must not know: what
+        the value IS.
         """
         graphdef = self.graphdef
 
         def fun(state, rng, obs, feats, proprio, ad, alpha, paired):
             model = nnx.merge(graphdef, state)
-            kv, pm = self._prefix(model, obs)  # ONE prefix pass, shared by both draws
-            b = obs.state.shape[0]
-            x0 = jax.random.normal(rng, (b, self.H, self.AD))
-            steered = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, alpha)
+            x0 = jax.random.normal(rng, (obs.state.shape[0], self.H, self.AD))
+
+            def value_fn(a_hat):
+                # Summed over the batch so jax.grad sees a scalar; the chunk is sliced to the
+                # critic's action width, which need not be the policy's.
+                return self._q(feats, a_hat[..., :ad], proprio, reduce="pess").sum()
+
+            def draw(a):
+                # preprocess=False: __call__ has already preprocessed, and doing it twice would
+                # put a second normalisation between the two draws.
+                return model.sample_steered(
+                    rng,
+                    obs,
+                    value_fn=value_fn,
+                    alpha=a,
+                    num_steps=self.spec.ode_steps,
+                    noise=x0,
+                    preprocess=False,
+                )
+
+            steered = draw(alpha)
             if not paired:
                 return steered
-            # The twin, from the same x0 and the same cached prefix, differing only in alpha.
-            base = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, 0.0)
-            return jnp.concatenate([steered, base], axis=0)  # index 0 is what executes
+            # The twin: same x0, same observation, same everything but alpha. Both draws recompute
+            # the prefix rather than sharing one pass, which reads as waste and is not: they are
+            # the identical pure subcomputation inside a single jit, so XLA folds them together.
+            return jnp.concatenate([steered, draw(0.0)], axis=0)  # index 0 is what executes
 
         return jax.jit(fun, static_argnums=(5, 7))
-
-    def _steer(self, model, obs, kv, pm, feats, proprio, ad, x, alpha):
-        """QPILOTS-U Euler integration at steering strength `alpha`. alpha=0 is the base sampler.
-
-        A plain Python loop, deliberately. A lax.fori_loop version compiled faster (24 s against
-        42 s) but changed the answer by 5.9e-03 in bf16 -- and, unlike the joint/cached-attention
-        difference measured elsewhere in this repo, that did NOT collapse in fp32 (7.7e-04, only
-        8x smaller, where pure accumulation order fell by 8400x). Unexplained numerical drift in
-        the sampler is not worth a compile-time saving, and it bought no runtime: the 25x speedup
-        came entirely from not doing eager work in __call__ (see there).
-
-        Kept as ONE path rather than a steered and an unsteered variant: the twin only measures the
-        steering term if everything else about the two draws is identical, and two code paths
-        cannot be identical by inspection for long.
-        """
-        n = self.spec.ode_steps
-        dt = 1.0 / n
-        for i in range(n):
-            tv = jnp.full((x.shape[0],), 1.0 - i * dt)
-            if i == 0:
-                # No state-dependent signal at t=0 (paper Sec. 4). Both draws take this branch, so
-                # it is symmetric between them.
-                v = self._velocity(model, obs, kv, pm, x, tv)
-            else:
-                # NOT short-circuited at alpha == 0, though it would save the gradient on every
-                # base step. `v` here comes out of jax.grad's forward pass, and a direct velocity
-                # call is the same math in a different accumulation ORDER -- measured in this repo
-                # at 1.2e-02 in bf16 (1.4e-06 in fp32). Branching on alpha would put that between
-                # the steered draw and the twin it is measured against, compounded over every step,
-                # and report the sum as steering displacement.
-
-                def q_of(x_, tv_=tv):
-                    v_ = self._velocity(model, obs, kv, pm, x_, tv_)
-                    a_hat = x_ - tv_[:, None, None] * v_  # Tweedie projection, Eq. 14
-                    a_hat = a_hat + jax.lax.stop_gradient(jnp.clip(a_hat, -1, 1) - a_hat)  # straight-through
-                    return self._q(feats, a_hat[..., :ad], proprio, reduce="pess").sum(), v_
-
-                g, v = jax.grad(q_of, has_aux=True)(x)
-                vn = jnp.linalg.norm(v.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
-                gn = jnp.linalg.norm(g.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
-                v = v - alpha * (vn / (gn + 1e-8)) * g  # drift-norm-matched, Eq. 17
-            x = x - dt * v
-        return jnp.clip(x, -1.0, 1.0)
 
     def __call__(self, rng, observation, patches, proprio):
         """-> chunk [N, H, AD] in the model's normalized space (N=1 for these arms).

@@ -110,8 +110,12 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._mode = mode
         self._mode_label = mode
         # Modes whose CHUNKS come from an extraction arm rather than the base sampler. They reuse
-        # everything else in this class (patch features, robot-space decode, scoring, HUD).
-        self._arm = mode if mode in ("qpilots", "lps", "lpsd", "flowdagger") else None
+        # everything else in this class (patch features, robot-space decode, scoring, HUD). Which
+        # modes those are is the arm registry's answer -- this file used to keep its own copy of
+        # the list, which is one more place to forget when an arm is added.
+        from openpi.extraction import serving as _serving
+
+        self._arm = mode if mode in _serving.SAMPLER_ARMS else None
         # Reassigned in the arm branch below. Non-arm modes already record every candidate they
         # draw, so there is nothing for drift references to add -- but say so, because a mistyped
         # mode otherwise produces a clean run with no drift columns and no message.
@@ -119,10 +123,11 @@ class PatchCriticSelectPolicy(BasePolicy):
         if drift_samples and self._arm is None:
             logging.warning(
                 "--drift-samples %d ignored by --critic-mode %s: it applies to the extraction arms "
-                "(qpilots/lps/lpsd/flowdagger), which bring one chunk and need references to "
-                "compare it against. %s already records all of its candidates.",
+                "(%s), which bring one chunk and need references to compare it against. "
+                "%s already records all of its candidates.",
                 drift_samples,
                 mode,
+                "/".join(_serving.SAMPLER_ARMS),
                 mode,
             )
         self._extraction_head = extraction_head
@@ -374,15 +379,24 @@ class PatchCriticSelectPolicy(BasePolicy):
                         "has no sample_n_actions. The reference draws are the scale the steering "
                         "displacement is measured against; without them there is nothing to compare to."
                     )
-                if self._arm != "qpilots":
-                    # Only steering has an "unsteered twin"; for the other arms the reference draws
-                    # would still be recorded, but the twin would be meaningless, so say so.
-                    logging.warning("drift reference draws requested on %s; only qpilots has a twin", self._arm)
-                self._arm_sampler.pair_unsteered = self._arm == "qpilots"
+                # Whether this arm HAS a twin is the arm registry's to answer, not this wrapper's.
+                # Asking it, rather than testing the mode string, is what keeps a second steering
+                # arm from needing an edit in this file.
+                twin = self._arm_sampler.offers_unsteered_twin
+                if not twin:
+                    # The reference draws are still recorded for a non-steering arm -- they are the
+                    # policy's own spread, which is meaningful on its own -- but there is no twin,
+                    # and a silently missing column reads as a bug in the analysis instead.
+                    logging.warning(
+                        "drift reference draws requested on %s, which does not steer: recording the "
+                        "unconditional draws but no unsteered twin",
+                        self._arm,
+                    )
+                self._arm_sampler.pair_unsteered = twin
                 logging.info(
                     "recording %d unconditional reference draw(s)%s alongside the executed chunk",
                     self._drift_samples,
-                    " and the unsteered twin" if self._arm == "qpilots" else "",
+                    " and the unsteered twin" if twin else "",
                 )
             logging.info("critic mode %s: chunks from the %s sampler", self._mode_label, self._arm)
 
@@ -582,7 +596,7 @@ class PatchCriticSelectPolicy(BasePolicy):
     def warmup(self, observation) -> None:
         """Compile the sampling graph now, rather than on the operator's first rollout.
 
-        QPILOTS costs 37 s to compile (56 s with the drift references) because the graph carries a
+        QPILOTS costs 37 s to compile (60 s with the drift references) because the graph carries a
         gradient through the VLM at every Euler step. Paid lazily, that lands on the first inference
         of a session -- past the client's websocket keepalive, which closes the connection and
         reports it as a link failure rather than as a compile.
@@ -622,8 +636,16 @@ class PatchCriticSelectPolicy(BasePolicy):
                 self._v_of(feats[0], pro[0])
             if self._arm_sampler is not None:
                 self._arm_sampler(rng, observation, feats, pro)
-            elif self._extract is not None:
-                self._extract(rng, observation, num_samples=self._default_samples, num_steps=self._flow_steps)
+            # NOT an elif. With --drift-samples the arm path ALSO draws references through
+            # `_extract`, and warming only the arm left the first request at 6.7 s where a run
+            # without references was already at 0.3 s -- the same partial warm-up, a third time.
+            if self._extract is not None:
+                self._extract(
+                    rng,
+                    observation,
+                    num_samples=self._drift_samples or self._default_samples,
+                    num_steps=self._flow_steps,
+                )
         except Exception as e:
             logging.warning("warm-up skipped (%s: %s); the first inference will pay the compile", type(e).__name__, e)
 
