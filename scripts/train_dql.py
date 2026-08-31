@@ -107,6 +107,12 @@ def main():
         logits = critic.net.apply({"params": critic.params}, feats, jnp.clip(chunk, -1, 1), proprio)
         return critic.hl.from_logits(logits)[..., -1]  # [K, B]
 
+    # remat the per-step velocity: DQL keeps the graph through all N suffix passes, so without
+    # this every layer's activations for all 10 steps stay live at once -- with the backbone
+    # trainable that reached a 134GiB single allocation on a 179GiB card. qam and fqlx already
+    # do this; dql did not, and its batch ceiling was measuring the omission, not the method.
+    velocity_r = nnx.remat(lambda m, o, pm, kv, x, t: m._velocity(o, pm, kv, x, t))
+
     def loss_fn(model, rng, obs, actions, feats, proprio, swap):
         prng, brng, srng = jax.random.split(rng, 3)
         obs = _model.preprocess_observation(prng, obs, train=True)
@@ -117,7 +123,7 @@ def main():
         x = jax.random.normal(srng, actions.shape)
         for i in range(N):
             t = 1.0 - i * dt
-            x = x - dt * model._velocity(obs, prefix_mask, kv, x, jnp.full((x.shape[0],), t))
+            x = x - dt * velocity_r(model, obs, prefix_mask, kv, x, jnp.full((x.shape[0],), t))
         qk = q_ensemble(feats, x[..., :robot_ad], proprio)  # [2, B]
         # random twin for the objective, the other for the detached scale (ql_diffusion.py:143-147)
         qi = jnp.where(swap, qk[0], qk[1])
