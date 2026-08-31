@@ -125,10 +125,16 @@ def test_both_draws_share_one_prefix_pass():
 
     from openpi.extraction.serving import ArmChunkSampler
 
-    src = inspect.getsource(ArmChunkSampler.__call__)
-    body = src[src.index('spec.arm == "qpilots"') :]
-    assert body.count("self._steer(") == 2, "steered and twin"
-    assert "self._prefix(" not in body, "the prefix comes from above, not from inside the branch"
+    # Both draws happen inside ONE jitted call, which computes the prefix once and hands it to
+    # both. Calling the jitted function twice would compute the prefix twice -- same values, so
+    # the twin would still be valid, but a wasted VLM pass on every reply with the readout on.
+    fun = inspect.getsource(ArmChunkSampler._steer_jit.func)
+    assert fun.count("self._prefix(") == 1, "one prefix pass"
+    assert fun.count("self._steer(") == 2, "steered and twin, both from it"
+
+    body = inspect.getsource(ArmChunkSampler.__call__)
+    body = body[body.index('spec.arm == "qpilots"') :]
+    assert body.count("self._steer_jit(") == 1, "one call, not one per draw"
 
 
 def test_the_declared_count_and_the_emitted_count_come_from_one_expression():

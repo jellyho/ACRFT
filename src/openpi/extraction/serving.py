@@ -43,6 +43,7 @@ served arm sees exactly the critic's training-time inputs.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import pathlib
 from typing import Any
 
@@ -220,11 +221,43 @@ class ArmChunkSampler:
             return q.min(axis=0)
         return q.mean(axis=0) - self.spec.rho * q.std(axis=0)  # pessimistic, QPILOTS Eq. 12
 
+    @functools.cached_property
+    def _steer_jit(self):
+        """`(state, rng, obs, feats, proprio, ad, alpha) -> chunk`, compiled once.
+
+        Follows nnx_utils.module_jit's shape -- split the module, pass the state, merge inside --
+        because that is what the rest of the repo does and why the other paths compile as one XLA
+        module instead of a pile of eager kernels. `alpha` stays traced, so the steered draw and
+        its alpha=0 twin share a single compilation; `ad` and the step count are static.
+        """
+        graphdef = self.graphdef
+
+        def fun(state, rng, obs, feats, proprio, ad, alpha, paired):
+            model = nnx.merge(graphdef, state)
+            kv, pm = self._prefix(model, obs)  # ONE prefix pass, shared by both draws
+            b = obs.state.shape[0]
+            x0 = jax.random.normal(rng, (b, self.H, self.AD))
+            steered = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, alpha)
+            if not paired:
+                return steered
+            # The twin, from the same x0 and the same cached prefix, differing only in alpha.
+            base = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, 0.0)
+            return jnp.concatenate([steered, base], axis=0)  # index 0 is what executes
+
+        return jax.jit(fun, static_argnums=(5, 7))
+
     def _steer(self, model, obs, kv, pm, feats, proprio, ad, x, alpha):
         """QPILOTS-U Euler integration at steering strength `alpha`. alpha=0 is the base sampler.
 
-        Kept as ONE path rather than a steered and an unsteered variant: the twin only measures
-        the steering term if everything else about the two draws is identical, and two code paths
+        A plain Python loop, deliberately. A lax.fori_loop version compiled faster (24 s against
+        42 s) but changed the answer by 5.9e-03 in bf16 -- and, unlike the joint/cached-attention
+        difference measured elsewhere in this repo, that did NOT collapse in fp32 (7.7e-04, only
+        8x smaller, where pure accumulation order fell by 8400x). Unexplained numerical drift in
+        the sampler is not worth a compile-time saving, and it bought no runtime: the 25x speedup
+        came entirely from not doing eager work in __call__ (see there).
+
+        Kept as ONE path rather than a steered and an unsteered variant: the twin only measures the
+        steering term if everything else about the two draws is identical, and two code paths
         cannot be identical by inspection for long.
         """
         n = self.spec.ode_steps
@@ -236,14 +269,12 @@ class ArmChunkSampler:
                 # it is symmetric between them.
                 v = self._velocity(model, obs, kv, pm, x, tv)
             else:
-                # NOT short-circuited at alpha == 0, though it would save the grad on every base
-                # step. `v` here comes out of jax.grad's forward pass, and a direct _velocity call
-                # is the same math in a different accumulation ORDER -- measured elsewhere in this
-                # repo at 1.2e-02 in bf16 (1.4e-06 in fp32) between a joint and a cached-prefix
-                # attention. Branching on alpha would put that difference between the steered draw
-                # and the twin it is measured against, compounded over every step, and call the
-                # result steering displacement. The twin is worth its cost only if alpha is the
-                # ONLY thing that differs.
+                # NOT short-circuited at alpha == 0, though it would save the gradient on every
+                # base step. `v` here comes out of jax.grad's forward pass, and a direct velocity
+                # call is the same math in a different accumulation ORDER -- measured in this repo
+                # at 1.2e-02 in bf16 (1.4e-06 in fp32). Branching on alpha would put that between
+                # the steered draw and the twin it is measured against, compounded over every step,
+                # and report the sum as steering displacement.
 
                 def q_of(x_, tv_=tv):
                     v_ = self._velocity(model, obs, kv, pm, x_, tv_)
@@ -265,11 +296,24 @@ class ArmChunkSampler:
         already computed by the serving wrapper for scoring — we reuse them rather than recomputing.
         """
         spec = self.spec
-        model = nnx.merge(self.graphdef, self.params)
         obs = _model.preprocess_observation(None, observation, train=False)
         b = obs.state.shape[0]
         feats = patches if patches.ndim == 3 else patches[None]
         proprio = proprio if proprio.ndim == 2 else proprio[None]
+
+        if spec.arm == "qpilots":
+            # FIRST, and before any eager work: everything this arm needs happens inside
+            # _steer_jit. Reconstructing the 3B model with nnx.merge and running an un-jitted
+            # prefix pass here -- only to have the jitted function compute the prefix again --
+            # cost 3.2 s per inference against 150 ms for best-of-N through the same wrapper.
+            # Measured: with the steering loop reduced to ZERO gradient steps it still took
+            # 3229 ms, which is how the overhead was found to be entirely outside the loop.
+            ad = self.critic.config["action_dim"]
+            return self._steer_jit(self.params, rng, obs, feats, proprio, ad, spec.alpha, self.pair_unsteered)
+
+        # The remaining arms still build the model here; they are single-forward paths, so the
+        # merge is not repeated inside a loop the way qpilots' prefix was.
+        model = nnx.merge(self.graphdef, self.params)
 
         if spec.arm in LATENT_ARMS:
             rep = jnp.concatenate([feats.mean(axis=1), proprio], axis=-1)
@@ -287,20 +331,6 @@ class ArmChunkSampler:
             coeffs = _mlp(self.head, rep, tanh_scale=3.0).reshape(b, self.basis.shape[0], self.AD)
             seed = jnp.einsum("kh,bkd->bhd", self.basis, coeffs)
             return self._euler(model, obs, kv, pm, seed)
-
-        if spec.arm == "qpilots":
-            ad = self.critic.config["action_dim"]
-            x0 = jax.random.normal(rng, (b, self.H, self.AD))
-            steered = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, spec.alpha)
-            if not self.pair_unsteered:
-                return steered
-            # The unsteered twin: SAME noise, SAME cached prefix, alpha = 0. One code path with
-            # alpha as a parameter, so the two differ by the steering term and by nothing else --
-            # comparing against an independently drawn sample would measure the policy's own
-            # spread on top of the displacement, which is a different quantity. This is how
-            # eval_extraction.py pairs offline, so deploy numbers stay commensurable with it.
-            base = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, 0.0)
-            return jnp.concatenate([steered, base], axis=0)  # index 0 is what executes
 
         raise ValueError(
             f"{spec.arm!r} is not sampled here: bon/idql are the wrapper's own selection path, and "
