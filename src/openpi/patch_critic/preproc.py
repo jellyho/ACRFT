@@ -143,3 +143,34 @@ class Pi05Preproc:
             "state_units": "pi05-normalized state (quantile) -- same space the base VLA sees",
             "action_units": "pi05-normalized JOINT DELTA -- identical to the sampler's raw output",
         }
+
+
+def critic_proprio(pre, proprio_idx, raw_state):
+    """RAW state -> the proprio vector the CRITIC was trained on. THE single expression.
+
+    Two steps whose ORDER is the whole content: normalize the FULL state, then slice. Slicing first
+    pairs channels 21..27 with the first-14 statistics.
+
+    It survived review because looking would not have caught it. The wrong order gives the SAME
+    shape, a plausible value range, and Q still comes back sensible -- and because proprio_indices
+    are two arms ([0..6, 21..27]), the LEFT arm still lands on statistics 0..6 with difference
+    identically ZERO. Only the right arm is wrong (max|diff| 1.43 on real stats). A spot check on
+    one arm, or a plot of one arm, shows a perfect match.
+
+    The cost of getting it wrong, measured: grad_a Q pointed elsewhere -- cosine 0.85 mean, -0.69
+    minimum, 40% of states below 0.9 against the correct direction. Nine retrained arms.
+
+    It is a function rather than a convention because a convention is re-derived at every call
+    site, and sites that agree by coincidence are chances to diverge. It lives HERE, beside
+    ``Pi05Preproc.state`` and ``.actions``, because those are the other two halves of the same
+    contract and this is where the next person building critic inputs will look.
+
+    Callers: critic_q.CacheView.rows (training/annotation) and the serving wrapper's arm and
+    scoring paths. Agreement between them is asserted numerically in
+    patch_critic/train_serve_contract_test.py, not by reading the two.
+
+    `pre` is the critic's Pi05Preproc, or None for a legacy raw-units critic, where the raw state
+    IS what it trained on. `proprio_idx` is its proprio_indices; None means the whole state.
+    """
+    s = raw_state if pre is None else pre.state(raw_state)
+    return s if proprio_idx is None else s[..., proprio_idx]

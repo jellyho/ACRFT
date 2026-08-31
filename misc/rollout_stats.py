@@ -133,11 +133,37 @@ def episode_stats(reader, episode: int) -> dict:
         out["candidates"] = int(scores.shape[1])
         out["critic_spread"] = float(np.mean(per_replan.max(axis=1) - per_replan.min(axis=1)))
         out["critic_advantage"] = float(np.mean(np.sort(per_replan, axis=1)[:, -1] - np.sort(per_replan, axis=1)[:, -2]))
+    if scores is not None and scores.ndim == 2 and scores.shape[1] > 1 and starts:
+        # Fraction of candidates the critic scores above the mean, per replan. The annotation-set
+        # reference for the fixed critic is 0.204; under the raw-proprio bug it was 0.277, and the
+        # values stayed in range throughout, so nothing else shows it. A run coming back near 0.28
+        # is a signal that the raw-proprio path crept back in -- not a result.
+        per_replan = scores[starts]
+        out["frac_above_mean"] = float(np.mean(per_replan > per_replan.mean(axis=1, keepdims=True)))
+
     choice = reader.column(episode, "critic_choice")
     if choice is not None and choice.size and starts:
         picked = choice.reshape(choice.shape[0], -1)[starts, 0].astype(int)
         out["choice_hist"] = {int(k): int(v) for k, v in zip(*np.unique(picked, return_counts=True), strict=False)}
         out["chose_first_frac"] = float(np.mean(picked == 0))
+
+    # Steering drift, when the run recorded reference draws (--drift-samples). Column layout is
+    # [executed, unsteered twin, uncond...]: the twin shares the executed draw's noise, so their
+    # distance is the steering displacement, and the unconditional spread is the scale that makes
+    # it mean something. A displacement of 0.1 rad is small inside a spread of 0.5 and enormous
+    # inside 0.02.
+    samples = reader.column(episode, "action_samples")
+    if samples is not None and samples.ndim == 3 and samples.shape[1] >= 3 and starts:
+        per_replan = samples[starts]  # [R, N, A] -- the decision is made once per reply
+        executed, twin, uncond = per_replan[:, 0], per_replan[:, 1], per_replan[:, 2:]
+        drift = np.abs(executed - twin).max(axis=-1)  # worst joint, per replan
+        spread = uncond.std(axis=1).mean(axis=-1)
+        out["steer_drift_p50"] = float(np.median(drift))
+        out["steer_drift_p95"] = float(np.percentile(drift, 95))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rel = drift / np.where(spread > 1e-9, spread, np.nan)
+        if np.any(np.isfinite(rel)):
+            out["steer_drift_over_spread"] = float(np.nanmedian(rel))
 
     actions = reader.column(episode, "action")
     if actions is not None and actions.ndim == 2:
@@ -173,6 +199,10 @@ def dataset_stats(repo_id: str, root: str, episodes: "list | None" = None) -> di
         "infer_ms_p95",
         "delay_ticks_p50",
         "critic_spread",
+        "frac_above_mean",
+        "steer_drift_over_spread",
+        "steer_drift_p95",
+        "steer_drift_p50",
         "critic_advantage",
         "chose_first_frac",
         "kstar_mean",
@@ -241,6 +271,9 @@ def format_table(results: list) -> str:
         ("cut short", lambda r: _fmt(r["aggregate"].get("truncated_frac"), 2), 12),
         ("jump@bnd", lambda r: _fmt(r["aggregate"].get("boundary_jump_p95"), 3), 13),
         ("jump@in", lambda r: _fmt(r["aggregate"].get("within_jump_p95"), 3), 13),
+        ("drift", lambda r: _fmt(r["aggregate"].get("steer_drift_p95"), 3), 13),
+        ("drift/spread", lambda r: _fmt(r["aggregate"].get("steer_drift_over_spread"), 2), 13),
+        ("frac>mean", lambda r: _fmt(r["aggregate"].get("frac_above_mean"), 3), 12),
     ]
     keep = [c for c in cols if any(c[1](r) != "—" for r in results)]
     lines = ["  ".join(h.ljust(w) for h, _, w in keep), "  ".join("-" * w for _, _, w in keep)]
@@ -251,6 +284,8 @@ def format_table(results: list) -> str:
     lines.append("spread = best-worst candidate value per replan; adv = best minus runner-up.")
     lines.append("k* = macro groups the critic committed (x macro = steps); cut short = replans that ran shorter.")
     lines.append("jump@bnd / jump@in = 95th pct of max joint step across a replan boundary vs inside a chunk.")
+    lines.append("drift = steered vs its unsteered twin (same noise); drift/spread scales it by the BC spread.")
+    lines.append("frac>mean near 0.28 (vs 0.204 expected) means the raw-proprio critic path crept back in.")
     return "\n".join(lines)
 
 

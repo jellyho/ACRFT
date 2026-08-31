@@ -71,10 +71,39 @@ uv run scripts/serve_policy.py --port 8000 --critic $CRITIC --critic-mode qpilot
 uv run scripts/serve_policy.py --port 8000 --critic $CRITIC --critic-mode lpsd \
     --extraction-head <latent_actor_*.msgpack> $BASE
 
-# flowdagger — a head predicts the DCT coefficients of the sampler's initial noise
+# flowdagger — a head predicts the DCT coefficients of the sampler's initial noise.
+# --extraction-head is a DIRECTORY here, not a file: the head is meaningless without the DCT basis
+# it was fitted against, so the two travel together or the coefficients decode into a different
+# chunk. (lps/lpsd point at a single file for the same reason inverted -- they store one array set.)
 uv run scripts/serve_policy.py --port 8000 --critic $CRITIC --critic-mode flowdagger \
     --extraction-head <run dir with steering_head.msgpack + dct_basis.npy> $BASE
 ```
+
+### Measuring how far steering moved the policy
+
+```bash
+uv run scripts/serve_policy.py --port 8000 --critic $CRITIC \
+    --critic-mode qpilots --steer-alpha 0.2 --drift-samples 8 $BASE
+```
+
+`--drift-samples N` records, alongside the chunk that actually executes, **the unsteered twin**
+(same noise, same cached prefix, alpha = 0) and **N unconditional draws**. They are references,
+never candidates — the arm's chunk is what runs, and the critic scores the set rather than
+choosing within it.
+
+Two questions, two references, and the second is what makes the first mean anything:
+
+| | |
+|---|---|
+| executed vs twin | how far steering displaced *this* draw — same noise, so the difference is the steering term and nothing else |
+| the unconditional spread | how wide the policy's own distribution is at this state |
+
+A displacement of 0.1 rad is small inside a spread of 0.5 and enormous inside 0.02. `misc/yam-misc
+stats` reports both, plus `drift/spread`, and the renderer draws the twin and the fan so the
+question "did steering leave the distribution or move inside it" is visible rather than inferred.
+
+Comparing the steered chunk against an *independently drawn* sample instead would measure sampling
+variance and steering mixed together, which is why the twin shares the draw.
 
 `--num-steps` sets the denoising iterations, and with a critic attached it is charged **per
 candidate** — the difference between BoN-8 costing 8 suffix passes and 80.
