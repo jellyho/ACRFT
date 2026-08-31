@@ -23,6 +23,7 @@ ABOUT = {
     "flowdpg": ("FlowDPG", "arXiv 2606.22303 Eq. 4-9 (no official code)", "expert overlay; Tweedie + twin-min grad-Q"),
     "qam": ("QAM", "ColinQiyangLi/qam agents/qam.py:49-145", "expert overlay; adjoint-matched fast field"),
     "dql": ("DQL", "Zhendong-Wang .../ql_diffusion.py:140-148", "expert overlay; BC + eta*(-Q) with BPTT"),
+    "fqlx": ("QC-FQL one-step", "seohong/fql actor loss, frozen critic", "expert overlay; distill teacher + (-Q)"),
     "lps": ("LPS", "author's lps.py:185-199 (ddpg)", "latent actor MLP over the frozen alpha-Flow one-step base"),
     "lpsd": ("LPSD", "author's lps.py:201-224 (onestep_ddpg)", "latent actor + anchor MSE"),
     "flowdagger": ("FlowDAgger", "microsoft/FlowDAgger", "DCT steering head predicting the sampler's seed"),
@@ -77,7 +78,7 @@ tags: [robotics, offline-rl, vla, pi0.5, policy-extraction]
 Policy-extraction methods applied to the same frozen pi0.5 base and the same frozen patch
 critic, as a **method-only-diff** comparison ring: identical BC init
 (`yam_bc_s300_h30_successonly/100000`), backbone frozen, **action expert only** trained, critic
-`patch_critic_yam_s347_g5_tau9_min` fixed.
+`patch_critic_yam_s347_fixed_tau9_min_200k` fixed.
 
 | folder | method | provenance | what it swaps |
 |---|---|---|---|
@@ -90,23 +91,46 @@ philippe-eecs/IDQL) — they run from the BC checkpoint plus the critic.
 
 ## Serving
 
+There is ONE serving entry point, `scripts/serve_policy.py`. Arms reach it two ways, and which
+way depends on whether the arm changed the policy's weights or only how a chunk is chosen.
+
+**Weight-only arms** (`awr`, `flowdpg`, `qam`, `dql`, `fqlx`) fine-tune the pi0.5 action expert,
+so they are exported to ordinary openpi checkpoints and served like any checkpoint:
+
 ```bash
-# from the openpi repo, branch integration
-uv run python scripts/serve_extraction_arm.py --arm dql --port 8000
-uv run python scripts/serve_extraction_arm.py --arm qpilots --alpha 0.2   # needs no weights
+uv run python scripts/export_extraction_checkpoint.py --arm dql          # -> exported/dql_30000
+uv run python scripts/serve_policy.py --port 8000 policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi --policy.dir <exported>/dql_30000
 ```
 
-or in Python:
+**CFGRL** additionally carries the optimality embedding and samples with classifier-free
+guidance, which are model properties, so it travels in its own config (`with_cfgrl` builds the
+variant of any pi0.5 task config; the guidance weight is `cfg_w`):
 
-```python
-from openpi.extraction import serving
-policy = serving.load_arm("lpsd")           # or dql / qam / lps / flowdagger / idql / bon
-chunk = policy.infer(obs)["actions"]
+```bash
+uv run python scripts/serve_policy.py --port 8000 policy:checkpoint \
+    --policy.config pi05_yam_lego_taxi_cfgrl --policy.dir <exported>/cfgrl_30000
 ```
 
-The expert-overlay arms (`awr`, `cfgrl`, `flowdpg`, `qam`, `dql`) store an orbax
-`{{"expert": ...}}` subtree that is overlaid on the BC parameters; `lps`/`lpsd` store a small
-latent-actor MLP (msgpack); `flowdagger` stores the DCT steering head plus its basis.
+**Critic-consuming arms** need no policy of their own; they are modes of the critic wrapper:
+
+```bash
+# selection: bon executes the argmax of N draws (this is also IDQL's argmax rule -- label it by N)
+uv run python scripts/serve_policy.py --port 8000 --critic <critic_dir> --critic-mode bon --num-samples 8 \
+    policy:checkpoint --policy.config pi05_yam_lego_taxi --policy.dir <BC checkpoint>
+
+# implicit: IDQL's implicit policy -- one draw sampled with expectile weights on the advantage
+#   --critic-mode implicit --num-samples 64
+# qpilots: test-time Q-steering of the sampler, no weights at all
+#   --critic-mode qpilots --alpha 0.2
+# lps / lpsd / flowdagger: pass their small head
+#   --critic-mode lpsd --extraction-head <latent_actor_*.msgpack>
+#   --critic-mode flowdagger --extraction-head <flowdagger_run1 dir>
+```
+
+`adaptive` (execute only the best commitment prefix, then replan) needs a critic trained with
+several commitment groups, i.e. `macro_group_size < horizon`; the fixed-chunk critic this ring
+trains against has a single group, where adaptive is bon under another name.
 
 ## Caveats
 

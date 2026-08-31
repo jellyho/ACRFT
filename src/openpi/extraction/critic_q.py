@@ -129,9 +129,7 @@ class CacheView:
         """
         f = np.asarray(self.feats[idx], np.float32)
         s = np.asarray(self.states[idx])
-        s_norm = s if critic.pre is None else critic.pre.state(s)
-        pr = s_norm if critic.proprio_idx is None else s_norm[:, critic.proprio_idx]
-        return f, s, pr
+        return f, s, critic_preproc.critic_proprio(critic.pre, critic.proprio_idx, s)
 
 
 def grad_q_chunk(critic: CriticQ):
