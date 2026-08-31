@@ -51,6 +51,12 @@ def main():
     ap.add_argument("--save-every", type=int, default=10000)
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("/data1/jellyho/acrft_ckpts/extraction/dql_run1"))
+    ap.add_argument(
+        "--train-backbone",
+        action="store_true",
+        help="train the WHOLE model, as the BC finetune did (no freeze_filter) -- otherwise only the "
+        "action expert, which keeps arms comparable but gives them a smaller budget than BC",
+    )
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-entity", default="jellyho_")
     ap.add_argument("--wandb-name", default="extract_dql_run1")
@@ -88,6 +94,10 @@ def main():
         nnx_utils.PathRegex(".*llm.*_1.*"),
         nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)|state_proj).*"),
     )
+    if a.train_backbone:
+        # BC trained everything (its config sets no freeze_filter), so matching its budget
+        # means matching what it was allowed to move, not just steps and batch.
+        expert_filter = nnx.Param
     tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
     opt = tx.init(params.filter(expert_filter))
     N = a.ode_steps

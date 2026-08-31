@@ -4,6 +4,7 @@
 # training — they run through scripts/eval_extraction.py directly.
 #SBATCH --partition=debug
 #SBATCH --gres=gpu:1
+# override at submit time for the B200 node:  sbatch --gres=gpu:B200:1 -w node200 ...
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=180G
 #SBATCH --time=48:00:00
