@@ -5,7 +5,7 @@ where its provenance comes from, and how to serve it. Only arms whose training r
 are uploaded — a still-running arm's latest checkpoint is a moving target, so we skip it unless
 --include-running is passed.
 
-    uv run python scripts/upload_extraction_arms.py --arms dql qam lps lpsd flowdagger
+    uv run python scripts/upload_extraction_arms.py --arms qam awr cfgrl flowdpg flowdagger
 """
 
 # ruff: noqa: PLC0415
@@ -22,7 +22,6 @@ ABOUT = {
     "cfgrl": ("CFGRL", "kvfrans/cfgrl iql_diffusion.py:157,170-179,213", "expert+opt_embed; CFG sampling at w"),
     "flowdpg": ("FlowDPG", "arXiv 2606.22303 Eq. 4-9 (no official code)", "expert overlay; Tweedie + twin-min grad-Q"),
     "qam": ("QAM", "ColinQiyangLi/qam agents/qam.py:49-145", "expert overlay; adjoint-matched fast field"),
-    "dql": ("DQL", "Zhendong-Wang .../ql_diffusion.py:140-148", "expert overlay; BC + eta*(-Q) with BPTT"),
     "fqlx": ("QC-FQL one-step", "seohong/fql actor loss, frozen critic", "expert overlay; distill teacher + (-Q)"),
     "lps": ("LPS", "author's lps.py:185-199 (ddpg)", "latent actor MLP over the frozen alpha-Flow one-step base"),
     "lpsd": ("LPSD", "author's lps.py:201-224 (onestep_ddpg)", "latent actor + anchor MSE"),
@@ -94,13 +93,13 @@ philippe-eecs/IDQL) — they run from the BC checkpoint plus the critic.
 There is ONE serving entry point, `scripts/serve_policy.py`. Arms reach it two ways, and which
 way depends on whether the arm changed the policy's weights or only how a chunk is chosen.
 
-**Weight-only arms** (`awr`, `flowdpg`, `qam`, `dql`, `fqlx`) fine-tune the pi0.5 action expert,
+**Weight-only arms** (`awr`, `flowdpg`, `qam`, `fqlx`) fine-tune the pi0.5 action expert,
 so they are exported to ordinary openpi checkpoints and served like any checkpoint:
 
 ```bash
-uv run python scripts/export_extraction_checkpoint.py --arm dql          # -> exported/dql_30000
+uv run python scripts/export_extraction_checkpoint.py --arm qam          # -> exported/qam_30000
 uv run python scripts/serve_policy.py --port 8000 policy:checkpoint \
-    --policy.config pi05_yam_lego_taxi --policy.dir <exported>/dql_30000
+    --policy.config pi05_yam_lego_taxi --policy.dir <exported>/qam_30000
 ```
 
 **CFGRL** additionally carries the optimality embedding and samples with classifier-free

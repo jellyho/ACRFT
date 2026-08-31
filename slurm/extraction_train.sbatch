@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real training run for one extraction arm: sbatch --job-name=ex_<arm> slurm/extraction_train.sbatch <arm>
-# Arms: awr cfgrl flowdpg qam lps lpsd dql fqlx flowdagger. Test-time arms (qpilots/idql/bon) need no
+# Arms: awr cfgrl flowdpg qam lps lpsd fqlx flowdagger. Test-time arms (qpilots/idql/bon) need no
 # training — they run through scripts/eval_extraction.py directly.
 #SBATCH --partition=debug
 #SBATCH --gres=gpu:1
@@ -22,7 +22,6 @@ case "$arm" in
   qam)        exec uv run --no-sync python -u scripts/train_qam.py      --wandb ;;
   lps)        exec uv run --no-sync python -u scripts/train_lps.py      --mode lps  --wandb ;;
   lpsd)       exec uv run --no-sync python -u scripts/train_lps.py      --mode lpsd --wandb ;;
-  dql)        exec uv run --no-sync python -u scripts/train_dql.py      --wandb ;;
   fqlx)       exec uv run --no-sync python -u scripts/train_fqlx.py     --wandb ;;
   flowdagger) exec uv run --no-sync python -u scripts/train_flowdagger.py --phase all --wandb ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
