@@ -302,6 +302,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         pooled = grid // 2
         ncam = len(self._camera_keys)
         npatch = ncam * pooled * pooled
+        self._patch_shape = (npatch, int(bb.embed_dim))
 
         def pool(p):
             b, _, d = p.shape
@@ -577,6 +578,54 @@ class PatchCriticSelectPolicy(BasePolicy):
         docstring explains why the order matters -- this binds the two settings, it does not
         restate the logic."""
         return critic_preproc_mod.critic_proprio(self._pre, self._proprio_idx, raw_state)
+
+    def warmup(self, observation) -> None:
+        """Compile the sampling graph now, rather than on the operator's first rollout.
+
+        QPILOTS costs 37 s to compile (56 s with the drift references) because the graph carries a
+        gradient through the VLM at every Euler step. Paid lazily, that lands on the first inference
+        of a session -- past the client's websocket keepalive, which closes the connection and
+        reports it as a link failure rather than as a compile.
+
+        Takes a post-transform Observation (train_config.model.fake_obs()) because the CLIENT-format
+        keys are dataset-specific and the server cannot invent them. The transforms it skips are
+        numpy, not the expensive part. Feature/proprio shapes come from the critic's own spec.
+
+        Best-effort: a failure here must cost the warm start and nothing else, so the server still
+        comes up and the first real inference just pays the compile as before.
+        """
+        try:
+            import dataclasses as _dc
+
+            # fake_obs derives the state width from the model's ACTION dim (32 for pi05), and on
+            # YAM the state is 42. Warming up on the wrong width compiles a graph the real request
+            # cannot reuse -- the warm-up then costs its full time and saves nothing, which is
+            # exactly what it looked like it was doing.
+            state_dim = _policy_mod._output_state_dim(self._pol._output_transform, fallback=self._model_action_dim)
+            if observation.state.shape[-1] != state_dim:
+                observation = _dc.replace(
+                    observation, state=jnp.zeros((observation.state.shape[0], state_dim), jnp.float32)
+                )
+            npatch, emb = self._patch_shape
+            feats = jnp.zeros((1, npatch, emb), jnp.float32)
+            pro = jnp.zeros((1, len(self._proprio_idx) if self._proprio_idx is not None else 42), jnp.float32)
+            self._rng, rng = jax.random.split(self._rng)
+
+            # Every jitted graph an inference touches, not just the sampler. Warming one of three
+            # spends the compile and still leaves the first request paying for the other two --
+            # which is what a 26.7 s first call became after only the sampler was warmed: 6.4 s.
+            ncam, size = len(self._camera_keys), self._img_size
+            self._patchify(jnp.zeros((1, ncam, 3, size, size), jnp.float32))
+            n = self._candidate_count()
+            self._score(feats[0], pro[0], jnp.zeros((n, self._critic_horizon, self._critic_action_dim), jnp.float32))
+            if self._v_of is not None:
+                self._v_of(feats[0], pro[0])
+            if self._arm_sampler is not None:
+                self._arm_sampler(rng, observation, feats, pro)
+            elif self._extract is not None:
+                self._extract(rng, observation, num_samples=self._default_samples, num_steps=self._flow_steps)
+        except Exception as e:
+            logging.warning("warm-up skipped (%s: %s); the first inference will pay the compile", type(e).__name__, e)
 
     def _candidate_count(self, num_samples: int | None = None) -> int:
         """How many chunks a reply's per-step arrays carry.
