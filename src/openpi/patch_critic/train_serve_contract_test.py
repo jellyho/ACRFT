@@ -19,18 +19,68 @@ import pytest
 
 from openpi.patch_critic import preproc as critic_preproc
 
-_CRITIC = pathlib.Path.home() / "hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_fixed_200k"
+#: The YAM proprio layout: two arms, 6 joints + gripper each, inside a 42-wide state. This is the
+#: shape the order matters for -- indices 0..6 land on statistics 0..6 whichever order you use, so
+#: the left arm is correct even under the bug and only 21..27 moves.
+_PROPRIO_IDX = np.array([0, 1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27], np.int64)
+_REF = np.array([0, 1, 2, 3, 4, 5, -1, 21, 22, 23, 24, 25, 26, -1], np.int64)
+_STATE_DIM, _ACTION_DIM, _HORIZON = 42, 14, 30
 
-pytestmark = pytest.mark.skipif(not _CRITIC.exists(), reason="needs the downloaded YAM critic")
+#: The real critic, when it happens to be on this machine. NOT the guard for the tests below: they
+#: need a SPEC (proprio indices, statistics, delta reference), not weights, and gating them on a
+#: downloaded artifact meant they ran on exactly one machine and skipped everywhere else --
+#: including on the machine where the training half of the contract is written. `4 skipped` reads
+#: as green in a summary line, so the guard on the boundary between the two halves was inert
+#: precisely where it was most needed. CI runs pre-commit only, so it never ran there either.
+_REAL_CRITIC = pathlib.Path.home() / "hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_fixed_200k"
 
 
-@pytest.fixture(scope="module")
-def spec_and_pre():
-    cfg = json.loads((_CRITIC / "config.json").read_text())
+def _synthetic_pre(seed: int = 0):
+    """A Pi05Preproc with per-channel statistics that differ across the state.
+
+    They have to differ: if channels 7..13 carried the same statistics as 21..27 the two orders
+    would agree numerically and the test would pass while asserting nothing.
+    """
+    rng = np.random.default_rng(seed)
+    lo = rng.uniform(-3.0, -1.0, _STATE_DIM)
+    # float64 arrays, exactly what load_norm_stats produces -- a list here would work in some
+    # expressions and raise in others, and the test would be exercising a shape the loader
+    # never hands the code under test.
+    stats = {
+        "state": {
+            "q01": lo,
+            "q99": lo + rng.uniform(2.0, 5.0, _STATE_DIM),
+            "mean": rng.normal(size=_STATE_DIM),
+            "std": rng.uniform(0.5, 2.0, _STATE_DIM),
+        },
+        "actions": {
+            "q01": rng.uniform(-1.0, -0.3, _ACTION_DIM),
+            "q99": rng.uniform(0.3, 1.0, _ACTION_DIM),
+            "mean": rng.normal(size=_ACTION_DIM),
+            "std": rng.uniform(0.2, 1.0, _ACTION_DIM),
+        },
+    }
+    return critic_preproc.Pi05Preproc(ref=_REF, stats=stats, use_quantiles=True, delta=True)
+
+
+@pytest.fixture(params=["synthetic", "real"])
+def spec_and_pre(request):
+    """Runs on the synthetic spec everywhere; adds the real critic where it is downloaded."""
+    if request.param == "synthetic":
+        return {
+            "state_dim": _STATE_DIM,
+            "action_dim": _ACTION_DIM,
+            "horizon": _HORIZON,
+            "proprio_indices": _PROPRIO_IDX.tolist(),
+            "joint_delta_reference": _REF.tolist(),
+        }, _synthetic_pre()
+    if not _REAL_CRITIC.exists():
+        pytest.skip("the real critic is not on this machine; the synthetic case covers the property")
+    cfg = json.loads((_REAL_CRITIC / "config.json").read_text())
     spec = cfg["input_spec"]
     pre = critic_preproc.Pi05Preproc(
         ref=np.asarray(spec["joint_delta_reference"], np.int64),
-        stats=critic_preproc.load_norm_stats(_CRITIC / spec["norm_stats_file"]),
+        stats=critic_preproc.load_norm_stats(_REAL_CRITIC / spec["norm_stats_file"]),
         use_quantiles=bool(spec["use_quantiles"]),
         delta=spec["delta_mode"] == "joint",
     )
