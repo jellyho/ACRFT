@@ -20,6 +20,15 @@ reject it on action statistics, only on whether it fits THIS state. We report
   lcb curve    the same, but selecting by CriticQ.q_lcb (mean - beta*std over the ensemble)
                instead of the mean. The gap between the two curves is how much of the winner's
                curse the ensemble can currently see.
+  width sweep  the same bias, measured over candidate sets of CONTROLLED action-space width:
+               chunks executed delta frames away in the same episode, delta from 1 (nearly the
+               same action) up to a whole other state. This is what reconciles this probe with the
+               hub entry q-landscape-ood, which measured the bias over the BC policy's OWN draws
+               (sigma_BC ~ 0.009 per dim) and found it small and log(N)-bounded (+1.88 +- 0.62 at
+               N=16). Both are true: the bias GROWS with how far the candidate set reaches, and
+               best-of-N at serving reaches only as far as the sampler's own noise. Read together
+               they say the serving question is not "does argmax select over-estimates" but
+               "is there anything to select at that width at all".
   scales       per-state ensemble disagreement vs the within-state spread over candidates. If
                disagreement << spread, the ensemble is not measuring the uncertainty that the
                arg-max is exploiting, and no amount of LCB beta will fix it -- only more members.
@@ -39,6 +48,87 @@ import numpy as np
 R = pathlib.Path(__file__).resolve().parents[1]
 
 
+# q-landscape-ood measured the SAME bias against the SAME anchor over the BC sampler's own draws.
+# Its two numbers are the only external points on this axis, so they are plotted, not restated.
+SIGMA_BC = 0.009  # per-dim std of the BC sampler's draws
+BON_BIAS = 1.88  # arg-max bias at N=16 over those draws
+BON_CI = 0.62
+
+
+def figure(res, path):
+    """Regenerate the figure from the probe's own JSON. Split out so a report build can redraw
+    without re-running the probe (the numbers still come from the source, never from prose)."""
+    import sys
+
+    sys.path.insert(0, str(R / "slurm"))
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import plot_style
+
+    plot_style.apply()
+    PAL = plot_style.PALETTE
+    ns, W = res["n"], res["width_n"]
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(10.6, 4.0))
+
+    ax.axhline(0, color="0.4", lw=1.0, ls="--", zorder=1)
+    ax.plot(
+        ns,
+        res["gaussian_null_margin"],
+        color="0.55",
+        lw=1.4,
+        ls=":",
+        zorder=2,
+        label="envelope if all spread were error",
+    )
+    ax.plot(ns, res["argmax_margin"], marker="o", ms=6, lw=1.8, color=PAL[3], zorder=4, label="arg-max Q (best-of-N)")
+    ax.plot(
+        ns,
+        res["lcb_margin"],
+        marker="s",
+        ms=6,
+        lw=1.8,
+        color=PAL[0],
+        zorder=3,
+        label=f"arg-max LCB (β={res['lcb_beta']:g}, K={res['num_critics']})",
+    )
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(ns)
+    ax.set_xticklabels([str(n) for n in ns])
+    ax.set_xlabel("candidates ranked, N")
+    ax.set_ylabel("Q(selected) − Q(executed)")
+    ax.set_title("transplanted candidates: no saturation")
+    ax.legend(loc="upper left", fontsize=9)
+
+    sp, bi = res["width_spread_rms"], res["width_argmax_bias"]
+    k = np.polyfit(np.log(sp), np.log(bi), 1)[0]
+    ax2.plot(sp, bi, marker="o", ms=6, lw=1.8, color=PAL[3], zorder=3, label=f"this probe  (slope {k:.1f} in log-log)")
+    ax2.errorbar(
+        [SIGMA_BC],
+        [BON_BIAS],
+        yerr=[BON_CI],
+        marker="D",
+        ms=8,
+        lw=0,
+        elinewidth=1.5,
+        capsize=4,
+        color=PAL[2],
+        zorder=5,
+        label="q-landscape-ood: the BC sampler's own draws",
+    )
+    ax2.set_xscale("log")
+    ax2.set_yscale("log")
+    ax2.set_xlabel("candidate spread from the executed chunk  (per-dim RMS)")
+    ax2.set_ylabel(f"arg-max bias, N={W}  (control steps)")
+    ax2.set_title("the bias is a function of candidate width")
+    ax2.legend(loc="upper left", fontsize=9)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=170)
+    return k
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -50,10 +140,25 @@ def main():
     ap.add_argument("--states", type=int, default=512)
     ap.add_argument("--candidates", type=int, default=32)
     ap.add_argument("--lcb-beta", type=float, default=1.0)
+    ap.add_argument(
+        "--widths",
+        type=int,
+        nargs="*",
+        default=[1, 2, 5, 10, 30, 100],
+        help="candidate sets drawn from +-delta frames away in the same episode, one set per delta; "
+        "the transplant-from-another-state set is appended as the widest point",
+    )
+    ap.add_argument("--width-n", type=int, default=16, help="candidates per width (matches q-landscape-ood's N=16)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=pathlib.Path, default=R / ".scratch/extraction/diag_selection_bias.json")
     ap.add_argument("--fig", type=pathlib.Path, default=R / ".scratch/extraction/fig_selection_bias.png")
+    ap.add_argument("--fig-only", action="store_true", help="redraw from the existing --out JSON, no recompute")
     a = ap.parse_args()
+
+    if a.fig_only:
+        k = figure(json.loads(a.out.read_text()), a.fig)
+        print(f"redrew {a.fig}  (log-log slope {k:.2f})")
+        return
 
     import jax
     import jax.numpy as jnp
@@ -68,16 +173,23 @@ def main():
     S = a.states
     rows = np.sort(rng.choice(view.meta["N"] - H - 1, S, replace=False))
 
+    # Per-row episode bounds, built once. Doing this lookup inside the chunk assembly (a linear
+    # scan over 347 episodes per row) made the width sweep O(rows * episodes * candidates) and
+    # dominated the runtime.
+    ep_start = np.empty(view.meta["N"], np.int64)
+    ep_end = np.empty(view.meta["N"], np.int64)
+    for e in eps:
+        lo, hi = e["offset"], e["offset"] + e["full_len"]
+        ep_start[lo:hi] = lo
+        ep_end[lo:hi] = hi - 1
+    ar_h = np.arange(H)
+
     def executed(rs):
         """The chunk actually executed at each row, assembled exactly as the critic's trainer does
         (train_patch_critic_cached.py:336-341): clamp-and-hold at the episode end, then joint delta
-        against the chunk's base frame + quantile normalization."""
-        out = np.empty((len(rs), H, AD), np.float32)
-        for i, g in enumerate(rs):
-            ep = next(e for e in eps if e["offset"] <= g < e["offset"] + e["full_len"])
-            end = ep["offset"] + ep["full_len"] - 1
-            out[i] = np.asarray(view.actions[np.clip(g + np.arange(H), 0, end)])
-        return out
+        against the chunk's base frame + quantile normalization (applied by the caller)."""
+        g = np.clip(rs[:, None] + ar_h[None], ep_start[rs][:, None], ep_end[rs][:, None])
+        return np.asarray(view.actions[g.reshape(-1)]).reshape(len(rs), H, AD)
 
     feats, raw, prop = view.rows(rows, critic)
     dch = critic.pre.actions(executed(rows), raw)[..., :AD]
@@ -134,52 +246,40 @@ def main():
         for n in ns
     ]
 
+    # ---- width sweep: how far does the candidate set have to reach before argmax bites? ---------
+    # Candidates are chunks executed delta frames away in the SAME episode: real actions, at a
+    # controlled action-space distance from the executed one. Distance is reported as per-dimension
+    # RMS in normalized action units so it sits on the same axis as the BC sampler's own spread.
+    starts, ends = ep_start[rows], ep_end[rows]
+    W = a.width_n
+    widths, wbias, wspread = [], [], []
+    for delta in a.widths:
+        off = rng.integers(-delta, delta + 1, size=(S, W))
+        off[off == 0] = delta  # a zero offset would put the executed chunk in its own candidate set
+        g2 = np.clip(rows[:, None] + off, starts[:, None], ends[:, None])
+        qc = np.empty((S, W), np.float32)
+        dist = np.empty((S, W), np.float32)
+        for j in range(W):
+            cj = critic.pre.actions(executed(g2[:, j]), raw)[..., :AD]
+            qc[:, j] = np.asarray(q_mean(F, jnp.asarray(cj), P))
+            dist[:, j] = np.linalg.norm((cj - dch).reshape(S, -1), axis=1) / np.sqrt(H * AD)
+        widths.append(int(delta))
+        wbias.append(float((qc.max(1) - q_exec).mean()))
+        wspread.append(float(dist.mean()))
+    # widest point: the transplant set already computed above
+    tdist = np.mean([np.linalg.norm((dch[rng.permutation(S)] - dch).reshape(S, -1), axis=1) for _ in range(4)])
+    widths.append(-1)  # -1 = another state entirely
+    wbias.append(float((QN[:, :W].max(1) - q_exec).mean()))
+    wspread.append(float(tdist / np.sqrt(H * AD)))
+    res["width_deltas"] = widths
+    res["width_spread_rms"] = wspread
+    res["width_argmax_bias"] = wbias
+    res["width_n"] = W
+
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(res, indent=2))
 
-    import sys
-
-    sys.path.insert(0, str(R / "slurm"))
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import plot_style
-
-    plot_style.apply()
-    PAL = plot_style.PALETTE
-    fig, ax = plt.subplots(figsize=(5.6, 3.8))
-    ax.axhline(0, color="0.4", lw=1.0, ls="--", zorder=1)
-    ax.plot(
-        ns,
-        res["gaussian_null_margin"],
-        color="0.55",
-        lw=1.4,
-        ls=":",
-        zorder=2,
-        label="envelope if all spread were error",
-    )
-    ax.plot(ns, argmax_m, marker="o", ms=6, lw=1.8, color=PAL[3], zorder=4, label="arg-max Q (best-of-N)")
-    ax.plot(
-        ns,
-        lcb_m,
-        marker="s",
-        ms=6,
-        lw=1.8,
-        color=PAL[0],
-        zorder=3,
-        label=f"arg-max LCB (β={a.lcb_beta:g}, K={res['num_critics']})",
-    )
-    ax.set_xscale("log", base=2)
-    ax.set_xticks(ns)
-    ax.set_xticklabels([str(n) for n in ns])
-    ax.set_xlabel("candidates ranked, N")
-    ax.set_ylabel("Q(selected) − Q(executed)")
-    ax.set_title("selection climbs above ground truth without saturating")
-    ax.legend(loc="upper left")
-    fig.tight_layout()
-    a.fig.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(a.fig, dpi=170)
+    figure(res, a.fig)
 
     print(f"critic {a.critic.name}  K={res['num_critics']}  states={S}")
     print(
