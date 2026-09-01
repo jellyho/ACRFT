@@ -168,4 +168,4 @@ def test_the_serving_layer_applies_it_rather_than_recording_it():
     from openpi.policies import patch_critic_policy as pcp
 
     src = inspect.getsource(pcp.PatchCriticSelectPolicy.infer)
-    assert "to_critic_space" in src, "the wrapper owns both transforms, so it computes the map"
+    assert "_set_critic_space(" in src, "the wrapper owns both transforms, so it computes the map"

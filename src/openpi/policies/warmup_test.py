@@ -11,6 +11,13 @@ bug this repo keeps producing -- an artifact that describes the property without
     sampler, correct width                       6360 ms   <- patchify and score still cold
     patchify + score + v + sampler               6747 ms   <- with --drift-samples: refs cold
     ...and the reference draws                    555 ms
+    ...but with the scalar default k/c           CRASH     <- a different SHAPE is a different jit
+
+The last one is the same bug once more, and the worst version of it: the steering graph takes the
+policy->critic action map as traced arguments, the warm-up passed the scalar default and the
+request passed [H, A] arrays, so the compile happened on a live inference with the robot attached
+and ptxas died with error code 2. Shapes are part of a compilation; warming with the wrong ones
+warms nothing.
 
 So these tests assert on CALLS, not on log lines: whatever an inference invokes, the warm-up must
 invoke too, with the shapes the real request will use.
@@ -29,6 +36,9 @@ class _Recorder:
     #: answer. (The warm-up swallowed the AttributeError and logged "warm-up skipped" -- correct
     #: behaviour, and the reason a test had to look at calls rather than at the log.)
     pair_unsteered = False
+    #: the scalar default the real ArmChunkSampler carries -- the one that compiled the wrong graph
+    to_critic_space = (1.0, 0.0)
+    critic_horizon = None
 
     def __init__(self, ret=None):
         self.calls = []
@@ -58,11 +68,17 @@ def _policy(*, arm: bool, drift: int, state_dim: int = 42):
     p._extract = _Recorder(jnp.zeros((1, 30, 32)))
     p._arm_sampler = _Recorder(jnp.zeros((1, 30, 32))) if arm else None
     p._arm = "qpilots" if arm else None
+    # the pieces _set_critic_space needs: an output transform that is callable (the identity here)
+    # and no critic preproc, so the map comes out as the identity at the right SHAPE -- which is
+    # the only thing that matters to a compilation.
+    p._action_horizon = 30
+    p._pre = None
 
-    class _T:
-        pass
+    class _Transform:
+        def __call__(self, d):
+            return {"actions": np.asarray(d["actions"], np.float32)}
 
-    p._pol = type("P", (), {"_output_transform": _T()})()
+    p._pol = type("P", (), {"_output_transform": _Transform()})()
     # the helper that reads the robot's real state width off the output transform
     p._forced_state_dim = state_dim
     return p
@@ -138,3 +154,34 @@ def test_a_warm_up_failure_is_not_a_startup_failure(caplog):
     p._patchify = boom
     p.warmup(_fake_obs(42))  # must not raise
     assert any("warm-up skipped" in r.message for r in caplog.records)
+
+
+def test_warm_up_and_infer_compile_the_same_graph():
+    """k and c are TRACED arguments of the steering graph, so their shape is part of the
+    compilation. The warm-up used the sampler's scalar default while a request passes [H, A]
+    arrays -- two graphs, the warm one unused, and the real compile landing on a live inference
+    where ptxas died with error code 2.
+
+    Both paths now go through `_set_critic_space`, so this asserts the SHAPE the warm-up leaves on
+    the sampler, which is the thing that has to match.
+    """
+    p = _policy(arm=True, drift=0)
+    assert p._arm_sampler.to_critic_space == (1.0, 0.0), "the default that caused the crash"
+    p.warmup(_fake_obs(42))
+    k, c = p._arm_sampler.to_critic_space
+    assert np.ndim(k) == 2, "warm-up must set a per-(step, dim) map, not leave the scalar default"
+    assert np.shape(k) == (p._critic_horizon, p._critic_action_dim), np.shape(k)
+    assert np.shape(c) == np.shape(k)
+
+
+def test_both_paths_go_through_one_call():
+    """Two call sites deriving the same shapes agree by inspection until one is edited. This is the
+    fourth warm-up regression in this file and the reason the map is set in one method."""
+    import inspect
+
+    from openpi.policies import patch_critic_policy as pcp
+
+    for fn in (pcp.PatchCriticSelectPolicy.infer, pcp.PatchCriticSelectPolicy.warmup):
+        src = inspect.getsource(fn)
+        assert "_set_critic_space(" in src, f"{fn.__name__} must not build the map itself"
+        assert "to_critic_space" not in src, f"{fn.__name__} must not assign it directly"

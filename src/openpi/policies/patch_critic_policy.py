@@ -407,6 +407,20 @@ class PatchCriticSelectPolicy(BasePolicy):
             self._affine_checked = False
             logging.info("critic mode %s: chunks from the %s sampler", self._mode_label, self._arm)
 
+    def _set_critic_space(self, norm_state, state) -> None:
+        """Hand the arm sampler the policy->critic action map for THIS request.
+
+        Called from both `infer` and `warmup`, and that is why it exists as a method. `k` and `c`
+        are traced arguments of the steering graph, so their SHAPE is part of the compilation:
+        warming with the scalar default and then serving [H, A] arrays compiles two different
+        graphs. The warm-up then warms the one nothing uses, and the real compile lands on the
+        first inference with the robot connected -- where it took ptxas out with error code 2.
+
+        That is the fourth time a warm-up in this file warmed something the request could not
+        reuse, so the two paths go through one call rather than agreeing by inspection.
+        """
+        self._arm_sampler.to_critic_space = jax.tree.map(jnp.asarray, self._critic_space_affine(norm_state, state))
+
     def _critic_space_affine(self, norm_state, state):
         """Policy-normalized chunk -> the critic's action space, as a per-dim affine `(k, c)`.
 
@@ -524,7 +538,7 @@ class PatchCriticSelectPolicy(BasePolicy):
                 # Probe the map once, loudly, rather than trusting that it is affine.
                 self._affine_checked = True
                 self._check_critic_space_affine(norm_state, state)
-            self._arm_sampler.to_critic_space = jax.tree.map(jnp.asarray, self._critic_space_affine(norm_state, state))
+            self._set_critic_space(norm_state, state)
             chunks_model = np.asarray(
                 self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(arm_proprio)), np.float32
             )
@@ -714,6 +728,12 @@ class PatchCriticSelectPolicy(BasePolicy):
             if self._v_of is not None:
                 self._v_of(feats[0], pro[0])
             if self._arm_sampler is not None:
+                # The SAME map infer will pass, so the graph compiled here is the graph served.
+                # k/c are traced, so their VALUES do not matter; their shapes and dtypes do, and
+                # warming with the scalar default compiled a graph no request could reuse -- the
+                # real compile then landed on a live inference and took ptxas out (error code 2).
+                zeros = np.zeros(observation.state.shape[-1], np.float32)
+                self._set_critic_space(zeros, zeros)
                 self._arm_sampler(rng, observation, feats, pro)
             # NOT an elif. With --drift-samples the arm path ALSO draws references through
             # `_extract`, and warming only the arm left the first request at 6.7 s where a run

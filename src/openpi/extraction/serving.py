@@ -313,6 +313,14 @@ class ArmChunkSampler:
             # 3229 ms, which is how the overhead was found to be entirely outside the loop.
             ad = self.critic.config["action_dim"]
             k, c = self.to_critic_space
+            if np.ndim(k) != 2:
+                # The scalar default would compile a SECOND graph -- a different shape is a
+                # different jit -- so the warm-up would have warmed one nothing serves and the real
+                # compile would land on a live request. Refuse rather than silently recompile.
+                raise RuntimeError(
+                    "the policy->critic action map was never set; PatchCriticSelectPolicy sets it "
+                    "in _set_critic_space, from both infer and warmup, and both must run."
+                )
             return self._steer_jit(self.params, rng, obs, feats, proprio, ad, spec.alpha, self.pair_unsteered, k, c)
 
         # The remaining arms still build the model here; they are single-forward paths, so the
