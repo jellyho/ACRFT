@@ -1,13 +1,20 @@
-"""Rollout statistics: the arithmetic, not the reading.
+"""Rollout statistics.
 
-Everything here is a pure function of arrays, so it is testable without a dataset -- which matters
-because the failure mode of a stats tool is a number that is wrong rather than absent.
+The failure mode of a stats tool is a number that is WRONG rather than absent, so most of this is
+pure arithmetic over made-up arrays and needs no dataset.
+
+That was once the whole file, and it left a gap: testing the formula proves the formula, not the
+code that runs. `episode_stats` decided which columns held what by inferring the layout from the
+candidate COUNT (`N >= 3`), which is also true of a best-of-8 run -- so it reported a steering
+displacement for runs with no steering in them, computed between two independent draws. The
+arithmetic tests all passed. `_Reader` below closes that: the real function, on columns shaped the
+way the serving wrapper emits them.
 """
 
 import numpy as np
 import pytest
 
-from misc.rollout_stats import boundary_jumps, chunk_starts, mean_ci
+from misc.rollout_stats import boundary_jumps, chunk_starts, episode_stats, mean_ci
 
 
 def test_boundaries_are_where_the_chunk_id_changes():
@@ -108,3 +115,77 @@ def test_the_advantage_tripwire_separates_the_two_critics():
     """0.204 is the fixed critic's reference; 0.277 is what the raw-proprio bug produced, and Q
     stayed in range the whole time. A deploy run near 0.28 is a signal, not a result."""
     assert abs(0.204 - 0.277) > 0.05, "the two distributions are far enough apart to act on"
+
+
+class _Reader:
+    """The two methods episode_stats calls. Enough to run the real function on made-up columns."""
+
+    fps = 30
+
+    def __init__(self, cols, frames):
+        self._cols, self._frames = cols, frames
+
+    def episode_length(self, _episode):
+        return self._frames
+
+    def column(self, _episode, key):
+        return self._cols.get(key)
+
+
+def _run(*, n_candidates, twin, replans=4, per=5):
+    """One episode's worth of columns, laid out the way the serving wrapper emits them."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    frames = replans * per
+    uncond = rng.normal(size=(replans, n_candidates - 2, 14)) * 0.5
+    executed = uncond[:, 0] + 0.1
+    per_replan = np.concatenate([executed[:, None], uncond[:, :1], uncond], axis=1)
+    cols = {
+        "policy.chunk_index": np.repeat(np.arange(replans, dtype=np.float32), per).reshape(-1, 1),
+        "action_samples": np.repeat(per_replan, per, axis=0).astype(np.float32),
+    }
+    if twin is not None:
+        cols["critic_twin"] = np.full((frames, 1), twin, np.float32)
+    return _Reader(cols, frames)
+
+
+def test_drift_is_read_out_of_a_real_episode_not_re_derived():
+    """The arithmetic above is checked in numpy; this checks that `episode_stats` -- the function
+    the stats table actually calls -- produces it from columns shaped the way the wrapper emits
+    them. Re-deriving a formula in a test proves the formula, not the code that runs."""
+    stats = episode_stats(_run(n_candidates=6, twin=1.0), 0)
+    assert abs(stats["steer_drift_p50"] - 0.1) < 1e-5
+    assert "steer_drift_over_spread" in stats
+
+
+def test_drift_is_not_reported_without_a_recorded_twin():
+    """A best-of-8 run has N >= 3 and no steering in it at all. Reading column 1 as "the twin"
+    there measures the distance between two INDEPENDENT draws and reports it as steering
+    displacement -- a plausible number with no error attached, which is the only kind of wrong
+    answer that survives. The layout is now read from `critic_twin`, which the server records.
+    """
+    bon8 = episode_stats(_run(n_candidates=8, twin=None), 0)
+    assert "steer_drift_p50" not in bon8, "a best-of-N run has no steering to measure"
+    assert bon8.get("steer_drift") == "no twin recorded", "and says so, rather than going missing"
+
+    # A non-steering arm asked for reference draws: the references are real, the twin is not.
+    lps = episode_stats(_run(n_candidates=6, twin=0.0), 0)
+    assert "steer_drift_p50" not in lps
+
+
+def test_the_flag_and_the_count_come_from_one_expression():
+    """`critic_twin` says column 1 is the twin and `_candidate_count` says how many columns there
+    are. Derived separately they agree by coincidence, and the run where they stop agreeing is one
+    whose drift column is quietly measuring the wrong pair."""
+    import inspect
+    import pathlib as _pl
+    import sys
+
+    sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "src"))
+    from openpi.policies import patch_critic_policy as pcp
+
+    counter = inspect.getsource(pcp.PatchCriticSelectPolicy._candidate_count)
+    emitter = inspect.getsource(pcp.PatchCriticSelectPolicy.infer)
+    assert "_has_twin" in counter
+    assert "self._has_twin" in emitter

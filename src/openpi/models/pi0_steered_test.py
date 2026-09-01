@@ -11,8 +11,6 @@ known optimum, so "steering moves the chunk toward higher value" is a claim abou
 loop, the actual Tweedie projection and the actual sign of Eq. 17.
 """
 
-import copy
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -149,7 +147,8 @@ def test_output_stays_in_the_box(fixture):
     _cfg, _base, model, obs, noise = fixture
     value_fn = lambda a: jnp.sum(a) * 1e3  # noqa: E731 - pushes hard at the boundary
     out = _draw(model, obs, noise, value_fn, 5.0)
-    assert out.min() >= -1.0 and out.max() <= 1.0
+    assert out.min() >= -1.0
+    assert out.max() <= 1.0
 
 
 def test_it_matches_the_pre_refactor_serving_loop(fixture):
@@ -164,7 +163,7 @@ def test_it_matches_the_pre_refactor_serving_loop(fixture):
     value_fn = lambda a: -jnp.sum((a - target) ** 2)  # noqa: E731
     alpha, n = 0.5, 4
 
-    kv, pm = (lambda r: (r[1], r[0]))(model._prefix_forward(obs))
+    pm, kv = model._prefix_forward(obs)
     x, dt = noise, 1.0 / n
     for i in range(n):
         tv = jnp.full((x.shape[0],), 1.0 - i * dt)

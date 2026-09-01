@@ -17,9 +17,20 @@ there would be one.
 
 ### Where an arm's code lives
 
-An arm that changes **how a chunk is drawn** is a property of the policy, so it lives with the
-policy — `qpilots` is `Pi0Steered(Pi0)` in `src/openpi/models/pi0_steered.py`, which is `Pi0` plus
-one sampler and no parameters of its own, so it can wrap a checkpoint trained as a plain `Pi0`.
+An arm that changes **how a chunk is drawn** is a property of the policy, so the drawing lives
+with the policy and the arm calls it:
+
+| arm | what it contributes | what it calls |
+|---|---|---|
+| `qpilots` | a value to steer toward | `Pi0Steered.sample_steered(value_fn=…)` |
+| `lps` / `lpsd` | a latent `z` from a small actor | `Pi0AlphaFlow.decode_latent(z)` |
+| `flowdagger` | a DCT-parameterised seed | `Pi0.sample_actions(noise=seed)` |
+
+Each of those used to be a hand-copy of the model's own sampler inside `serving.py`. A copy does
+not fail when it drifts — it silently serves a base that is no longer the base being served.
+
+`Pi0Steered` is `Pi0` plus one sampler and no parameters of its own, so it can wrap a checkpoint
+trained as a plain `Pi0`.
 
 The critic is **injected** into it as `value_fn(a_hat) -> scalar`. That is what keeps the model
 from learning that a critic exists, and it is why one critic can score a BC, an α-Flow or an RLT
@@ -31,8 +42,8 @@ The layers, and what each is allowed to know:
 
 | layer | knows |
 |---|---|
-| `models/pi0_steered.py` | how to integrate a flow with a value gradient. Not what the value is. |
-| `extraction/serving.py` | which arms exist, what each one's value is, how to load their heads |
+| `models/*.py` | how to draw a chunk — steered, from a latent, from a seed. Not why. |
+| `extraction/serving.py` | which arms exist, what each one contributes, how to load their heads |
 | `policies/patch_critic_policy.py` | features, scoring, selection, robot-space decode — **no arm names** |
 
 That last row is enforced by a test: `patch_critic_policy.py` contains no arm name at all. It asks

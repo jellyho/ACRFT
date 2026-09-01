@@ -180,7 +180,14 @@ def test_the_declared_count_and_the_emitted_count_come_from_one_expression():
     assert "self._candidate_count(" in emitted, "infer must check what it emits against the count"
 
     counter = inspect.getsource(pcp.PatchCriticSelectPolicy._candidate_count)
-    assert "pair_unsteered" in counter, "the twin only counts when it is actually drawn"
+    assert "_has_twin" in counter, "the twin only counts when it is actually drawn"
+    # ...and the RECORDED layout flag comes from that same expression, so the number of columns and
+    # the meaning of column 1 cannot disagree. They were derived separately, and the analysis side
+    # then inferred the layout from the count alone -- which reported a steering displacement for
+    # best-of-N runs, measured between two independent draws.
+    twin = inspect.getsource(pcp.PatchCriticSelectPolicy._has_twin.fget)
+    assert "pair_unsteered" in twin, "one expression behind both the count and the flag"
+    assert '"critic_twin"' in inspect.getsource(pcp.PatchCriticSelectPolicy.extra_features)
 
 
 def test_the_count_follows_what_is_actually_drawn():

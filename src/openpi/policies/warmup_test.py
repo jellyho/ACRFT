@@ -73,19 +73,14 @@ def _state_width(monkeypatch):
     monkeypatch.setattr(pcp._policy_mod, "_output_state_dim", lambda _t, fallback: 42)
 
 
-class _Obs:
-    def __init__(self, state):
-        self.state = state
-
-
 def _fake_obs(width):
     import dataclasses
 
     @dataclasses.dataclass
-    class O:
+    class _Obs:
         state: jnp.ndarray
 
-    return O(jnp.zeros((1, width), jnp.float32))
+    return _Obs(jnp.zeros((1, width), jnp.float32))
 
 
 def test_the_reference_draws_are_warmed_alongside_the_arm():

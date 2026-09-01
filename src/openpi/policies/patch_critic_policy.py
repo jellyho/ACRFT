@@ -573,6 +573,13 @@ class PatchCriticSelectPolicy(BasePolicy):
         # records, so a replan's frames repeat them.
         out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
+        # Whether column 1 of action_samples is the unsteered twin, RECORDED rather than inferred.
+        # The analysis side (misc/rollout_stats.py) has to know the column layout to read a drift
+        # out of it, and it was deriving that layout independently -- from `N >= 3`, which is true
+        # of every best-of-8 run too. It therefore reported a "steering displacement" for runs with
+        # no steering in them: the distance between two independent draws, a plausible number with
+        # no error attached. Both sides now read this one field.
+        out["critic_twin"] = np.full((x, 1), float(self._has_twin), np.float32)
         if self._emit_full:
             # `action_samples` above is the EXECUTED prefix, so whatever the model proposed beyond
             # it exists nowhere else. Adaptive always leaves such a tail; so does bon when the
@@ -649,6 +656,15 @@ class PatchCriticSelectPolicy(BasePolicy):
         except Exception as e:
             logging.warning("warm-up skipped (%s: %s); the first inference will pay the compile", type(e).__name__, e)
 
+    @property
+    def _has_twin(self) -> bool:
+        """Whether an unsteered twin is drawn, and so occupies column 1 of `action_samples`.
+
+        The single expression behind both the candidate count and the recorded `critic_twin` flag,
+        so the number of columns and the meaning of column 1 cannot disagree.
+        """
+        return bool(self._arm_sampler is not None and self._arm_sampler.pair_unsteered)
+
     def _candidate_count(self, num_samples: int | None = None) -> int:
         """How many chunks a reply's per-step arrays carry.
 
@@ -660,8 +676,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         unconditional reference draws. Everything else is the candidate sampler's N.
         """
         if self._arm is not None:
-            twin = 1 if (self._arm_sampler is not None and self._arm_sampler.pair_unsteered) else 0
-            return 1 + twin + self._drift_samples
+            return 1 + int(self._has_twin) + self._drift_samples
         return int(num_samples or self._default_samples)
 
     def extra_features(self, num_samples: int | None = None) -> dict:
@@ -683,6 +698,8 @@ class PatchCriticSelectPolicy(BasePolicy):
             # Where the macro-group boundaries fell, and which group the commitment stopped at.
             "critic_macro": [1],
             "critic_best_prefix": [1],
+            # 1.0 when action_samples[:, 1] is the unsteered twin (see infer).
+            "critic_twin": [1],
         }
         if self._emit_full:
             # The full horizon the model proposed, of which only a prefix was executed (see infer).

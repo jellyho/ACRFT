@@ -214,26 +214,11 @@ class ArmChunkSampler:
         self.graphdef = nnx.graphdef(self.model)
         self.params = jax.device_put(nnx.state(self.model))
 
-    # ---- pi0.5 sampler pieces (same math as the trainers / eval harness) ----------------------
-    # _prefix / _velocity used to be hand-copies of pi0.py's sampler. They are now the model's own
-    # primitives: a copy that drifts from the served policy does not fail, it silently steers away
-    # from a base that is not the policy being served -- and the same math is duplicated again in
-    # five extraction trainers, so the copies have to converge on ONE implementation, not two.
-    def _prefix(self, model, obs):
-        """``(kv_cache, prefix_mask)`` -- reversed from the model's ``(prefix_mask, kv_cache)``,
-        kept only because every call site below unpacks it this way."""
-        prefix_mask, kv = model._prefix_forward(obs)
-        return kv, prefix_mask
-
-    def _velocity(self, model, obs, kv, pm, x, tau):
-        return model._velocity(obs, pm, kv, x, tau)
-
-    def _euler(self, model, obs, kv, pm, x):
-        n = self.spec.ode_steps
-        dt = 1.0 / n
-        for i in range(n):
-            x = x - dt * self._velocity(model, obs, kv, pm, x, jnp.full((x.shape[0],), 1.0 - i * dt))
-        return x
+    # No sampler pieces live here any more. _prefix / _velocity / _euler were hand-copies of
+    # pi0.py's sampler, and every arm now calls the model instead: qpilots through
+    # Pi0Steered.sample_steered, lps/lpsd through Pi0AlphaFlow.decode_latent, flowdagger through
+    # Pi0.sample_actions(noise=seed). A copy does not fail when it drifts -- it silently serves a
+    # base that is no longer the base being served, which is how this ring once lost nine arms.
 
     def _q(self, feats, chunk, proprio, *, reduce: str):
         logits = self.critic.net.apply({"params": self.critic.params}, feats, chunk, proprio)
@@ -316,21 +301,26 @@ class ArmChunkSampler:
         model = nnx.merge(self.graphdef, self.params)
 
         if spec.arm in LATENT_ARMS:
+            # The arm's contribution is the latent; decoding it is the model's, and is called
+            # rather than rebuilt here out of `_u` and a prefix pass.
             rep = jnp.concatenate([feats.mean(axis=1), proprio], axis=-1)
             if spec.arm == "lpsd":
                 rep = jnp.concatenate([rep, jax.random.normal(rng, (b, self.H * self.AD))], axis=-1)
             z = _mlp(self.actor, rep).reshape(b, self.H, self.AD)
-            pm, kv = model._prefix_forward(obs)
-            u = model._u(obs, pm, kv, z, jnp.ones((b,)), jnp.zeros((b,)))
-            return z - u
-
-        kv, pm = self._prefix(model, obs)
+            return model.decode_latent(obs, z, preprocess=False)
 
         if spec.arm == "flowdagger":
+            # Likewise: the arm's contribution is the SEED (a DCT-parameterised displacement of the
+            # noise the policy would otherwise have drawn), and integrating it is the base
+            # sampler's job. `sample_actions` already accepts a seed, so the hand-copied Euler loop
+            # that used to be here was the model's own sampler written out a second time --
+            # measured identical to 1.2e-07, i.e. fp32 round-off, on the dummy variant.
             rep = jnp.concatenate([feats.mean(axis=1), proprio], axis=-1)
             coeffs = _mlp(self.head, rep, tanh_scale=3.0).reshape(b, self.basis.shape[0], self.AD)
             seed = jnp.einsum("kh,bkd->bhd", self.basis, coeffs)
-            return self._euler(model, obs, kv, pm, seed)
+            # obs is already preprocessed; preprocess_observation is idempotent at train=False
+            # (resize is a no-op at the right resolution, the mask fill is a fill).
+            return model.sample_actions(rng, obs, num_steps=spec.ode_steps, noise=seed)
 
         raise ValueError(
             f"{spec.arm!r} is not sampled here: bon/idql are the wrapper's own selection path, and "
