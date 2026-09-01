@@ -69,6 +69,20 @@ head = (
 )
 
 KO = f"""{head}
+
+<h3>0. 같은 로봇의 앞선 두 스윕 — 이 결과가 놓인 자리</h3>
+<p>이 리포트의 두 실험은 진공에서 나온 것이 아니다. 같은 로봇·같은 과제에서 먼저 두 가지를 쟀고,
+그림은 있었으나 허브에 게시된 적이 없어 여기에 함께 싣는다.</p>
+<figure><img src='figures/serving-rollouts-yam/fig_legoprog.png' alt='BC execution-length sweep'>
+<figcaption><b>BC 실행길이 스윕.</b> horizon 50으로 학습한 정책을 5·10·20·30·40·50 스텝씩 실행. 10스텝이
+3.1로 정점이고 50스텝은 0.8까지 떨어진다 — 긴 청크를 통째로 실행할수록 나빠진다.</figcaption></figure>
+<figure><img src='figures/serving-rollouts-yam/fig_legoprog_rl.png' alt='critic deploy comparison'>
+<figcaption><b>critic 배포 비교.</b> h30 BC를 베이스로 6개 critic을 BoN/adaptive로 배포. 최고가 2.2
+(<code>fixed_tau9_min</code>, <code>g5_tau9_min</code>)로, BC 기준선(2.1)을 거의 넘지 못한다.</figcaption></figure>
+<p><b>이 배경이 중요한 이유.</b> 위 두 스윕에서 critic 배포가 BC를 거의 못 이겼기 때문에, 이번 실험의
+implicit N=8({best_sel:.2f})은 <b>같은 로봇에서 관측된 가장 높은 값 중 하나</b>다. 동시에 BC 실행길이 스윕은
+"짧게 실행할수록 좋다"고 말하는데, 이번 arm들은 모두 30스텝 청크를 통째로 실행한다 — 선택 규칙과 실행
+길이는 아직 교차되지 않은 두 축이다.</p>
 <p><b>왜.</b> <span class='xref' data-eid='extraction-suite-yam'>extraction 링</span>의 arm들을 지금까지
 오프라인 지표(critic-Q, demo-MSE, jerk)로만 비교해 왔다. 그런데 critic-Q는 조향·선택 arm에 대해
 <b>자기 심판</b>이다 — 조향은 바로 그 critic을 올리도록 설계됐으므로 ΔQ는 정의상 오른다. 실물 롤아웃만이
@@ -79,6 +93,8 @@ KO = f"""{head}
 
 <h3>1. 선택 규칙 — implicit이 argmax를 이겼다</h3>
 <table class='num'><tr><th>규칙</th><th>평균 progress</th><th>n</th><th></th></tr>{sel_rows}</table>
+<figure><img src='figures/serving-rollouts-yam/fig_legoprog_selection.png' alt='selection rules'>
+<figcaption>왼쪽: 평균 progress(±95% CI, 점은 개별 에피소드). 오른쪽: 평균이 감추는 에피소드별 분포 — argmax의 양극화가 여기서만 보인다.</figcaption></figure>
 
 <p><b>판정 — argmax는 선택을 안 한 것과 같았다({argmax_sel:.2f} vs {base_sel:.2f}).</b> N=8로 뽑아 최고점을
 골랐는데 대조군과 평균이 같다. 분포를 보면 이유가 보인다: argmax는 10개 중 7개가 stage 1에서 멈추고 2개만
@@ -121,6 +137,20 @@ FlowDAgger)의 기대치도 함께 내려가야 한다. 다음 단계는 ∇Q �
 progress는 단계 카운트라 등간격 척도가 아니며, 평균은 편의상 통계다.</p>"""
 
 EN = f"""{head}
+
+<h3>0. Two earlier sweeps on the same robot — where this result sits</h3>
+<p>These experiments did not arrive in a vacuum. Two earlier sweeps ran on the same robot and task; their
+figures existed but had never been published, so they are included here.</p>
+<figure><img src='figures/serving-rollouts-yam/fig_legoprog.png' alt='BC execution-length sweep'>
+<figcaption><b>BC execution-length sweep.</b> A horizon-50 policy executed 5/10/20/30/40/50 steps per replan.
+10 steps peaks at 3.1; 50 steps falls to 0.8 — executing more of each chunk is worse.</figcaption></figure>
+<figure><img src='figures/serving-rollouts-yam/fig_legoprog_rl.png' alt='critic deploy comparison'>
+<figcaption><b>Critic deployment.</b> h30 BC as base, six critics deployed BoN/adaptive. The best is 2.2
+(<code>fixed_tau9_min</code>, <code>g5_tau9_min</code>), barely above the BC baseline of 2.1.</figcaption></figure>
+<p><b>Why that background matters.</b> Because critic deployment had barely beaten BC in those sweeps,
+implicit N=8 at {best_sel:.2f} is among the highest values observed on this robot. At the same time the
+execution-length sweep says shorter execution is better, while every arm here executes the full 30-step
+chunk — selection rule and execution length are two axes that have not yet been crossed.</p>
 <p><b>Why.</b> Every comparison in the <span class='xref' data-eid='extraction-suite-yam'>extraction ring</span>
 so far has been an offline proxy (critic-Q, demo-MSE, jerk). But critic-Q is <b>self-refereed</b> for
 steering and selection arms — steering ascends that very critic, so ΔQ rises by construction. Only a
@@ -131,6 +161,8 @@ sampled chunk to execute changes. 10 episodes per condition, progress is a 0-4 s
 
 <h3>1. Selection rule — implicit beat argmax</h3>
 <table class='num'><tr><th>rule</th><th>mean progress</th><th>n</th><th></th></tr>{sel_rows}</table>
+<figure><img src='figures/serving-rollouts-yam/fig_legoprog_selection.png' alt='selection rules'>
+<figcaption>Left: mean progress (95% CI, dots are episodes). Right: the per-episode distribution the mean hides — argmax's polarisation is visible only here.</figcaption></figure>
 
 <p><b>Verdict — argmax matched doing no selection at all ({argmax_sel:.2f} vs {base_sel:.2f}).</b> The
 distribution shows why: argmax stalls at stage 1 in 7 of 10 episodes and reaches stage 4 in 2 — mostly
