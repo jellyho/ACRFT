@@ -383,6 +383,35 @@ class Pi0AlphaFlow(Pi0):
 
     # ------------------------------------------------------------------ sampling
 
+    def decode_latent(
+        self,
+        observation: _model.Observation,
+        z: at.Float[at.Array, "b ah ad"],
+        *,
+        preprocess: bool = True,
+    ) -> _model.Actions:
+        """The one-step jump from a GIVEN latent: `z - u(z, r=0, t=1)`.
+
+        `sample_actions` draws z from the prior; this takes it from the caller, which is the whole
+        of what latent policy steering (lps/lpsd) does differently -- it fits a small actor over
+        (critic features, proprio) that proposes a z the critic likes, and then decodes it through
+        this model exactly as an ordinary sample would be decoded.
+
+        So the actor stays entirely on the caller's side and this file never learns that one
+        exists. The alternative, which is what the serving layer was doing, is to reach into `_u`
+        from outside and rebuild the decode by hand -- a copy that does not fail when it drifts
+        from the model it is decoding for.
+
+        t=1, r=0 is the full interval in one step: the mean velocity over [0, 1], which is the
+        quantity this model is trained to represent.
+        """
+        if preprocess:
+            observation = _model.preprocess_observation(None, observation, train=False)
+        batch = observation.state.shape[0]
+        prefix_mask, kv_cache = self._prefix_forward(observation)
+        u = self._u(observation, prefix_mask, kv_cache, z, jnp.ones((batch,)), jnp.zeros((batch,)))
+        return z - u
+
     @override
     def sample_actions(
         self,

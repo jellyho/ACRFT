@@ -110,8 +110,12 @@ class PatchCriticSelectPolicy(BasePolicy):
         self._mode = mode
         self._mode_label = mode
         # Modes whose CHUNKS come from an extraction arm rather than the base sampler. They reuse
-        # everything else in this class (patch features, robot-space decode, scoring, HUD).
-        self._arm = mode if mode in ("qpilots", "lps", "lpsd", "flowdagger") else None
+        # everything else in this class (patch features, robot-space decode, scoring, HUD). Which
+        # modes those are is the arm registry's answer -- this file used to keep its own copy of
+        # the list, which is one more place to forget when an arm is added.
+        from openpi.extraction import serving as _serving
+
+        self._arm = mode if mode in _serving.SAMPLER_ARMS else None
         # Reassigned in the arm branch below. Non-arm modes already record every candidate they
         # draw, so there is nothing for drift references to add -- but say so, because a mistyped
         # mode otherwise produces a clean run with no drift columns and no message.
@@ -119,10 +123,11 @@ class PatchCriticSelectPolicy(BasePolicy):
         if drift_samples and self._arm is None:
             logging.warning(
                 "--drift-samples %d ignored by --critic-mode %s: it applies to the extraction arms "
-                "(qpilots/lps/lpsd/flowdagger), which bring one chunk and need references to "
-                "compare it against. %s already records all of its candidates.",
+                "(%s), which bring one chunk and need references to compare it against. "
+                "%s already records all of its candidates.",
                 drift_samples,
                 mode,
+                "/".join(_serving.SAMPLER_ARMS),
                 mode,
             )
         self._extraction_head = extraction_head
@@ -302,6 +307,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         pooled = grid // 2
         ncam = len(self._camera_keys)
         npatch = ncam * pooled * pooled
+        self._patch_shape = (npatch, int(bb.embed_dim))
 
         def pool(p):
             b, _, d = p.shape
@@ -360,6 +366,10 @@ class PatchCriticSelectPolicy(BasePolicy):
                 **({"steering_head": pathlib.Path(extraction_head)} if self._arm == "flowdagger" else {}),
             )
             self._arm_sampler = _serving.ArmChunkSampler(spec, policy._model)
+            # The critic's horizon is a property of the critic, so the sampler is told it rather
+            # than discovering it: without it the steering gradient reads the whole policy chunk,
+            # including the tail past what the critic was trained on.
+            self._arm_sampler.critic_horizon = self._critic_horizon
             self._drift_samples = int(drift_samples)
             if self._drift_samples:
                 if self._extract is None:
@@ -373,17 +383,85 @@ class PatchCriticSelectPolicy(BasePolicy):
                         "has no sample_n_actions. The reference draws are the scale the steering "
                         "displacement is measured against; without them there is nothing to compare to."
                     )
-                if self._arm != "qpilots":
-                    # Only steering has an "unsteered twin"; for the other arms the reference draws
-                    # would still be recorded, but the twin would be meaningless, so say so.
-                    logging.warning("drift reference draws requested on %s; only qpilots has a twin", self._arm)
-                self._arm_sampler.pair_unsteered = self._arm == "qpilots"
+                # Whether this arm HAS a twin is the arm registry's to answer, not this wrapper's.
+                # Asking it, rather than testing the mode string, is what keeps a second steering
+                # arm from needing an edit in this file.
+                twin = self._arm_sampler.offers_unsteered_twin
+                if not twin:
+                    # The reference draws are still recorded for a non-steering arm -- they are the
+                    # policy's own spread, which is meaningful on its own -- but there is no twin,
+                    # and a silently missing column reads as a bug in the analysis instead.
+                    logging.warning(
+                        "drift reference draws requested on %s, which does not steer: recording the "
+                        "unconditional draws but no unsteered twin",
+                        self._arm,
+                    )
+                self._arm_sampler.pair_unsteered = twin
                 logging.info(
                     "recording %d unconditional reference draw(s)%s alongside the executed chunk",
                     self._drift_samples,
-                    " and the unsteered twin" if self._arm == "qpilots" else "",
+                    " and the unsteered twin" if twin else "",
                 )
+            # Checked on the first inference, against a real state -- the widths are the robot's
+            # and are not known here.
+            self._affine_checked = False
             logging.info("critic mode %s: chunks from the %s sampler", self._mode_label, self._arm)
+
+    def _critic_space_affine(self, norm_state, state):
+        """Policy-normalized chunk -> the critic's action space, as a per-dim affine `(k, c)`.
+
+        The selection path routes candidates through PHYSICAL units before scoring them, because
+        the sampler's output is normalized by the POLICY's statistics and the critic was trained
+        under its own. The steering path could not do that: it scores inside a jit, on an array
+        that has to stay differentiable, and `_output_transform` is numpy.
+
+        It is affine, though -- unnormalize, add the state, subtract the state, renormalize, all
+        per dimension -- so two probes through the REAL transforms determine it exactly, and the
+        gradient can then be taken through `k * a + c`. Probing rather than re-deriving the algebra
+        is deliberate: a hand-written copy of the quantile formula is the same kind of duplicate
+        that produced this bug, and it would not notice a transform being reconfigured underneath.
+
+        Probes at -0.5 and +0.5 rather than 0 and 1, to stay well inside any clipping; the
+        linearity check at construction is what would catch it if a transform were not affine.
+        """
+        h, ad = self._action_horizon, self._model_action_dim
+        probe = np.stack([np.full((h, ad), -0.5, np.float32), np.full((h, ad), 0.5, np.float32)])
+        dec = np.asarray(
+            self._pol._output_transform(
+                {"state": np.broadcast_to(norm_state, (2, norm_state.shape[0])).copy(), "actions": probe}
+            )["actions"],
+            np.float32,
+        )
+        sc = self._pre.actions(dec, state) if self._pre is not None else dec
+        sc = np.asarray(sc, np.float32)[:, : self._critic_horizon, : self._critic_action_dim]
+        k = sc[1] - sc[0]  # slope per unit of normalized action
+        c = (sc[1] + sc[0]) / 2.0  # value at 0
+        return k, c
+
+    def _check_critic_space_affine(self, norm_state, state) -> None:
+        """The probe is only valid if the map really is affine, and only worth caching if it does
+        not depend on the state. Both are checked once, loudly, at construction -- a warning here
+        is the difference between a steering gradient taken in the critic's space and one taken in
+        a displaced copy of it."""
+        k, c = self._critic_space_affine(norm_state, state)
+        rng = np.random.default_rng(0)
+        x = rng.uniform(-0.9, 0.9, size=(1, self._action_horizon, self._model_action_dim)).astype(np.float32)
+        dec = np.asarray(
+            self._pol._output_transform({"state": norm_state[None].copy(), "actions": x})["actions"], np.float32
+        )
+        got = np.asarray(self._pre.actions(dec, state) if self._pre is not None else dec, np.float32)
+        got = got[:, : self._critic_horizon, : self._critic_action_dim][0]
+        want = x[0, : self._critic_horizon, : self._critic_action_dim] * k + c
+        err = float(np.abs(got - want).max())
+        if err > 1e-3:
+            logging.warning(
+                "the policy->critic action map is not affine to %.2e; steering will follow a "
+                "gradient taken through a linearization of it. Scoring (selection, recorded "
+                "critic_scores) is unaffected -- it uses the transforms directly.",
+                err,
+            )
+        else:
+            logging.info("policy->critic action map calibrated (affine to %.1e)", err)
 
     def _patches_of(self, obs):
         imgs = np.stack([_parse_image(obs[k], self._img_size) for k in self._camera_keys])  # [ncam,S,S,3]
@@ -438,6 +516,15 @@ class PatchCriticSelectPolicy(BasePolicy):
             # below builds. Handing it the policy-normalized state instead would be silently off by
             # a normalization whenever the two stat sets differ.
             arm_proprio = self._critic_proprio(state)
+            # ...and its action queries take the critic's ACTION space, for the same reason. This
+            # is recomputed per inference because the map absorbs the state whenever the critic
+            # scores absolute targets (`_pre is None`); with a pi05-space critic it is constant,
+            # and two numpy transform calls against a 435 ms inference is not worth caching.
+            if not self._affine_checked:
+                # Probe the map once, loudly, rather than trusting that it is affine.
+                self._affine_checked = True
+                self._check_critic_space_affine(norm_state, state)
+            self._arm_sampler.to_critic_space = jax.tree.map(jnp.asarray, self._critic_space_affine(norm_state, state))
             chunks_model = np.asarray(
                 self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(arm_proprio)), np.float32
             )
@@ -558,6 +645,13 @@ class PatchCriticSelectPolicy(BasePolicy):
         # records, so a replan's frames repeat them.
         out["critic_macro"] = np.full((x, 1), self._macro, np.float32)
         out["critic_best_prefix"] = np.full((x, 1), int(np.argmax(pv[best])), np.float32)
+        # Whether column 1 of action_samples is the unsteered twin, RECORDED rather than inferred.
+        # The analysis side (misc/rollout_stats.py) has to know the column layout to read a drift
+        # out of it, and it was deriving that layout independently -- from `N >= 3`, which is true
+        # of every best-of-8 run too. It therefore reported a "steering displacement" for runs with
+        # no steering in them: the distance between two independent draws, a plausible number with
+        # no error attached. Both sides now read this one field.
+        out["critic_twin"] = np.full((x, 1), float(self._has_twin), np.float32)
         if self._emit_full:
             # `action_samples` above is the EXECUTED prefix, so whatever the model proposed beyond
             # it exists nowhere else. Adaptive always leaves such a tail; so does bon when the
@@ -578,6 +672,71 @@ class PatchCriticSelectPolicy(BasePolicy):
         restate the logic."""
         return critic_preproc_mod.critic_proprio(self._pre, self._proprio_idx, raw_state)
 
+    def warmup(self, observation) -> None:
+        """Compile the sampling graph now, rather than on the operator's first rollout.
+
+        QPILOTS costs 37 s to compile (60 s with the drift references) because the graph carries a
+        gradient through the VLM at every Euler step. Paid lazily, that lands on the first inference
+        of a session -- past the client's websocket keepalive, which closes the connection and
+        reports it as a link failure rather than as a compile.
+
+        Takes a post-transform Observation (train_config.model.fake_obs()) because the CLIENT-format
+        keys are dataset-specific and the server cannot invent them. The transforms it skips are
+        numpy, not the expensive part. Feature/proprio shapes come from the critic's own spec.
+
+        Best-effort: a failure here must cost the warm start and nothing else, so the server still
+        comes up and the first real inference just pays the compile as before.
+        """
+        try:
+            import dataclasses as _dc
+
+            # fake_obs derives the state width from the model's ACTION dim (32 for pi05), and on
+            # YAM the state is 42. Warming up on the wrong width compiles a graph the real request
+            # cannot reuse -- the warm-up then costs its full time and saves nothing, which is
+            # exactly what it looked like it was doing.
+            state_dim = _policy_mod._output_state_dim(self._pol._output_transform, fallback=self._model_action_dim)
+            if observation.state.shape[-1] != state_dim:
+                observation = _dc.replace(
+                    observation, state=jnp.zeros((observation.state.shape[0], state_dim), jnp.float32)
+                )
+            npatch, emb = self._patch_shape
+            feats = jnp.zeros((1, npatch, emb), jnp.float32)
+            pro = jnp.zeros((1, len(self._proprio_idx) if self._proprio_idx is not None else 42), jnp.float32)
+            self._rng, rng = jax.random.split(self._rng)
+
+            # Every jitted graph an inference touches, not just the sampler. Warming one of three
+            # spends the compile and still leaves the first request paying for the other two --
+            # which is what a 26.7 s first call became after only the sampler was warmed: 6.4 s.
+            ncam, size = len(self._camera_keys), self._img_size
+            self._patchify(jnp.zeros((1, ncam, 3, size, size), jnp.float32))
+            n = self._candidate_count()
+            self._score(feats[0], pro[0], jnp.zeros((n, self._critic_horizon, self._critic_action_dim), jnp.float32))
+            if self._v_of is not None:
+                self._v_of(feats[0], pro[0])
+            if self._arm_sampler is not None:
+                self._arm_sampler(rng, observation, feats, pro)
+            # NOT an elif. With --drift-samples the arm path ALSO draws references through
+            # `_extract`, and warming only the arm left the first request at 6.7 s where a run
+            # without references was already at 0.3 s -- the same partial warm-up, a third time.
+            if self._extract is not None:
+                self._extract(
+                    rng,
+                    observation,
+                    num_samples=self._drift_samples or self._default_samples,
+                    num_steps=self._flow_steps,
+                )
+        except Exception as e:
+            logging.warning("warm-up skipped (%s: %s); the first inference will pay the compile", type(e).__name__, e)
+
+    @property
+    def _has_twin(self) -> bool:
+        """Whether an unsteered twin is drawn, and so occupies column 1 of `action_samples`.
+
+        The single expression behind both the candidate count and the recorded `critic_twin` flag,
+        so the number of columns and the meaning of column 1 cannot disagree.
+        """
+        return bool(self._arm_sampler is not None and self._arm_sampler.pair_unsteered)
+
     def _candidate_count(self, num_samples: int | None = None) -> int:
         """How many chunks a reply's per-step arrays carry.
 
@@ -589,8 +748,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         unconditional reference draws. Everything else is the candidate sampler's N.
         """
         if self._arm is not None:
-            twin = 1 if (self._arm_sampler is not None and self._arm_sampler.pair_unsteered) else 0
-            return 1 + twin + self._drift_samples
+            return 1 + int(self._has_twin) + self._drift_samples
         return int(num_samples or self._default_samples)
 
     def extra_features(self, num_samples: int | None = None) -> dict:
@@ -612,6 +770,8 @@ class PatchCriticSelectPolicy(BasePolicy):
             # Where the macro-group boundaries fell, and which group the commitment stopped at.
             "critic_macro": [1],
             "critic_best_prefix": [1],
+            # 1.0 when action_samples[:, 1] is the unsteered twin (see infer).
+            "critic_twin": [1],
         }
         if self._emit_full:
             # The full horizon the model proposed, of which only a prefix was executed (see infer).

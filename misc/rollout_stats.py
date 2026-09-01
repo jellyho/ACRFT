@@ -152,8 +152,20 @@ def episode_stats(reader, episode: int) -> dict:
     # distance is the steering displacement, and the unconditional spread is the scale that makes
     # it mean something. A displacement of 0.1 rad is small inside a spread of 0.5 and enormous
     # inside 0.02.
+    #
+    # The layout is READ from `critic_twin`, not inferred. This used to test `N >= 3`, which is
+    # also true of every best-of-8 run and of a non-steering arm run with --drift-samples: in both
+    # the "twin" is an INDEPENDENT draw, so the reported displacement was the policy's own sampling
+    # variance dressed up as steering. It came out as a plausible number with no error attached,
+    # which is the only kind of wrong answer that survives.
     samples = reader.column(episode, "action_samples")
-    if samples is not None and samples.ndim == 3 and samples.shape[1] >= 3 and starts:
+    twin_flag = reader.column(episode, "critic_twin")
+    has_twin = twin_flag is not None and twin_flag.size and bool(np.asarray(twin_flag).reshape(-1)[0])
+    if samples is not None and samples.ndim == 3 and samples.shape[1] >= 3 and starts and not has_twin:
+        # Recorded before `critic_twin` existed, or a run whose column 1 is not a twin. Say so
+        # rather than omitting the row: a missing drift column reads as "steering did nothing".
+        out["steer_drift"] = "no twin recorded"
+    if has_twin and samples is not None and samples.ndim == 3 and samples.shape[1] >= 3 and starts:
         per_replan = samples[starts]  # [R, N, A] -- the decision is made once per reply
         executed, twin, uncond = per_replan[:, 0], per_replan[:, 1], per_replan[:, 2:]
         drift = np.abs(executed - twin).max(axis=-1)  # worst joint, per replan

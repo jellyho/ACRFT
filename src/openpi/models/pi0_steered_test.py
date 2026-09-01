@@ -1,0 +1,208 @@
+"""Value-steered sampling, checked against the model it steers.
+
+The previous version of these tests could not do that. The steering loop lived in the serving
+wrapper, entangled with a patch critic and a DINOv2 backbone, so the test stood up a `_FakeSampler`
+whose `_steer` was `x + alpha` -- it pinned the plumbing around the sampler (which index executes,
+what N is returned) and never executed one line of the integration. That is this repo's recurring
+failure: an artifact that describes the property, passing without checking it.
+
+Injecting the value function is what makes the real thing testable. Here it is analytic, with a
+known optimum, so "steering moves the chunk toward higher value" is a claim about the actual Euler
+loop, the actual Tweedie projection and the actual sign of Eq. 17.
+"""
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from openpi.models import model as _model
+from openpi.models import pi0_config
+from openpi.models.pi0 import Pi0
+from openpi.models.pi0_steered import Pi0Steered
+
+
+@pytest.fixture(scope="module")
+def fixture():
+    cfg = pi0_config.Pi0Config(
+        pi05=True, action_horizon=4, action_dim=8, paligemma_variant="dummy", action_expert_variant="dummy"
+    )
+    base = cfg.create(jax.random.key(0))
+    model = Pi0Steered.wrap(base)
+    obs = _model.preprocess_observation(None, cfg.fake_obs(batch_size=1), train=False)
+    noise = jax.random.normal(jax.random.key(7), (1, cfg.action_horizon, cfg.action_dim))
+    return cfg, base, model, obs, noise
+
+
+def _draw(model, obs, noise, value_fn, alpha, steps=4):
+    return np.asarray(
+        model.sample_steered(
+            jax.random.key(0), obs, value_fn=value_fn, alpha=alpha, num_steps=steps, noise=noise, preprocess=False
+        )
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# wrap()
+
+
+def test_wrap_shares_parameters_and_leaves_the_served_model_alone(fixture):
+    """The served policy's jitted graphs are keyed on a graphdef carrying the type. Re-tagging in
+    place would invalidate every one of them, so wrap() copies -- but it must not COPY the 3B of
+    parameters to do it."""
+    _cfg, base, model, _obs, _noise = fixture
+    assert type(base) is Pi0  # untouched
+    assert isinstance(model, Pi0Steered)
+    assert model is not base
+    assert model.PaliGemma is base.PaliGemma  # same objects, no re-allocation
+
+
+def test_wrap_is_idempotent(fixture):
+    _cfg, _base, model, _obs, _noise = fixture
+    assert Pi0Steered.wrap(model) is model
+
+
+# ---------------------------------------------------------------------------------------------
+# the integration
+
+
+def test_alpha_zero_reproduces_the_unsteered_sampler(fixture):
+    """The twin has to BE the base policy's draw, or the displacement measured against it is not
+    steering displacement.
+
+    Not asserted as exact equality, and the reason is the point: at alpha=0 the velocity still
+    comes out of jax.grad's forward pass rather than a direct _velocity call. Same math, different
+    accumulation order. Short-circuiting the gradient would make this exact and would put that
+    same difference between a STEERED draw and its twin instead, compounded over every step, where
+    it would be reported as displacement. The tolerance is the price of that symmetry.
+    """
+    cfg, _base, model, obs, noise = fixture
+    value_fn = lambda a: -jnp.sum(a**2)  # noqa: E731
+    unsteered = _draw(model, obs, noise, value_fn, 0.0)
+
+    prefix_mask, kv = model._prefix_forward(obs)
+    x, n = noise, 4
+    for i in range(n):
+        v = model._velocity(obs, prefix_mask, kv, x, jnp.full((1,), 1.0 - i / n))
+        x = x - (1.0 / n) * v
+    direct = np.asarray(jnp.clip(x, -1.0, 1.0))
+
+    assert np.allclose(unsteered, direct, atol=2e-2), np.abs(unsteered - direct).max()
+
+
+def test_steering_moves_the_chunk_toward_higher_value(fixture):
+    """The claim the arm exists to make, on a value function whose optimum is known.
+
+    This is what the injected value_fn buys: with the critic hard-wired in, "did it go the right
+    way" was not answerable without a trained checkpoint, so nothing asserted it. A sign error in
+    Eq. 17, a missing minus in the Tweedie projection, or a gradient taken through the clip
+    instead of around it all survive every OTHER test in this file.
+    """
+    _cfg, _base, model, obs, noise = fixture
+    target = jnp.full((1, 4, 8), 0.5)
+    value_fn = lambda a: -jnp.sum((a - target) ** 2)  # noqa: E731
+
+    base = _draw(model, obs, noise, value_fn, 0.0)
+    steered = _draw(model, obs, noise, value_fn, 0.5)
+
+    d_base = float(np.abs(base - np.asarray(target)).mean())
+    d_steer = float(np.abs(steered - np.asarray(target)).mean())
+    assert d_steer < d_base, f"steering moved AWAY from the optimum: {d_base:.4f} -> {d_steer:.4f}"
+
+
+def test_stronger_steering_moves_further(fixture):
+    """Monotone in alpha, which a sign-correct but magnitude-broken Eq. 17 need not be."""
+    _cfg, _base, model, obs, noise = fixture
+    target = jnp.full((1, 4, 8), 0.5)
+    value_fn = lambda a: -jnp.sum((a - target) ** 2)  # noqa: E731
+    d = [float(np.abs(_draw(model, obs, noise, value_fn, a) - np.asarray(target)).mean()) for a in (0.0, 0.25, 0.5)]
+    assert d[0] > d[1] > d[2], d
+
+
+def test_the_first_step_is_unsteered_for_every_alpha(fixture):
+    """Paper Sec. 4: no state-dependent signal at t=0. With num_steps=1 the whole draw is that one
+    step, so every alpha must give the same chunk -- including alphas large enough to saturate."""
+    _cfg, _base, model, obs, noise = fixture
+    value_fn = lambda a: -jnp.sum((a - 0.5) ** 2)  # noqa: E731
+    one = [_draw(model, obs, noise, value_fn, a, steps=1) for a in (0.0, 1.0, 50.0)]
+    assert np.array_equal(one[0], one[1])
+    assert np.array_equal(one[0], one[2])
+
+
+def test_the_same_noise_is_what_makes_the_twin_comparable(fixture):
+    """Independent draws differ by the policy's own spread, which is the quantity the twin exists
+    to hold fixed. If this ever stopped being true, a displacement readout would be reporting
+    sampling variance."""
+    _cfg, _base, model, obs, noise = fixture
+    value_fn = lambda a: -jnp.sum(a**2)  # noqa: E731
+    other = jax.random.normal(jax.random.key(11), noise.shape)
+    same = _draw(model, obs, noise, value_fn, 0.0)
+    diff = _draw(model, obs, other, value_fn, 0.0)
+    assert not np.allclose(same, diff, atol=1e-3)
+
+
+def test_output_stays_in_the_box(fixture):
+    """The critic was trained on normalized actions in [-1, 1]; steering must not serve a chunk
+    outside the box it was scored in."""
+    _cfg, _base, model, obs, noise = fixture
+    value_fn = lambda a: jnp.sum(a) * 1e3  # noqa: E731 - pushes hard at the boundary
+    out = _draw(model, obs, noise, value_fn, 5.0)
+    assert out.min() >= -1.0
+    assert out.max() <= 1.0
+
+
+def test_it_matches_the_pre_refactor_serving_loop(fixture):
+    """Bit-for-bit against the implementation this replaced (ArmChunkSampler._steer, PR #13).
+
+    The migration's whole claim is that it moved code without changing behaviour. That is checkable
+    exactly, so it is checked exactly -- the loop below is the old one transcribed, with the critic
+    call replaced by the injected value_fn it was specialised to.
+    """
+    _cfg, _base, model, obs, noise = fixture
+    target = jnp.full((1, 4, 8), 0.5)
+    value_fn = lambda a: -jnp.sum((a - target) ** 2)  # noqa: E731
+    alpha, n = 0.5, 4
+
+    pm, kv = model._prefix_forward(obs)
+    x, dt = noise, 1.0 / n
+    for i in range(n):
+        tv = jnp.full((x.shape[0],), 1.0 - i * dt)
+        if i == 0:
+            v = model._velocity(obs, pm, kv, x, tv)
+        else:
+
+            def q_of(x_, tv_=tv):
+                v_ = model._velocity(obs, pm, kv, x_, tv_)
+                a_hat = x_ - tv_[:, None, None] * v_
+                a_hat = a_hat + jax.lax.stop_gradient(jnp.clip(a_hat, -1, 1) - a_hat)
+                return value_fn(a_hat), v_
+
+            g, v = jax.grad(q_of, has_aux=True)(x)
+            vn = jnp.linalg.norm(v.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
+            gn = jnp.linalg.norm(g.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
+            v = v - alpha * (vn / (gn + 1e-8)) * g
+        x = x - dt * v
+    old = np.asarray(jnp.clip(x, -1.0, 1.0))
+
+    new = _draw(model, obs, noise, value_fn, alpha, steps=n)
+    assert np.array_equal(old, new), np.abs(old - new).max()
+
+
+def test_preprocess_is_not_applied_twice(fixture):
+    """The serving wrapper preprocesses once and passes preprocess=False, because it needed the
+    observation to build the critic's own inputs. Both spellings must give the same chunk."""
+    cfg, _base, model, obs, noise = fixture
+    value_fn = lambda a: -jnp.sum(a**2)  # noqa: E731
+    a = _draw(model, obs, noise, value_fn, 0.3)
+    b = np.asarray(
+        model.sample_steered(
+            jax.random.key(0),
+            cfg.fake_obs(batch_size=1),
+            value_fn=value_fn,
+            alpha=0.3,
+            num_steps=4,
+            noise=noise,
+            preprocess=True,
+        )
+    )
+    assert np.array_equal(a, b)
