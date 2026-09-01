@@ -57,6 +57,31 @@ class CriticQ:
         q = self.hl.from_logits(logits)  # [K, B, Pfx]
         return q.mean(axis=0)[..., -1]  # full-chunk prefix, ensemble mean
 
+    def q_lcb(self, feats, chunk_norm, proprio, beta: float = 1.0):
+        """Ensemble lower-confidence bound, mean - beta*std, over the K members.
+
+        With K=2 the only pessimism available is the min, and min-of-2 is a crude, K-dependent
+        estimator: growing the ensemble makes `q_min` monotonically more pessimistic for reasons
+        that have nothing to do with epistemic uncertainty. LCB separates the two -- the ensemble
+        size sets how well the disagreement is ESTIMATED, `beta` sets how much pessimism is
+        APPLIED -- so a K=10 critic can be read at the same conservatism as a K=2 one, or at more.
+        beta=0 recovers q_mean; beta -> large approaches (a smooth version of) q_min.
+
+        This is the standard offline-RL pessimistic read (SAC-N / EDAC, An et al. NeurIPS 2021 Eq. 3
+        uses min over N; the mean-minus-std form is the LCB variant used by e.g. PBRL and by the
+        uncertainty-penalised backups in MOReL/MOPO). It is a READ, not a training change: nothing
+        in the critic's objective depends on it.
+        """
+        logits = self.net.apply({"params": self.params}, feats, chunk_norm, proprio)
+        q = self.hl.from_logits(logits)[..., -1]  # [K, B]
+        return q.mean(axis=0) - beta * q.std(axis=0)
+
+    def q_disagreement(self, feats, chunk_norm, proprio):
+        """Per-candidate ensemble std -- the epistemic signal itself, for diagnostics and for
+        rejecting candidates the ensemble cannot agree on."""
+        logits = self.net.apply({"params": self.params}, feats, chunk_norm, proprio)
+        return self.hl.from_logits(logits)[..., -1].std(axis=0)
+
     def q_prefixes(self, feats, chunk_norm, proprio):
         logits = self.net.apply({"params": self.params}, feats, chunk_norm, proprio)
         return self.hl.from_logits(logits).mean(axis=0)  # [B, Pfx]
