@@ -138,7 +138,14 @@ def main():
 
         path = (a.out / f"{step_i}").absolute()
         with ocp2.StandardCheckpointer() as c2:
-            c2.save(path, {"expert": params.filter(expert_filter).to_pure_dict()}, force=True)
+            # with the backbone trainable the expert subtree is no longer the whole change, so
+            # saving only it would silently drop what was learned everywhere else
+            payload = (
+                {"params": params.to_pure_dict()}
+                if a.train_backbone
+                else {"expert": params.filter(expert_filter).to_pure_dict()}
+            )
+            c2.save(path, payload, force=True)
         print(f"saved {path}", flush=True)
 
     import time

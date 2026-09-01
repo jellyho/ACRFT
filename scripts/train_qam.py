@@ -223,7 +223,14 @@ def main():
 
         path = (a.out / f"{step_i}").absolute()
         with ocp.StandardCheckpointer() as c:
-            c.save(path, {"expert": p_exp_f.to_pure_dict()}, force=True)
+            # with the backbone trainable the expert subtree is no longer the whole change, so
+            # saving only it would silently drop what was learned everywhere else
+            payload = (
+                {"params": nnx.State.merge(p_exp_f, p_rest).to_pure_dict()}
+                if a.train_backbone
+                else {"expert": p_exp_f.to_pure_dict()}
+            )
+            c.save(path, payload, force=True)
         print(f"saved {path}", flush=True)
 
     import numpy as np
