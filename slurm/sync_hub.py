@@ -1,12 +1,25 @@
 """Sync worker-B experiments into the shared HF Space hub — one blog entry PER experiment.
 
 Reads the experiment ENTRIES + META (5W1H, real dates, cross-links) from make_master_report
-(single source of truth), converts each into the hub's native format, and adds two pinned
-overview entries: a daily THREAD digest (what was posted each day, at a glance) and a MINDMAP
-(the experiments as a linked graph). Replaces previous worker-B entries, keeps the other
-worker's entries untouched, and opens+merges a PR.
+(single source of truth) and writes them into the hub's `entries.json`.
 
-    uv run --no-sync python slurm/sync_hub.py
+    uv run --no-sync python slurm/sync_hub.py                 # every entry in ENTRIES
+    uv run --no-sync python slurm/sync_hub.py --only <eid>    # just one
+
+THE HUB CHANGED FORMAT. It used to be a single index.html carrying `const REPORTS = [...]` inline
+with a <section> per entry, and this script spliced that array. It is now data-driven: index.html
+is static and fetches `entries.json` at runtime, so publishing is a read-modify-write of that one
+file plus the figures it references. The thread digest and the mindmap are no longer entries this
+script synthesises -- the page builds them from the data itself.
+
+SAFETY. It replaces ONLY entries whose eid appears in ENTRIES, and leaves every other entry byte
+for byte. The old version replaced every worker-B entry, which was correct when this file was the
+single source for all of them; it no longer is -- other sessions publish worker-B entries that
+were never in make_master_report, and a blanket replace would delete them.
+
+Figures ride as base64 in the body and are extracted to `figures/<eid>/<sha>.png`, matching what
+the hub's existing entries reference: HF tracks files over 10 MB as LFS, and a static Space serves
+LFS files as downloads rather than rendering them.
 """
 
 import json
@@ -174,274 +187,119 @@ def build_mindmap(eid_idx, summaries=None):
     )
 
 
+def _entry_payload(coarse_date, eid, title, status, body, en_body):
+    """One hub entry. KO and EN are both carried; the page toggles between the two wrappers."""
+    meta = mm.META.get(eid, {})
+    dual = f'<div class="wbx wbx-ko">{body}</div>'
+    if en_body:
+        dual += f'<div class="wbx wbx-en">{en_body}</div>'
+    else:
+        dual += (
+            f'<div class="wbx wbx-en"><p class="sub">English version pending — Korean original '
+            f"below.</p>{body}</div>"
+        )
+    return {
+        "eid": eid,
+        # META carries the real "YYYY-MM-DD HH:MM"; DATE_MAP maps the coarse label
+        # ("~08-01") that a few early entries still use as their only date.
+        "date": meta.get("date") or DATE_MAP.get(coarse_date, "2026-08-08"),
+        "worker": "B",
+        "title": f"🤖 [{MARK}] {title}",
+        "summary": summary_of(body),
+        "tags": [MARK, *meta.get("tags", [])],
+        "links": meta.get("links", []),
+        "phase": meta.get("phase", "실험"),
+        # 완결 -> a result that stands; 살아있음 -> a page that keeps being updated.
+        "status": {"완결": "finding", "진행 중": "ongoing", "살아있음": "living"}.get(status, "done"),
+        "body_html": wrap_tables(dual),
+    }
+
+
+def wrap_tables(body: str) -> str:
+    """Tables go inside a scrollable wrapper — display:block on the table itself folds the rows."""
+    body = re.sub(r"<table(?![^>]*tblwrapped)", "<div class='tblwrap'><table", body)
+    return body.replace("</table>", "</table></div>")
+
+
 def main():
+    import argparse
+    import base64
+    import hashlib
+
     from huggingface_hub import CommitOperationAdd
     from huggingface_hub import HfApi
     from huggingface_hub import hf_hub_download
 
-    api = HfApi()
-    idx = pathlib.Path(hf_hub_download(SPACE, "index.html", repo_type="space", force_download=True)).read_text()
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--only", nargs="*", default=None, help="publish just these eids")
+    args = ap.parse_args()
 
-    # ---- parse REPORTS array
-    i0 = idx.find("const REPORTS = ")
-    arr_start = idx.find("[", i0)
-    reports, arr_end_rel = json.JSONDecoder().raw_decode(idx[arr_start:])
-    arr_end = arr_start + arr_end_rel
-    sec_pat = re.compile(r'<section class="report" id="r(\d+)"[\s\S]*?</section>\n?')
-    blocks = [m.group(0) for m in sec_pat.finditer(idx)]
-    assert len(blocks) == len(reports), f"섹션 {len(blocks)} vs 엔트리 {len(reports)} 불일치"
-    keep = [(r, b) for r, b in zip(reports, blocks, strict=True) if MARK not in json.dumps(r, ensure_ascii=False)]
-
-    # ---- ours from ENTRIES (real per-eid dates from META)
-    ours = []
+    wanted = set(args.only) if args.only else None
+    ours = {}
     for date, eid, title, status, body in mm.ENTRIES:
-        iso = mm.META.get(eid, {}).get("date") or DATE_MAP.get(date, "2026-08-08")
-        en_body = mm.EN_BODIES.get(eid)
-        if en_body:
-            dual = f'<div class="wbx wbx-ko">{body}</div><div class="wbx wbx-en">{en_body}</div>'
-        else:
-            dual = (
-                f'<div class="wbx wbx-ko">{body}</div>'
-                f'<div class="wbx wbx-en"><p class="sub">English version pending — Korean original below.</p>{body}</div>'
-            )
-        ours.append(
-            (
-                eid,
-                {
-                    "date": iso,
-                    "title": f"🧪 [{MARK}] {title}",
-                    "summary": summary_of(body),
-                    "tags": [MARK, "RoboCasa"],
-                    "status": "living" if status != "완결" else "finding",
-                },
-                dual,
-            )
-        )
-    ours.sort(key=lambda x: x[1]["date"], reverse=True)
+        if wanted and eid not in wanted:
+            continue
+        ours[eid] = _entry_payload(date, eid, title, status, body, mm.EN_BODIES.get(eid))
+    if wanted and set(wanted) - set(ours):
+        raise SystemExit(f"not in ENTRIES: {sorted(set(wanted) - set(ours))}")
+    if not ours:
+        raise SystemExit("nothing to publish")
 
-    # 스레드·마인드맵은 리스트 항목이 아니라 별도 탭(#wb-thread/#wb-map)으로 상주한다.
-    merged = [(r, b) for _, r, b in ours] + keep
-    eid_idx = {eid: i for i, (eid, _, _) in enumerate(ours)}
-
-    # ---- xref 활성화: data-eid → openReport(idx)
-    def activate(body):
-        def sub(m):
-            e = m.group(1)
-            if e in eid_idx:
-                return f"<span class='xref' onclick='openReport({eid_idx[e]})'"
-            return "<span class='xref' style='opacity:.5'"
-
-        return re.sub(r"<span class='xref' data-eid='([^']+)'", sub, body)
-
-    def wrap_tables(body):
-        """표는 스크롤 가능한 래퍼 DIV 안에 — table에 display:block을 주면 행이 접혀버린다."""
-        body = re.sub(r"<table(?![^>]*tblwrapped)", "<div class='tblwrap'><table", body)
-        return body.replace("</table>", "</table></div>")
-
-    bodies = [wrap_tables(activate(b)) for _, _, b in ours]
-    bodies += [b for _, b in keep]
-
-    new_reports = [r for r, _ in merged]
-
-    def rebuild(i, b):
-        inner = re.sub(r"^<section[^>]*>", "", b)
-        inner = re.sub(r"</section>\n?$", "", inner)
-        return f'<section class="report" id="r{i}" hidden>{inner}</section>\n'
-
-    new_blocks = []
-    for i, b in enumerate(bodies):
-        new_blocks.append(
-            rebuild(i, b) if b.startswith("<section") else f'<section class="report" id="r{i}" hidden>{b}</section>\n'
-        )
-
-    # ---- assemble
-    out = idx[:arr_start] + json.dumps(new_reports, ensure_ascii=False) + idx[arr_end:]
-    first = out.find('<section class="report"')
-    last_end = max(mm_.end() for mm_ in re.finditer(r"</section>\n?", out))
-    out = out[:first] + "".join(new_blocks) + out[last_end:]
-    out = re.sub(r'<style id="wbx-style">[\s\S]*?</style>', "", out)
-    out = out.replace("</head>", WBX_STYLE + "</head>", 1)
-    # 이전 정렬 패치 원복(스레드·마인드맵이 리스트에서 빠졌으므로 불필요)
-    out = out.replace(
-        '.sort((a,b)=>{const p=t=>t.tags&&t.tags.includes("인덱스")?1:0;'
-        "if(p(a)!==p(b))return p(b)-p(a);return b.date.localeCompare(a.date);});",
-        ".sort((a,b)=>b.date.localeCompare(a.date));",
-        1,
+    api = HfApi()
+    live = json.loads(
+        pathlib.Path(hf_hub_download(SPACE, "entries.json", repo_type="space", force_download=True)).read_text()
     )
 
-    # ---- 상단 탭 + 상주 뷰(#wb-thread/#wb-map) 주입 (이전 주입분은 마커로 제거 후 재주입)
-    out = re.sub(r"<!--wb-tabs-->[\s\S]*?<!--/wb-tabs-->", "", out)
-    out = re.sub(r"<!--wb-views-->[\s\S]*?<!--/wb-views-->", "", out)
-    out = re.sub(r'<script id="wb-tabs-js">[\s\S]*?</script>', "", out)
-    tabs = (
-        '<!--wb-tabs--><div id="wb-tabbar" style="display:flex;gap:8px;margin:14px 0">'
-        '<button class="wb-tab on" data-v="list" onclick="wbView(\'list\')">📋 리포트 목록</button>'
-        '<button class="wb-tab" data-v="thread" onclick="wbView(\'thread\')">🧵 데일리 스레드</button>'
-        '<button class="wb-tab" data-v="map" onclick="wbView(\'map\')">🗺️ 관계도</button>'
-        '<button id="wb-lang" class="wb-tab" style="margin-left:auto" onclick="wbLang()">EN</button>'
-        "</div><!--/wb-tabs-->"
-    )
-    views = (
-        "<!--wb-views-->"
-        f'<div id="wb-thread" hidden><div class="wbx">{build_thread([r for r, _ in merged])}</div></div>'
-        f'<div id="wb-map" hidden><div class="wbx">{build_mindmap(eid_idx, {e: r["summary"] for e, r, _ in ours})}</div></div>'
-        "<!--/wb-views-->"
-    )
-    js = """<script id="wb-tabs-js">
-function wbLang(){
-  const b=document.body, to=(b.dataset.wblang==='en')?'ko':'en';
-  b.dataset.wblang=to; localStorage.setItem('wblang',to);
-  document.getElementById('wb-lang').textContent=(to==='en')?'한국어':'EN';
-}
-(function(){const s=localStorage.getItem('wblang'); if(s==='en'){document.body.dataset.wblang='en';
-  addEventListener('DOMContentLoaded',()=>{const e=document.getElementById('wb-lang'); if(e) e.textContent='한국어';});}})();
-function wbView(v){
-  document.querySelectorAll('.wb-tab').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
-  const listy=['list','count','chips'];
-  listy.forEach(id=>{const e=document.getElementById(id); if(e) e.hidden=(v!=='list');});
-  document.querySelectorAll('#home .controls').forEach(e=>e.hidden=(v!=='list'));
-  document.getElementById('wb-thread').hidden=(v!=='thread');
-  document.getElementById('wb-map').hidden=(v!=='map');
-  if(v==='map') wbGraphInit();
-}
-// ---- 인터랙티브 관계도: 자체 force-directed 시뮬레이션 (드래그·호버·클릭)
-let _wbG=null;
-function wbGraphInit(){
-  if(_wbG) return; const box=document.getElementById('wb-graph'); if(!box) return;
-  const D=JSON.parse(document.getElementById('wb-graph-data').textContent);
-  const Wd=box.clientWidth||1200, H=box.clientHeight||640, NS='http://www.w3.org/2000/svg';
-  const svg=document.createElementNS(NS,'svg'); svg.setAttribute('width','100%'); svg.setAttribute('height','100%');
-  box.style.position='relative'; box.appendChild(svg);
-  const tip=document.createElement('div'); tip.id='wb-tip';
-  tip.style.cssText='position:absolute;display:none;max-width:300px;background:#fff;border:1px solid #cfd4dd;'+
-    'border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.14);padding:10px 13px;font-size:.85em;'+
-    'line-height:1.5;color:#1a1a1a;pointer-events:none;z-index:10';
-  box.appendChild(tip);
-  const ncat=D.phases.length;
-  const N=D.nodes.map((n,i)=>({...n,
-    x:(Wd*0.12)+(n.cat+0.5)*(Wd*0.76)/ncat+40*(Math.random()-0.5),
-    y:H*0.18+H*0.64*Math.random(), vx:0, vy:0}));
-  const byId={}; N.forEach(n=>byId[n.id]=n);
-  const L=D.links.map(([a,b])=>({a:byId[a],b:byId[b]})).filter(l=>l.a&&l.b);
-  const adj={}; L.forEach(l=>{(adj[l.a.id]=adj[l.a.id]||new Set()).add(l.b.id);(adj[l.b.id]=adj[l.b.id]||new Set()).add(l.a.id);});
-  const eEls=L.map(l=>{const p=document.createElementNS(NS,'line');
-    p.setAttribute('stroke',D.colors[l.a.cat]); p.setAttribute('stroke-width','1.3'); p.setAttribute('opacity','.38');
-    svg.appendChild(p); return p;});
-  const nEls=N.map(n=>{
-    const g=document.createElementNS(NS,'g'); g.style.cursor='grab';
-    const c=document.createElementNS(NS,'circle');
-    c.setAttribute('r', 14+3*((adj[n.id]&&adj[n.id].size)||0));
-    c.setAttribute('fill','#fff'); c.setAttribute('stroke',D.colors[n.cat]); c.setAttribute('stroke-width','2.4');
-    const t=document.createElementNS(NS,'text'); t.textContent=n.id;
-    t.setAttribute('text-anchor','middle'); t.setAttribute('dy','-1.4em');
-    t.setAttribute('font-size','12'); t.setAttribute('font-weight','600'); t.setAttribute('fill','#1a1a1a');
-    g.appendChild(c); g.appendChild(t); svg.appendChild(g);
-    g.addEventListener('mouseenter',()=>{
-      eEls.forEach((e,i)=>e.setAttribute('opacity',(L[i].a===n||L[i].b===n)?'0.95':'0.08'));
-      nEls.forEach((m,i)=>m.g.setAttribute('opacity',(N[i]===n||(adj[n.id]&&adj[n.id].has(N[i].id)))?'1':'0.25'));
-      tip.innerHTML='<b>'+n.id+'</b> <span style="color:#5f6b7a">'+n.date+'</span>'+
-        '<div style="margin-top:3px">'+n.what+'</div>'+
-        (n.sum?'<div style="margin-top:5px;color:#5f6b7a">'+n.sum+'</div>':'');
-      tip.style.display='block';});
-    g.addEventListener('mousemove',ev=>{const r=box.getBoundingClientRect();
-      let tx=ev.clientX-r.left+16, ty=ev.clientY-r.top+14;
-      if(tx+310>r.width) tx=ev.clientX-r.left-316; if(ty+140>r.height) ty=ev.clientY-r.top-120;
-      tip.style.left=tx+'px'; tip.style.top=ty+'px';});
-    g.addEventListener('mouseleave',()=>{
-      eEls.forEach(e=>e.setAttribute('opacity','.38')); nEls.forEach(m=>m.g.setAttribute('opacity','1'));
-      tip.style.display='none';});
-    return {g,c,t,n};});
-  let drag=null, moved=0, alpha=1;
-  nEls.forEach(({g,n})=>{
-    g.addEventListener('pointerdown',ev=>{drag={n,dx:n.x-ev.clientX,dy:n.y-ev.clientY}; moved=0; alpha=Math.max(alpha,.35); g.setPointerCapture(ev.pointerId);});
-    g.addEventListener('pointermove',ev=>{if(!drag||drag.n!==n)return; n.x=ev.clientX+drag.dx; n.y=ev.clientY+drag.dy; n.vx=n.vy=0; moved++; alpha=Math.max(alpha,.3);});
-    g.addEventListener('pointerup',()=>{if(moved<4) openReport(n.idx); drag=null;});});
-  function tick(){
-    if(alpha>0.005){
-      for(let i=0;i<N.length;i++) for(let j=i+1;j<N.length;j++){
-        const a=N[i],b=N[j]; let dx=b.x-a.x,dy=b.y-a.y; let d2=dx*dx+dy*dy||1; if(d2<40000){
-          const f=1800/d2; const d=Math.sqrt(d2); dx/=d; dy/=d;
-          a.vx-=f*dx; a.vy-=f*dy; b.vx+=f*dx; b.vy+=f*dy;}}
-      L.forEach(({a,b})=>{const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1,f=0.012*(d-130);
-        a.vx+=f*dx/d; a.vy+=f*dy/d; b.vx-=f*dx/d; b.vy-=f*dy/d;});
-      N.forEach(n=>{ n.vx+=0.004*((Wd*0.12)+(n.cat+0.5)*(Wd*0.76)/ncat-n.x); n.vy+=0.002*(H/2-n.y);
-        if(drag&&drag.n===n) return;
-        n.x+=n.vx*=0.86; n.y+=n.vy*=0.86;
-        n.x=Math.max(30,Math.min(Wd-30,n.x)); n.y=Math.max(34,Math.min(H-24,n.y));});
-      alpha*=0.985;}
-    eEls.forEach((e,i)=>{e.setAttribute('x1',L[i].a.x);e.setAttribute('y1',L[i].a.y);e.setAttribute('x2',L[i].b.x);e.setAttribute('y2',L[i].b.y);});
-    nEls.forEach(({g,n})=>g.setAttribute('transform','translate('+n.x+','+n.y+')'));
-    requestAnimationFrame(tick);}
-  _wbG=true; tick();
-}
-// ---- 떠 있는 내비: 리포트 열람 중 목록으로/맨위로 즉시 이동
-(function(){
-  function ensure(){
-    if(document.getElementById('wb-float')) return;
-    const box=document.createElement('div'); box.id='wb-float';
-    const home=document.createElement('button'); home.textContent='☰'; home.title='목록으로';
-    home.onclick=function(){ if(typeof goHome==='function') goHome(); else location.hash=''; window.scrollTo(0,0); };
-    const top=document.createElement('button'); top.textContent='↑'; top.title='맨 위로';
-    top.onclick=function(){ window.scrollTo({top:0,behavior:'smooth'}); };
-    box.appendChild(home); box.appendChild(top); document.body.appendChild(box);
-  }
-  function inReader(){ const r=document.getElementById('reader'); return r && !r.hidden; }
-  function upd(){ ensure(); const f=document.getElementById('wb-float');
-    f.style.display=(inReader() && window.scrollY>320)?'flex':'none'; }
-  addEventListener('scroll',upd,{passive:true});
-  addEventListener('click',()=>setTimeout(upd,60));
-  addEventListener('DOMContentLoaded',()=>{ensure();upd();});
-  ensure();
-})();
-</script>"""
-    m = re.search(r'(<div class="sub">[^<]*</div>)', out)
-    out = out[: m.end()] + tabs + out[m.end() :]
-    i_list = out.find('<div id="list"></div>')
-    out = out[: i_list + len('<div id="list"></div>')] + views + out[i_list + len('<div id="list"></div>') :]
-    out = out.replace("</body>", js + "</body>", 1)
-
-    # HF auto-tracks files >10MB as LFS, and static Spaces serve LFS files as downloads instead of
-    # rendering them — so inline base64 figures are extracted to figs/<sha>.png and referenced by
-    # relative path, keeping index.html a small regular-git blob.
-    import base64
-    import hashlib
-
+    # Figures out of the base64 bodies, one directory per entry so a re-publish overwrites its own
+    # and nothing else.
     fig_dir = CACHE / "hub_figs"
     fig_dir.mkdir(parents=True, exist_ok=True)
-    fig_ops = []
-    seen_figs = set()
+    ops, seen = [], set()
 
-    def extract_fig(m):
-        ext, b64 = m.group(1), m.group(2)
-        raw = base64.b64decode(b64)
-        name = f"figs/{hashlib.sha1(raw).hexdigest()[:16]}.{ext}"
-        if name not in seen_figs:
-            seen_figs.add(name)
-            fp = fig_dir / name.split("/")[1]
-            fp.write_bytes(raw)
-            fig_ops.append(CommitOperationAdd(path_in_repo=name, path_or_fileobj=str(fp)))
-        return f'src="{name}"'
+    def extract(eid):
+        def sub(m):
+            ext, b64 = m.group(1), m.group(2)
+            raw = base64.b64decode(b64)
+            name = f"figures/{eid}/{hashlib.sha1(raw).hexdigest()[:16]}.{ext}"
+            if name not in seen:
+                seen.add(name)
+                fp = fig_dir / name.replace("/", "_")
+                fp.write_bytes(raw)
+                ops.append(CommitOperationAdd(path_in_repo=name, path_or_fileobj=str(fp)))
+            return f'src="{name}"'
 
-    out = re.sub(r'src="data:image/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)"', extract_fig, out)
+        return sub
 
-    tmp = CACHE / "hub_index_new.html"
-    tmp.write_text(out)
+    for eid, e in ours.items():
+        e["body_html"] = re.sub(
+            r'src=["\']data:image/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)["\']',
+            extract(eid),
+            e["body_html"],
+        )
+
+    # Replace ours in place (keeping position), append the rest. Everything not ours is untouched.
+    merged, replaced = [], set()
+    for row in live:
+        eid = row.get("eid")
+        if eid in ours:
+            merged.append(ours[eid])
+            replaced.add(eid)
+        else:
+            merged.append(row)
+    added = [e for eid, e in ours.items() if eid not in replaced]
+    merged.extend(added)
+    merged.sort(key=lambda r: str(r.get("date", "")), reverse=True)
+
+    tmp = CACHE / "entries_new.json"
+    tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1))
     size_mb = tmp.stat().st_size / 1e6
     if size_mb > 9.5:
-        raise RuntimeError(f"index.html {size_mb:.1f}MB — 10MB LFS 경계 초과 위험, 본문을 더 줄여야 함")
-    # drop the stale LFS rule for index.html so re-uploads return to regular git storage
-    attr_path = hf_hub_download(SPACE, ".gitattributes", repo_type="space")
-    attrs = pathlib.Path(attr_path).read_text()
-    ops_extra = []
-    if "index.html filter=lfs" in attrs:
-        attrs = "\n".join(line for line in attrs.splitlines() if not line.startswith("index.html ")) + "\n"
-        atmp = CACHE / "hub_gitattributes"
-        atmp.write_text(attrs)
-        ops_extra.append(CommitOperationAdd(path_in_repo=".gitattributes", path_or_fileobj=str(atmp)))
+        raise RuntimeError(f"entries.json {size_mb:.1f}MB — 10MB LFS 경계 초과 위험, 본문을 더 줄여야 함")
+
     res = api.create_commit(
         repo_id=SPACE,
         repo_type="space",
-        operations=[CommitOperationAdd(path_in_repo="index.html", path_or_fileobj=str(tmp)), *ops_extra, *fig_ops],
+        operations=[CommitOperationAdd(path_in_repo="entries.json", path_or_fileobj=str(tmp)), *ops],
         commit_message=f"worker-B: {len(ours)} entries [{mm.GIT_STAMP}]",
         create_pr=True,
     )
@@ -450,7 +308,10 @@ function wbGraphInit(){
         return
     num = int(res.pr_url.rstrip("/").split("/")[-1])
     api.merge_pull_request(SPACE, num, repo_type="space")
-    print(f"허브 동기화: 스레드+마인드맵+우리 {len(ours)} + 기존 {len(keep)} = {len(merged)} 엔트리, PR#{num} 머지")
+    print(
+        f"허브 동기화: 교체 {len(replaced)} + 신규 {len(added)} = {len(ours)}, "
+        f"그림 {len(ops)}장, 전체 {len(merged)} 엔트리, PR#{num} 머지"
+    )
 
 
 if __name__ == "__main__":

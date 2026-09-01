@@ -4381,7 +4381,9 @@ META = {
         "what": "critic\uc774 support \ubc16\uc5d0\uc11c \uacfc\ub300\ucd94\uc815\ud568\uc744 \uc2e4\uce21 \u2014 \uc2dc\uc5f0\uc790 \ub300\ube44 +12.7\u00b11.7(\ubc15\uc2a4 \uacbd\uacc4) / +32.9\u00b15.3(3\ubc30), \uc575\uc0c1\ube14 std\ub294 1.7\ubc30\ub9cc \uc99d\uac00, min\uc774 \uac77\uc5b4\ub0b4\ub294 \uac74 20%. BoN \ud3b8\ud5a5\uc740 +1.9\u00b10.6(N=16)\ub85c 17\ubc30 \uc791\uc74c",
         "how": "probe_q_landscape.py: \uc11c\ube59 \ub798\ud37c \uc704\uc5d0\uc11c BC draw 1\ud68c\ub97c 9 critic\uc774 \uacf5\uc720 \ucc44\uc810, \u2207\u2090Q \ubc29\ud5a5\uc73c\ub85c \uc808\ub300 \ub2e8\uc704 sweep + 2D \uaca9\uc790, \uc575\ucee4\ub294 \uc131\uacf5 \uc5d0\ud53c\uc18c\ub4dc\uc758 \uc2dc\uc5f0\uc790 \uccad\ud06c. \uadf8\ub9bc\u00b7\uc218\uce58\ub294 \uc6d0\ubcf8 JSON\uc5d0\uc11c \uc7ac\uc0dd\uc131",
         "why": "BoN \uacfc\ub300\ucd94\uc815\uacfc QPILOTS gradient \uc624\ub958 \ub450 \uad00\ucc30\uc758 \uacf5\ud1b5 \uc6d0\uc778\uc744 \uc815\ub7c9\ud654 \u2014 \ub450 \ud604\uc0c1\uc774 \uac19\uc740 \uc2e4\ud328\uc758 \uc11c\ub85c \ub2e4\ub978 \uc2a4\ucf00\uc77c\uc784\uc744 \ubcf4\uc774\uace0, alpha \uc0c1\ud55c\uacfc critic \uc120\ud0dd\uc758 \uadfc\uac70\ub97c \ub9cc\ub4ec",
-        "links": ["deas", "conservatism", "vbias", "papers-value-steering", "critic-pfx"],
+        "phase": "\uc9c4\ub2e8\u00b7\ubc29\ubc95",
+        "tags": ["QPILOTS", "critic", "OOD", "BoN", "extraction"],
+        "links": ["serving-rollouts-yam", "deas", "conservatism", "vbias", "papers-value-steering", "critic-pfx"],
     },
     "alphaflow-1step-gate": {
         "date": "2026-08-22 11:30",
@@ -5102,7 +5104,20 @@ entry(
     "감독하므로 제약점이 6배 많고, 외삽할 자유도가 그만큼 적다.</p>"
     "<p><b>잠정.</b> 이는 사전 등록한 가설이 아니라 사후 관찰이고, critic 9개(짝 4쌍)에 근거한다. 확증하려면 "
     "macro만 바꾼 critic을 새로 학습시켜 재현해야 한다.</p>"
-    "<h4>판정과 후속</h4><ul>"
+    "<h4>이것이 설명하는 것 — 같은 로봇의 실물 결과</h4>"
+    "<p>같은 날 같은 로봇에서 나온 <span class='xref' data-eid='serving-rollouts-yam'>실물 롤아웃 1차</span>는 "
+    "세 가지를 관측했다: (1) argmax N=8이 7/10 에피소드에서 stage 1에 멈추는 양극화, (2) QPILOTS-U가 α=0(1.80)에서 "
+    "최고이고 α=0.005부터 이미 손해, α=0.1에서 0.30으로 붕괴, (3) <i>같은 critic에서 순위(선택)는 되고 기울기(조향)는 "
+    "안 된다</i>. 이 프로브가 그 셋의 기제다.</p>"
+    "<p><b>순위는 되고 기울기는 안 되는 이유.</b> 선택은 BC draw <i>안에서만</i> 이뤄지므로 critic이 그 작은 구름 "
+    "안에서 상대 순위만 맞으면 된다 — 편향이 +1.9에 갇히는 것이 그 뜻이다. 조향은 ∇<sub>a</sub>Q를 따라 "
+    "<i>구름 밖으로</i> 나가는데, 거기서 Q는 시연자보다 +13(박스 경계)~+33(3배) 높다. 기울기가 가리키는 곳이 바로 "
+    "critic이 가장 틀린 곳이다.</p>"
+    "<p><b>α=0.005가 이미 손해인 이유.</b> 곡선이 원점에서부터 가파르다 — t=0.5(박스 절반)에서 이미 +6.6이다. "
+    "논문의 최소 α가 우리의 최대 α인 것은, 이 landscape가 논문 도메인보다 훨씬 이르게 오르기 때문이다.</p>"
+    "<p><b>argmax 양극화의 모양.</b> BoN 편향이 log(N)으로 자라므로 N=8에서 +1.6 — 작지만 0이 아니고, "
+    "critic이 특정 stage에서 계통적으로 낙관적이면 그 stage를 반복 선택하게 만들기에 충분하다.</p>"
+    + "<h4>판정과 후속</h4><ul>"
     "<li><b>확정</b> — off-support 과대추정은 실재하며 critic 9종 전부에서 나타난다. 앙상블 비관성으로 해결되지 "
     "않는다 (20~30%만 제거).</li>"
     "<li><b>확정</b> — BoN 편향은 정책 자신의 산포에 상한이 걸린다. steering은 걸리지 않는다.</li>"
@@ -5188,7 +5203,20 @@ en(
     "than one, six times as many constraints and correspondingly less freedom to extrapolate.</p>"
     "<p><b>Provisional.</b> This is a post-hoc observation, not a pre-registered hypothesis, and it rests on nine "
     "critics (four pairs). Confirming it needs a critic trained with macro as the only change.</p>"
-    "<h4>Verdict and next</h4><ul>"
+    "<h4>What it explains — the real-robot result from the same day</h4>"
+    "<p>The <span class='xref' data-eid='serving-rollouts-yam'>first real rollouts</span>, on the same robot, "
+    "observed three things: (1) argmax N=8 polarising, 7/10 episodes stalling at stage 1; (2) QPILOTS-U best at "
+    "α=0 (1.80), already losing at α=0.005, collapsing to 0.30 at α=0.1; (3) <i>with the same critic, ranking "
+    "(selection) works and the gradient (steering) does not</i>. This probe is the mechanism for all three.</p>"
+    "<p><b>Why ranking works and the gradient does not.</b> Selection happens strictly INSIDE the BC draws, so the "
+    "critic only has to get the relative order right within that small cloud — which is what the bias being capped "
+    "at +1.9 means. Steering follows ∇<sub>a</sub>Q OUT of the cloud, where Q sits +13 (box edge) to +33 (3×) above "
+    "the demonstrator. The direction the gradient points is exactly where the critic is most wrong.</p>"
+    "<p><b>Why α=0.005 already hurts.</b> The curve is steep from the origin: +6.6 by t=0.5, half a box-width. The "
+    "paper's smallest α being our largest follows from this landscape rising far earlier than in its domain.</p>"
+    "<p><b>The shape of the argmax polarisation.</b> The bon bias grows like log(N), so N=8 gives +1.6 — small but "
+    "not zero, and enough to keep re-selecting a stage the critic is systematically optimistic about.</p>"
+    + "<h4>Verdict and next</h4><ul>"
     "<li><b>Confirmed</b> — off-support overestimation is real and present in all nine critics. Ensemble "
     "pessimism does not solve it (20–30% removed).</li>"
     "<li><b>Confirmed</b> — the bon bias is bounded by the policy's own spread. Steering is not.</li>"
