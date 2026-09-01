@@ -163,6 +163,13 @@ class ArmChunkSampler:
     #: chunk should keep getting one. Only meaningful where `offers_unsteered_twin` is true.
     pair_unsteered: bool = False
 
+    #: `(k, c)` mapping a policy-normalized chunk into the critic's action space, and the critic's
+    #: own horizon. Set by the serving wrapper, which owns both transforms; the identity default is
+    #: correct only when the two were normalized alike, so the wrapper always sets it rather than
+    #: leaving it to chance.
+    to_critic_space: tuple = (1.0, 0.0)
+    critic_horizon: int | None = None
+
     @property
     def offers_unsteered_twin(self) -> bool:
         """Whether an alpha=0 draw of this arm is a meaningful reference for its steered one.
@@ -242,14 +249,25 @@ class ArmChunkSampler:
         """
         graphdef = self.graphdef
 
-        def fun(state, rng, obs, feats, proprio, ad, alpha, paired):
+        ch = self.critic_horizon
+
+        def fun(state, rng, obs, feats, proprio, ad, alpha, paired, k, c):
             model = nnx.merge(graphdef, state)
             x0 = jax.random.normal(rng, (obs.state.shape[0], self.H, self.AD))
 
             def value_fn(a_hat):
-                # Summed over the batch so jax.grad sees a scalar; the chunk is sliced to the
-                # critic's action width, which need not be the policy's.
-                return self._q(feats, a_hat[..., :ad], proprio, reduce="pess").sum()
+                # Into the CRITIC's space before scoring, and this is the whole reason the caller
+                # passes k/c: `a_hat` is normalized by the POLICY's statistics, and the critic was
+                # trained under its own. The selection path has always routed candidates through
+                # physical units for exactly this; steering fed the raw array straight in, so the
+                # gradient it followed was taken in a displaced copy of the critic's space while
+                # the scores RECORDED for the same chunk were taken in the right one.
+                #
+                # Sliced to the critic's horizon too, which the selection path also does: a critic
+                # shorter than the policy's chunk (h30 critic, h50 policy) was otherwise being
+                # handed 50 steps it was never trained to read.
+                a = a_hat[:, :ch, :ad] * k + c
+                return self._q(feats, a, proprio, reduce="pess").sum()
 
             def draw(a):
                 # preprocess=False: __call__ has already preprocessed, and doing it twice would
@@ -294,7 +312,8 @@ class ArmChunkSampler:
             # Measured: with the steering loop reduced to ZERO gradient steps it still took
             # 3229 ms, which is how the overhead was found to be entirely outside the loop.
             ad = self.critic.config["action_dim"]
-            return self._steer_jit(self.params, rng, obs, feats, proprio, ad, spec.alpha, self.pair_unsteered)
+            k, c = self.to_critic_space
+            return self._steer_jit(self.params, rng, obs, feats, proprio, ad, spec.alpha, self.pair_unsteered, k, c)
 
         # The remaining arms still build the model here; they are single-forward paths, so the
         # merge is not repeated inside a loop the way qpilots' prefix was.

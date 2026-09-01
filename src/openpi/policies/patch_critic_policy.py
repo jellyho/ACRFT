@@ -366,6 +366,10 @@ class PatchCriticSelectPolicy(BasePolicy):
                 **({"steering_head": pathlib.Path(extraction_head)} if self._arm == "flowdagger" else {}),
             )
             self._arm_sampler = _serving.ArmChunkSampler(spec, policy._model)
+            # The critic's horizon is a property of the critic, so the sampler is told it rather
+            # than discovering it: without it the steering gradient reads the whole policy chunk,
+            # including the tail past what the critic was trained on.
+            self._arm_sampler.critic_horizon = self._critic_horizon
             self._drift_samples = int(drift_samples)
             if self._drift_samples:
                 if self._extract is None:
@@ -398,7 +402,66 @@ class PatchCriticSelectPolicy(BasePolicy):
                     self._drift_samples,
                     " and the unsteered twin" if twin else "",
                 )
+            # Checked on the first inference, against a real state -- the widths are the robot's
+            # and are not known here.
+            self._affine_checked = False
             logging.info("critic mode %s: chunks from the %s sampler", self._mode_label, self._arm)
+
+    def _critic_space_affine(self, norm_state, state):
+        """Policy-normalized chunk -> the critic's action space, as a per-dim affine `(k, c)`.
+
+        The selection path routes candidates through PHYSICAL units before scoring them, because
+        the sampler's output is normalized by the POLICY's statistics and the critic was trained
+        under its own. The steering path could not do that: it scores inside a jit, on an array
+        that has to stay differentiable, and `_output_transform` is numpy.
+
+        It is affine, though -- unnormalize, add the state, subtract the state, renormalize, all
+        per dimension -- so two probes through the REAL transforms determine it exactly, and the
+        gradient can then be taken through `k * a + c`. Probing rather than re-deriving the algebra
+        is deliberate: a hand-written copy of the quantile formula is the same kind of duplicate
+        that produced this bug, and it would not notice a transform being reconfigured underneath.
+
+        Probes at -0.5 and +0.5 rather than 0 and 1, to stay well inside any clipping; the
+        linearity check at construction is what would catch it if a transform were not affine.
+        """
+        h, ad = self._action_horizon, self._model_action_dim
+        probe = np.stack([np.full((h, ad), -0.5, np.float32), np.full((h, ad), 0.5, np.float32)])
+        dec = np.asarray(
+            self._pol._output_transform(
+                {"state": np.broadcast_to(norm_state, (2, norm_state.shape[0])).copy(), "actions": probe}
+            )["actions"],
+            np.float32,
+        )
+        sc = self._pre.actions(dec, state) if self._pre is not None else dec
+        sc = np.asarray(sc, np.float32)[:, : self._critic_horizon, : self._critic_action_dim]
+        k = sc[1] - sc[0]  # slope per unit of normalized action
+        c = (sc[1] + sc[0]) / 2.0  # value at 0
+        return k, c
+
+    def _check_critic_space_affine(self, norm_state, state) -> None:
+        """The probe is only valid if the map really is affine, and only worth caching if it does
+        not depend on the state. Both are checked once, loudly, at construction -- a warning here
+        is the difference between a steering gradient taken in the critic's space and one taken in
+        a displaced copy of it."""
+        k, c = self._critic_space_affine(norm_state, state)
+        rng = np.random.default_rng(0)
+        x = rng.uniform(-0.9, 0.9, size=(1, self._action_horizon, self._model_action_dim)).astype(np.float32)
+        dec = np.asarray(
+            self._pol._output_transform({"state": norm_state[None].copy(), "actions": x})["actions"], np.float32
+        )
+        got = np.asarray(self._pre.actions(dec, state) if self._pre is not None else dec, np.float32)
+        got = got[:, : self._critic_horizon, : self._critic_action_dim][0]
+        want = x[0, : self._critic_horizon, : self._critic_action_dim] * k + c
+        err = float(np.abs(got - want).max())
+        if err > 1e-3:
+            logging.warning(
+                "the policy->critic action map is not affine to %.2e; steering will follow a "
+                "gradient taken through a linearization of it. Scoring (selection, recorded "
+                "critic_scores) is unaffected -- it uses the transforms directly.",
+                err,
+            )
+        else:
+            logging.info("policy->critic action map calibrated (affine to %.1e)", err)
 
     def _patches_of(self, obs):
         imgs = np.stack([_parse_image(obs[k], self._img_size) for k in self._camera_keys])  # [ncam,S,S,3]
@@ -453,6 +516,15 @@ class PatchCriticSelectPolicy(BasePolicy):
             # below builds. Handing it the policy-normalized state instead would be silently off by
             # a normalization whenever the two stat sets differ.
             arm_proprio = self._critic_proprio(state)
+            # ...and its action queries take the critic's ACTION space, for the same reason. This
+            # is recomputed per inference because the map absorbs the state whenever the critic
+            # scores absolute targets (`_pre is None`); with a pi05-space critic it is constant,
+            # and two numpy transform calls against a 435 ms inference is not worth caching.
+            if not self._affine_checked:
+                # Probe the map once, loudly, rather than trusting that it is affine.
+                self._affine_checked = True
+                self._check_critic_space_affine(norm_state, state)
+            self._arm_sampler.to_critic_space = jax.tree.map(jnp.asarray, self._critic_space_affine(norm_state, state))
             chunks_model = np.asarray(
                 self._arm_sampler(sample_rng, observation, jnp.asarray(patches), jnp.asarray(arm_proprio)), np.float32
             )
