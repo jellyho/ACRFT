@@ -4374,6 +4374,15 @@ demo-MSE는 성공률의 프록시일 뿐이다. 확정은 "동일 모델 내 1-
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "q-landscape-ood": {
+        "date": "2026-09-01 23:50",
+        "who": "\uc6cc\ucee4B",
+        "where": "RTX 4080 \ub85c\uceec \u00b7 yam_lego_taxi 347ep(critic \uc790\uae30 \ud559\uc2b5\uc14b) \uc911 \uc131\uacf5 300ep \u00b7 40\ud504\ub808\uc784/20\uc5d0\ud53c\uc18c\ub4dc \u00b7 critic 9\uc885",
+        "what": "critic\uc774 support \ubc16\uc5d0\uc11c \uacfc\ub300\ucd94\uc815\ud568\uc744 \uc2e4\uce21 \u2014 \uc2dc\uc5f0\uc790 \ub300\ube44 +12.7\u00b11.7(\ubc15\uc2a4 \uacbd\uacc4) / +32.9\u00b15.3(3\ubc30), \uc575\uc0c1\ube14 std\ub294 1.7\ubc30\ub9cc \uc99d\uac00, min\uc774 \uac77\uc5b4\ub0b4\ub294 \uac74 20%. BoN \ud3b8\ud5a5\uc740 +1.9\u00b10.6(N=16)\ub85c 17\ubc30 \uc791\uc74c",
+        "how": "probe_q_landscape.py: \uc11c\ube59 \ub798\ud37c \uc704\uc5d0\uc11c BC draw 1\ud68c\ub97c 9 critic\uc774 \uacf5\uc720 \ucc44\uc810, \u2207\u2090Q \ubc29\ud5a5\uc73c\ub85c \uc808\ub300 \ub2e8\uc704 sweep + 2D \uaca9\uc790, \uc575\ucee4\ub294 \uc131\uacf5 \uc5d0\ud53c\uc18c\ub4dc\uc758 \uc2dc\uc5f0\uc790 \uccad\ud06c. \uadf8\ub9bc\u00b7\uc218\uce58\ub294 \uc6d0\ubcf8 JSON\uc5d0\uc11c \uc7ac\uc0dd\uc131",
+        "why": "BoN \uacfc\ub300\ucd94\uc815\uacfc QPILOTS gradient \uc624\ub958 \ub450 \uad00\ucc30\uc758 \uacf5\ud1b5 \uc6d0\uc778\uc744 \uc815\ub7c9\ud654 \u2014 \ub450 \ud604\uc0c1\uc774 \uac19\uc740 \uc2e4\ud328\uc758 \uc11c\ub85c \ub2e4\ub978 \uc2a4\ucf00\uc77c\uc784\uc744 \ubcf4\uc774\uace0, alpha \uc0c1\ud55c\uacfc critic \uc120\ud0dd\uc758 \uadfc\uac70\ub97c \ub9cc\ub4ec",
+        "links": ["deas", "conservatism", "vbias", "papers-value-steering", "critic-pfx"],
+    },
     "alphaflow-1step-gate": {
         "date": "2026-08-22 11:30",
         "who": "워커B",
@@ -5042,9 +5051,170 @@ def _decorate(eid, body):
     return w6 + body + tail
 
 
+# ---------------------------------------------------------------- Q-landscape / OOD overestimation
+_QL_SPEC = spec(
+    [
+        ("데이터", "yam_lego_taxi 347ep — critic 자신의 학습셋. 성공 300ep에서만 프레임 추출"),
+        ("표본", "40 프레임 / 20 에피소드 (에피소드당 2), run-level 95% t-CI"),
+        ("정책", "pi05_yam_lego_taxi bc_s300_h30/200000, BC draw 16개/프레임"),
+        ("critic", "patch_critic_yam_s347 9종 — expectile .7/.9 × macro 30/5 × floor on/off × aug/noaug"),
+        ("앵커", "시연자의 실제 다음 30스텝 (성공 에피소드 → 목표 도달이 확인된 행동)"),
+        ("탐침", "∇ₐQ 방향 절대 단위 0→3 sweep, σ_BC 단위 0→8 sweep, 2D 격자 21×21 (±2)"),
+    ]
+)
+
+entry(
+    "2026-09-01 23:50",
+    "q-landscape-ood",
+    "critic은 support 밖에서 과대추정한다 — 9종 전부, 비관성으로 막히지 않음",
+    "완결",
+    "<p><b>질문.</b> bon으로 critic을 조금이라도 exploit하면 선택된 값이 낙관적으로 나오고, qpilots에서는 "
+    "grad<sub>a</sub>Q가 엉뚱한 곳을 가리킨다 — 둘 다 <i>행동이 시연 분포를 벗어나면 Q가 어떻게 되는가</i>라는 "
+    "한 질문이다. 이 프로브는 <b>critic 자신이 학습한 데이터셋</b> 위에서 그 답을 잰다. off-support가 학습 때와 "
+    "같은 뜻이 되도록.</p>"
+    "<p><b>무엇에 대고 재는가.</b> support 밖 Q에는 정답이 없다 — 그게 문제의 본질이다. 그래서 "
+    "<b>시연자의 실제 다음 30스텝</b>을 앵커로 쓴다: 성공 에피소드에서만 뽑았으므로 목표에 도달한 것이 확인된 "
+    "행동이고, critic은 cost-to-goal이므로 이보다 크게 나은 값을 내놓을 수 없어야 한다. 모든 수치는 이 앵커 대비다.</p>"
+    + _QL_SPEC
+    + "<h4>1. Q는 support를 벗어날수록 오른다</h4>"
+    + img(P / "33_q_landscape.png", "Q landscape: off-support rise, ensemble std, pessimism, best-of-N, 2D slice")
+    + "<p>BC 평균(<code>t=0</code>)에서 <b>+0.1 ± 0.5</b> — critic이 BC 평균과 시연자를 동등하게 본다. 이것이 "
+    "프로브 전체의 sanity check이고, 정규화가 어긋났다면 여기서 깨진다. 거기서 ∇<sub>a</sub>Q 방향으로 나아가면 "
+    "박스 경계(<code>t=1</code>)에서 <b>+12.7 ± 1.7</b>, <code>t=3</code>에서 <b>+32.9 ± 5.3</b>. cost-to-goal "
+    "단위이므로 이는 <i>데이터가 한 번도 가지 않은 행동이 시연자보다 목표에 33스텝(1.1초) 가깝다</i>는 뜻이다.</p>"
+    "<p><b>비관성은 보되 막지 못한다.</b> 앙상블 std는 4.1 → 7.1로 1.7배만 자라는 동안 평균은 +33 오른다. "
+    "min(K=2)이 걷어내는 것은 +32.9 → +25.8, 약 20%뿐이다. ρ를 올려도 std 자체가 자라지 않아 소용이 없다.</p>"
+    "<h4>2. BoN과 steering은 17배 다른 스케일에서 exploit한다</h4>"
+    "<p>best-of-N은 BC draw 중에서만 고를 수 있고 σ<sub>BC</sub> ≈ 0.009이므로, N을 아무리 키워도 그 작은 구름을 "
+    "벗어나지 못한다 — 편향이 실재하되 <b>+1.88 ± 0.62 (N=16)</b>에 갇히고 log(N)으로 자란다. steering은 "
+    "alpha·‖v‖만큼 <b>절대 단위</b>로 움직이므로 박스 밖까지 간다. 관찰된 두 현상은 같은 실패(off-support "
+    "과대추정)의 서로 다른 크기였다.</p>"
+    "<h4>3. 9개 critic 전부에서 나타난다 — 그리고 macro가 갈랐다</h4>"
+    + img(
+        P / "33_q_landscape_critics.png",
+        "nine critics: the rise by expectile, by augmentation, all nine, and what min() removes",
+    )
+    + "<p>같은 프레임·같은 BC draw로 critic 9종을 채점했다. <b>평평한 critic은 없다</b> (t=3에서 +20.2 ~ +33.0) "
+    "— 체크포인트 특성이 아니라 방법론의 성질이다.</p>"
+    "<p>사전에 예상한 축은 갈리지 않았다: expectile 0.7→0.9는 −1.6, mc_floor on/off는 −1.8로 CI 안에서 구분되지 "
+    "않는다. 실제로 가른 것은 <b>macro_group_size</b>였고, 다른 축이 모두 같은 짝 4쌍에서 <b>4/4 같은 방향</b>이다 "
+    "(+4.3 ~ +8.7, macro=30이 더 낙관적). 그럴듯한 기제가 있다 — macro=5는 청크를 6개 commitment prefix로 나눠 "
+    "감독하므로 제약점이 6배 많고, 외삽할 자유도가 그만큼 적다.</p>"
+    "<p><b>잠정.</b> 이는 사전 등록한 가설이 아니라 사후 관찰이고, critic 9개(짝 4쌍)에 근거한다. 확증하려면 "
+    "macro만 바꾼 critic을 새로 학습시켜 재현해야 한다.</p>"
+    "<h4>판정과 후속</h4><ul>"
+    "<li><b>확정</b> — off-support 과대추정은 실재하며 critic 9종 전부에서 나타난다. 앙상블 비관성으로 해결되지 "
+    "않는다 (20~30%만 제거).</li>"
+    "<li><b>확정</b> — BoN 편향은 정책 자신의 산포에 상한이 걸린다. steering은 걸리지 않는다.</li>"
+    "<li><b>잠정</b> — macro_group_size가 낙관 정도를 가른다 (4/4 일관). exploit 기반 arm에는 g5 계열이 5~9 낮다.</li>"
+    "<li><b>후속</b> — QPILOTS alpha 상한은 이 곡선에서 읽어야 한다. 실제 롤아웃의 drift/spread와 이 landscape를 "
+    "겹쳐 '실행된 행동이 어디까지 갔는가'를 확인하는 것이 다음 측정이다.</li>"
+    "</ul>"
+    "<h4>한계</h4><ul>"
+    "<li>이 프로브는 <b>하나의 실패 모드</b>만 잰다. off-support 교정이 좋으면서 on-support 순위가 나쁜 critic이 "
+    "있을 수 있고, 여기서 낮게 나온 것이 과제에서 더 낫다는 뜻은 아니다.</li>"
+    "<li>탐침 방향은 ∇<sub>a</sub>Q 하나다. 다른 방향의 landscape는 2D 격자 패널이 보여주지만 통계는 이 축에 대한 것이다.</li>"
+    "<li>40프레임/20에피소드는 critic 간 순위를 가르기엔 넉넉하지 않다 — CI가 겹치는 쌍이 있다.</li>"
+    "</ul>"
+    "<h4>재현</h4>"
+    "<pre><code>uv run python scripts/probe_q_landscape.py \\\n"
+    "  --critic ~/hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_*/ \\\n"
+    "  --policy-dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000 \\\n"
+    "  --frames 40 --per-episode 2 --n-bc 16 --grid-n 21 --grid-max 2.0\n"
+    "uv run python scripts/plot_q_landscape.py          # 단일 critic 해부 (5패널)\n"
+    "uv run python scripts/plot_q_landscape_critics.py  # 9종 비교 (4패널)</code></pre>"
+    "<p>원본은 <code>slurm/probes/q_landscape.json.gz</code>(7.5 MB, gz 1.7 MB)로 리포에 있고, "
+    "<code>make_figures.py</code>의 <code>fig_33_q_landscape()</code>가 리포트 생성마다 거기서 그림을 다시 만든다 "
+    "— 그림과 데이터가 어긋날 수 없게.</p>",
+)
+
+
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+
+_QL_SPEC_EN = spec(
+    [
+        (
+            "Data",
+            "yam_lego_taxi, 347 episodes — the critic's own training set. Frames drawn only from the 300 successes",
+        ),
+        ("Sample", "40 frames / 20 episodes (2 per episode), run-level 95% t-CI"),
+        ("Policy", "pi05_yam_lego_taxi bc_s300_h30/200000, 16 BC draws per frame"),
+        ("Critics", "9 × patch_critic_yam_s347 — expectile .7/.9 × macro 30/5 × floor on/off × aug/noaug"),
+        ("Anchor", "the demonstrator's actual next 30 actions (successful episodes → known to reach the goal)"),
+        ("Probe", "absolute-unit sweep 0→3 along ∇ₐQ, σ_BC sweep 0→8, 21×21 grid (±2)"),
+    ]
+)
+
+en(
+    "q-landscape-ood",
+    "The critic overestimates off-support — all nine of them, and pessimism does not stop it",
+    "<p><b>The question.</b> Exploiting the critic even slightly with bon makes the SELECTED value "
+    "optimistic, and with qpilots the grad<sub>a</sub>Q points somewhere odd. Both are one question: "
+    "<i>what does Q do as an action leaves the region the demonstrations cover?</i> This probe answers it "
+    'on the critic\'s OWN training set, so "off-support" means what it meant during fitting.</p>'
+    "<p><b>What it is measured against.</b> There is no ground truth for Q off-support — that is the whole "
+    "problem. So the anchor is <b>the demonstrator's own next 30 actions</b>: drawn only from SUCCESSFUL "
+    "episodes, so it is an action known to have reached the goal, and the critic is cost-to-goal, so it "
+    "should not be able to beat it by much. Every number is relative to that anchor.</p>"
+    + _QL_SPEC_EN
+    + "<h4>1. Q rises as the action leaves support</h4>"
+    + img(P / "33_q_landscape.png", "Q landscape: off-support rise, ensemble std, pessimism, best-of-N, 2D slice")
+    + "<p>At the BC mean (<code>t=0</code>) the gap is <b>+0.1 ± 0.5</b> — the critic ranks the BC mean and the "
+    "demonstrator the same. That is the sanity check for the whole probe, and a normalization error would break "
+    "it here. Moving along ∇<sub>a</sub>Q from there: <b>+12.7 ± 1.7</b> at the box edge (<code>t=1</code>) and "
+    "<b>+32.9 ± 5.3</b> at <code>t=3</code>. These are cost-to-goal units, so that reads as <i>an action the data "
+    "never took is 33 steps (1.1 s) closer to the goal than the one that actually reached it</i>.</p>"
+    "<p><b>Pessimism sees it and cannot cancel it.</b> The ensemble std grows only 4.1 → 7.1 (1.7×) while the mean "
+    "rises by +33. The min over K=2 removes +32.9 → +25.8, about 20%. Raising ρ does not help, because the std "
+    "itself is what fails to grow.</p>"
+    "<h4>2. bon and steering exploit at scales 17× apart</h4>"
+    "<p>Best-of-N can only pick among draws, and σ<sub>BC</sub> ≈ 0.009, so no N escapes that small cloud — the "
+    "bias is real but capped at <b>+1.88 ± 0.62 (N=16)</b> and grows like log(N). Steering moves by α·‖v‖ in "
+    "<b>absolute</b> units, so it reaches past the box. The two observations were the same failure at different "
+    "magnitudes.</p>"
+    "<h4>3. It appears in all nine critics — and macro is the axis that separates them</h4>"
+    + img(
+        P / "33_q_landscape_critics.png",
+        "nine critics: the rise by expectile, by augmentation, all nine, and what min() removes",
+    )
+    + "<p>Nine critics scored on the same frames and the same BC draws. <b>None is flat</b> (+20.2 to +33.0 at "
+    "t=3) — this is a property of the method, not of one checkpoint.</p>"
+    "<p>The axes predicted beforehand did not separate: expectile 0.7→0.9 is −1.6 and mc_floor on/off is −1.8, "
+    "neither resolvable within the CI. What did separate is <b>macro_group_size</b>, and across the four pairs "
+    "that hold every other axis fixed it is <b>4/4 in the same direction</b> (+4.3 to +8.7, macro=30 the more "
+    "optimistic). There is a plausible mechanism: macro=5 supervises the chunk at six commitment prefixes rather "
+    "than one, six times as many constraints and correspondingly less freedom to extrapolate.</p>"
+    "<p><b>Provisional.</b> This is a post-hoc observation, not a pre-registered hypothesis, and it rests on nine "
+    "critics (four pairs). Confirming it needs a critic trained with macro as the only change.</p>"
+    "<h4>Verdict and next</h4><ul>"
+    "<li><b>Confirmed</b> — off-support overestimation is real and present in all nine critics. Ensemble "
+    "pessimism does not solve it (20–30% removed).</li>"
+    "<li><b>Confirmed</b> — the bon bias is bounded by the policy's own spread. Steering is not.</li>"
+    "<li><b>Provisional</b> — macro_group_size sets how optimistic the critic is off-support (4/4 consistent); "
+    "the g5 family is 5–9 lower, which matters for any arm that exploits the critic.</li>"
+    "<li><b>Next</b> — QPILOTS' alpha ceiling should be read off this curve. Overlaying a real rollout's "
+    "drift/spread on this landscape, to see how far the EXECUTED action actually went, is the next measurement.</li>"
+    "</ul>"
+    "<h4>Limits</h4><ul>"
+    "<li>This probes <b>one failure mode</b>. A critic can be well-calibrated off-support and still rank "
+    "on-support actions poorly; nothing here says the lower ones are better at the task.</li>"
+    "<li>One probe direction, ∇<sub>a</sub>Q. The 2D panel shows the plane, but the statistics are about this axis.</li>"
+    "<li>40 frames / 20 episodes is not enough to rank critics individually — several CIs overlap.</li>"
+    "</ul>"
+    "<h4>Reproduce</h4>"
+    "<pre><code>uv run python scripts/probe_q_landscape.py \\\n"
+    "  --critic ~/hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_*/ \\\n"
+    "  --policy-dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000 \\\n"
+    "  --frames 40 --per-episode 2 --n-bc 16 --grid-n 21 --grid-max 2.0\n"
+    "uv run python scripts/plot_q_landscape.py          # single-critic anatomy (5 panels)\n"
+    "uv run python scripts/plot_q_landscape_critics.py  # nine-critic comparison (4 panels)</code></pre>"
+    "<p>The raw probe ships in the repo as <code>slurm/probes/q_landscape.json.gz</code> (7.5 MB, 1.7 MB gzipped), "
+    "and <code>fig_33_q_landscape()</code> in <code>make_figures.py</code> rebuilds both figures from it on every "
+    "report build — so a figure cannot drift from its data.</p>",
+)
+
 en(
     "three-forces",
     "The balance of four forces — synthesis of the adaptive-chunking theory, with testable predictions",
