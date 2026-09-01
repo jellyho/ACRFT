@@ -43,6 +43,20 @@ KO = f"""<table class='num'><tr><th>항목</th><th>내용</th></tr>
 <tr><th>why</th><td>우리 실물 결과(조향 붕괴·argmax 무효)가 이 문헌에서 어디에 위치하는지 확인</td></tr>
 <tr><th>코드</th><td><code>{branch}@{stamp}</code></td></tr></table>
 
+<div class='missing'><b>정정 (게시 직후, 사용자 지적).</b> 초판의 "발견 1"은 <b>"아무도 우리처럼 하지 않는다"</b>로
+읽히게 썼는데 과했다. <b>동결 오프라인 critic + BoN은 여러 곳에서 한다</b> — 바로 이 표의 V-GPS(Cal-QL 동결,
+K=50 재순위)가 그렇고, 우리 자신의 <span class='xref' data-eid='deas'>DEAS 재현</span>도 그렇다. DEAS는
+VLA + 액션 시퀀스(청크) + 분포형 가치 + BoN이라 <b>청크 단위 BoN의 직접 선례</b>다. 정확한 진술은
+"BoN을 하는 곳이 없다"가 아니라 <b>"우리만큼 큰 채점 대상(H=30, {OURS}차원)을 쓰는 곳이 없다"</b>이다.
+아래 본문은 그 좁은 주장으로 고쳐 읽어야 한다.</div>
+
+<p><b>그리고 더 중요한 재구성.</b> 사용자 지적대로, 이 논문들은 형태는 달라도 <b>대부분 critic을 쓰고 있고
+그들에게는 그 critic이 쓸 만했다</b>. 그러므로 질문은 "critic을 쓰는가"가 아니라 <b>"무엇이 critic을 믿을 만하게
+만드는가"</b>이다. 다만 '믿을 만하다'가 생각보다 약할 수 있다는 내부 증거가 하나 있다 — 우리
+<span class='xref' data-eid='deas'>DEAS 재현</span>의 결론은 <b>"critic은 VLA와 동률(못 이기고 안 해침)"</b>이었고,
+지난 '유해' 판정은 n=25 노이즈였다. 즉 <b>청크 BoN이 베이스를 못 이기는 것은 이번이 처음이 아니라 우리
+계보에서 재현되는 패턴</b>이다. 오늘의 argmax ≈ 선택없음(1.70 vs 1.70)은 그 연장선에 있다.</p>
+
 <p><b>이 리포트의 질문.</b> <span class='xref' data-eid='critic-detail-survey'>앞선 서베이</span>는 소규모
 오프라인 RL 코드베이스(IDQL·QAM·CFGRL·LPS)를 읽었다. 그 결론은 "액션 차원과 앙상블이 다르다"였는데,
 그 논문들은 모두 <b>proprio 기반 시뮬</b>이라 VLA와는 거리가 있다. 이번에는 <b>실제로 대형 VLA에
@@ -50,9 +64,9 @@ KO = f"""<table class='num'><tr><th>항목</th><th>내용</th></tr>
 
 {TABLE}
 
-<h3>발견 1 — 아무도 우리처럼 하지 않는다</h3>
-<p>표를 세로로 읽으면 한 가지가 두드러진다. <b>"동결된 오프라인 critic으로 긴 액션 청크를 채점해
-argmax/조향한다"를 하는 연구가 하나도 없다.</b> 성공을 보고한 연구들은 넷 중 하나를 택한다:</p>
+<h3>발견 1 — critic은 다들 쓴다. 다만 <b>채점 대상</b>이 우리만 크다</h3>
+<p>동결 오프라인 critic으로 BoN을 하는 것 자체는 흔하다(V-GPS, DEAS). 표를 세로로 읽을 때 우리만 다른 칸은
+<b>Q가 채점하는 대상의 크기</b>다 — 성공을 보고한 연구들은 다음 중 하나로 그 부담을 줄인다:</p>
 <ul>
 <li><b>채점 대상을 작게</b> — V-GPS는 단일 7차원 액션, Q-VGM·QPILOTS는 H=5 청크. 우리는 H=30, {OURS}차원이다.</li>
 <li><b>critic을 온라인으로</b> — QPILOTS(5e5 스텝 SARSA), ConRFT(오프라인 후 온라인).</li>
@@ -60,7 +74,8 @@ argmax/조향한다"를 하는 연구가 하나도 없다.</b> 성공을 보고�
 OOD 외삽 문제 자체가 사라진다. 그리고 <b>V-GPS(Q함수)보다 낫다고 보고</b>한다.</li>
 <li><b>가치함수를 안 쓴다</b> — RIPT-VLA는 희소 이진 보상 + 정책 경사.</li>
 </ul>
-<p>우리는 <b>가장 어려운 조합</b>을 골랐다: 가장 큰 채점 대상({OURS}차원), 동결 오프라인 critic, 실물 평가.</p>
+<p>우리는 이 넷 중 <b>어느 것도 택하지 않았다</b>: {OURS}차원 채점 대상, 동결 오프라인 critic, 실물 평가.
+각각은 선례가 있지만 <b>이 조합은 없다</b>.</p>
 
 <h3>발견 2 — Q-VGM이 우리 결과를 독립적으로 재현했다</h3>
 <p>Q-VGM은 우리와 <b>같은 베이스(π0.5), 같은 동결 방식(VLM 동결, action expert만 학습)</b>을 쓴다.
@@ -92,6 +107,21 @@ QPILOTS의 Tweedie 투영과 같은 문제 인식이다.</li>
 <p>또 RoboMonkey는 <b>샘플 수에 대한 거듭제곱 스케일링 법칙</b>을 보고한다(1만 샘플에서 RMSE −59.3%).
 우리 N=8은 그 곡선의 맨 왼쪽 끝이다.</p>
 
+
+<h3>발견 5 — 진짜 actor-critic으로 <b>학습</b>하는 연구는 생각보다 적다</h3>
+<p>가치신호를 어디에 쓰는지로 나누면 지형이 달라진다.</p>
+<div class='tblwrap'><table class='num'>
+<tr><th>가치신호의 쓰임</th><th>연구</th><th>정책 파라미터를 Q로 갱신하나</th></tr>
+<tr><td><b>추론 시점 선택만</b></td><td>V-GPS, RoboMonkey, QPILOTS-U, IDQL, <b>DEAS</b>, 우리 bon/implicit</td><td>아니오</td></tr>
+<tr><td><b>상태값·진척도로 재가중</b></td><td>AWR 계열, <b>RECAP(π0.6 방식)</b></td><td>간접 — 가치가 <b>상태/진척</b> 수준이고 현재정책 action-value가 아님</td></tr>
+<tr><td><b>가치함수 없음</b></td><td>RIPT-VLA, SimpleVLA-RL</td><td>아니오 (희소 보상 정책경사)</td></tr>
+<tr><td><b>진짜 action-value actor-critic</b></td><td>PA-RL, Q-VGM, ConRFT, Diffusion-QL</td><td><b>예</b></td></tr>
+</table></div>
+<p>마지막 칸이 눈에 띄게 얇다. 그리고 그 안에서도 <b>Diffusion-QL은 실패로 보고</b>되고(Q-VGM: LIBERO 69.5% vs
+SFT 75.0%), Q-VGM 자신은 BPTT를 피해 <b>Q로 만든 타깃을 residual로 회귀</b>하는 우회로를 쓴다. 즉 "Q의 기울기로
+큰 정책을 직접 미는" 순수한 형태는 VLA 스케일에서 아직 잘 되는 사례가 드물다.</p>
+<p>특히 <b>π0.6의 RECAP이 action-value가 아니라 상태/진척 수준 가치</b>를 쓴다는 점은 시사적이다 — 프런티어
+쪽이 Q(s,a)에서 <b>멀어지는</b> 방향으로 움직이고 있다. 우리 링은 반대로 Q(s,a) 위에 8개 arm을 세웠다.</p>
 <h3>그래서 무엇을 바꿀 것인가 — 우선순위</h3>
 <ol>
 <li><b>채점 청크를 줄인다.</b> 문헌 전체가 H=1~5인데 우리만 H=30이다. macro_group_size를 줄여
@@ -120,6 +150,21 @@ EN = f"""<table class='num'><tr><th>item</th><th>content</th></tr>
 <tr><th>why</th><td>To locate our real-robot result (steering collapsed, argmax was inert) within this literature</td></tr>
 <tr><th>code</th><td><code>{branch}@{stamp}</code></td></tr></table>
 
+<div class='missing'><b>Correction (posted shortly after publication, user-flagged).</b> The first version of
+"Finding 1" read as <b>"nobody does what we do"</b>, which overstates it. <b>Frozen-offline-critic BoN is
+common</b> — V-GPS in this very table (frozen Cal-QL, K=50 re-ranking) does it, and so does our own
+<span class='xref' data-eid='deas'>DEAS reproduction</span>: VLA + action sequence (chunk) + distributional
+value + BoN, a direct precedent for chunk-level BoN. The accurate claim is not "nobody does BoN" but
+<b>"nobody scores a target as large as ours (H=30, {OURS} dims)"</b>. Read the section below in that narrower
+sense.</p></div>
+
+<p><b>A more important reframing.</b> As the user points out, these papers mostly DO use a critic, and for them
+it was good enough. So the question is not "does anyone use a critic" but <b>"what makes a critic trustworthy"</b>.
+One internal caveat on how strong "trustworthy" is: our own <span class='xref' data-eid='deas'>DEAS
+reproduction</span> concluded the <b>critic tied with the VLA — neither beating nor harming it</b>, and the
+earlier "critic is harmful" verdict was n=25 noise. So <b>chunk-level BoN failing to beat the base is not new
+today; it is a pattern that reproduces in our line</b>. Today's argmax ≈ no-selection (1.70 vs 1.70) continues it.</p>
+
 <p><b>The question.</b> The <span class='xref' data-eid='critic-detail-survey'>previous survey</span> read the
 small-scale offline-RL codebases and concluded that action dimensionality and ensemble size differ. But those
 papers are all proprioceptive simulation. This one looks only at work that actually attaches a value function
@@ -127,10 +172,9 @@ to a large VLA.</p>
 
 {TABLE}
 
-<h3>Finding 1 — nobody does what we are doing</h3>
-<p>Read the table down its columns and one thing stands out: <b>no published work scores a long action chunk
-with a frozen offline critic and then argmaxes or steers on it.</b> Every method reporting success takes one
-of four escapes:</p>
+<h3>Finding 1 — everyone uses a critic; only our <b>scoring target</b> is large</h3>
+<p>Frozen-offline-critic BoN is itself common (V-GPS, DEAS). Read down the columns and the cell where we differ
+is <b>the size of what Q scores</b> — the works reporting success reduce that burden one of four ways:</p>
 <ul>
 <li><b>Score something small</b> — V-GPS a single 7-dim action; Q-VGM and QPILOTS an H=5 chunk. Ours is
 H=30, {OURS} dimensions.</li>
@@ -139,8 +183,8 @@ H=30, {OURS} dimensions.</li>
 bootstrap, so the OOD extrapolation problem does not arise; it reports beating V-GPS.</li>
 <li><b>Use no value function at all</b> — RIPT-VLA: sparse binary reward and a policy gradient.</li>
 </ul>
-<p>We picked <b>the hardest combination</b>: the largest scoring target ({OURS} dims), a frozen offline
-critic, and real hardware.</p>
+<p>We took <b>none of the four</b>: a {OURS}-dim scoring target, a frozen offline critic, and real hardware.
+Each has precedent on its own; <b>the combination does not</b>.</p>
 
 <h3>Finding 2 — Q-VGM independently reproduces our result</h3>
 <p>Q-VGM uses <b>the same base (π0.5) and the same freezing (VLM frozen, action expert only)</b> as we do.
@@ -172,6 +216,21 @@ of one prescription: <b>do not take the best, lean toward the good ones.</b> Our
 <p>RoboMonkey additionally reports a <b>power-law scaling in the number of samples</b> (RMSE −59.3% at 10,000
 samples). Our N=8 sits at the far-left end of that curve.</p>
 
+
+<h3>Finding 5 — fewer works actually <b>train</b> with an action-value actor-critic than it seems</h3>
+<p>Sorting by where the value signal is used changes the picture.</p>
+<div class='tblwrap'><table class='num'>
+<tr><th>use of the value signal</th><th>works</th><th>policy params updated by Q?</th></tr>
+<tr><td><b>test-time selection only</b></td><td>V-GPS, RoboMonkey, QPILOTS-U, IDQL, <b>DEAS</b>, our bon/implicit</td><td>no</td></tr>
+<tr><td><b>reweighting by state value / progress</b></td><td>AWR-family, <b>RECAP (π0.6-style)</b></td><td>indirect — the value is <b>state/progress</b> level, not a current-policy action value</td></tr>
+<tr><td><b>no value function</b></td><td>RIPT-VLA, SimpleVLA-RL</td><td>no (sparse-reward policy gradient)</td></tr>
+<tr><td><b>true action-value actor-critic</b></td><td>PA-RL, Q-VGM, ConRFT, Diffusion-QL</td><td><b>yes</b></td></tr>
+</table></div>
+<p>That last row is conspicuously thin — and inside it <b>Diffusion-QL is reported as failing</b> (Q-VGM: 69.5%
+vs SFT 75.0%), while Q-VGM itself detours around BPTT by <b>regressing a residual onto Q-improved targets</b>.
+The pure form — pushing a large policy directly with ∇Q — has few working examples at VLA scale.</p>
+<p>Notably <b>π0.6's RECAP uses a state/progress-level value rather than an action value</b>, which suggests the
+frontier is moving <b>away</b> from Q(s,a). Our ring built eight arms on top of Q(s,a).</p>
 <h3>What to change, in order</h3>
 <ol>
 <li><b>Shorten the scored chunk.</b> The literature scores H=1–5; we score H=30. A critic over an H=5 prefix
@@ -192,7 +251,7 @@ is less reliable than the others. The causal claim in Finding 3 is a hypothesis,
 
 entry = {
     "eid": "vla-rl-survey",
-    "date": "2026-09-02 00:30",
+    "date": "2026-09-02 01:05",
     "worker": "B",
     "title": "📚 [워커B] VLA×RL 문헌 서베이 — 아무도 30스텝 청크를 동결 critic으로 argmax하지 않는다",
     "summary": (
@@ -206,7 +265,7 @@ entry = {
     "tags": ["워커B", "서베이", "VLA", "RL", "critic", "문헌"],
     "status": "finding",
     "phase": "진단·방법",
-    "links": ["critic-detail-survey", "serving-rollouts-yam", "extraction-suite-yam"],
+    "links": ["critic-detail-survey", "serving-rollouts-yam", "extraction-suite-yam", "deas"],
     "body_html": f'<div class="wbx wbx-ko">{KO}</div><div class="wbx wbx-en">{EN}</div>',
 }
 out = R / ".scratch/vla_rl_survey_entry.json"
