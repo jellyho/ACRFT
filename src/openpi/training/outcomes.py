@@ -163,6 +163,6 @@ def dataset_root(repo_id: str, root: str | pathlib.Path | None = None) -> pathli
     LeRobot resolves it (``HF_LEROBOT_HOME``)."""
     if root is not None:
         return pathlib.Path(root) / repo_id
-    from lerobot.datasets import lerobot_dataset  # noqa: PLC0415 -- heavy import, only for the no-root case
+    from lerobot.datasets import lerobot_dataset
 
     return pathlib.Path(lerobot_dataset.LeRobotDatasetMetadata(repo_id).root)
