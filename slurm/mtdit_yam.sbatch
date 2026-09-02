@@ -25,6 +25,14 @@
 # (`jax.random.beta(rng, 1.5, 1) * 0.999`, src/openpi/models/pi0.py), so a flow-matching run is the
 # apples-to-apples comparison against our BC policy. `OBJ=diffusion` switches to the doc's recipe.
 #
+# TORCH BUILD IS PINNED TO cu126 ON PURPOSE. `pip install lerobot[multi-task-dit]` pulls torch
+# 2.11+cu130 and the compute nodes' driver is CUDA 12.2, so job 37273 died at the check below with
+# "The NVIDIA driver on your system is too old (found version 12020)". lerobot 0.6.1 allows
+# torch>=2.7,<2.12, so the venv is held at torch 2.8.0+cu126 / torchvision 0.23.0+cu126 from the
+# pytorch cu126 index; re-run that install if the venv is ever rebuilt. torchcodec then cannot load
+# its native libs (libavutil.so.56 absent -- the compute nodes have no ffmpeg), which is exactly why
+# the video backend below is pyav: pyav ships its own.
+#
 # Everything else follows the official 30 Hz recipe in docs/source/multi_task_dit.mdx (horizon 32,
 # n_action_steps 24) at the documented MINIMUM batch of 64 rather than its recommended 256-320,
 # which does not fit an L40S. B200 is deliberately avoided so the extraction-arm queue is not
