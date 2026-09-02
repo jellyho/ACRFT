@@ -1,11 +1,14 @@
 """Upload finished policy-extraction arms to a public HF model repo.
 
-One repo, one folder per arm (``<arm>_run1/...``), plus a README that says what each arm is,
+One repo, one folder per run (``<arm><suffix>/...``), plus a README that says what each arm is,
 where its provenance comes from, and how to serve it. Only arms whose training run has FINISHED
-are uploaded — a still-running arm's latest checkpoint is a moving target, so we skip it unless
---include-running is passed.
+are uploaded — a still-running arm's latest checkpoint is a moving target.
 
-    uv run python scripts/upload_extraction_arms.py --arms qam awr cfgrl flowdpg flowdagger
+By default only the FINAL step is uploaded, as a whole openpi checkpoint (user's convention:
+"전체 체크포인트 통채로", "최종 스텝만"). Intermediate steps stay on disk; they are useful locally
+and would multiply the repo size by the save-every count for nothing.
+
+    uv run python scripts/upload_extraction_arms.py --arms awr --suffix _bb
 """
 
 # ruff: noqa: PLC0415
@@ -34,6 +37,17 @@ def main():
     ap.add_argument("--arms", nargs="+", required=True)
     ap.add_argument("--repo", default=REPO)
     ap.add_argument("--private", action="store_true", help="default is PUBLIC (user-authorized)")
+    ap.add_argument(
+        "--suffix",
+        default="_bb",
+        help="run-folder suffix under the checkpoint root. _bb = the BC-budget runs (whole model "
+        "trained, batch 32, lr 5e-5, 30k steps); _run1 = the earlier expert-only runs.",
+    )
+    ap.add_argument(
+        "--all-steps",
+        action="store_true",
+        help="upload every saved step instead of only the last one (the default is last-only)",
+    )
     a = ap.parse_args()
 
     from huggingface_hub import HfApi
@@ -50,22 +64,34 @@ def main():
 
     uploaded = []
     for arm in a.arms:
-        src = ROOT / f"{arm}_run1"
+        run = f"{arm}{a.suffix}"
+        src = ROOT / run
         if not src.exists():
             print(f"skip {arm}: {src} missing")
             continue
-        print(f"uploading {arm} from {src} ...", flush=True)
+        steps = sorted((d for d in src.iterdir() if d.is_dir() and d.name.isdigit()), key=lambda d: int(d.name))
+        if not steps:
+            print(f"skip {arm}: no numbered step directories under {src}")
+            continue
+        if a.all_steps:
+            folder, in_repo, what = src, run, f"all {len(steps)} steps"
+        else:
+            folder, in_repo, what = steps[-1], f"{run}/{steps[-1].name}", f"step {steps[-1].name} only"
+        size = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file()) / 1e9
+        print(f"uploading {arm}: {what} from {folder} ({size:.1f} GB) ...", flush=True)
         api.upload_folder(
             repo_id=a.repo,
             repo_type="model",
-            folder_path=str(src),
-            path_in_repo=f"{arm}_run1",
-            commit_message=f"{arm} extraction arm ({stamp[:8]})",
+            folder_path=str(folder),
+            path_in_repo=in_repo,
+            commit_message=f"{arm} extraction arm, {what} ({stamp[:8]})",
         )
-        uploaded.append(arm)
+        uploaded.append((arm, in_repo, steps[-1].name, size))
 
     rows = "\n".join(
-        f"| `{arm}_run1` | {ABOUT[arm][0]} | {ABOUT[arm][1]} | {ABOUT[arm][2]} |" for arm in uploaded if arm in ABOUT
+        f"| `{in_repo}` | {ABOUT[arm][0]} | {step} | {size:.0f} GB | {ABOUT[arm][1]} | {ABOUT[arm][2]} |"
+        for arm, in_repo, step, size in uploaded
+        if arm in ABOUT
     )
     readme = f"""---
 license: apache-2.0
@@ -74,13 +100,22 @@ tags: [robotics, offline-rl, vla, pi0.5, policy-extraction]
 
 # ACRFT — YAM lego-taxi policy-extraction arms
 
-Policy-extraction methods applied to the same frozen pi0.5 base and the same frozen patch
-critic, as a **method-only-diff** comparison ring: identical BC init
-(`yam_bc_s300_h30_successonly/100000`), backbone frozen, **action expert only** trained, critic
-`patch_critic_yam_s347_fixed_tau9_min_200k` fixed.
+Policy-extraction methods applied to the same pi0.5 base and the same frozen patch critic, as a
+**method-only-diff** comparison ring: identical BC init
+(`yam_bc_s300_h30_successonly/100000`), critic `patch_critic_yam_s347_fixed_tau9_min_200k` frozen,
+and only the extraction objective differs between arms.
 
-| folder | method | provenance | what it swaps |
-|---|---|---|---|
+Runs suffixed **`_bb`** match the BC fine-tune's own training budget: the **whole model** is
+trainable (the BC config sets no freeze filter, so matching its budget means matching what it was
+allowed to move, not only steps and batch), batch 32, constant lr 5e-5, 30k steps. These are whole
+openpi checkpoints, **final step only** — load them the way you load any pi0.5 checkpoint.
+
+Runs suffixed **`_run1`** are the earlier pass with the backbone frozen and the **action expert
+only** trainable. They are a smaller budget than BC's and are kept for comparison, not as the
+headline result.
+
+| folder | method | step | size | provenance | what it swaps |
+|---|---|---|---|---|---|
 {rows}
 
 Each implementation carries file/line-level provenance comments from the official code (or the

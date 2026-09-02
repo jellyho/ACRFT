@@ -4,6 +4,7 @@ import json
 import logging
 import pathlib
 import socket
+import time
 
 import tyro
 
@@ -341,6 +342,21 @@ def main(args: Args) -> None:
             # describing steps that never ran.
             logging.info("executing %d of each %d-step chunk, then replanning", args.execute_steps, horizon)
             policy = _policy.TruncateChunkPolicy(policy, args.execute_steps)
+
+    # Walk the wrapper chain: the policy here may be Truncate(MultiSample(PatchCritic(...))), and
+    # only the innermost one owns a sampling graph worth compiling early.
+    warm, node = None, policy
+    while node is not None and warm is None:
+        warm = getattr(node, "warmup", None)
+        node = getattr(node, "_policy", None) or getattr(node, "_pol", None)
+    if warm is not None:
+        # Compile before the first request rather than during it. The steering graph takes ~37 s,
+        # which is longer than the client's websocket keepalive -- so paid lazily it does not look
+        # like a slow first call, it looks like the link dropping.
+        logging.info("warming up (compiling the sampling graph)...")
+        t0 = time.monotonic()
+        warm(train_config.model.fake_obs(batch_size=1))
+        logging.info("warm-up done in %.0fs", time.monotonic() - t0)
 
     # Config-derived spec first, so an explicit policy_metadata entry can still override it.
     policy_metadata = {**spec_metadata(train_config), **(policy.metadata or {})}

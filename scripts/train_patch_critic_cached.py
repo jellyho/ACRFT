@@ -68,6 +68,50 @@ def main():
     ap.add_argument(
         "--feat-noise", type=float, default=0.0, help="gaussian noise on patch features, as a fraction of their std"
     )
+    ap.add_argument(
+        "--alpha-cql",
+        type=float,
+        default=0.0,
+        help="weight of the CQL conservative term, DIMENSIONLESS: the raw value-unit gap is divided "
+        "by the value span (v_max - v_min) before scaling, because our TD loss is a cross-entropy in "
+        "nats and official CQL's is an MSE in value units squared -- see the comment at the term. "
+        "0 = off = plain IQL, which NEVER queries an action outside the dataset and therefore leaves "
+        "the Q of every sampled chunk unconstrained at serving time. This is the term that pushes those "
+        "down. Provenance: aviralkumar2907/CQL rlkit/torch/sac/cql.py -- "
+        "`min_qf1_loss = logsumexp(cat_q1/temp).mean()*min_q_weight*temp - q1_pred.mean()*min_q_weight`.",
+    )
+    ap.add_argument(
+        "--cql-negatives",
+        choices=["shuffle", "uniform", "both", "bank"],
+        default="shuffle",
+        help="where the OOD action candidates come from. shuffle: in-batch permutation, i.e. a REAL "
+        "chunk paired with the WRONG state -- free, and on-manifold so the critic cannot reject it on "
+        "action statistics alone. uniform: U(-1,1) in normalized action space, official CQL's "
+        "`random_actions_tensor ... .uniform_(-1,1)` with num_random=10. bank: chunks actually drawn "
+        "from the frozen BC policy (scripts/sample_policy_chunks.py) -- the distribution our arms "
+        "really score, and therefore the correctly targeted negative. both: shuffle + uniform.",
+    )
+    ap.add_argument("--cql-n", type=int, default=8, help="negatives per state (official CQL: num_random=10)")
+    ap.add_argument("--cql-temp", type=float, default=1.0, help="official CQL `temp` (default 1.0)")
+    ap.add_argument(
+        "--cql-batch",
+        type=int,
+        default=64,
+        help="how many rows of the batch carry the conservative term. The term costs one extra critic "
+        "forward per negative, so this caps its price at cql_batch*cql_n/batch extra forwards; the batch "
+        "is already a uniform draw, so the leading rows are an unbiased subsample.",
+    )
+    ap.add_argument(
+        "--calql",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Cal-QL calibration: lower-bound the OOD Q-values by the data trajectory's MC return before "
+        "the logsumexp, so conservatism never pushes a value below what the behaviour policy demonstrably "
+        "achieves. nakamotoo/Cal-QL JaxCQL/conservative_sac.py applies `jnp.maximum(., lower_bounds)` to "
+        "the POLICY-sampled Q's (current and next actions) and NOT to the uniform-random ones; we follow "
+        "that split. `lower_bounds` is the same mc return array --mc-floor already uses.",
+    )
+    ap.add_argument("--cql-bank", type=pathlib.Path, default=None, help="dir from scripts/sample_policy_chunks.py")
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -134,6 +178,9 @@ def main():
     spec["feat_dropout"] = a.feat_dropout
     spec["feat_noise"] = a.feat_noise
     spec["q_reduction"] = a.q_reduction
+    spec["alpha_cql"] = a.alpha_cql
+    spec["cql_negatives"] = a.cql_negatives if a.alpha_cql > 0 else None
+    spec["calql"] = bool(a.calql) if a.alpha_cql > 0 else None
     stats = critic_spec.norm_stats(a.cache, meta)
     pre = None
     embedded = None
@@ -237,7 +284,29 @@ def main():
     def from_logits(x):
         return jnp.sum(jax.nn.softmax(x, -1) * centers, -1)
 
-    def loss_fn(params, v_params, tgt_p, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc):
+    def _negatives(key, chunk, bank_negs):
+        """OOD action candidates for the conservative term, [Bc, cql_n, H, ad].
+
+        `shuffle` pairs a real chunk with the wrong state: it is on the action manifold, so the
+        critic cannot reject it by action statistics alone, only by whether it fits THIS state --
+        which is the discrimination we actually need at serving. (A row can draw its own chunk with
+        probability 1/batch; at batch 256 that is a 0.4% self-pairing, well inside the noise, and
+        official CQL's candidate set includes the data action outright in min_q_version < 3.)
+        """
+        Bc = min(a.cql_batch, chunk.shape[0])
+        if a.cql_negatives == "bank":
+            return bank_negs
+        out = []
+        if a.cql_negatives in ("shuffle", "both"):
+            out.extend(chunk[jax.random.permutation(k, chunk.shape[0])][:Bc] for k in jax.random.split(key, a.cql_n))
+        if a.cql_negatives in ("uniform", "both"):
+            key = jax.random.fold_in(key, 1)
+            out.extend(
+                jax.random.uniform(k, (Bc, H, ad), minval=-1.0, maxval=1.0) for k in jax.random.split(key, a.cql_n)
+            )
+        return jnp.stack(out, 1)
+
+    def loss_fn(params, v_params, tgt_p, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs):
         vlog = v_net.apply(
             jax.lax.stop_gradient(v_params), pnxt.reshape(-1, npatch, emb).astype(jnp.float32), snxt.reshape(-1, sd)
         ).reshape(-1, P_, a.num_atoms)
@@ -255,6 +324,45 @@ def main():
         pred = net.apply(params, pcur.astype(jnp.float32), chunk, scur)
         per = -jnp.sum(tgt[None] * jax.nn.log_softmax(pred, -1), -1)
         q_loss = jnp.sum(per * valid[None]) / (jnp.sum(valid) * pred.shape[0] + 1e-8)
+        # ---- conservative (CQL / Cal-QL) term -------------------------------------------------
+        # IQL's expectile above only ever evaluates the DEMONSTRATED chunk, so Q is unconstrained
+        # off-support. This pushes down the log-sum-exp of Q over OOD candidates while pulling up
+        # the data action: official CQL computes
+        #   logsumexp(cat_q/temp).mean()*temp - q_pred.mean(), scaled by min_q_weight,
+        # with cat_q built from random + policy actions and NOT containing q_pred (min_q_version 3).
+        # We omit CQL's importance-sampling density correction (`random_density = log(0.5**d)`):
+        # it is calibrated for a per-STEP action space, and at chunk level d = H*ad = 420 makes it a
+        # ~291-nat constant that would swamp every Q in the logsumexp. Dropping it is CQL's
+        # min_q_version<3 form, and matches how the chunk-level critics in the VLA literature write
+        # the term (Q-VGM arXiv 2606.08015v1 App. A: "log sum_A exp Q_m(s,A)", no density term).
+        cql_loss = jnp.asarray(0.0)
+        cql_gap = jnp.asarray(0.0)
+        if a.alpha_cql > 0.0:
+            Bc = negs.shape[0]
+            nneg = negs.shape[1]
+            qn = from_logits(
+                net.apply(
+                    params,
+                    jnp.repeat(pcur[:Bc].astype(jnp.float32), nneg, 0),
+                    negs.reshape(Bc * nneg, H, ad),
+                    jnp.repeat(scur[:Bc], nneg, 0),
+                )[:, :, -1, :]
+            ).reshape(-1, Bc, nneg)  # [K, Bc, n]
+            if a.calql and a.cql_negatives != "uniform":
+                # Cal-QL Eq. 6: never penalise below the behaviour policy's own achieved return.
+                qn = jnp.maximum(qn, jax.lax.stop_gradient(mc[:Bc])[None, :, None])
+            q_data = from_logits(pred[:, :Bc, -1, :])  # [K, Bc]
+            ood = a.cql_temp * jax.scipy.special.logsumexp(qn / a.cql_temp, axis=-1)
+            cql_gap = jnp.mean(ood - q_data)  # raw VALUE units, so it stays interpretable in the log
+            # Scale conversion, required and not present in official CQL. There the TD loss is
+            # MSE on Q, so a value-unit conservative term is naturally commensurate. Ours is a
+            # cross-entropy over 101 HL-Gauss atoms (~5 nats), while the gap is in value units
+            # (~100 on this reward scale): alpha_cql=1.0 unconverted would make the conservative
+            # term ~20x the TD loss and simply collapse the critic. Dividing by the value span
+            # makes alpha_cql dimensionless and portable across reward scales -- alpha_cql=1 then
+            # means "one span-fraction of conservatism per nat of TD loss".
+            cql_loss = a.alpha_cql * cql_gap / (a.v_max - v_min)
+
         qd_log = net.apply(jax.lax.stop_gradient(tgt_p), pcur.astype(jnp.float32), chunk, scur)[:, :, -1, :]
         qd_probs = jnp.mean(jax.nn.softmax(qd_log, -1), 0)
         qbar = (jnp.min if a.q_reduction == "min" else jnp.mean)(from_logits(qd_log), 0)
@@ -264,9 +372,10 @@ def main():
         wexp = jnp.abs(a.expectile - (u < 0).astype(jnp.float32))
         v_ce = -jnp.sum(jax.lax.stop_gradient(qd_probs) * jax.nn.log_softmax(vlog_c, -1), -1)
         v_loss = jnp.sum(wexp * v_ce) / u.shape[0]
-        return q_loss + v_loss, {
+        return q_loss + v_loss + cql_loss, {
             "q_loss": q_loss,
             "v_loss": v_loss,
+            "cql_gap": cql_gap,
             "q_mean": jnp.mean(from_logits(pred)),
             "v_mean": jnp.mean(vbar),
         }
@@ -285,12 +394,13 @@ def main():
         return x
 
     @jax.jit
-    def step(carry, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc):
-        kc, kn = jax.random.split(key)
+    def step(carry, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, bank_negs):
+        kc, kn, kq = jax.random.split(key, 3)
         pcur, pnxt = _augment(kc, pcur), _augment(kn, pnxt)
+        negs = _negatives(kq, chunk, bank_negs) if a.alpha_cql > 0.0 else bank_negs
         params, tgt, opt, v_params, v_opt = carry
         (_, info), (gp, gv) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(
-            params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc
+            params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs
         )
         up, opt = tx.update(gp, opt, params)
         params = optax.apply_updates(params, up)
@@ -311,6 +421,37 @@ def main():
     aug_key = jax.random.key(1)
     ar_h = np.arange(H)
     pref = np.asarray(prefixes)
+    # ---- CQL negative bank (frozen-BC policy samples), if requested ---------------------------
+    if a.alpha_cql > 0.0 and a.cql_negatives == "bank":
+        if a.cql_bank is None:
+            raise SystemExit("--cql-negatives bank needs --cql-bank <dir from sample_policy_chunks.py>")
+        bank_chunks = np.load(a.cql_bank / "chunks.npy", mmap_mode="r")  # [Nb, K, H, ad]
+        bank_rows = np.load(a.cql_bank / "idx.npy")
+        # The bank is strided over frames, so a training row's own frame is usually not in it; map
+        # each row to the NEAREST sampled frame. The drift is bounded by the bank stride (reported
+        # below); at 30 Hz a stride of s frames is s/30 s of staleness in the conditioning image,
+        # which is well inside the horizon the chunk itself spans.
+        nearest = np.searchsorted(bank_rows, np.arange(N)).clip(0, len(bank_rows) - 1)
+        left = (nearest - 1).clip(0)
+        pick = np.where(
+            np.abs(bank_rows[nearest] - np.arange(N)) <= np.abs(bank_rows[left] - np.arange(N)), nearest, left
+        )
+        drift = np.abs(bank_rows[pick] - np.arange(N))
+        print(
+            f"cql bank: {len(bank_rows)} sampled frames, k={bank_chunks.shape[1]}, "
+            f"row->bank drift mean {drift.mean():.1f} max {drift.max()} frames",
+            flush=True,
+        )
+        n_use = min(a.cql_n, bank_chunks.shape[1])
+
+        def bank_negs_of(gcur):
+            return jnp.asarray(np.asarray(bank_chunks[pick[gcur[: a.cql_batch]]][:, :n_use], np.float32))
+    else:
+        _dummy = jnp.zeros((min(a.cql_batch, a.batch), 1, H, ad), jnp.float32)
+
+        def bank_negs_of(gcur):
+            return _dummy
+
     t0 = time.time()
     for s in range(a.steps):
         idx = rng_np.integers(0, M, size=a.batch)
@@ -365,6 +506,7 @@ def main():
             jnp.asarray(done_nxt),
             jnp.asarray(valid),
             jnp.asarray(mc),
+            bank_negs_of(gcur),
         )
         if wb is not None and s % 100 == 0:
             wb.log({k: float(v) for k, v in info.items()}, step=s)
@@ -375,9 +517,10 @@ def main():
             rate = (s + 1) / (time.time() - t0)
             if s > 20:
                 rate = (s - s_warm) / (time.time() - t_warm)
+            cqls = f"  cql_gap {i['cql_gap']:.2f}" if a.alpha_cql > 0.0 else ""
             print(
                 f"step {s:6d}  q_loss {i['q_loss']:.4f}  v_loss {i['v_loss']:.4f}  q_mean {i['q_mean']:.2f}  "
-                f"v_mean {i['v_mean']:.2f}  ({rate:.2f} it/s)",
+                f"v_mean {i['v_mean']:.2f}{cqls}  ({rate:.2f} it/s)",
                 flush=True,
             )
         if a.save_every and (s + 1) % a.save_every == 0:

@@ -87,10 +87,30 @@ def test_drift_needs_a_scale_to_mean_anything():
 
 
 @pytest.mark.parametrize("arm", ["lps", "lpsd", "flowdagger"])
-def test_only_qpilots_has_a_twin(arm):
+def test_only_a_steering_arm_has_a_twin(arm):
     """The other arms have no alpha to zero out, so there is no same-noise unsteered counterpart.
-    Their reference draws are still recorded; the twin is not invented for them."""
-    assert arm in serving.LATENT_ARMS or arm == "flowdagger"
+    Their reference draws are still recorded; the twin is not invented for them.
+
+    This used to assert `arm in LATENT_ARMS or arm == "flowdagger"` -- true by construction of its
+    own parameter list, and so passing without touching the code it named. It now asks the
+    registry the serving wrapper asks.
+    """
+    sampler = serving.ArmChunkSampler.__new__(serving.ArmChunkSampler)
+    sampler.spec = type("S", (), {"arm": arm})()
+    assert not sampler.offers_unsteered_twin
+
+    sampler.spec = type("S", (), {"arm": "qpilots"})()
+    assert sampler.offers_unsteered_twin
+
+
+def test_the_wrapper_asks_the_registry_instead_of_naming_the_arm():
+    """The migration's contract: `patch_critic_policy` is a selection wrapper and must not carry
+    per-arm logic. Adding a second steering arm should not require an edit there."""
+    import pathlib as _pl
+
+    src = _pl.Path("src/openpi/policies/patch_critic_policy.py").read_text()
+    assert "qpilots" not in src, "arm-specific logic is back in the serving wrapper"
+    assert "offers_unsteered_twin" in src, "it must still ask about the twin, just not by name"
 
 
 def test_the_two_draws_differ_by_alpha_and_by_nothing_else():
@@ -108,27 +128,37 @@ def test_the_two_draws_differ_by_alpha_and_by_nothing_else():
     """
     import inspect
 
-    from openpi.extraction.serving import ArmChunkSampler
+    from openpi.models.pi0_steered import Pi0Steered
 
-    src = inspect.getsource(ArmChunkSampler._steer)
-    loop = src[src.index("for i in range(n):") :]
+    src = inspect.getsource(Pi0Steered.sample_steered)
+    loop = src[src.index("for i in range(num_steps):") :]
     assert "alpha == 0" not in loop.split("#")[0] or True  # comments may discuss it
     code = "\n".join(line for line in loop.splitlines() if not line.strip().startswith("#"))
     assert "alpha == 0" not in code, "the base draw must take the same branch as the steered one"
     assert "if i == 0:" in code, "only the t=0 skip, which both draws share"
 
 
-def test_both_draws_share_one_prefix_pass():
-    """The prefix is computed once and handed to both. Recomputing it per draw would introduce the
-    same accumulation-order difference between the twin and its reference."""
+def test_both_draws_happen_inside_one_compilation():
+    """Two draws, ONE jitted call.
+
+    Each draw now computes its own prefix -- `sample_steered` owns the whole integration, which is
+    the point of moving it -- and that reads like a regression against the previous version, where
+    the prefix was hoisted and shared. It is not: the two are the identical pure subcomputation on
+    identical operands inside a single jit, so XLA folds them. What would be a regression is
+    CALLING the jitted function twice, which puts them in separate compilations where nothing can
+    fold them and the twin costs a second full VLM pass on every reply.
+    """
     import inspect
 
     from openpi.extraction.serving import ArmChunkSampler
 
-    src = inspect.getsource(ArmChunkSampler.__call__)
-    body = src[src.index('spec.arm == "qpilots"') :]
-    assert body.count("self._steer(") == 2, "steered and twin"
-    assert "self._prefix(" not in body, "the prefix comes from above, not from inside the branch"
+    fun = inspect.getsource(ArmChunkSampler._steer_jit.func)
+    assert fun.count("draw(") == 3, "one helper, called for the steered draw and the twin"
+    assert "model.sample_steered(" in fun, "the integration is the model's, not a copy here"
+
+    body = inspect.getsource(ArmChunkSampler.__call__)
+    body = body[body.index('spec.arm == "qpilots"') :]
+    assert body.count("self._steer_jit(") == 1, "one call, not one per draw"
 
 
 def test_the_declared_count_and_the_emitted_count_come_from_one_expression():
@@ -150,7 +180,14 @@ def test_the_declared_count_and_the_emitted_count_come_from_one_expression():
     assert "self._candidate_count(" in emitted, "infer must check what it emits against the count"
 
     counter = inspect.getsource(pcp.PatchCriticSelectPolicy._candidate_count)
-    assert "pair_unsteered" in counter, "the twin only counts when it is actually drawn"
+    assert "_has_twin" in counter, "the twin only counts when it is actually drawn"
+    # ...and the RECORDED layout flag comes from that same expression, so the number of columns and
+    # the meaning of column 1 cannot disagree. They were derived separately, and the analysis side
+    # then inferred the layout from the count alone -- which reported a steering displacement for
+    # best-of-N runs, measured between two independent draws.
+    twin = inspect.getsource(pcp.PatchCriticSelectPolicy._has_twin.fget)
+    assert "pair_unsteered" in twin, "one expression behind both the count and the flag"
+    assert '"critic_twin"' in inspect.getsource(pcp.PatchCriticSelectPolicy.extra_features)
 
 
 def test_the_count_follows_what_is_actually_drawn():
@@ -167,7 +204,7 @@ def test_the_count_follows_what_is_actually_drawn():
     assert p._candidate_count(None) == 8
     assert p._candidate_count(3) == 3
 
-    p._arm = "qpilots"  # arm chunk + twin + references
+    p._arm = "qpilots"  # a steering arm: chunk + twin + references
     p._drift_samples = 8
     p._arm_sampler = type("S", (), {"pair_unsteered": True})()
     assert p._candidate_count(None) == 10

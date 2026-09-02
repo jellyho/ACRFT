@@ -43,6 +43,7 @@ served arm sees exactly the critic's training-time inputs.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import pathlib
 from typing import Any
 
@@ -53,6 +54,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from openpi.models import model as _model
+from openpi.models import pi0_steered as _pi0_steered
 from openpi.training import config as _config
 from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
@@ -63,6 +65,15 @@ CKPT_ROOT = pathlib.Path("/data1/jellyho/acrft_ckpts/extraction")
 
 EXPERT_ARMS = ("awr", "cfgrl", "flowdpg", "qam", "dql")
 LATENT_ARMS = ("lps", "lpsd")
+#: Arms whose CHUNK comes from ArmChunkSampler rather than the served policy's own sampler. The
+#: serving wrapper reuses everything else (patch features, robot-space decode, scoring, HUD), so
+#: it needs to know which modes route here -- and that list belongs with the arms, not in the
+#: wrapper, where it was a second hand-maintained copy of the same four names.
+SAMPLER_ARMS = ("qpilots", *LATENT_ARMS, "flowdagger")
+#: Arms that draw by steering a flow, and so have an alpha=0 twin of the same draw to compare
+#: against. Only qpilots today; the constant exists so that adding a second steering arm is a
+#: one-line change here rather than a hunt for `== "qpilots"` across the serving stack.
+STEERING_ARMS = frozenset({"qpilots"})
 CRITIC_ARMS = ("qpilots", "idql", "bon")
 ALL_ARMS = (*EXPERT_ARMS, *LATENT_ARMS, "flowdagger", *CRITIC_ARMS, "bc")
 
@@ -147,17 +158,35 @@ class ArmChunkSampler:
     served BC policy), so it is loaded here; for qpilots the served policy's own model is used.
     """
 
-    #: Also return the unsteered twin (qpilots only), so a deploy recording can say how far
-    #: steering displaced the action. Off by default: it changes the returned N, and every caller
-    #: that only wants the chunk should keep getting one.
+    #: Also return the unsteered twin, so a deploy recording can say how far steering displaced
+    #: the action. Off by default: it changes the returned N, and every caller that only wants the
+    #: chunk should keep getting one. Only meaningful where `offers_unsteered_twin` is true.
     pair_unsteered: bool = False
+
+    #: `(k, c)` mapping a policy-normalized chunk into the critic's action space, and the critic's
+    #: own horizon. Set by the serving wrapper, which owns both transforms; the identity default is
+    #: correct only when the two were normalized alike, so the wrapper always sets it rather than
+    #: leaving it to chance.
+    to_critic_space: tuple = (1.0, 0.0)
+    critic_horizon: int | None = None
+
+    @property
+    def offers_unsteered_twin(self) -> bool:
+        """Whether an alpha=0 draw of this arm is a meaningful reference for its steered one.
+
+        Asked by the serving wrapper so that it does not have to know which arms steer. It knows
+        it wants a twin; which arms HAVE one is a property of the arm, and the arms live here.
+        """
+        return self.spec.arm in STEERING_ARMS
 
     def __init__(self, spec: ArmSpec, served_model=None):
         self.spec = spec
         if spec.arm == "qpilots" and served_model is not None:
-            # steer the policy that is actually being served, whatever checkpoint it came from
-            self.model = served_model
-            self.graphdef = nnx.graphdef(served_model)
+            # Steer the policy that is actually being served, whatever checkpoint it came from.
+            # Re-tagged as the subclass that owns the steered sampler; it shares the served
+            # model's parameters and leaves the served object itself untouched (see wrap()).
+            self.model = _pi0_steered.Pi0Steered.wrap(served_model)
+            self.graphdef = nnx.graphdef(self.model)
             self.params = jax.device_put(nnx.state(served_model))
             self.H = served_model.action_horizon
             self.AD = served_model.action_dim
@@ -192,26 +221,11 @@ class ArmChunkSampler:
         self.graphdef = nnx.graphdef(self.model)
         self.params = jax.device_put(nnx.state(self.model))
 
-    # ---- pi0.5 sampler pieces (same math as the trainers / eval harness) ----------------------
-    # _prefix / _velocity used to be hand-copies of pi0.py's sampler. They are now the model's own
-    # primitives: a copy that drifts from the served policy does not fail, it silently steers away
-    # from a base that is not the policy being served -- and the same math is duplicated again in
-    # five extraction trainers, so the copies have to converge on ONE implementation, not two.
-    def _prefix(self, model, obs):
-        """``(kv_cache, prefix_mask)`` -- reversed from the model's ``(prefix_mask, kv_cache)``,
-        kept only because every call site below unpacks it this way."""
-        prefix_mask, kv = model._prefix_forward(obs)
-        return kv, prefix_mask
-
-    def _velocity(self, model, obs, kv, pm, x, tau):
-        return model._velocity(obs, pm, kv, x, tau)
-
-    def _euler(self, model, obs, kv, pm, x):
-        n = self.spec.ode_steps
-        dt = 1.0 / n
-        for i in range(n):
-            x = x - dt * self._velocity(model, obs, kv, pm, x, jnp.full((x.shape[0],), 1.0 - i * dt))
-        return x
+    # No sampler pieces live here any more. _prefix / _velocity / _euler were hand-copies of
+    # pi0.py's sampler, and every arm now calls the model instead: qpilots through
+    # Pi0Steered.sample_steered, lps/lpsd through Pi0AlphaFlow.decode_latent, flowdagger through
+    # Pi0.sample_actions(noise=seed). A copy does not fail when it drifts -- it silently serves a
+    # base that is no longer the base being served, which is how this ring once lost nine arms.
 
     def _q(self, feats, chunk, proprio, *, reduce: str):
         logits = self.critic.net.apply({"params": self.critic.params}, feats, chunk, proprio)
@@ -220,43 +234,63 @@ class ArmChunkSampler:
             return q.min(axis=0)
         return q.mean(axis=0) - self.spec.rho * q.std(axis=0)  # pessimistic, QPILOTS Eq. 12
 
-    def _steer(self, model, obs, kv, pm, feats, proprio, ad, x, alpha):
-        """QPILOTS-U Euler integration at steering strength `alpha`. alpha=0 is the base sampler.
+    @functools.cached_property
+    def _steer_jit(self):
+        """`(state, rng, obs, feats, proprio, ad, alpha, paired) -> chunk`, compiled once.
 
-        Kept as ONE path rather than a steered and an unsteered variant: the twin only measures
-        the steering term if everything else about the two draws is identical, and two code paths
-        cannot be identical by inspection for long.
+        Follows nnx_utils.module_jit's shape -- split the module, pass the state, merge inside --
+        because that is what the rest of the repo does and why the other paths compile as one XLA
+        module instead of a pile of eager kernels. `alpha` stays traced, so the steered draw and
+        its alpha=0 twin share a single compilation; `ad` and `paired` are static.
+
+        The integration itself is NOT here. It is `Pi0Steered.sample_steered`, next to the sampler
+        it modifies. What this layer contributes is the one thing the model must not know: what
+        the value IS.
         """
-        n = self.spec.ode_steps
-        dt = 1.0 / n
-        for i in range(n):
-            tv = jnp.full((x.shape[0],), 1.0 - i * dt)
-            if i == 0:
-                # No state-dependent signal at t=0 (paper Sec. 4). Both draws take this branch, so
-                # it is symmetric between them.
-                v = self._velocity(model, obs, kv, pm, x, tv)
-            else:
-                # NOT short-circuited at alpha == 0, though it would save the grad on every base
-                # step. `v` here comes out of jax.grad's forward pass, and a direct _velocity call
-                # is the same math in a different accumulation ORDER -- measured elsewhere in this
-                # repo at 1.2e-02 in bf16 (1.4e-06 in fp32) between a joint and a cached-prefix
-                # attention. Branching on alpha would put that difference between the steered draw
-                # and the twin it is measured against, compounded over every step, and call the
-                # result steering displacement. The twin is worth its cost only if alpha is the
-                # ONLY thing that differs.
+        graphdef = self.graphdef
 
-                def q_of(x_, tv_=tv):
-                    v_ = self._velocity(model, obs, kv, pm, x_, tv_)
-                    a_hat = x_ - tv_[:, None, None] * v_  # Tweedie projection, Eq. 14
-                    a_hat = a_hat + jax.lax.stop_gradient(jnp.clip(a_hat, -1, 1) - a_hat)  # straight-through
-                    return self._q(feats, a_hat[..., :ad], proprio, reduce="pess").sum(), v_
+        ch = self.critic_horizon
 
-                g, v = jax.grad(q_of, has_aux=True)(x)
-                vn = jnp.linalg.norm(v.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
-                gn = jnp.linalg.norm(g.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
-                v = v - alpha * (vn / (gn + 1e-8)) * g  # drift-norm-matched, Eq. 17
-            x = x - dt * v
-        return jnp.clip(x, -1.0, 1.0)
+        def fun(state, rng, obs, feats, proprio, ad, alpha, paired, k, c):
+            model = nnx.merge(graphdef, state)
+            x0 = jax.random.normal(rng, (obs.state.shape[0], self.H, self.AD))
+
+            def value_fn(a_hat):
+                # Into the CRITIC's space before scoring, and this is the whole reason the caller
+                # passes k/c: `a_hat` is normalized by the POLICY's statistics, and the critic was
+                # trained under its own. The selection path has always routed candidates through
+                # physical units for exactly this; steering fed the raw array straight in, so the
+                # gradient it followed was taken in a displaced copy of the critic's space while
+                # the scores RECORDED for the same chunk were taken in the right one.
+                #
+                # Sliced to the critic's horizon too, which the selection path also does: a critic
+                # shorter than the policy's chunk (h30 critic, h50 policy) was otherwise being
+                # handed 50 steps it was never trained to read.
+                a = a_hat[:, :ch, :ad] * k + c
+                return self._q(feats, a, proprio, reduce="pess").sum()
+
+            def draw(a):
+                # preprocess=False: __call__ has already preprocessed, and doing it twice would
+                # put a second normalisation between the two draws.
+                return model.sample_steered(
+                    rng,
+                    obs,
+                    value_fn=value_fn,
+                    alpha=a,
+                    num_steps=self.spec.ode_steps,
+                    noise=x0,
+                    preprocess=False,
+                )
+
+            steered = draw(alpha)
+            if not paired:
+                return steered
+            # The twin: same x0, same observation, same everything but alpha. Both draws recompute
+            # the prefix rather than sharing one pass, which reads as waste and is not: they are
+            # the identical pure subcomputation inside a single jit, so XLA folds them together.
+            return jnp.concatenate([steered, draw(0.0)], axis=0)  # index 0 is what executes
+
+        return jax.jit(fun, static_argnums=(5, 7))
 
     def __call__(self, rng, observation, patches, proprio):
         """-> chunk [N, H, AD] in the model's normalized space (N=1 for these arms).
@@ -265,42 +299,55 @@ class ArmChunkSampler:
         already computed by the serving wrapper for scoring — we reuse them rather than recomputing.
         """
         spec = self.spec
-        model = nnx.merge(self.graphdef, self.params)
         obs = _model.preprocess_observation(None, observation, train=False)
         b = obs.state.shape[0]
         feats = patches if patches.ndim == 3 else patches[None]
         proprio = proprio if proprio.ndim == 2 else proprio[None]
 
+        if spec.arm == "qpilots":
+            # FIRST, and before any eager work: everything this arm needs happens inside
+            # _steer_jit. Reconstructing the 3B model with nnx.merge and running an un-jitted
+            # prefix pass here -- only to have the jitted function compute the prefix again --
+            # cost 3.2 s per inference against 150 ms for best-of-N through the same wrapper.
+            # Measured: with the steering loop reduced to ZERO gradient steps it still took
+            # 3229 ms, which is how the overhead was found to be entirely outside the loop.
+            ad = self.critic.config["action_dim"]
+            k, c = self.to_critic_space
+            if np.ndim(k) != 2:
+                # The scalar default would compile a SECOND graph -- a different shape is a
+                # different jit -- so the warm-up would have warmed one nothing serves and the real
+                # compile would land on a live request. Refuse rather than silently recompile.
+                raise RuntimeError(
+                    "the policy->critic action map was never set; PatchCriticSelectPolicy sets it "
+                    "in _set_critic_space, from both infer and warmup, and both must run."
+                )
+            return self._steer_jit(self.params, rng, obs, feats, proprio, ad, spec.alpha, self.pair_unsteered, k, c)
+
+        # The remaining arms still build the model here; they are single-forward paths, so the
+        # merge is not repeated inside a loop the way qpilots' prefix was.
+        model = nnx.merge(self.graphdef, self.params)
+
         if spec.arm in LATENT_ARMS:
+            # The arm's contribution is the latent; decoding it is the model's, and is called
+            # rather than rebuilt here out of `_u` and a prefix pass.
             rep = jnp.concatenate([feats.mean(axis=1), proprio], axis=-1)
             if spec.arm == "lpsd":
                 rep = jnp.concatenate([rep, jax.random.normal(rng, (b, self.H * self.AD))], axis=-1)
             z = _mlp(self.actor, rep).reshape(b, self.H, self.AD)
-            pm, kv = model._prefix_forward(obs)
-            u = model._u(obs, pm, kv, z, jnp.ones((b,)), jnp.zeros((b,)))
-            return z - u
-
-        kv, pm = self._prefix(model, obs)
+            return model.decode_latent(obs, z, preprocess=False)
 
         if spec.arm == "flowdagger":
+            # Likewise: the arm's contribution is the SEED (a DCT-parameterised displacement of the
+            # noise the policy would otherwise have drawn), and integrating it is the base
+            # sampler's job. `sample_actions` already accepts a seed, so the hand-copied Euler loop
+            # that used to be here was the model's own sampler written out a second time --
+            # measured identical to 1.2e-07, i.e. fp32 round-off, on the dummy variant.
             rep = jnp.concatenate([feats.mean(axis=1), proprio], axis=-1)
             coeffs = _mlp(self.head, rep, tanh_scale=3.0).reshape(b, self.basis.shape[0], self.AD)
             seed = jnp.einsum("kh,bkd->bhd", self.basis, coeffs)
-            return self._euler(model, obs, kv, pm, seed)
-
-        if spec.arm == "qpilots":
-            ad = self.critic.config["action_dim"]
-            x0 = jax.random.normal(rng, (b, self.H, self.AD))
-            steered = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, spec.alpha)
-            if not self.pair_unsteered:
-                return steered
-            # The unsteered twin: SAME noise, SAME cached prefix, alpha = 0. One code path with
-            # alpha as a parameter, so the two differ by the steering term and by nothing else --
-            # comparing against an independently drawn sample would measure the policy's own
-            # spread on top of the displacement, which is a different quantity. This is how
-            # eval_extraction.py pairs offline, so deploy numbers stay commensurable with it.
-            base = self._steer(model, obs, kv, pm, feats, proprio, ad, x0, 0.0)
-            return jnp.concatenate([steered, base], axis=0)  # index 0 is what executes
+            # obs is already preprocessed; preprocess_observation is idempotent at train=False
+            # (resize is a no-op at the right resolution, the mask fill is a fill).
+            return model.sample_actions(rng, obs, num_steps=spec.ode_steps, noise=seed)
 
         raise ValueError(
             f"{spec.arm!r} is not sampled here: bon/idql are the wrapper's own selection path, and "

@@ -15,6 +15,41 @@ There is **one** serving entry point, `scripts/serve_policy.py`. There is no
 `serve_extraction_arm.py` — it existed briefly and was reverted (`8889930`) precisely so that
 there would be one.
 
+### Where an arm's code lives
+
+An arm that changes **how a chunk is drawn** is a property of the policy, so the drawing lives
+with the policy and the arm calls it:
+
+| arm | what it contributes | what it calls |
+|---|---|---|
+| `qpilots` | a value to steer toward | `Pi0Steered.sample_steered(value_fn=…)` |
+| `lps` / `lpsd` | a latent `z` from a small actor | `Pi0AlphaFlow.decode_latent(z)` |
+| `flowdagger` | a DCT-parameterised seed | `Pi0.sample_actions(noise=seed)` |
+
+Each of those used to be a hand-copy of the model's own sampler inside `serving.py`. A copy does
+not fail when it drifts — it silently serves a base that is no longer the base being served.
+
+`Pi0Steered` is `Pi0` plus one sampler and no parameters of its own, so it can wrap a checkpoint
+trained as a plain `Pi0`.
+
+The critic is **injected** into it as `value_fn(a_hat) -> scalar`. That is what keeps the model
+from learning that a critic exists, and it is why one critic can score a BC, an α-Flow or an RLT
+base without any of them knowing about it. It is also what makes the sampler testable: with the
+critic hard-wired, "did steering move the chunk the right way" was not answerable without a trained
+checkpoint and a DINOv2 backbone, so nothing asserted it.
+
+The layers, and what each is allowed to know:
+
+| layer | knows |
+|---|---|
+| `models/*.py` | how to draw a chunk — steered, from a latent, from a seed. Not why. |
+| `extraction/serving.py` | which arms exist, what each one contributes, how to load their heads |
+| `policies/patch_critic_policy.py` | features, scoring, selection, robot-space decode — **no arm names** |
+
+That last row is enforced by a test: `patch_critic_policy.py` contains no arm name at all. It asks
+the arm registry (`offers_unsteered_twin`, `SAMPLER_ARMS`) instead, so a second steering arm is a
+line in `serving.py` rather than an edit spread across the serving stack.
+
 ---
 
 ## Weight-only arms
@@ -87,7 +122,7 @@ uv run scripts/serve_policy.py --port 8000 --critic $CRITIC \
 ```
 
 `--drift-samples N` records, alongside the chunk that actually executes, **the unsteered twin**
-(same noise, same cached prefix, alpha = 0) and **N unconditional draws**. They are references,
+(same noise, same observation, alpha = 0) and **N unconditional draws**. They are references,
 never candidates — the arm's chunk is what runs, and the critic scores the set rather than
 choosing within it.
 
