@@ -196,6 +196,35 @@ def main():
         help="zero the critic's output kernel at init, as DEAS does via use_zero_output=True "
         "(agents/deas.py:380-387, utils/networks.py:50,55-59). Only affects the first few thousand steps.",
     )
+    ap.add_argument(
+        "--value-head",
+        choices=["categorical", "floq"],
+        default="categorical",
+        help="categorical: HL-Gauss logits, read once. floq: the Q-value is the ENDPOINT of a flow "
+        "over a scalar, integrated K Euler steps from uniform noise (arXiv 2509.06863, official "
+        "CMU-AIRe/floq). floq REPLACES the categorical read-out -- HL-Gauss survives only as the "
+        "INPUT encoding of the interpolant, which is what floq itself does.",
+    )
+    ap.add_argument("--floq-steps", type=int, default=8, help="K, floq/agents/floq.py:477; tuned over {4,8,16}")
+    ap.add_argument("--floq-noise-samples", type=int, default=8, help="m, floq/agents/floq.py:475")
+    ap.add_argument(
+        "--floq-kappa",
+        type=float,
+        default=0.1,
+        help="noise_coverage: the interval is [kappa*Q_min, kappa*Q_max] (floq.py:438-439), which "
+        "makes kappa identically the paper's (u-l)/(Q_max-Q_min). Default 0.1 (floq.py:476), swept "
+        "over {0.1, 0.25} by their README. On our support that is l = -277.78, u = 0. Do not jump to "
+        "1.0 for target coverage: floq ablated kappa over {0.01..1.0} and found an interior optimum, "
+        "the stated reason being flow CURVATURE rather than overlap.",
+    )
+    ap.add_argument("--floq-bins", type=int, default=51, help="floq/agents/floq.py:484; 51 EDGES -> a 50-wide encoding")
+    ap.add_argument("--floq-embed-sigma", type=float, default=16.0, help="in BIN WIDTHS, floq/agents/floq.py:485")
+    ap.add_argument(
+        "--floq-reward-offset",
+        type=float,
+        default=0.01,
+        help="pads the z-encoding support only (floq.py:369-370,486), NOT the noise interval",
+    )
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -304,6 +333,15 @@ def main():
     spec["terminal"] = a.terminal
     spec["support"] = a.support
     spec["zero_init_head"] = a.zero_init_head
+    spec["value_head"] = a.value_head
+    if a.value_head == "floq":
+        spec["floq"] = {
+            "steps": a.floq_steps,
+            "noise_samples": a.floq_noise_samples,
+            "kappa": a.floq_kappa,
+            "bins": a.floq_bins,
+            "embed_sigma": a.floq_embed_sigma,
+        }
     spec["critic_arch"] = a.critic_arch
     spec["edac_weight"] = a.edac_weight
     if a.critic_arch == "shared":
@@ -404,6 +442,34 @@ def main():
         net = PatchCriticEnsemble(**_common)
         net_pm = PatchCriticEnsemble(**_common, per_member_actions=True)
     v_net = PatchV(num_atoms=a.num_atoms)
+    # ---- floq: a trunk + a velocity field replace the categorical read-out ----------------------
+    floq_net = floq_trunk = None
+    if a.value_head == "floq":
+        from openpi.patch_critic.critic import PatchFloqVelocity
+        from openpi.patch_critic.critic import PatchTrunk
+
+        # z-encoding support is PADDED past the value range on purpose (floq/agents/floq.py:369-370):
+        #   q_min = (r_min - offset)/(1-g),  q_max = (r_max + offset)/(1-g)
+        _fq_min = (-1.0 - a.floq_reward_offset) / (1.0 - g1)
+        _fq_max = (0.0 + a.floq_reward_offset) / (1.0 - g1)
+        # the NOISE interval is a different range, scaled by kappa at both ends (floq.py:438-439)
+        noise_lo, noise_hi = a.floq_kappa * (-1.0 / (1.0 - g1)), a.floq_kappa * 0.0
+        print(
+            f"floq: K={a.floq_steps} m={a.floq_noise_samples} kappa={a.floq_kappa} "
+            f"noise=[{noise_lo:.2f},{noise_hi:.2f}] zbins={a.floq_bins} zsupport=[{_fq_min:.1f},{_fq_max:.1f}]",
+            flush=True,
+        )
+        floq_trunk = PatchTrunk(num_layers=a.trunk_layers)
+        floq_net = PatchFloqVelocity(
+            action_dim=ad,
+            horizon=H,
+            macro_group_size=a.macro_group_size,
+            num_layers=a.head_layers,
+            num_bins=a.floq_bins,
+            sigma=a.floq_embed_sigma,
+            q_min=_fq_min,
+            q_max=_fq_max,
+        )
     hl = HLGauss(v_min, a.v_max, a.num_atoms, sigma_frac=a.hlg_sigma_frac)
     centers = jnp.asarray(hl.centers)
     prefixes = list(range(a.macro_group_size, H + 1, a.macro_group_size))
@@ -412,6 +478,25 @@ def main():
     rng = jax.random.key(0)
     p2 = jnp.zeros((2, npatch, emb), jnp.float32)
     params = net.init(rng, p2, jnp.zeros((2, H, ad)), jnp.zeros((2, sd)))
+    if a.value_head == "floq":
+        _mh = H // a.macro_group_size
+        _tp = floq_trunk.init(rng, p2, jnp.zeros((2, sd)))
+        _zs = floq_trunk.apply(_tp, p2, jnp.zeros((2, sd)))
+        _vp = floq_net.init(rng, _zs, jnp.zeros((2, H, ad)), jnp.zeros((2, _mh)), jnp.zeros(()))
+        params = {"trunk": _tp, "vel": _vp}
+
+        def flow_q(prm, feats, chunk, prop, *, steps):
+            """Q = psi(1): K Euler steps from uniform noise. floq/agents/floq.py:244-249.
+
+            The trunk is hoisted out of the loop. That is exact, not an approximation: the trunk sees
+            neither the interpolant nor the flow time, so K velocity evaluations share one encoding.
+            """
+            zs = floq_trunk.apply(prm["trunk"], feats, prop)
+            zf = jnp.broadcast_to(jnp.asarray(0.5 * (noise_lo + noise_hi)), (feats.shape[0], _mh))
+            for i in range(steps):
+                zf = zf + floq_net.apply(prm["vel"], zs, chunk, zf, jnp.asarray(i / steps, jnp.float32)) / steps
+            return zf
+
     v_params = v_net.init(rng, p2, jnp.zeros((2, sd)))
     if a.init_params is not None:
         import flax.serialization
@@ -591,6 +676,65 @@ def main():
             "v_mean": jnp.mean(vbar),
         }
 
+    def floq_loss_fn(params, v_params, tgt_p, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc):
+        """floq's flow-matching critic loss, transcribed from floq/agents/floq.py:56-97.
+
+        The categorical read-out is GONE: there are no logits and no cross-entropy. HL-Gauss survives
+        only inside PatchFloqVelocity, as the encoding of the interpolant.
+
+        V stays a separate network and supplies the bootstrap, which is the IQL substitution for
+        floq's `a' ~ pi(s')`; the arithmetic of the target is otherwise floq's
+        (floq.py:41-52) -- a SCALAR y, used directly as the Dirac endpoint x_1, never pushed through
+        a histogram. floq clips only x_0 to [l,u] (floq.py:66) and never clips x_1, so neither do we.
+        """
+        m = a.floq_noise_samples
+        B = pcur.shape[0]
+        # ---- scalar target, exactly the DEAS-shaped backup the categorical mode builds ----------
+        vlog = v_net.apply(
+            jax.lax.stop_gradient(v_params), pnxt.reshape(-1, npatch, emb).astype(jnp.float32), snxt.reshape(-1, sd)
+        ).reshape(-1, P_, a.num_atoms)
+        gam = g2 ** jnp.asarray(prefixes, jnp.float32)
+        next_v = hl.from_logits(vlog)
+        y = cum + gam[None, :] * next_v
+        if a.terminal == "deas":
+            y = cum + jnp.where(done_nxt > 0, gam[None, :] * reward_nxt, 0.0) + gam[None, :] * (1.0 - done_nxt) * next_v
+        else:
+            y = jnp.where(done_nxt > 0, reward_nxt, y)
+        if a.mc_floor:
+            y = jnp.maximum(y, mc[:, None])
+        y = jax.lax.stop_gradient(y)  # [B, P_]
+
+        # ---- flow matching over m independent noise draws (floq.py:58-87) -----------------------
+        k1, k2 = jax.random.split(key)
+        ratios = jax.random.uniform(k1, (B, m, P_))
+        x0 = (1.0 - ratios) * noise_lo + ratios * noise_hi  # floq.py:66
+        x1 = jnp.broadcast_to(y[:, None, :], (B, m, P_))  # the same scalar for every draw = Dirac
+        tt = jax.random.uniform(k2, (B, m))  # floq.py:74-77
+        xt = (1.0 - tt[..., None]) * x0 + tt[..., None] * x1  # floq.py:79
+        vel = x1 - x0  # floq.py:81
+        zs = floq_trunk.apply(params["trunk"], pcur.astype(jnp.float32), scur)
+        # fold the m draws into the batch; the trunk encoding is shared across them
+        zs_m = jnp.repeat(zs, m, axis=0)
+        ch_m = jnp.repeat(chunk, m, axis=0)
+        pred = floq_net.apply(params["vel"], zs_m, ch_m, xt.reshape(B * m, P_), tt.reshape(B * m))
+        per = jnp.sum((pred.reshape(B, m, P_) - vel) ** 2, axis=1)  # floq.py:87 SUMS over draws
+        q_loss = jnp.sum(per * valid) / (jnp.sum(valid) + 1e-8)
+
+        # ---- V: the IQL expectile against the TARGET flow's Q, on scalars -----------------------
+        qbar = jax.lax.stop_gradient(flow_q(tgt_p, pcur.astype(jnp.float32), chunk, scur, steps=a.floq_steps))[:, -1]
+        vbar = hl.from_logits(v_net.apply(v_params, pcur.astype(jnp.float32), scur))
+        u = qbar - vbar
+        wexp = jnp.abs(a.expectile - (u < 0).astype(jnp.float32))
+        v_loss = jnp.mean(wexp * u**2)  # standard IQL squared expectile; Q is a scalar now
+        return q_loss + v_loss, {
+            "q_loss": q_loss,
+            "v_loss": v_loss,
+            "cql_gap": jnp.asarray(0.0),
+            "edac_cos": jnp.asarray(0.0),
+            "q_mean": jnp.mean(qbar),
+            "v_mean": jnp.mean(vbar),
+        }
+
     def _augment(key, x):
         """Occlusion + noise on frozen patch tokens. Scale-free: noise is relative to the batch std."""
         if a.feat_dropout <= 0.0 and a.feat_noise <= 0.0:
@@ -610,6 +754,16 @@ def main():
         pcur, pnxt = _augment(kc, pcur), _augment(kn, pnxt)
         negs = _negatives(kq, chunk, bank_negs) if a.alpha_cql > 0.0 else bank_negs
         params, tgt, opt, v_params, v_opt = carry
+        if a.value_head == "floq":
+            (_, info), (gp, gv) = jax.value_and_grad(floq_loss_fn, argnums=(0, 1), has_aux=True)(
+                params, v_params, tgt, kq, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc
+            )
+            up, opt = tx.update(gp, opt, params)
+            params = optax.apply_updates(params, up)
+            uv, v_opt = tx_v.update(gv, v_opt, v_params)
+            v_params = optax.apply_updates(v_params, uv)
+            tgt = optax.incremental_update(params, tgt, a.target_tau)
+            return (params, tgt, opt, v_params, v_opt), info
         (_, info), (gp, gv) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(
             params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs
         )
