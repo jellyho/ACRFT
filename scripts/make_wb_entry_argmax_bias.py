@@ -158,6 +158,14 @@ q-landscape-ood가 보고한 BC 샘플러 자체의 폭 σ≈{SIGMA_BC}과 같�
 평균-of-std &lt; RMS-of-std 이다. 프로브의 <code>q_landscape.json.gz</code>에서 되돌리면:
 <br><code>pc_sigma=[0.4565, 0.2205], pc_var_frac=[0.544, 0.154] → 총분산 0.4565²/0.544 = 0.383
 → 좌표당 RMS std = √(0.383/420) = 0.0295 → 두 draw 사이 거리 = √2×0.0295 = <b>0.0417</b></code>
+<br><b>4.6배의 분해</b> (frozen probe 360 프레임에서 직접 재현; 네 숫자 모두 4자리 일치):
+<table class='num'><tr><th>단계</th><th>값</th><th>배수</th><th>누구 몫</th></tr>
+<tr><td>이 글이 인용했던 σ</td><td>0.0090</td><td>—</td><td>—</td></tr>
+<tr><td>프로브의 실제 mean-of-std</td><td>0.0185</td><td>2.06×</td><td>낡은 코드 주석. 프로즌 프로브의 값이었던 적이 없다 (워커B가 교체·푸시)</td></tr>
+<tr><td>RMS-of-std (Jensen)</td><td>0.0295</td><td>1.60×</td><td>내가 지목한 기제 — 다만 크기는 <b>1.6배</b>다</td></tr>
+<tr><td>두 draw 사이 거리 (√2)</td><td>0.0417</td><td>1.41×</td><td>내 축은 구름 반경이 아니라 <b>후보−실행 청크 거리</b>다</td></tr>
+</table>
+곱하면 4.63배. 첫 정정은 이 전부를 Jensen으로 돌렸으나 Jensen은 그중 1.6배뿐이다.
 <br>즉 BC 구름은 이 축에서 <b>0.042</b>에 있다. 거기서 멱함수는 <b>+1.74</b>를 주고, 프로브의 독립 실측은
 <b>+1.88 ± 0.62</b> — <b>8% 이내로 일치</b>한다. 14배 잔차도, 그것을 설명하려던 "BC draw가 거리당 더
 적대적"이라는 가설도 <b>필요 없다</b>. 마커가 엉뚱한 자리에 찍혀 있었을 뿐이다.
@@ -263,7 +271,32 @@ q-landscape-ood measured +{BON_PRIOR} — <b>{OVERSHOOT:.0f}x higher</b>. The or
 value does not, and there is a plausible reason: the narrow candidates in this sweep are <b>real actions shifted
 in time</b>, which stay politely on the demonstration manifold, whereas BC draws are <b>samples from a generative
 model</b> and can leave it in directions the data never took, at the same distance. That is a hypothesis —
-<b>higher adversariality per unit distance</b> — and the policy-sample bank tests it directly with this same script.</p>
+<b>higher adversariality per unit distance</b> — and the policy-sample bank tests it directly with this same script.</span></p>
+<div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
+<b>Correction 2 (2026-09-02) — that residual did not exist. The axis was wrong.</b>
+Worker B (ACRFT-WS) flagged the units and their probe's own frozen output settles it. The sigma the
+probe reported as 0.009 is not the frozen probe's value at all, and the quantity it names is
+<code>bc.std(axis=0).mean()</code> (<code>probe_q_landscape.py:177</code>) — the <b>mean over
+coordinates of the per-coordinate std</b>. This entry's axis is <code>norm(delta)/sqrt(H*AD)</code>,
+a <b>per-dimension RMS</b> between two chunks. Recovered from <code>q_landscape.json.gz</code>:
+<br><code>pc_sigma=[0.4565, 0.2205], pc_var_frac=[0.544, 0.154] → total variance 0.4565²/0.544 = 0.383
+→ per-coordinate RMS std = sqrt(0.383/420) = 0.0295 → distance between two draws = sqrt(2)×0.0295 = <b>0.0417</b></code>
+<br><b>The 4.6x, decomposed</b> (reproduced from the frozen probe's 360 frames; all four to four digits):
+<table class='num'><tr><th>step</th><th>value</th><th>factor</th><th>whose</th></tr>
+<tr><td>sigma as this entry quoted it</td><td>0.0090</td><td>—</td><td>—</td></tr>
+<tr><td>the probe's actual mean-of-std</td><td>0.0185</td><td>2.06x</td><td>a stale code comment; never the frozen probe's value (worker B has replaced and pushed it)</td></tr>
+<tr><td>RMS-of-std (Jensen)</td><td>0.0295</td><td>1.60x</td><td>the mechanism I named — but it is <b>1.6x</b> of the gap</td></tr>
+<tr><td>distance between two draws (sqrt 2)</td><td>0.0417</td><td>1.41x</td><td>my axis is a <b>candidate-to-executed distance</b>, not a cloud radius</td></tr>
+</table>
+The product is 4.63x. My first correction charged all of it to Jensen; Jensen is 1.6x of it.
+<br>So the BC cloud sits at <b>0.042</b> on this axis, not 0.009. There the fitted power law gives
+<b>+1.74</b> against the probe's independently measured <b>+1.88 ± 0.62</b> — agreement within <b>8%</b>.
+Neither the 14x residual nor the "BC draws are more adversarial per unit distance" hypothesis invented
+to explain it is needed; the marker was in the wrong place.
+<br>The conclusion is unchanged in direction — the bias at serving width is still <b>one to two control
+steps (~0.06 s)</b>, two orders of magnitude below the wide set's +165. What changed is that two
+independent measurements now <b>agree</b> instead of conflicting.
+</div>
 
 <h3>So the robot's BoN failure is not over-estimation</h3>
 <p>This is where the prescriptions diverge. If bias were the problem, the answer is <b>more pessimism</b>
