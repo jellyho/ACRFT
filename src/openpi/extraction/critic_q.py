@@ -26,6 +26,7 @@ from openpi.patch_critic import spec as critic_spec
 from openpi.patch_critic.critic import HLGauss
 from openpi.patch_critic.critic import PatchCriticEnsemble
 from openpi.patch_critic.critic import PatchV
+from openpi.patch_critic.critic import SharedTrunkCriticEnsemble
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,13 +106,24 @@ def load(critic_dir) -> CriticQ:
         delta=isp["delta_mode"] == "joint",
     )
     pidx = isp.get("proprio_indices")
-    net = PatchCriticEnsemble(
-        action_dim=cc["action_dim"],
-        horizon=cc["horizon"],
-        num_critics=cc["num_critics"],
-        macro_group_size=cc["macro_group_size"],
-        num_atoms=cc["num_atoms"],
-    )
+    common = {
+        "action_dim": cc["action_dim"],
+        "horizon": cc["horizon"],
+        "num_critics": cc["num_critics"],
+        "macro_group_size": cc["macro_group_size"],
+        "num_atoms": cc["num_atoms"],
+    }
+    # Which ensemble was trained is recorded in the checkpoint's own input_spec, so a served critic
+    # cannot be rebuilt with the wrong architecture. Older checkpoints predate the field and are
+    # independent by construction.
+    if isp.get("critic_arch", "independent") == "shared":
+        net = SharedTrunkCriticEnsemble(
+            **common,
+            trunk_layers=isp.get("trunk_layers", 3),
+            head_layers=isp.get("head_layers", 2),
+        )
+    else:
+        net = PatchCriticEnsemble(**common)
 
     def _unwrap(raw):
         # the msgpacks store the full variables dict {"params": ...} (score_critic_cached.py:43,55

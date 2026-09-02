@@ -42,6 +42,30 @@ def main():
     ap.add_argument("--num-atoms", type=int, default=101)
     ap.add_argument("--macro-group-size", type=int, default=5)
     ap.add_argument("--num-critics", type=int, default=2)
+    ap.add_argument(
+        "--critic-arch",
+        choices=["independent", "shared"],
+        default="independent",
+        help="independent: K full PatchARQCritics (the deployed architecture). shared: ONE trunk over "
+        "the action-independent patch/proprio tokens plus K action heads. The trunk split is an exact "
+        "refactor -- patch tokens already cannot attend to the action token -- and it is what makes a "
+        "large K affordable (K=10 independent OOMs an L40S with a single 38.6 GB allocation).",
+    )
+    ap.add_argument("--trunk-layers", type=int, default=3, help="shared arch only")
+    ap.add_argument(
+        "--edac-batch", type=int, default=64, help="rows carrying the EDAC penalty (it costs a second backward)"
+    )
+    ap.add_argument("--head-layers", type=int, default=2, help="shared arch only")
+    ap.add_argument(
+        "--edac-weight",
+        type=float,
+        default=0.0,
+        help="EDAC ensemble-diversity penalty on grad_a Q (An et al., NeurIPS 2021; their `eta`). "
+        "Penalises the pairwise cosine similarity of the members' action-gradients, which is the one "
+        "direction our critics agree along when they should not: worker B measures Q inflating +32.8 "
+        "along grad_a Q against -0.13 along random directions, in all 9 critics, and our own pairwise "
+        "probe puts the cosine at 0.33 for members that share nothing but the recipe (chance 0.049).",
+    )
     ap.add_argument("--reward-scheme", choices=["cost_to_goal"], default="cost_to_goal")
     ap.add_argument("--h-goal", type=int, default=3)
     ap.add_argument("--discount", type=float, default=0.99964)
@@ -178,6 +202,11 @@ def main():
     spec["feat_dropout"] = a.feat_dropout
     spec["feat_noise"] = a.feat_noise
     spec["q_reduction"] = a.q_reduction
+    spec["critic_arch"] = a.critic_arch
+    spec["edac_weight"] = a.edac_weight
+    if a.critic_arch == "shared":
+        spec["trunk_layers"] = a.trunk_layers
+        spec["head_layers"] = a.head_layers
     spec["alpha_cql"] = a.alpha_cql
     spec["cql_negatives"] = a.cql_negatives if a.alpha_cql > 0 else None
     spec["calql"] = bool(a.calql) if a.alpha_cql > 0 else None
@@ -253,10 +282,24 @@ def main():
     from openpi.patch_critic.critic import HLGauss
     from openpi.patch_critic.critic import PatchCriticEnsemble
     from openpi.patch_critic.critic import PatchV
+    from openpi.patch_critic.critic import SharedTrunkCriticEnsemble
 
-    net = PatchCriticEnsemble(
-        action_dim=ad, horizon=H, num_critics=a.num_critics, macro_group_size=a.macro_group_size, num_atoms=a.num_atoms
-    )
+    _common = {
+        "action_dim": ad,
+        "horizon": H,
+        "num_critics": a.num_critics,
+        "macro_group_size": a.macro_group_size,
+        "num_atoms": a.num_atoms,
+    }
+    if a.critic_arch == "shared":
+        _common |= {"trunk_layers": a.trunk_layers, "head_layers": a.head_layers}
+        net = SharedTrunkCriticEnsemble(**_common)
+        # Same parameter tree, but each member differentiates its own copy of the action -- the JAX
+        # form of EDAC's `actions_tile ... .requires_grad_(True)` (snu-mllab/EDAC sac.py).
+        net_pm = SharedTrunkCriticEnsemble(**_common, per_member_actions=True)
+    else:
+        net = PatchCriticEnsemble(**_common)
+        net_pm = PatchCriticEnsemble(**_common, per_member_actions=True)
     v_net = PatchV(num_atoms=a.num_atoms)
     hl = HLGauss(v_min, a.v_max, a.num_atoms)
     centers = jnp.asarray(hl.centers)
@@ -363,6 +406,34 @@ def main():
             # means "one span-fraction of conservatism per nat of TD loss".
             cql_loss = a.alpha_cql * cql_gap / (a.v_max - v_min)
 
+        # ---- EDAC ensemble-diversity penalty on grad_a Q ---------------------------------------
+        # An et al., "Uncertainty-Based Offline RL with Diversified Q-Ensemble" (NeurIPS 2021).
+        # Transcribed from the official snu-mllab/EDAC sac.py: tile the action so every member
+        # differentiates its OWN copy, L2-normalise each member's gradient, take all pairwise dot
+        # products, zero the diagonal, sum, average over the batch, divide by (num_qs - 1):
+        #     qs_pred_grads = qs_pred_grads / (torch.norm(..., p=2, dim=2).unsqueeze(-1) + 1e-10)
+        #     qs_pred_grads = torch.einsum('bik,bjk->bij', qs_pred_grads, qs_pred_grads)
+        #     qs_pred_grads = (1 - masks) * qs_pred_grads
+        #     grad_loss = torch.mean(torch.sum(qs_pred_grads, dim=(1,2))) / (self.num_qs - 1)
+        # Our gradient is taken on the FULL-CHUNK prefix, which is the value steering differentiates.
+        edac_loss = jnp.asarray(0.0)
+        edac_cos = jnp.asarray(0.0)
+        if a.edac_weight > 0.0 and a.num_critics > 1:
+            K = a.num_critics
+            Be = min(a.edac_batch, pcur.shape[0])
+            pc_e, sc_e, ch_e = pcur[:Be].astype(jnp.float32), scur[:Be], chunk[:Be]
+
+            def _q_per_member(ck):
+                return from_logits(net_pm.apply(params, pc_e, ck, sc_e)[:, :, -1, :]).sum()
+
+            g = jax.grad(_q_per_member)(jnp.broadcast_to(ch_e, (K, *ch_e.shape)))  # [K, Be, H, ad]
+            gf = g.reshape(K, Be, -1)
+            gf = gf / (jnp.linalg.norm(gf, axis=-1, keepdims=True) + 1e-10)
+            sim = jnp.einsum("bik,bjk->bij", jnp.transpose(gf, (1, 0, 2)), jnp.transpose(gf, (1, 0, 2)))
+            sim = sim * (1.0 - jnp.eye(K))
+            edac_cos = jnp.sum(sim) / (Be * K * (K - 1))  # mean off-diagonal cosine, for the log
+            edac_loss = a.edac_weight * jnp.mean(jnp.sum(sim, axis=(1, 2))) / (K - 1)
+
         qd_log = net.apply(jax.lax.stop_gradient(tgt_p), pcur.astype(jnp.float32), chunk, scur)[:, :, -1, :]
         qd_probs = jnp.mean(jax.nn.softmax(qd_log, -1), 0)
         qbar = (jnp.min if a.q_reduction == "min" else jnp.mean)(from_logits(qd_log), 0)
@@ -372,10 +443,11 @@ def main():
         wexp = jnp.abs(a.expectile - (u < 0).astype(jnp.float32))
         v_ce = -jnp.sum(jax.lax.stop_gradient(qd_probs) * jax.nn.log_softmax(vlog_c, -1), -1)
         v_loss = jnp.sum(wexp * v_ce) / u.shape[0]
-        return q_loss + v_loss + cql_loss, {
+        return q_loss + v_loss + cql_loss + edac_loss, {
             "q_loss": q_loss,
             "v_loss": v_loss,
             "cql_gap": cql_gap,
+            "edac_cos": edac_cos,
             "q_mean": jnp.mean(from_logits(pred)),
             "v_mean": jnp.mean(vbar),
         }
@@ -518,6 +590,7 @@ def main():
             if s > 20:
                 rate = (s - s_warm) / (time.time() - t_warm)
             cqls = f"  cql_gap {i['cql_gap']:.2f}" if a.alpha_cql > 0.0 else ""
+            cqls += f"  edac_cos {i['edac_cos']:.3f}" if a.edac_weight > 0.0 else ""
             print(
                 f"step {s:6d}  q_loss {i['q_loss']:.4f}  v_loss {i['v_loss']:.4f}  q_mean {i['q_mean']:.2f}  "
                 f"v_mean {i['v_mean']:.2f}{cqls}  ({rate:.2f} it/s)",
