@@ -404,26 +404,38 @@ def fig_33_q_landscape():
     if not probe.exists():
         print(f"  (skip fig_33: {probe.name} not present)")
         return
-    # The single-critic panel is PINNED to the checkpoint the report's prose quotes. Left to the
-    # default it takes whichever critic sorts first, and the figure would then illustrate numbers
+    # The single-critic panels are PINNED to the checkpoint the report's prose quotes. Left to the
+    # default they take whichever critic sorts first, and the figures would then illustrate numbers
     # measured on a different one -- silently, since both are real measurements.
     anatomy = "patch_critic_yam_s347_fixed_tau9_min_200k"
-    for script, out, extra in (
-        ("plot_q_landscape.py", "33_q_landscape.png", ["--critic-name", anatomy]),
-        ("plot_q_landscape_critics.py", "33_q_landscape_critics.png", []),
-    ):
-        subprocess.run(
+    root = str(ROOT)
+    jobs = (
+        # (script, extra args) -- plot_ood writes two files, so it is passed both output paths
+        (
+            "plot_ood.py",
             [
-                sys.executable,
-                str(ROOT / "scripts" / script),
-                "--probe",
-                str(probe),
-                "--out",
-                str(P / out),
+                "--critic-name",
+                anatomy,
+                "--out-bon",
+                str(P / "33_ood_1_bon.png"),
+                "--out-steer",
+                str(P / "33_ood_2_steering.png"),
                 "--summary",
-                str(P / out.replace(".png", "_summary.json")),
-                *extra,
+                str(P / "33_ood_summary.json"),
             ],
+        ),
+        (
+            "plot_ood_axes.py",
+            ["--root", root, "--out", str(P / "33_ood_3_axes.png"), "--summary", str(P / "33_ood_axes_summary.json")],
+        ),
+        (
+            "plot_q_landscape_critics.py",
+            ["--out", str(P / "33_ood_4_critics.png"), "--summary", str(P / "33_ood_critics_summary.json")],
+        ),
+    )
+    for script, extra in jobs:
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / script), "--probe", str(probe), *extra],
             check=True,
         )
 

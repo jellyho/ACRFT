@@ -40,26 +40,40 @@ def axes_of(name: str) -> dict:
     }
 
 
-def _ci(x, axis=0):
+def _ci(x, groups=None):
+    """Mean and 95% t half-width. With `groups` (one episode id per row) the CI is clustered by
+    episode: two frames from the same trajectory are not independent draws, and a frame-level band
+    is too narrow. Without groups the rows ARE the unit (e.g. one row per critic)."""
     from scipy import stats
 
-    m = x.mean(axis=axis)
-    n = x.shape[axis]
+    x = np.asarray(x, np.float64)
+    if groups is not None:
+        keys = sorted(set(groups))
+        x = np.stack([x[[i for i, g in enumerate(groups) if g == k]].mean(axis=0) for k in keys])
+    n = x.shape[0]
+    m = x.mean(axis=0)
     if n < 2:
         return m, np.zeros_like(m)
-    return m, x.std(axis=axis, ddof=1) / np.sqrt(n) * stats.t.ppf(0.975, n - 1)
+    return m, x.std(axis=0, ddof=1) / np.sqrt(n) * stats.t.ppf(0.975, n - 1)
 
 
 def curves(rows, name):
-    """Per-frame Q(t) - Q(demonstrator), for one critic. [F, T]"""
-    got = [r["critics"][name] for r in rows if name in r["critics"]]
+    """Per-frame Q(t) - Q(demonstrator), for one critic. [F, T], plus the episode of each frame.
+
+    Each estimator is referenced to ITSELF applied to the demonstrator; scoring `min` against a
+    `mean` anchor offsets the whole curve by the ensemble half-gap and makes it look as though the
+    critic already beats the demonstrator at t=0.
+    """
+    got = [(r["episode"], r["critics"][name]) for r in rows if name in r["critics"]]
+    eps = [e for e, _ in got]
+    got = [g for _, g in got]
     ray = np.asarray([g["q_absray"] for g in got], np.float32)  # [F, K, T]
     data = np.asarray([g["q_data"] for g in got], np.float32)[..., 0]  # [F, K]
-    anchor = data.mean(axis=1)[:, None]
     return {
-        "mean": ray.mean(axis=1) - anchor,
-        "min": ray.min(axis=1) - anchor,
-        "pess": (ray.mean(axis=1) - RHO * ray.std(axis=1)) - anchor,
+        "eps": eps,
+        "mean": ray.mean(axis=1) - data.mean(axis=1)[:, None],
+        "min": ray.min(axis=1) - data.min(axis=1)[:, None],
+        "pess": (ray.mean(axis=1) - RHO * ray.std(axis=1)) - (data.mean(axis=1) - RHO * data.std(axis=1))[:, None],
         "std": ray.std(axis=1),
         "bc": np.asarray([g["q_bc"] for g in got], np.float32),
         "data": data,
@@ -89,7 +103,8 @@ def main(a):
         for i, v in enumerate(vals):
             sub = [n for n in names if axes_of(n)[key] == v]
             stack = np.concatenate([C[n]["mean"] for n in sub])
-            m, h = _ci(stack)
+            gr = [f"{n}|{e}" for n in sub for e in C[n]["eps"]]  # critic x episode
+            m, h = _ci(stack, gr)
             lab = f"{key}={v}  (n={len(sub)})"
             ax.plot(ts, m, color=PALETTE[i], lw=2, label=lab)
             ax.fill_between(ts, m - h, m + h, color=PALETTE[i], alpha=0.2, lw=0)
@@ -103,7 +118,7 @@ def main(a):
     # 3: the whole set, one line each -- is anyone flat?
     ax = axes[2]
     for i, n in enumerate(sorted(names)):
-        m, _ = _ci(C[n]["mean"])
+        m, _ = _ci(C[n]["mean"], C[n]["eps"])
         ax.plot(ts, m, color=PALETTE[i % len(PALETTE)], lw=1.6, label=re.sub(r"^patch_critic_yam_s347_|_200k$", "", n))
     ax.axhline(0, color=GRAY, ls="--", lw=1)
     ax.axvline(1.0, color=GRAY, ls=":", lw=1)
@@ -115,12 +130,12 @@ def main(a):
     # 4: how much of the rise pessimism removes, per critic. The bar is what min() is worth --
     # the quantity bon relies on and steering's rho approximates.
     ax = axes[3]
-    order = sorted(names, key=lambda n: _ci(C[n]["mean"])[0][-1])
+    order = sorted(names, key=lambda n: _ci(C[n]["mean"], C[n]["eps"])[0][-1])
     xs = np.arange(len(order))
-    mm = np.array([_ci(C[n]["mean"])[0][-1] for n in order])
-    mh = np.array([_ci(C[n]["mean"])[1][-1] for n in order])
-    pm = np.array([_ci(C[n]["min"])[0][-1] for n in order])
-    ph = np.array([_ci(C[n]["min"])[1][-1] for n in order])
+    mm = np.array([_ci(C[n]["mean"], C[n]["eps"])[0][-1] for n in order])
+    mh = np.array([_ci(C[n]["mean"], C[n]["eps"])[1][-1] for n in order])
+    pm = np.array([_ci(C[n]["min"], C[n]["eps"])[0][-1] for n in order])
+    ph = np.array([_ci(C[n]["min"], C[n]["eps"])[1][-1] for n in order])
     ax.barh(xs - 0.2, mm, height=0.38, xerr=mh, color=PALETTE[0], label="mean", error_kw={"lw": 1})
     ax.barh(xs + 0.2, pm, height=0.38, xerr=ph, color=PALETTE[1], label="min", error_kw={"lw": 1})
     ax.set_yticks(xs)
@@ -139,9 +154,9 @@ def main(a):
     summary = {"frames": len(rows), "rho": RHO, "abs_ts": ts.tolist(), "critics": {}}
     for n in names:
         c = C[n]
-        m, h = _ci(c["mean"])
-        mn, hn = _ci(c["min"])
-        sd, _ = _ci(c["std"])
+        m, h = _ci(c["mean"], c["eps"])
+        mn, hn = _ci(c["min"], c["eps"])
+        sd, _ = _ci(c["std"], c["eps"])
         summary["critics"][n] = {
             **axes_of(n),
             "dq_mean_end": [float(m[-1]), float(h[-1])],

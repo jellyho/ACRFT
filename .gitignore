@@ -183,3 +183,7 @@ third_party/robosuite-gr1/
 hub_figs/
 q_landscape.json
 q_landscape*_summary.json
+probe_base_*.json
+probe_rollout_*.json
+probe_n50.json
+ood_*summary.json

@@ -196,8 +196,33 @@ def probe_frame(pb, obs, bc_norm, norm_state, data_chunk, *, ray_sigmas, abs_ts,
     # question "is off-support overestimated" actually lives.
     ray = np.stack([centre + t * sigma * e1 for t in ray_sigmas])
     absray = np.stack([centre + t * e1 for t in abs_ts])
+    # THE CONTROL. grad_a Q is by definition the direction Q rises fastest, so "Q rises along it"
+    # is not a finding on its own -- the finding has to be how far it keeps rising, and against
+    # WHAT. These are the same distances along random unit directions and along the direction of
+    # the demonstrator's own action, which is the honest baseline the ray has to beat.
+    rr = np.random.default_rng(1234)
+    rnd = [_unit(rr.normal(size=e1.shape).astype(np.float32)) for _ in range(3)]
+    randray = np.stack([centre + t * u for u in rnd for t in abs_ts])
     ts = np.linspace(-grid_abs, grid_abs, grid_n)
     grid = np.stack([centre + x * e1 + y * e2 for x in ts for y in ts])
+
+    # ---- the same field, in the plane the POLICY actually varies in --------------------------
+    # The grid above is spanned by grad_a Q and something orthogonal to it, which answers "what
+    # does the exploit direction cost" but shows the BC cloud as a single dot -- sigma is ~0.009
+    # and the plane is 2 units wide. To see the cloud AND the field around it, project onto the
+    # top two principal components OF THE DRAWS THEMSELVES: the two directions this policy is
+    # actually uncertain about at this state.
+    #
+    # Rendered at two zooms, and the pair is the whole point:
+    #   near  +/-4 sigma of the cloud   what best-of-N can reach -- it only ever picks a draw
+    #   far   +/-1 in normalized units  what steering can reach -- the box, with the cloud a dot
+    flat = bc.reshape(len(bc), -1) - centre.reshape(1, -1)
+    _u, sv, vt = np.linalg.svd(flat, full_matrices=False)
+    pc = [vt[i].reshape(centre.shape) for i in (0, 1)]
+    psig = [float(sv[i] / max(len(bc) - 1, 1) ** 0.5) for i in (0, 1)]  # std along each component
+    pts = np.linspace(-1, 1, grid_n)
+    near = np.stack([centre + (a * 4 * psig[0]) * pc[0] + (b * 4 * psig[1]) * pc[1] for a in pts for b in pts])
+    far = np.stack([centre + a * pc[0] + b * pc[1] for a in pts for b in pts])
 
     out = {
         "sigma": sigma,
@@ -206,12 +231,48 @@ def probe_frame(pb, obs, bc_norm, norm_state, data_chunk, *, ray_sigmas, abs_ts,
         "grid_ts": [float(t) for t in ts],
         "grad_norm": float(np.linalg.norm(g)),
     }
-    for name, arr in (("bc", bc), ("ray", ray), ("absray", absray), ("grid", grid)):
+
+    # Where everything sits in that plane, so the figure can draw the cloud, the demonstrator and
+    # the exploit direction on top of the field instead of asserting where they are.
+    def proj(v):
+        d = (v - centre).reshape(-1)
+        return [float(d @ pc[0].reshape(-1)), float(d @ pc[1].reshape(-1))]
+
+    # How much of the exploit direction lies inside the subspace the policy actually varies in.
+    # The top-2 plane is only ~69% of the draws' variance, so a gradient sitting in PC5 would make
+    # a "mostly out of plane" claim from the 2D projection wrong. This is the honest version: the
+    # projection onto the FULL span of the centred draws (at most N-1 = 15 of 420 dimensions).
+    # A random unit vector would land 15/420 = 3.6% of its energy there by chance, so that is the
+    # number this has to beat to mean anything.
+    qbasis, _ = np.linalg.qr(flat.T)  # [D, <=N] orthonormal basis of the draws' span
+    e1flat = e1.reshape(-1)
+    span_frac = float(((e1flat @ qbasis) ** 2).sum())
+    out_extra = {
+        "grad_in_draw_span": span_frac,
+        "n_rand_dirs": len(rnd),
+        "draw_span_dim": int(qbasis.shape[1]),
+        "grad_in_draw_span_chance": float(qbasis.shape[1] / e1flat.size),
+        "pc_sigma": psig,
+        "pc_var_frac": [float(x) for x in (sv**2 / max((sv**2).sum(), 1e-12))[:2]],
+        "proj_bc": [proj(x) for x in bc],
+        "proj_grad": proj(centre + e1),  # unit step along the exploit direction
+    }
+    for name, arr in (
+        ("bc", bc),
+        ("ray", ray),
+        ("absray", absray),
+        ("randray", randray),
+        ("grid", grid),
+        ("near", near),
+        ("far", far),
+    ):
         q = pb.q_members(feats, pro, arr)  # [K, N]
         out[f"q_{name}"] = q.tolist()
         out[f"outbox_{name}"] = float(((arr < -1) | (arr > 1)).mean())
     d = pb.dataset_to_critic_space(data_chunk, raw_state)
     out["q_data"] = pb.q_members(feats, pro, d).tolist()
+    out |= out_extra
+    out["proj_data"] = proj(d[0])
     return out
 
 
@@ -248,11 +309,21 @@ def main(a):
             if line.strip():
                 d = json.loads(line)
                 outcomes[int(d["episode"])] = d
-    # Successful episodes only: the anchor has to be an action that actually reached the goal, or
-    # "the critic beats the demonstrator" says nothing.
-    eps = sorted(e for e, d in outcomes.items() if d.get("outcome") == "success")
+    # Successful episodes only, BY DEFAULT: the anchor has to be an action that actually reached
+    # the goal, or "the critic beats the demonstrator" says nothing.
+    #
+    # --all-outcomes turns that off, for probing a ROLLOUT dataset. There the anchor is not a
+    # demonstrator at all -- it is what the deployed policy executed -- so the anchored numbers
+    # change meaning and only the anchor-free ones (the SLOPE away from the BC mean, the
+    # cross-critic disagreement) are comparable with the demonstration run. Restricting a rollout
+    # to its successes would also select exactly the states where nothing went wrong, which is the
+    # opposite of what the comparison is for.
+    if a.all_outcomes:
+        eps = sorted(outcomes) or sorted(range(reader.num_episodes))
+    else:
+        eps = sorted(e for e, d in outcomes.items() if d.get("outcome") == "success")
     if not eps:
-        raise SystemExit(f"no successful episodes in {op}; the anchor would be meaningless")
+        raise SystemExit(f"no episodes selected from {op}; the anchor would be meaningless")
     logging.info("%d successful episodes of %d", len(eps), len(outcomes))
 
     rng = jax.random.key(a.seed)
@@ -365,6 +436,9 @@ if __name__ == "__main__":
     ap.add_argument("--abs-step", type=float, default=0.1)
     ap.add_argument("--grid-max", type=float, default=2.0, help="2D slice half-width, absolute normalized units")
     ap.add_argument("--grid-n", type=int, default=21)
+    ap.add_argument(
+        "--all-outcomes", action="store_true", help="probe every episode, not just successes (for rollout datasets)"
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="q_landscape.json")
     main(ap.parse_args())
