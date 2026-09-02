@@ -529,7 +529,8 @@ class LeRobotYAMDataConfig(DataConfigFactory):
     # Train on successful episodes only. The YAM teleop set is 100 success / 19 fail; with this off
     # (the default) BC clones the failures too, which is what a critic wants as negatives later but
     # is not what a clean BC policy wants. On, it resolves the success episode list from
-    # outcomes.jsonl and trains (and computes norm stats) on exactly those.
+    # the dataset's own verdict features (next.success / next.done) and trains (and computes norm
+    # stats) on exactly those.
     success_only: bool = False
 
     @override
@@ -577,8 +578,11 @@ class LeRobotYAMDataConfig(DataConfigFactory):
             episodes = _progress.success_episode_indices(self.repo_id, reward_key=self.reward_key)
             if episodes is None:
                 raise ValueError(
-                    f"success_only=True but {self.repo_id} has no outcomes.jsonl and no "
-                    f"'{self.reward_key}' column to derive success from."
+                    f"success_only=True but {self.repo_id} carries no episode verdicts "
+                    f"(next.success / next.done features) and no '{self.reward_key}' column to derive "
+                    "success from. A dataset recorded before the verdict moved into the LeRobot schema "
+                    "still has its outcomes.jsonl next to it: migrate it with the recorder's "
+                    "`workstation/yam-data migrate-outcomes <dataset-dir>` (i2rt_rllab)."
                 )
             episodes = tuple(episodes)
         return dataclasses.replace(
@@ -1605,7 +1609,7 @@ def _yam_rlt_config(delta_mode: str = "joint", horizon: int = 30) -> TrainConfig
         data=LeRobotYAMDataConfig(
             repo_id="jellyho/yam_lego_taxi",
             delta_mode=delta_mode,
-            include_progress=False,  # success is episode-level (outcomes.jsonl), no per-frame reward
+            include_progress=False,  # success is episode-level (next.success on the last frame), no per-frame reward
             base_config=DataConfig(prompt_from_task=True),
         ),
         batch_size=32,

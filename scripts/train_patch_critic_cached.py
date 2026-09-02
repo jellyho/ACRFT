@@ -18,6 +18,7 @@ import numpy as np
 
 from openpi.patch_critic import preproc as critic_preproc
 from openpi.patch_critic import spec as critic_spec
+import openpi.training.outcomes as _outcomes
 
 # reuse the validated target math + checkpoint writer from the clip trainer
 from scripts.train_patch_critic_clip import _save
@@ -27,7 +28,11 @@ from scripts.train_patch_critic_clip import analytic_targets
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", type=pathlib.Path, required=True, help="dir from cache_patch_features.py")
-    ap.add_argument("--outcomes", required=True)
+    ap.add_argument(
+        "--outcomes",
+        default=None,
+        help="legacy outcomes.jsonl (deprecated: the verdict is read from the dataset's next.success / next.done)",
+    )
     ap.add_argument("--homing-onsets", type=pathlib.Path, default=None)
     ap.add_argument(
         "--truncate-homing",
@@ -205,11 +210,7 @@ def main():
         actions = np.ascontiguousarray(actions)
         print(f"preloaded cache into RAM ({feats.nbytes / 1e9:.0f}GB features) in {_t.time() - _t0:.0f}s", flush=True)
 
-    outc = {}
-    for line in pathlib.Path(a.outcomes).read_text().splitlines():
-        if line.strip():
-            r = json.loads(line)
-            outc[int(r["episode"])] = r["outcome"]
+    outc = _outcomes.cache_outcomes(meta, legacy_jsonl=a.outcomes)
     homing = json.loads(a.homing_onsets.read_text()) if a.homing_onsets is not None else None
 
     # Build the flat table of valid CURRENT frames (homing tail dropped for failures at train time).
