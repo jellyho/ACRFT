@@ -28,6 +28,7 @@ import torch
 import openpi.models.model as _model
 from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
+import openpi.training.outcomes as _outcomes
 import openpi.transforms as _transforms
 
 try:
@@ -36,18 +37,21 @@ except ImportError:  # lerobot < 0.4
     from lerobot.common.datasets import lerobot_dataset
 
 
-def _episode_tables(outcomes_path, homing_path, h_goal, discount, v_min, failure_reward):
-    """Per-episode arrays: length, success flag, terminal frame index, in exact house conventions."""
-    outcomes = [json.loads(line) for line in pathlib.Path(outcomes_path).read_text().splitlines() if line.strip()]
+def _episode_tables(ds_root, outcomes_path, homing_path, h_goal, discount, v_min, failure_reward):
+    """Per-episode arrays: length, success flag, terminal frame index, in exact house conventions.
+
+    Verdicts and lengths come from the dataset's own metadata (``next.success`` / ``next.done`` per-episode
+    stats); ``outcomes_path`` names a legacy sidecar and is only honoured when given explicitly."""
+    outcomes = _outcomes.load_outcomes(ds_root, legacy_jsonl=outcomes_path)
+    lengths = _outcomes.episode_lengths(ds_root)
     homing = json.loads(pathlib.Path(homing_path).read_text())
-    n_ep = len(outcomes)
+    n_ep = len(lengths)
     length = np.zeros(n_ep, np.int64)
     succ = np.zeros(n_ep, bool)
     term = np.zeros(n_ep, np.int64)  # first absorbing frame: T - h_goal (success) | onset - 1 (failure)
-    for entry in outcomes:
-        e = int(entry["episode"])
-        length[e] = int(entry["frames"])
-        succ[e] = entry["outcome"] == "success"
+    for e, n in lengths.items():
+        length[e] = int(n)
+        succ[e] = outcomes.get(e) == "success"
         if succ[e]:
             term[e] = max(length[e] - h_goal, 1)
         else:
@@ -67,8 +71,8 @@ class YamFQLTransitions(torch.utils.data.Dataset):
         horizon: int,
         bc_assets_dir: str,
         asset_id: str = "jellyho/yam_lego_taxi",
-        outcomes_path: str,
         homing_path: str,
+        outcomes_path: str | None = None,
         h_goal: int = 3,
         discount: float = 0.99964,
         failure_reward: float | None = None,
@@ -116,7 +120,7 @@ class YamFQLTransitions(torch.utils.data.Dataset):
         self._ds = ds
 
         self._len, self._succ, self._term = _episode_tables(
-            outcomes_path, homing_path, h_goal, discount, self.v_min, self.failure_reward
+            pathlib.Path(root) / repo_id, outcomes_path, homing_path, h_goal, discount, self.v_min, self.failure_reward
         )
         # LeRobot v3 global frame order is episode-major; starts from the episode lengths
         self._ep_start = np.concatenate([[0], np.cumsum(self._len)[:-1]])

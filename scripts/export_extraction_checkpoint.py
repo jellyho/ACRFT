@@ -4,9 +4,9 @@ The extraction trainers save only the trained subtree (`{"expert": ...}`) becaus
 they touch. Serving must not know about that: this writes a normal `<out>/params` + `<out>/assets`
 checkpoint, so the arm is served by the one serving entry point with no special path:
 
-    uv run python scripts/export_extraction_checkpoint.py --arm dql
+    uv run python scripts/export_extraction_checkpoint.py --arm qam
     uv run python scripts/serve_policy.py --policy.config pi05_yam_lego_taxi \\
-        --policy.dir /data1/jellyho/acrft_ckpts/extraction/exported/dql_30000
+        --policy.dir /data1/jellyho/acrft_ckpts/extraction/exported/qam_30000
 
 CFGRL keeps its own train config (`pi05_yam_lego_taxi_cfgrl`) because its model carries the
 optimality embedding and samples with classifier-free guidance; the export is otherwise identical.
@@ -21,7 +21,7 @@ import shutil
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", required=True, choices=["awr", "cfgrl", "flowdpg", "qam", "dql"])
+    ap.add_argument("--arm", required=True, choices=["awr", "cfgrl", "flowdpg", "qam", "fqlx"])
     ap.add_argument("--step", type=int, default=None, help="checkpoint step (default: latest)")
     ap.add_argument("--run", default="run1")
     ap.add_argument("--base-config", default="pi05_yam_lego_taxi", help="the task config the arm was trained on")

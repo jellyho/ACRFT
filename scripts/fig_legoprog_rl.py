@@ -3,7 +3,7 @@
 Base policy = BC h30; fixed_* critics deploy as best-of-N chunk selection, g5_* critics as
 adaptive prefix selection. progress 0..4, 10 rollouts per arm. Reference lines = the same
 base policy without any critic (bc30_ex_10 / bc30_ex_30 from the upper block).
-Source of record: .scratch/legoprog_v2.xlsx. Run: uv run --with openpyxl python scripts/fig_legoprog_rl.py
+Source of record: .scratch/legoprog_v3.xlsx. Run: uv run --with openpyxl python scripts/fig_legoprog_rl.py
 """
 
 # ruff: noqa: E402, ICN001  (matplotlib.use must precede pyplot; probe-local imports intentional)
@@ -25,7 +25,7 @@ import plot_style
 plot_style.apply()
 PAL = plot_style.PALETTE
 
-ws = load_workbook(R / ".scratch/legoprog_v2.xlsx")["Sheet1"]
+ws = load_workbook(R / ".scratch/legoprog_v3.xlsx")["Sheet1"]
 
 
 def block(header_row):

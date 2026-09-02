@@ -24,6 +24,8 @@ import time
 
 import numpy as np
 
+import openpi.training.outcomes as _outcomes
+
 CAMS = ["observation.images.agentview", "observation.images.wrist_left", "observation.images.wrist_right"]
 
 
@@ -95,7 +97,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi")
     ap.add_argument("--root", default="/data5/jellyho/yam_v2/lerobot")
-    ap.add_argument("--outcomes", required=True)
+    ap.add_argument(
+        "--outcomes",
+        default=None,
+        help="legacy outcomes.jsonl (deprecated: the verdict is read from the dataset's next.success / next.done)",
+    )
     ap.add_argument("--img-size", type=int, default=224)
     ap.add_argument("--backbone", default="small")
     ap.add_argument(
@@ -170,11 +176,7 @@ def main():
     from openpi.patch_critic.critic import PatchV
     from openpi.training.critic_data_loader import CriticClipDataset
 
-    outc = {}
-    for line in pathlib.Path(a.outcomes).read_text().splitlines():
-        if line.strip():
-            r = json.loads(line)
-            outc[int(r["episode"])] = r["outcome"]
+    outc = _outcomes.load_outcomes(_outcomes.dataset_root(a.repo_id, a.root), legacy_jsonl=a.outcomes)
 
     homing = json.loads(a.homing_onsets.read_text()) if a.homing_onsets is not None else None
     ds = CriticClipDataset(

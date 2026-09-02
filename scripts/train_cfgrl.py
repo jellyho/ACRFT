@@ -36,6 +36,12 @@ def main():
     ap.add_argument(
         "--out", type=pathlib.Path, default=pathlib.Path("/data1/jellyho/acrft_ckpts/extraction/cfgrl_run1")
     )
+    ap.add_argument(
+        "--train-backbone",
+        action="store_true",
+        help="train the WHOLE model, as the BC finetune did (no freeze_filter) -- otherwise only the "
+        "action expert, which keeps arms comparable but gives them a smaller budget than BC",
+    )
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-entity", default="jellyho_")
     ap.add_argument("--wandb-name", default="extract_cfgrl_run1")
@@ -73,6 +79,10 @@ def main():
         nnx_utils.PathRegex(".*llm.*_1.*"),
         nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)|state_proj|opt_embed).*"),
     )
+    if a.train_backbone:
+        # BC trained everything (its config sets no freeze_filter), so matching its budget
+        # means matching what it was allowed to move, not just steps and batch.
+        train_filter = nnx.Param
     tx = optax.adam(a.lr)
     opt = tx.init(params.filter(train_filter))
 
@@ -108,7 +118,14 @@ def main():
 
         path = (a.out / f"{step_i}").absolute()
         with ocp.StandardCheckpointer() as c:
-            c.save(path, {"expert": params.filter(train_filter).to_pure_dict()}, force=True)
+            # with the backbone trainable the expert subtree is no longer the whole change, so
+            # saving only it would silently drop what was learned everywhere else
+            payload = (
+                {"params": params.to_pure_dict()}
+                if a.train_backbone
+                else {"expert": params.filter(train_filter).to_pure_dict()}
+            )
+            c.save(path, payload, force=True)
         print(f"saved {path}", flush=True)
 
     rng = jax.random.key(0)
