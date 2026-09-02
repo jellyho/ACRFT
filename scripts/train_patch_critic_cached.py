@@ -153,6 +153,49 @@ def main():
         "(from Q=-80 to -264 after 200 backups) -- a bias on the near-goal states selection cares "
         "about, with the same sign as worker B's 11-37% under-estimate of remaining time.",
     )
+    ap.add_argument(
+        "--discount2",
+        type=float,
+        default=None,
+        help="DEAS's INTER-OPTION discount gamma2, used for the bootstrap exponent, while --discount "
+        "becomes the INTRA-OPTION gamma1 that sums rewards inside one chunk and sets the MC floor. "
+        "DEAS carries the two separately end to end (utils/smdp.py:12-13, datasets.py:240-241, "
+        "agents/deas.py:159) and at scale they differ: scripts/large/deas.sh:11-12 sets "
+        "DISCOUNT1=0.9, DISCOUNT2=0.999. None = gamma2 is gamma1, i.e. today's single-discount "
+        "behaviour, so every existing checkpoint stays reproducible.",
+    )
+    ap.add_argument(
+        "--hlg-sigma-frac",
+        type=float,
+        default=0.75,
+        help="HL-Gauss kernel width in bin widths. Ours realises N(y, sigma^2) with sigma = frac*bin "
+        "(rlt_critic/critic.py:281-284). DEAS divides by sqrt(2)*sigma before the STANDARD-NORMAL cdf "
+        "(utils/hlg.py:90-93), where the canonical form divides before erf, so its realised kernel is "
+        "sqrt(2) WIDER. Pass 1.06066 (= 0.75*sqrt(2)) to match DEAS exactly.",
+    )
+    ap.add_argument(
+        "--terminal",
+        choices=["replace", "deas"],
+        default="replace",
+        help="replace (today's): on a terminal the target BECOMES reward_nxt, discarding the reward "
+        "accumulated over the chunk. deas: only the BOOTSTRAP is masked, the accumulated reward is "
+        "kept -- agents/deas.py:157-162 `rewards + gamma^(nstep*L) * masks * next_v`.",
+    )
+    ap.add_argument(
+        "--support",
+        choices=["fixed", "smdp"],
+        default="fixed",
+        help="fixed (today's): v_min = -1/(1-discount). smdp: DEAS's default `universal` support, "
+        "derived from BOTH discounts and the option length (main.py:150-154, utils/smdp.py:18-34). "
+        "DEAS hardcodes H=1000 for OGBench; ours must be given via --smdp-h.",
+    )
+    ap.add_argument("--smdp-h", type=int, default=5941, help="episode length for the smdp support; our max task length")
+    ap.add_argument(
+        "--zero-init-head",
+        action="store_true",
+        help="zero the critic's output kernel at init, as DEAS does via use_zero_output=True "
+        "(agents/deas.py:380-387, utils/networks.py:50,55-59). Only affects the first few thousand steps.",
+    )
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -188,9 +231,45 @@ def main():
         help="materialize the feature/state/action memmaps into RAM (needs ~feature-cache GB of --mem; "
         "turns per-step NFS gathers into RAM-speed reads -- the throughput win)",
     )
+    ap.add_argument(
+        "--deas-faithful",
+        action="store_true",
+        help="preset: everything the DEAS audit found we differ on, at once. Sets --backup scalar, "
+        "--terminal deas, --support smdp, --hlg-sigma-frac 1.06066 (their sqrt(2)-wider kernel), "
+        "--zero-init-head, --no-mc-floor, --alpha-cql 0, --edac-weight 0, --feat-dropout 0, "
+        "--feat-noise 0. It does NOT set the discounts, expectile or batch: those are values DEAS "
+        "tunes per benchmark, not structural choices, so they stay explicit.",
+    )
     a = ap.parse_args()
+    if a.deas_faithful:
+        a.backup, a.terminal, a.support = "scalar", "deas", "smdp"
+        a.hlg_sigma_frac, a.zero_init_head, a.mc_floor = 1.0606601717798212, True, False
+        a.alpha_cql, a.edac_weight, a.feat_dropout, a.feat_noise = 0.0, 0.0, 0.0, 0.0
+        print(
+            "--deas-faithful: scalar backup, deas terminal, smdp support, sqrt(2) kernel, "
+            "zero-init head; mc-floor/CQL/EDAC/augmentation OFF",
+            flush=True,
+        )
 
-    v_min = a.v_min if a.v_min is not None else -1.0 / (1.0 - a.discount)
+    g1 = a.discount
+    g2 = a.discount2 if a.discount2 is not None else a.discount
+
+    def smdp_return_range(r_min, r_max, ln, horizon, gamma1, gamma2):
+        """Transcribed from DEAS-FQL utils/smdp.py:18-34 -- the reachable return range of an SMDP
+        whose options last `ln` primitive steps, discounting inside an option by gamma1 and between
+        options by gamma2^ln."""
+        m, r = horizon // ln, horizon % ln
+        s_l = (1 - gamma1**ln) / (1 - gamma1)
+        s_r = (1 - gamma1**r) / (1 - gamma1) if r > 0 else 0.0
+        weight = (1 - gamma2 ** (m * ln)) / (1 - gamma2**ln)
+        total = s_l * weight + ((gamma2 ** (m * ln)) * s_r if r > 0 else 0.0)
+        return r_min * total, r_max * total
+
+    if a.support == "smdp":
+        v_min, _v_max_smdp = smdp_return_range(-1.0, 0.0, a.macro_group_size, a.smdp_h, g1, g2)
+        print(f"smdp support: v_min={v_min:.2f} (L={a.macro_group_size}, H={a.smdp_h}, g1={g1}, g2={g2})", flush=True)
+    else:
+        v_min = a.v_min if a.v_min is not None else -1.0 / (1.0 - g1)
     failure_reward = a.failure_reward if a.failure_reward is not None else v_min
     H = a.horizon
 
@@ -220,6 +299,11 @@ def main():
     spec["feat_noise"] = a.feat_noise
     spec["q_reduction"] = a.q_reduction
     spec["backup"] = a.backup
+    spec["discount2"] = g2
+    spec["hlg_sigma_frac"] = a.hlg_sigma_frac
+    spec["terminal"] = a.terminal
+    spec["support"] = a.support
+    spec["zero_init_head"] = a.zero_init_head
     spec["critic_arch"] = a.critic_arch
     spec["edac_weight"] = a.edac_weight
     if a.critic_arch == "shared":
@@ -308,6 +392,7 @@ def main():
         "num_critics": a.num_critics,
         "macro_group_size": a.macro_group_size,
         "num_atoms": a.num_atoms,
+        "zero_init_head": a.zero_init_head,
     }
     if a.critic_arch == "shared":
         _common |= {"trunk_layers": a.trunk_layers, "head_layers": a.head_layers}
@@ -319,7 +404,7 @@ def main():
         net = PatchCriticEnsemble(**_common)
         net_pm = PatchCriticEnsemble(**_common, per_member_actions=True)
     v_net = PatchV(num_atoms=a.num_atoms)
-    hl = HLGauss(v_min, a.v_max, a.num_atoms)
+    hl = HLGauss(v_min, a.v_max, a.num_atoms, sigma_frac=a.hlg_sigma_frac)
     centers = jnp.asarray(hl.centers)
     prefixes = list(range(a.macro_group_size, H + 1, a.macro_group_size))
     P_ = len(prefixes)
@@ -371,7 +456,7 @@ def main():
         vlog = v_net.apply(
             jax.lax.stop_gradient(v_params), pnxt.reshape(-1, npatch, emb).astype(jnp.float32), snxt.reshape(-1, sd)
         ).reshape(-1, P_, a.num_atoms)
-        gam = a.discount ** jnp.asarray(prefixes, jnp.float32)
+        gam = g2 ** jnp.asarray(prefixes, jnp.float32)  # gamma2: the inter-option bootstrap exponent
         if a.backup == "scalar":
             # DEAS-FQL agents/deas.py::critic_loss -- Farebrother et al.'s HL-Gauss used as intended,
             # a CLASSIFICATION loss on a scalar target with the kernel applied exactly once:
@@ -382,7 +467,16 @@ def main():
             # and become a select and a maximum.
             next_v = hl.from_logits(vlog)  # [B, P_]
             y = cum + gam[None, :] * next_v
-            y = jnp.where(done_nxt > 0, reward_nxt, y)
+            if a.terminal == "deas":
+                # agents/deas.py:157-162 masks only the BOOTSTRAP; the reward accumulated over the
+                # chunk is kept, and the terminal reward is added at the option boundary.
+                y = (
+                    cum
+                    + jnp.where(done_nxt > 0, gam[None, :] * reward_nxt, 0.0)
+                    + gam[None, :] * (1.0 - done_nxt) * next_v
+                )
+            else:
+                y = jnp.where(done_nxt > 0, reward_nxt, y)
             if a.mc_floor:
                 y = jnp.maximum(y, mc[:, None])
             tgt = jax.lax.stop_gradient(hl.to_probs(jnp.clip(y, v_min, a.v_max)))
@@ -580,7 +674,18 @@ def main():
         CL = int(pos.max()) + int(pref[-1]) + 2
         pad_row = np.zeros((a.batch, CL), bool)
         cum, reward_nxt, done_nxt, valid, mc, jnxt = analytic_targets(
-            pos, eff, succ, pos, pad_row, list(prefixes), a.discount, a.h_goal, v_min, a.reward_scheme, failure_reward
+            pos,
+            eff,
+            succ,
+            pos,
+            pad_row,
+            list(prefixes),
+            g2,
+            a.h_goal,
+            v_min,
+            a.reward_scheme,
+            failure_reward,
+            discount1=g1,
         )
         gcur = g0 + pos
         nxt_pos = np.clip(pos[:, None] + pref[None], 0, full[:, None] - 1)

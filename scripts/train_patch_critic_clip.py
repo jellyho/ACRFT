@@ -27,12 +27,24 @@ import numpy as np
 CAMS = ["observation.images.agentview", "observation.images.wrist_left", "observation.images.wrist_right"]
 
 
-def analytic_targets(pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h_goal, v_min, scheme, failure_reward):
+def analytic_targets(
+    pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h_goal, v_min, scheme, failure_reward, discount1=None
+):
     """Per-transition cost_to_goal target pieces, computed from episode geometry (no next-state decode).
 
     pos: [T] episode-frame index of each transition's current frame. ep_len,succ: [T]. jloc: [T] the
     clip-local index of the current frame. img_pad_row: [T, clip_len] bool pad mask of the clip.
-    Returns cum[T,P], reward_nxt[T,P], done_nxt[T,P], valid[T,P], mc[T]."""
+    Returns cum[T,P], reward_nxt[T,P], done_nxt[T,P], valid[T,P], mc[T].
+
+    discount1 is DEAS's INTRA-OPTION discount gamma1, used for the reward sum inside one chunk and
+    for the MC floor; `discount` is the inter-option gamma2 used for the bootstrap exponent. DEAS
+    plumbs the two separately end to end (DEAS-FQL utils/smdp.py:12-13 "gamma1: intra-option
+    discount" / "gamma2: inter-option discount"; datasets.py:240-241 sums rewards inside an option
+    with gamma1, agents/deas.py:159 raises gamma2 to nstep*action_sequence for the bootstrap), and at
+    scale they differ a lot: scripts/large/deas.sh:11-12 DISCOUNT1=0.9, DISCOUNT2=0.999. Default None
+    keeps the single-discount behaviour every existing checkpoint was trained with."""
+    if discount1 is None:
+        discount1 = discount
     T = pos.shape[0]
     P = len(prefixes)
     cl = img_pad_row.shape[1]
@@ -45,7 +57,7 @@ def analytic_targets(pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h
     cum = np.zeros((T, P), np.float32)
     # cumulative discounted reward over the h steps leading to each prefix
     maxh = prefixes[-1]
-    disc_pow = discount ** np.arange(maxh)
+    disc_pow = discount1 ** np.arange(maxh)
     within = pos[:, None] + np.arange(maxh)[None] < ep_len[:, None]  # [T,maxh] still inside episode
     rr = rew(np.clip(pos[:, None] + np.arange(maxh)[None], 0, ep_len[:, None] - 1), ep_len[:, None], succ[:, None])
     rr = np.where(within, rr * disc_pow[None], 0.0)
@@ -72,7 +84,7 @@ def analytic_targets(pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h
     if scheme == "cost_to_goal":
         goal_start = ep_len - h_goal
         steps_to_goal = np.maximum(0, goal_start - pos)  # -1 per step until goal region, then 0
-        mc = -(1 - discount**steps_to_goal) / (1 - discount)
+        mc = -(1 - discount1**steps_to_goal) / (1 - discount1)
         mc = np.where(succ, mc, v_min).astype(np.float32)  # failure: pin to floor (not a valid bound)
     else:
         mc = np.zeros(T, np.float32)

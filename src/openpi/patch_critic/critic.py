@@ -16,6 +16,7 @@ HL-Gauss and the ensemble vmap mirror ``rlt_critic.critic``; we import HLGauss d
 from __future__ import annotations
 
 import flax.linen as nn
+import jax
 import jax.numpy as jnp
 
 from openpi.rlt_critic.critic import HLGauss  # reuse the validated histogram head
@@ -48,6 +49,7 @@ class PatchARQCritic(nn.Module):
     mlp_dim: int = 1024
     num_atoms: int = 51  # distributional by default
     per_position_head: bool = True
+    zero_init_head: bool = False
 
     @property
     def n_embd(self) -> int:
@@ -87,7 +89,11 @@ class PatchARQCritic(nn.Module):
         x = nn.LayerNorm()(x)[..., nl:, :]  # keep only action positions -> [..., mh, d]
 
         if self.per_position_head:
-            kernel = self.param("head_k", nn.initializers.lecun_normal(), (mh, d, self.num_atoms))
+            kernel = self.param(
+                "head_k",
+                nn.initializers.zeros if self.zero_init_head else nn.initializers.lecun_normal(),
+                (mh, d, self.num_atoms),
+            )
             bias = self.param("head_b", nn.initializers.zeros, (mh, self.num_atoms))
             out = jnp.einsum("...hd,hda->...ha", x, kernel) + bias
         else:
@@ -142,6 +148,7 @@ class PatchCriticEnsemble(nn.Module):
     mlp_dim: int = 1024
     num_atoms: int = 51
     per_position_head: bool = True
+    zero_init_head: bool = False
     per_member_actions: bool = False
     """`actions` is [K, ..., H, action_dim], one tensor per member -- see the same flag on
     SharedTrunkCriticEnsemble. Present here too so EDAC can be run against BOTH architectures."""
@@ -234,6 +241,7 @@ class PatchActionHead(nn.Module):
     mlp_dim: int = 1024
     num_atoms: int = 101
     per_position_head: bool = True
+    zero_init_head: bool = False
 
     @property
     def n_embd(self) -> int:
@@ -258,7 +266,11 @@ class PatchActionHead(nn.Module):
             q = q + nn.Dense(d)(nn.gelu(nn.Dense(self.mlp_dim)(h)))
         q = nn.LayerNorm()(q)
         if self.per_position_head:
-            kernel = self.param("head_k", nn.initializers.lecun_normal(), (mh, d, self.num_atoms))
+            kernel = self.param(
+                "head_k",
+                nn.initializers.zeros if self.zero_init_head else nn.initializers.lecun_normal(),
+                (mh, d, self.num_atoms),
+            )
             bias = self.param("head_b", nn.initializers.zeros, (mh, self.num_atoms))
             out = jnp.einsum("...hd,hda->...ha", q, kernel) + bias
         else:
@@ -285,6 +297,7 @@ class SharedTrunkCriticEnsemble(nn.Module):
     mlp_dim: int = 1024
     num_atoms: int = 101
     per_position_head: bool = True
+    zero_init_head: bool = False
     per_member_actions: bool = False
     """Give each member its OWN action tensor, i.e. `actions` is [K, ..., H, action_dim].
 
@@ -321,3 +334,116 @@ class SharedTrunkCriticEnsemble(nn.Module):
             axis_size=self.num_critics,
         )
         return vmapped(make(), z, actions)  # [num_critics, ..., mh(, atoms)]
+
+
+# ---------------------------------------------------------------------------------------------
+# floq: the Q-value as the endpoint of a flow over a SCALAR, not a categorical read-out.
+# arXiv 2509.06863, official code CMU-AIRe/floq. Transcribed, with file:line for every borrowing.
+# ---------------------------------------------------------------------------------------------
+
+
+def floq_support(q_min: float, q_max: float, num_bins: int):
+    """floq/utils/networks.py:454-459. num_bins EDGES, so the encoding below is num_bins-1 wide."""
+    return q_min + jnp.arange(num_bins) * (q_max - q_min) / (num_bins - 1)
+
+
+def floq_to_probs(target, support, sigma):
+    """floq/utils/networks.py:441-452 -- an erf-CDF over bin EDGES normalised by the ENCLOSED mass.
+
+    Deliberately NOT HLGauss.to_probs: that one is our OUTPUT head's kernel (sigma = 0.75 bin widths,
+    a sharp target), whereas this is an INPUT encoding whose sigma is 16 bin widths, chosen to be
+    nearly flat. The paper states the intent: "we use a larger sigma, chosen such that approximately
+    80% of the bins receive non-zero probability mass at initialization". Reusing 0.75 here would
+    collapse the encoding to a spike and hand the velocity net almost no information about z.
+
+    floq's own comment at networks.py:452 says the width is num_bins; it is num_bins-1 (the reshape
+    at :522 says so, and the arithmetic here agrees).
+    """
+    cdf = jax.scipy.special.erf((support - target[..., None]) / (jnp.sqrt(2.0) * sigma))
+    z = cdf[..., -1:] - cdf[..., :1]
+    return (cdf[..., 1:] - cdf[..., :-1]) / z
+
+
+class PatchFloqVelocity(nn.Module):
+    """The velocity field, as OUR transformer rather than floq's MLP.
+
+    floq's velocity net is a plain ensembled MLP (floq/utils/networks.py:461-538) because in floq the
+    observation is a low-dimensional state vector and that MLP is the whole critic. Ours is not: the
+    observation is 192 frozen DINOv2 patch tokens, and the categorical mode reads them with a
+    transformer. Putting the flow behind an MLP instead would confound the objective with the
+    encoder, so the body here is PatchARQCritic's body unchanged and only two things differ:
+
+      1. the action token carries [action, encode(z), cos(t)] instead of the action alone. This is
+         the structural analogue of floq/utils/networks.py:536
+         `inputs = jnp.concatenate([observations, returns, times_embed], axis=-1)`. The action token
+         is our only per-prefix site, and z is per-prefix, so each prefix's z reaches only its own
+         position -- which the causal mask already permits and which the commitment-prefix contract
+         requires. Attending across prefixes would let prefix k see prefix j>k's interpolant.
+      2. the head emits a scalar velocity per prefix instead of num_atoms logits.
+
+    cos(t) rather than a Fourier embedding is not an oversight. floq declares time_embed_dim=64
+    (floq/agents/floq.py:482) and never uses it: networks.py:526-529 is `times_embed = jnp.cos(times)`,
+    one dimension. The released code is what produced the reported numbers, so the code wins over the
+    paper's prose here. On t in [0,1] cosine is monotone, so it is an injective reparameterisation.
+    """
+
+    action_dim: int
+    horizon: int
+    macro_group_size: int = 30
+    num_layers: int = 3
+    num_heads: int = 8
+    head_dim: int = 48
+    mlp_dim: int = 1024
+    num_bins: int = 51  # floq/agents/floq.py:484
+    sigma: float = 16.0  # in BIN WIDTHS; floq/agents/floq.py:485
+    q_min: float = -2805.5556
+    q_max: float = 27.7778
+
+    @property
+    def n_embd(self) -> int:
+        return self.num_heads * self.head_dim
+
+    @property
+    def macro_h(self) -> int:
+        return self.horizon // self.macro_group_size
+
+    @nn.compact
+    def __call__(self, z_state, actions, zf, t):
+        """z_state [..., nl, d] trunk output; actions [..., H, ad]; zf [..., mh] the interpolant,
+        one per prefix; t [...] the flow time. -> [..., mh] scalar velocity per prefix."""
+        d, mh = self.n_embd, self.macro_h
+        a = actions.reshape(*actions.shape[:-2], mh, self.macro_group_size * self.action_dim)
+        support = floq_support(self.q_min, self.q_max, self.num_bins)
+        bin_width = support[1] - support[0]  # networks.py:518
+        zcat = floq_to_probs(zf, support, self.sigma * bin_width)  # networks.py:521; [..., mh, bins-1]
+        tcat = jnp.broadcast_to(jnp.cos(t)[..., None, None], (*a.shape[:-1], 1))
+        q = nn.Dense(d)(jnp.concatenate([a, zcat, tcat], axis=-1))
+        q = q + self.param("act_pos", nn.initializers.normal(0.02), (mh, d))
+        causal = jnp.tril(jnp.ones((mh, mh), dtype=bool))
+        for _ in range(self.num_layers):
+            h = nn.LayerNorm()(q)
+            q = q + nn.MultiHeadDotProductAttention(num_heads=self.num_heads, qkv_features=d)(h, h, mask=causal)
+            h = nn.LayerNorm()(q)
+            q = q + nn.MultiHeadDotProductAttention(num_heads=self.num_heads, qkv_features=d)(
+                h, nn.LayerNorm()(z_state)
+            )
+            h = nn.LayerNorm()(q)
+            q = q + nn.Dense(d)(nn.gelu(nn.Dense(self.mlp_dim)(h)))
+        q = nn.LayerNorm()(q)
+        kernel = self.param("vel_k", nn.initializers.lecun_normal(), (mh, d, 1))
+        bias = self.param("vel_b", nn.initializers.zeros, (mh, 1))
+        return (jnp.einsum("...hd,hdo->...ho", q, kernel) + bias)[..., 0]
+
+
+def floq_integrate(velocity_fn, zf0, num_steps):
+    """Euler integration, floq/agents/floq.py:244-249 and :278-283.
+
+        for i in range(K):  t = i/K;  returns = returns + v(t, returns)/K
+
+    Times are i/K for i = 0..K-1. Algorithm 1 (paper p.31) agrees; Eq 4.1 (p.5) writes the sum over
+    i = 1..j, i.e. times 1/K..1, and CONTRADICTS both. The code is what produced the numbers.
+    """
+    zf = zf0
+    for i in range(num_steps):
+        zf = zf + velocity_fn(zf, jnp.asarray(i / num_steps, jnp.float32)) / num_steps
+    return zf
