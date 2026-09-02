@@ -21,6 +21,8 @@ import pathlib
 
 import numpy as np
 
+import openpi.training.outcomes as _outcomes
+
 CAMS = ["observation.images.agentview", "observation.images.wrist_left", "observation.images.wrist_right"]
 
 
@@ -40,7 +42,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi")
     ap.add_argument("--root", default="/data5/jellyho/yam_v2/lerobot")
-    ap.add_argument("--outcomes", required=True, help="outcomes.jsonl with per-episode success/fail")
+    ap.add_argument(
+        "--outcomes",
+        default=None,
+        help="legacy outcomes.jsonl (deprecated: the verdict is read from the dataset's next.success / next.done)",
+    )
     ap.add_argument("--max-frames", type=int, default=160000)
     ap.add_argument("--img-size", type=int, default=224)
     ap.add_argument("--out", type=pathlib.Path, required=True)
@@ -60,11 +66,7 @@ def main():
     print(f"dataset {a.repo_id}: {n_total} frames, {ds.num_episodes} episodes", flush=True)
 
     # only episodes that carry an outcome label (success/fail) can be used for cost_to_goal
-    outc = {}
-    for line in pathlib.Path(a.outcomes).read_text().splitlines():
-        if line.strip():
-            r = json.loads(line)
-            outc[int(r["episode"])] = r["outcome"]
+    outc = _outcomes.load_outcomes(_outcomes.dataset_root(a.repo_id, a.root), legacy_jsonl=a.outcomes)
     labeled = [e for e in outc if e in starts]
     fails = [e for e in labeled if outc[e] != "success"]
     succ = [e for e in labeled if outc[e] == "success"]

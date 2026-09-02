@@ -73,35 +73,29 @@ def success_episode_indices(repo_id: str, *, reward_key: str = "next.reward") ->
     """Episode indices that ended in success, or None when the notion does not apply.
 
     Two sources, in order:
-      1. ``outcomes.jsonl`` at the dataset root — one row per episode with an ``outcome`` field
-         ("success"/"fail"). This is the authoritative per-episode label for teleop datasets that
-         mix successes and failures (e.g. YAM: 100 success / 19 fail).
-      2. the ``reward_key`` column — an episode counts as a success if the sparse reward fires
-         anywhere in it. Used for datasets that carry a reward but no outcomes file.
+      1. the dataset's own verdict features -- ``next.success`` / ``next.done``, read from the
+         per-episode stats in ``meta/episodes`` (see :mod:`openpi.training.outcomes`). This is the
+         authoritative per-episode label for teleop datasets that mix successes and failures
+         (e.g. YAM lego: 300 success / 47 fail). An episode kept without a verdict is NOT a success.
+      2. the ``reward_key`` column -- an episode counts as a success if the sparse reward fires
+         anywhere in it. Used for datasets that carry a reward but no verdict features.
 
     Returns None (meaning "do not filter") when NEITHER source exists, which is the correct default
-    for demonstration datasets that are successful by construction (every RoboCasa demo) — there the
-    fail set is empty and a filter would be a silent no-op at best.
+    for demonstration datasets that are successful by construction (every RoboCasa demo) -- there the
+    fail set is empty and a filter would be a silent no-op at best. A dataset recorded by the i2rt
+    recorder before the verdict moved into the schema also lands here; ``success_only`` refuses it
+    (see the error in config.py) rather than training on everything.
     """
-    import json
-
     from lerobot.datasets import lerobot_dataset
+
+    import openpi.training.outcomes as _outcomes
 
     meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     root = pathlib.Path(meta.root)
 
-    outcomes = root / "outcomes.jsonl"
-    if outcomes.exists():
-        keep = []
-        for raw_line in outcomes.read_text().splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            row = json.loads(line)
-            if row.get("outcome") == "success":
-                keep.append(int(row["episode"]))
-        keep.sort()
-        logger.info(f"outcomes.jsonl for {repo_id}: {len(keep)}/{meta.total_episodes} episodes are success")
+    keep = _outcomes.success_episode_indices(root)
+    if keep is not None:
+        logger.info(f"{_outcomes.SUCCESS_KEY} for {repo_id}: {len(keep)}/{meta.total_episodes} episodes are success")
         return keep
 
     reward = read_reward_column(root, meta.total_frames, reward_key)
