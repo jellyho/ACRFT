@@ -13,6 +13,13 @@
 # to make yellow taxi", so the language pathway is constant: this tests the architecture and the
 # pipeline, not the multi-task claim.
 #
+# SUCCESS-ONLY, like BC. The 347 episodes are 300 success + 47 fail, and the BC checkpoint is
+# yam_bc_s300_h30_successonly -- openpi resolves that subset at startup via
+# LeRobotYAMDataConfig.success_only (config.py:573-580). LeRobot has no such flag, so the episode
+# list is derived HERE from the same outcomes file openpi uses and passed as --dataset.episodes.
+# Deriving it at launch rather than pasting 300 indices keeps it in sync with the outcomes file and
+# makes the count assertion below the thing that fails if they ever diverge.
+#
 # OBJECTIVE defaults to flow_matching, not the doc's diffusion. Its timestep sampling is
 # beta(alpha=1.5, beta=1.0) scaled by 0.999 -- identical to pi0.5's own
 # (`jax.random.beta(rng, 1.5, 1) * 0.999`, src/openpi/models/pi0.py), so a flow-matching run is the
@@ -33,6 +40,17 @@
 #SBATCH --output=/data5/jellyho/ACRFT/openpi/logs/mtdit_yam_%j.slurm.log
 echo "[$(date +%T)] mtdit_yam starting on $(hostname)"
 VENV=/data5/jellyho/ACRFT/mtdit/.venv
+OUTCOMES=/data5/jellyho/ACRFT/openpi/.scratch/yam_outcomes_347.jsonl
+EPISODES=$($VENV/bin/python - "$OUTCOMES" <<'PYEOF'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+succ = sorted(r["episode"] for r in rows if r["outcome"] == "success")
+fail = sorted(r["episode"] for r in rows if r["outcome"] != "success")
+assert len(succ) == 300 and len(fail) == 47, f"expected 300 success / 47 fail, got {len(succ)}/{len(fail)}"
+print("[" + ",".join(map(str, succ)) + "]")
+PYEOF
+) || exit 1
+echo "[$(date +%T)] training on ${OBJ:-flow_matching}, success-only: 300 of 347 episodes (47 failures excluded)"
 # Fail loudly and immediately if this torch build cannot see the GPU, instead of after the dataset
 # scan. torch here is 2.11+cu130 while openpi's is 2.7.1+cu126, so the driver check is not free.
 $VENV/bin/python -c "import torch;assert torch.cuda.is_available(),'no CUDA';print('[cuda]',torch.cuda.get_device_name(0),torch.__version__)" || exit 1
@@ -40,6 +58,7 @@ exec $VENV/bin/lerobot-train \
   --dataset.repo_id=jellyho/yam_lego_taxi \
   --dataset.root=/data5/jellyho/.cache/huggingface/lerobot/jellyho/yam_lego_taxi \
   --dataset.video_backend=pyav \
+  --dataset.episodes="$EPISODES" \
   --policy.type=multi_task_dit \
   --policy.device=cuda \
   --policy.horizon=32 \
