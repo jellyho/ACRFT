@@ -158,8 +158,29 @@ def main():
             f"\n[{split}]  R2(state) {r_s:+.4f}   R2(state+action) {r_sa:+.4f}   GAP {r_sa - r_s:+.4f}   R2(action only) {r_a:+.4f}"
         )
 
+    # ---- THE NULL: is the gap capacity rather than signal? ---------------------------------------
+    # Adding 420 action columns to a ridge at a FIXED alpha is not a free comparison -- the larger
+    # design spreads the same regularisation over more directions, so part of a gap can be capacity.
+    # Cross-validation bounds that but does not zero it. Permuting the action block across frames
+    # destroys the state-action correspondence while preserving the block's marginal distribution and
+    # its collinearity structure exactly, so whatever the gap survives at is capacity alone.
+    # Two versions; the within-episode one is stricter because it also preserves that demonstrator's
+    # pace and style. Control contributed by the ACRFT-WS session, which ran it first.
+    rngp = np.random.default_rng(a.seed + 1)
+    A_glob = A[rngp.permutation(len(A))]
+    A_wep = A.copy()
+    for c in np.unique(epi):
+        m = np.flatnonzero(epi == c)
+        A_wep[m] = A[m[rngp.permutation(len(m))]]
+    null = {}
+    for lab, Ap in (("global", A_glob), ("within_episode", A_wep)):
+        r_n = r2(np.concatenate([S, Ap], 1), ttg, epi, by_episode=True)
+        null[lab] = {"state_action_permuted": r_n, "gap": r_n - r2(S, ttg, epi, by_episode=True)}
+        print(f"  null ({lab:14s}) : R2 {r_n:+.4f}  GAP {null[lab]['gap']:+.4f}")
+    res["permutation_null"] = null
+
     # ---- controls: is the gap just the demonstrator's pace or style leaking through? -------------
-    print("\n--- controls, episode-held-out ---")
+    print("\n--- permutation null and controls, episode-held-out ---")
     ctl = {}
     r_sp, r_sap = r2(S, ttg_pace, epi, by_episode=True), r2(SA, ttg_pace, epi, by_episode=True)
     ctl["pace_corrected"] = {"state": r_sp, "state_action": r_sap, "gap": r_sap - r_sp}
