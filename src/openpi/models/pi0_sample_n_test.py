@@ -76,3 +76,31 @@ def test_the_patch_critic_wrapper_now_accepts_pi05(model):
     """The wrapper dispatches on this attribute; that dispatch is the thing that was failing."""
     _, m = model
     assert hasattr(m, "sample_n_actions")
+
+
+def test_batched_shape_is_states_by_candidates(model):
+    cfg, m = model
+    out = m.sample_n_actions_batched(jax.random.key(1), _obs(cfg, batch=3), num_samples=5, num_steps=4)
+    assert out.shape == (3, 5, cfg.action_horizon, cfg.action_dim)
+
+
+def test_batched_does_not_mix_states(model):
+    """The claim the offline bank rests on: state i's candidates are conditioned on state i's prefix.
+
+    jnp.repeat interleaves, so row i*n+j is state i's j-th draw; getting the tiling wrong (repeat vs
+    tile) would silently pair every state with the wrong frame's prefix, and the resulting bank would
+    look perfectly well-formed. Compared against the batch-1 path, which is already pinned to
+    sample_actions by test_sharing_the_prefix_changes_nothing.
+    """
+    cfg, m = model
+    b, n = 3, 2
+    obs = _obs(cfg, batch=b)
+    rng = jax.random.key(11)
+    batched = np.asarray(m.sample_n_actions_batched(rng, obs, num_samples=n, num_steps=4))
+    # the batched path draws one [b*n, ah, ad] normal; give the single-state path the same rows
+    noise = jax.random.normal(rng, (b * n, cfg.action_horizon, cfg.action_dim))
+    for i in range(b):
+        one_obs = jax.tree.map(lambda x, i=i: x[i : i + 1], obs)
+        for j in range(n):
+            one = np.asarray(m.sample_actions(rng, one_obs, num_steps=4, noise=noise[i * n + j][None]))
+            np.testing.assert_allclose(batched[i, j], one[0], rtol=2e-4, atol=2e-4)
