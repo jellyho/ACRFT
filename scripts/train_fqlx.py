@@ -56,6 +56,12 @@ def main():
     ap.add_argument("--save-every", type=int, default=10000)
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("/data1/jellyho/acrft_ckpts/extraction/fqlx_run1"))
+    ap.add_argument(
+        "--train-backbone",
+        action="store_true",
+        help="train the WHOLE model, as the BC finetune did (no freeze_filter) -- otherwise only the "
+        "action expert, which keeps arms comparable but gives them a smaller budget than BC",
+    )
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-entity", default="jellyho_")
     ap.add_argument("--wandb-name", default="extract_fqlx_run1")
@@ -86,6 +92,10 @@ def main():
         nnx_utils.PathRegex(".*llm.*_1.*"),
         nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)|state_proj).*"),
     )
+    if a.train_backbone:
+        # BC trained everything (its config sets no freeze_filter), so matching its budget
+        # means matching what it was allowed to move, not just steps and batch.
+        expert_filter = nnx.Param
     model = cfg.model.create(jax.random.key(0))
     graphdef_m, p_exp, p_rest = nnx.split(model, expert_filter, ...)
     loaded = CheckpointWeightLoaderKeepMissing(str(a.init_ckpt / "params")).load(
@@ -94,6 +104,9 @@ def main():
     full = nnx.state(model)
     full.replace_by_pure_dict(loaded)
     p_exp_t, p_rest = full.filter(expert_filter), full.filter(nnx.Not(expert_filter))
+    # frozen state goes through the jit BOUNDARY, never a closure: XLA bakes closure constants
+    # into the executable and a 3B-param set becomes a "new constant" allocation that OOMs
+    # (measured here at 535MB for one tensor before it gave up). Same fix as qam/lps/flowdagger.
     p_exp_t = jax.device_put(p_exp_t)  # teacher expert: frozen BC
     p_rest = jax.device_put(p_rest)  # shared frozen backbone
     p_exp_s = jax.tree.map(lambda x: x.copy(), p_exp_t)  # student starts at the teacher
@@ -103,35 +116,36 @@ def main():
     N = a.teacher_steps
     dt = 1.0 / N
 
-    def prefix(p_e, obs):
-        # mask FIRST, matching Pi0._prefix_forward; kept in that order at every call site here
+    def prefix(p_e, p_rest, obs):
+        # mask FIRST, matching Pi0._prefix_forward; kept in that order at every call site here.
+        # p_rest is a PARAMETER, not a closure: XLA bakes closure constants into the executable.
         return nnx.merge(graphdef_m, p_e, p_rest)._prefix_forward(obs)
 
-    def velocity(p_e, obs, pm, kv, x, tau):
+    def velocity(p_e, p_rest, obs, pm, kv, x, tau):
         return nnx.merge(graphdef_m, p_e, p_rest)._velocity(obs, pm, kv, x, tau)
 
     velocity = jax.checkpoint(velocity)  # the teacher unrolls N of these; recompute in backward
 
-    def loss_fn(p_e_s, obs, feats, proprio, z):
+    def loss_fn(p_e_s, p_exp_t, p_rest, obs, feats, proprio, z):
         # teacher: the frozen BC policy's own multi-step sample from this noise (stop-grad)
-        pm, kv_t = prefix(p_exp_t, obs)
+        pm, kv_t = prefix(p_exp_t, p_rest, obs)
         x = z
         for i in range(N):
-            x = x - dt * velocity(p_exp_t, obs, pm, kv_t, x, jnp.full((x.shape[0],), 1.0 - i * dt))
+            x = x - dt * velocity(p_exp_t, p_rest, obs, pm, kv_t, x, jnp.full((x.shape[0],), 1.0 - i * dt))
         a_theta = jax.lax.stop_gradient(x)
         # student: ONE Euler step from the same noise (the "one-step actor")
-        pm_s, kv_s = prefix(p_e_s, obs)
-        a_omega = z - velocity(p_e_s, obs, pm_s, kv_s, z, jnp.ones((z.shape[0],)))
+        pm_s, kv_s = prefix(p_e_s, p_rest, obs)
+        a_omega = z - velocity(p_e_s, p_rest, obs, pm_s, kv_s, z, jnp.ones((z.shape[0],)))
         l_distill = jnp.mean(jnp.square(a_omega - a_theta))
         q = critic.q_mean(feats, jnp.clip(a_omega[..., :robot_ad], -1, 1), proprio)
         l_q = -jnp.mean(q) / jax.lax.stop_gradient(jnp.mean(jnp.abs(q)) + 1e-6)  # official normalization
         return l_q + a.alpha * l_distill, {"l_distill": l_distill, "l_q": l_q, "q_pi": jnp.mean(q)}
 
     @functools.partial(jax.jit, donate_argnums=(0, 1))
-    def step(p_e_s, opt, rng, obs, feats, proprio):
+    def step(p_e_s, opt, p_exp_t, p_rest, rng, obs, feats, proprio):
         obs = _model.preprocess_observation(None, obs, train=False)
         z = jax.random.normal(rng, (obs.state.shape[0], H, AD))
-        (loss, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(p_e_s, obs, feats, proprio, z)
+        (loss, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(p_e_s, p_exp_t, p_rest, obs, feats, proprio, z)
         upd, opt = tx.update(grads, opt, p_e_s)
         return optax.apply_updates(p_e_s, upd), opt, loss, info
 
@@ -153,7 +167,14 @@ def main():
 
         path = (a.out / f"{step_i}").absolute()
         with ocp.StandardCheckpointer() as c:
-            c.save(path, {"expert": p_exp_s.to_pure_dict()}, force=True)
+            # with the backbone trainable the expert subtree is no longer the whole change, so
+            # saving only it would silently drop what was learned everywhere else
+            payload = (
+                {"params": nnx.State.merge(p_exp_s, p_rest).to_pure_dict()}
+                if a.train_backbone
+                else {"expert": p_exp_s.to_pure_dict()}
+            )
+            c.save(path, payload, force=True)
         print(f"saved {path}", flush=True)
 
     rng = jax.random.key(0)
@@ -162,7 +183,7 @@ def main():
         obs, _actions, ann = next(it)
         f, _st, pr = cache.rows(np.asarray(ann["idx"], np.int64), critic)
         rng, k = jax.random.split(rng)
-        p_exp_s, opt, loss, info = step(p_exp_s, opt, k, obs, jnp.asarray(f), jnp.asarray(pr))
+        p_exp_s, opt, loss, info = step(p_exp_s, opt, p_exp_t, p_rest, k, obs, jnp.asarray(f), jnp.asarray(pr))
         if s % 100 == 0:
             print(
                 f"step {s:6d}  loss {float(loss):.4f}  l_distill {float(info['l_distill']):.5f}  "

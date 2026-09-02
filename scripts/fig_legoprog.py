@@ -2,7 +2,7 @@
 
 bcH_ex_K = BC policy trained with horizon H, executing K steps of each predicted chunk
 before replanning. progress in 0..4 (assembly stages), 10 rollouts per condition.
-Source of record: .scratch/legoprog.xlsx (copied from the user's upload 2026-08-27);
+Source of record: .scratch/legoprog_v3.xlsx (copied from the user's upload 2026-08-27);
 every number is parsed from it here. Run with:  uv run --with openpyxl python scripts/fig_legoprog.py
 """
 
@@ -25,7 +25,7 @@ import plot_style
 plot_style.apply()
 PAL = plot_style.PALETTE
 
-ws = load_workbook(R / ".scratch/legoprog.xlsx")[  # one sheet, 8 (name,num,prog) column triplets
+ws = load_workbook(R / ".scratch/legoprog_v3.xlsx")[  # one sheet, 8 (name,num,prog) column triplets
     "Sheet1"
 ]
 data = {}
