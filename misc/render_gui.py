@@ -217,6 +217,12 @@ class RenderGUI(QtWidgets.QWidget):
         self.value_check.setChecked(True)
         self.chunk_check = QtWidgets.QCheckBox("chunk length strip")
         self.chunk_check.setChecked(True)
+        self.qtable_check = QtWidgets.QCheckBox("critic Q table")
+        self.qtable_check.setChecked(True)
+        self.qtable_check.setToolTip(
+            "One cell per candidate with the exact Q the critic gave it, and the chosen one marked.\n"
+            "Only drawn for recordings that carry critic_scores."
+        )
 
         self.out_edit = QtWidgets.QLineEdit()
         self.render_btn = QtWidgets.QPushButton("Render")
@@ -249,6 +255,7 @@ class RenderGUI(QtWidgets.QWidget):
         opts.addWidget(QtWidgets.QLabel("panel height"))
         opts.addWidget(self.height_spin)
         opts.addWidget(self.value_check)
+        opts.addWidget(self.qtable_check)
         opts.addWidget(self.chunk_check)
         opts.addStretch(1)
         form.addRow("options", opts)
@@ -388,6 +395,7 @@ class RenderGUI(QtWidgets.QWidget):
             candidates=None,
             no_value_plot=not self.value_check.isChecked(),
             no_chunk_plot=not self.chunk_check.isChecked(),
+            no_q_table=not self.qtable_check.isChecked(),
             replans=0,
             hold=1,
             height=self.height_spin.value(),
