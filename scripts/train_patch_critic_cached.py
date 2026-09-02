@@ -136,6 +136,23 @@ def main():
         "that split. `lower_bounds` is the same mc return array --mc-floor already uses.",
     )
     ap.add_argument("--cql-bank", type=pathlib.Path, default=None, help="dir from scripts/sample_policy_chunks.py")
+    ap.add_argument(
+        "--backup",
+        choices=["scalar", "distributional"],
+        default="scalar",
+        help="scalar (DEFAULT, and what csmile-1006/DEAS-FQL does in agents/deas.py critic_loss): "
+        "scalarize V(s'), form a SCALAR TD target, apply the HL-Gauss kernel ONCE, cross-entropy. "
+        "distributional: the old path -- shift every atom by r + gamma^k, re-project with the same "
+        "HL-Gauss kernel, mix by the next-state probabilities, i.e. a C51 operator with an HL-Gauss "
+        "kernel. Kept only to reproduce the critics trained before this was fixed. It DIFFUSES: "
+        "HL-Gauss's sigma is 0.75 x bin width by design, meant to be applied once to a scalar, so "
+        "using it as a projection kernel convolves a Gaussian into the target at every backup. "
+        "Measured on our support ([-2778, 0], 101 atoms) the target std grows 22.1 -> 31.3 -> 73.3 "
+        "-> 222.1 after 0/1/10/100 backups, exactly 22.1*sqrt(n). Away from the boundary the mean "
+        "survives; near the goal the clip at v_max=0 truncates the spreading mass and drags it down "
+        "(from Q=-80 to -264 after 200 backups) -- a bias on the near-goal states selection cares "
+        "about, with the same sign as worker B's 11-37% under-estimate of remaining time.",
+    )
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -202,6 +219,7 @@ def main():
     spec["feat_dropout"] = a.feat_dropout
     spec["feat_noise"] = a.feat_noise
     spec["q_reduction"] = a.q_reduction
+    spec["backup"] = a.backup
     spec["critic_arch"] = a.critic_arch
     spec["edac_weight"] = a.edac_weight
     if a.critic_arch == "shared":
@@ -353,17 +371,32 @@ def main():
         vlog = v_net.apply(
             jax.lax.stop_gradient(v_params), pnxt.reshape(-1, npatch, emb).astype(jnp.float32), snxt.reshape(-1, sd)
         ).reshape(-1, P_, a.num_atoms)
-        vprob = jax.nn.softmax(vlog, -1)
         gam = a.discount ** jnp.asarray(prefixes, jnp.float32)
-        z = cum[..., None] + gam[None, :, None] * centers[None, None, :]
-        phi = hl.to_probs(jnp.clip(z, v_min, a.v_max))
-        tgt = jnp.einsum("bpj,bpja->bpa", vprob, phi)
-        tgt = jnp.where((done_nxt > 0)[..., None], hl.to_probs(reward_nxt), tgt)
-        if a.mc_floor:
-            tmean = jnp.sum(tgt * centers, -1)
-            floor = mc[:, None] > tmean
-            tgt = jnp.where(floor[..., None], hl.to_probs(jnp.broadcast_to(mc[:, None], tmean.shape)), tgt)
-        tgt = jax.lax.stop_gradient(tgt)
+        if a.backup == "scalar":
+            # DEAS-FQL agents/deas.py::critic_loss -- Farebrother et al.'s HL-Gauss used as intended,
+            # a CLASSIFICATION loss on a scalar target with the kernel applied exactly once:
+            #     next_v   = self.transform_from_probs(next_v_probs)
+            #     target_v = rewards + discount**(nstep*action_sequence) * masks * next_v
+            #     critic_loss = cross_entropy_loss_on_scalar(q_dists, target_v, transform_to_probs)
+            # In scalar space the terminal case and the MC floor stop needing distribution surgery
+            # and become a select and a maximum.
+            next_v = hl.from_logits(vlog)  # [B, P_]
+            y = cum + gam[None, :] * next_v
+            y = jnp.where(done_nxt > 0, reward_nxt, y)
+            if a.mc_floor:
+                y = jnp.maximum(y, mc[:, None])
+            tgt = jax.lax.stop_gradient(hl.to_probs(jnp.clip(y, v_min, a.v_max)))
+        else:
+            vprob = jax.nn.softmax(vlog, -1)
+            z = cum[..., None] + gam[None, :, None] * centers[None, None, :]
+            phi = hl.to_probs(jnp.clip(z, v_min, a.v_max))
+            tgt = jnp.einsum("bpj,bpja->bpa", vprob, phi)
+            tgt = jnp.where((done_nxt > 0)[..., None], hl.to_probs(reward_nxt), tgt)
+            if a.mc_floor:
+                tmean = jnp.sum(tgt * centers, -1)
+                floor = mc[:, None] > tmean
+                tgt = jnp.where(floor[..., None], hl.to_probs(jnp.broadcast_to(mc[:, None], tmean.shape)), tgt)
+            tgt = jax.lax.stop_gradient(tgt)
         pred = net.apply(params, pcur.astype(jnp.float32), chunk, scur)
         per = -jnp.sum(tgt[None] * jax.nn.log_softmax(pred, -1), -1)
         q_loss = jnp.sum(per * valid[None]) / (jnp.sum(valid) * pred.shape[0] + 1e-8)
@@ -435,8 +468,20 @@ def main():
             edac_loss = a.edac_weight * jnp.mean(jnp.sum(sim, axis=(1, 2))) / (K - 1)
 
         qd_log = net.apply(jax.lax.stop_gradient(tgt_p), pcur.astype(jnp.float32), chunk, scur)[:, :, -1, :]
-        qd_probs = jnp.mean(jax.nn.softmax(qd_log, -1), 0)
-        qbar = (jnp.min if a.q_reduction == "min" else jnp.mean)(from_logits(qd_log), 0)
+        # V's target distribution has to come from the SAME member the expectile comparison used.
+        # DEAS-FQL value_loss picks the arg-min member's whole distribution when q_agg == "min":
+        #     min_q_idx = jnp.argmin(qs, axis=0); q_prob = q_probs[min_q_idx, batch_indices]
+        # We were taking the ensemble MEAN distribution while comparing against the ensemble MIN
+        # scalar, so the weight said "be pessimistic" about a target that was not.
+        qs_all = from_logits(qd_log)  # [K, B]
+        if a.q_reduction == "min":
+            _i = jnp.argmin(qs_all, axis=0)
+            _b = jnp.arange(qs_all.shape[1])
+            qbar = qs_all[_i, _b]
+            qd_probs = jax.nn.softmax(qd_log, -1)[_i, _b]
+        else:
+            qbar = jnp.mean(qs_all, 0)
+            qd_probs = jnp.mean(jax.nn.softmax(qd_log, -1), 0)
         vlog_c = v_net.apply(v_params, pcur.astype(jnp.float32), scur)
         vbar = from_logits(vlog_c)
         u = jax.lax.stop_gradient(qbar) - vbar
