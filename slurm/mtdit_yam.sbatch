@@ -41,13 +41,64 @@
 echo "[$(date +%T)] mtdit_yam starting on $(hostname)"
 VENV=/data5/jellyho/ACRFT/mtdit/.venv
 OUTCOMES=/data5/jellyho/ACRFT/openpi/.scratch/yam_outcomes_347.jsonl
-EPISODES=$($VENV/bin/python - "$OUTCOMES" <<'PYEOF'
-import json, sys
-rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-succ = sorted(r["episode"] for r in rows if r["outcome"] == "success")
-fail = sorted(r["episode"] for r in rows if r["outcome"] != "success")
-assert len(succ) == 300 and len(fail) == 47, f"expected 300 success / 47 fail, got {len(succ)}/{len(fail)}"
-print("[" + ",".join(map(str, succ)) + "]")
+DATA_ROOT=/data5/jellyho/.cache/huggingface/lerobot/jellyho/yam_lego_taxi
+EPISODES=$($VENV/bin/python - "$OUTCOMES" "$DATA_ROOT" <<'PYEOF'
+import glob, json, sys
+
+# Verdicts now live in the LeRobot schema itself, not in a sidecar: per-frame bool features
+# `next.success` / `next.done`, True on the last frame, aggregated per episode in meta/episodes as
+# stats/next.success/max and stats/next.done/max. Note it is THREE states, not two --
+# done==0 means "kept without judging", which must NOT be counted as a failure.
+# Canonical reader is openpi.training.outcomes (branch feat/outcomes-from-schema); this launcher
+# inlines the same rule because that module is not on master yet.
+jsonl_path, root = sys.argv[1], sys.argv[2]
+
+
+def from_schema(root):
+    files = sorted(glob.glob(f"{root}/meta/episodes/**/*.parquet", recursive=True))
+    if not files:
+        return None
+    import pandas as pd
+
+    d = pd.concat([pd.read_parquet(f) for f in files])
+    if "stats/next.success/max" not in d.columns:
+        return None
+    succ = d["stats/next.success/max"].to_numpy() > 0
+    done = d["stats/next.done/max"].to_numpy() > 0
+    idx = d["episode_index"].to_numpy()
+    return {
+        "success": sorted(int(i) for i, s in zip(idx, succ, strict=True) if s),
+        "fail": sorted(int(i) for i, s, dn in zip(idx, succ, done, strict=True) if dn and not s),
+        "unknown": sorted(int(i) for i, dn in zip(idx, done, strict=True) if not dn),
+    }
+
+
+def from_jsonl(path):
+    rows = [json.loads(x) for x in open(path) if x.strip()]
+    return {
+        "success": sorted(r["episode"] for r in rows if r["outcome"] == "success"),
+        "fail": sorted(r["episode"] for r in rows if r["outcome"] != "success"),
+        "unknown": [],
+    }
+
+
+sch, leg = from_schema(root), from_jsonl(jsonl_path)
+if sch is not None:
+    if leg["success"] != sch["success"]:
+        raise SystemExit(
+            f"schema and legacy sidecar disagree: {len(sch['success'])} vs {len(leg['success'])} "
+            "success episodes. Trust the schema and delete the sidecar."
+        )
+    src, out = "schema", sch
+else:
+    src, out = "legacy sidecar (dataset is pre-migration)", leg
+if len(out["success"]) != 300 or len(out["fail"]) != 47 or out["unknown"]:
+    raise SystemExit(
+        f"expected 300 success / 47 fail / 0 unknown, got {len(out['success'])}/"
+        f"{len(out['fail'])}/{len(out['unknown'])} from the {src}"
+    )
+print("[" + ",".join(map(str, out["success"])) + "]", file=sys.stdout)
+print(f"episode verdicts read from the {src}", file=sys.stderr)
 PYEOF
 ) || exit 1
 echo "[$(date +%T)] training on ${OBJ:-flow_matching}, success-only: 300 of 347 episodes (47 failures excluded)"
