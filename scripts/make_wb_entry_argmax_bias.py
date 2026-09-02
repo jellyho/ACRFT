@@ -71,7 +71,34 @@ width_tbl_en = (
 
 FIG = "<figure><img src='figures/argmax-width/fig_selection_bias.png' alt='selection bias vs candidate width'><figcaption>{cap}</figcaption></figure>"
 
-KO = f"""<table class='num'><tr><th>항목</th><th>내용</th></tr>
+CORR_KO = """<div style='border-left:4px solid #c44;background:#fff5f5;padding:10px 14px;margin:12px 0'>
+<b>정정 (2026-09-02, 게시 당일).</b> 이 글의 초판은 실물 결과를 <b>"BoN이 실패했고 확률적 추첨이 이겼다"</b>로
+서술했다. 원자료로 run-level 통계를 다시 내면 그렇게 말할 수 없다 — 조건당 n=10, 0–4 정수 척도:
+<br><code>무선택 1.70 ± 0.59 &nbsp;|&nbsp; argmax BoN 1.70 ± 0.78 &nbsp;|&nbsp; 추첨 2.70 ± 0.78</code>
+<br>BoN vs 무선택 <b>Δ=+0.00, 95% CI [−1.05, +1.05], p=1.000</b> — "실패"가 아니라 <b>신호가 없을 때
+예측되는 바로 그 결과</b>이며, 설명이 필요한 현상이 아니다.
+추첨 vs 무선택 <b>Δ=+1.00, 95% CI [−0.05, +2.05], p=0.060</b> — <b>유의하지 않다.</b>
+따라서 <b>세 조건은 통계적으로 서로 구분되지 않으며</b>, "덜 고르는 규칙이 이겼다"는 아래 문장들은
+유의하지 않은 차이에 기댄 것이므로 취소한다. Δ=1.0을 잡으려면 조건당 30–40 에피소드가 필요하다.
+<br><b>이 글의 오프라인 측정(판별 정확도 0.566, 폭-편향 멱함수, 앙상블 4.7%)은 로봇 결과와 독립적으로
+성립하며 영향받지 않는다.</b> 영향받는 것은 그것을 실물 결과와 잇는 해석뿐이다.
+</div>"""
+CORR_EN = """<div style='border-left:4px solid #c44;background:#fff5f5;padding:10px 14px;margin:12px 0'>
+<b>Correction (2026-09-02, same day as publication).</b> The first version of this entry described the
+robot result as <b>"best-of-N failed and the stochastic lottery won"</b>. Recomputing run-level
+statistics from the raw data does not support that — n=10 per condition, integer 0–4 scale:
+<br><code>no selection 1.70 ± 0.59 &nbsp;|&nbsp; argmax BoN 1.70 ± 0.78 &nbsp;|&nbsp; lottery 2.70 ± 0.78</code>
+<br>BoN vs no selection: <b>Δ=+0.00, 95% CI [−1.05, +1.05], p=1.000</b> — not a failure but
+<b>exactly what no signal predicts</b>, and therefore nothing that needs explaining.
+Lottery vs no selection: <b>Δ=+1.00, 95% CI [−0.05, +2.05], p=0.060</b> — <b>not significant.</b>
+<b>All three conditions are statistically indistinguishable</b>, so the sentences below that lean on
+"the rule that selects less won" are withdrawn. Detecting Δ=1.0 needs 30–40 episodes per condition.
+<br><b>The offline measurements in this entry (0.566 discrimination, the width–bias power law, the
+4.7% ensemble ratio) hold independently of the robot result and are unaffected.</b> What is affected
+is only the interpretation that joins them to it.
+</div>"""
+
+KO = f"""{CORR_KO}<table class='num'><tr><th>항목</th><th>내용</th></tr>
 <tr><th>who</th><td>워커B</td></tr>
 <tr><th>when</th><td>2026-09-02</td></tr>
 <tr><th>where</th><td>CPU only — 캐시된 DINOv2 feature(<code>pc_cache/yam_s347</code>, 93.8만 프레임) 위. GPU·로봇 불필요</td></tr>
@@ -126,7 +153,7 @@ q-landscape-ood가 보고한 BC 샘플러 자체의 폭 σ≈{SIGMA_BC}과 같�
 <h3>그래서 실물 BoN이 실패한 이유는 과대평가가 아니다</h3>
 <p>처방이 갈리는 지점이다. 편향이 문제라면 답은 <b>더 강한 비관성</b>(앙상블·LCB·CQL)이다. 그러나 서빙 폭에서
 편향이 +{BON_PRIOR}에 불과하다면, N=8 arg-max가 무선택과 동률인 이유는 <b>그 폭에서 고를 신호가 없기 때문</b>이다.
-같은 데이터가 이미 그렇게 말한다 — 확률적 추첨이 2.70을 낸 것은 <b>덜 고르는 규칙</b>이 이겼다는 뜻이다.</p>
+다만 위 정정대로 <b>실물 데이터는 아직 이 해석을 지지하지도 반박하지도 못한다</b>(세 조건 모두 CI가 겹친다). 이 문단은 오프라인 측정이 시사하는 <b>가설</b>이며, 판정은 에피소드 수를 늘린 뒤에 내린다.</p>
 <p><b>판별력을 직접 재면 이 해석이 지지된다.</b> 위 표의 후보는 "다른 상태에서 실행된 청크"로,
 BoN이 마주하는 것보다 <b>{WIDEST:.0f}배 넓은</b> — 즉 훨씬 <b>쉬운</b> — 판별 과제다.
 그런데도 후보 하나씩 볼 때 critic의 정확도는 <b>{D["ranking_accuracy"]:.3f}</b>(우연 0.5), 후보당 마진 중앙값은
@@ -169,7 +196,7 @@ q-landscape-ood는 9종에서 과대추정이 보편적임을 보였지만, 여�
 실물 BoN이 여전히 동률이면 이 해석이 틀린 것이다.</li>
 </ul>"""
 
-EN = f"""<table class='num'><tr><th>field</th><th></th></tr>
+EN = f"""{CORR_EN}<table class='num'><tr><th>field</th><th></th></tr>
 <tr><th>who</th><td>worker B</td></tr>
 <tr><th>when</th><td>2026-09-02</td></tr>
 <tr><th>where</th><td>CPU only, over cached DINOv2 features (<code>pc_cache/yam_s347</code>, 938k frames). No GPU, no robot.</td></tr>
@@ -224,8 +251,9 @@ model</b> and can leave it in directions the data never took, at the same distan
 <h3>So the robot's BoN failure is not over-estimation</h3>
 <p>This is where the prescriptions diverge. If bias were the problem, the answer is <b>more pessimism</b>
 (ensembles, LCB, CQL). But if the bias at serving width is only +{BON_PRIOR}, then N=8 arg-max tying with no
-selection means <b>there is no signal to select on at that width</b>. The same data already says so: the
-stochastic lottery winning at 2.70 means the rule that <b>selects less</b> won.</p>
+selection means <b>there is no signal to select on at that width</b>. Per the correction above, though, <b>the robot data can neither support nor refute this yet</b> — all three
+conditions have overlapping CIs. This paragraph is a <b>hypothesis</b> suggested by the offline measurements;
+the verdict waits on more episodes.</p>
 <p><b>Measuring the discrimination directly supports that reading.</b> The candidates above are chunks
 executed at OTHER states — a task <b>{WIDEST:.0f}x wider</b>, and therefore far
 <b>easier</b>, than what BoN faces. Even so, per candidate the critic is right only <b>{D["ranking_accuracy"]:.3f}</b>
@@ -274,7 +302,7 @@ entry = {
     "eid": "argmax-width",
     "worker": "B",
     "date": "2026-09-02 04:10",
-    "status": "finding",
+    "status": "finding",  # offline part settled; the robot-side reading is explicitly provisional
     "title": "🤖 [워커B] arg-max 편향은 후보 폭의 함수다 — BoN은 그 폭이 없고, critic은 상태를 0.57로만 가린다",
     "summary": (
         f"같은 앵커·같은 단위인데 q-landscape-ood의 BoN 편향(+{BON_PRIOR}, N=16)과 이 프로브({AM[i16]:+.0f}, N=16)가 "
