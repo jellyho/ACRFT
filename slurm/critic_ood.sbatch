@@ -28,7 +28,15 @@ if [ -n "${ACQL:-}" ]; then
   CQL_ARGS="--alpha-cql ${ACQL} --cql-negatives ${NEG:-shuffle} --cql-n ${CQLN:-8} --cql-batch ${CQLB:-64}"
   if [ -n "${BANK:-}" ]; then CQL_ARGS="${CQL_ARGS} --cql-bank ${BANK}"; fi
 fi
-exec uv run --no-sync python -u scripts/train_patch_critic_cached.py \
+echo "[$(date +%T)] ${NAME:?} starting on $(hostname)"
+# NOTE: we call the venv interpreter directly instead of `uv run --no-sync`. On node100, `uv run`
+# hangs before it ever starts Python -- jobs 37235-37239 sat there for two hours writing a zero-byte
+# log, and a staged diagnostic (logs/diag100_37263.log) showed the bash preamble printing and then
+# both a 120s and a 180s `timeout uv run` expiring with no output, while the identical script
+# finished in under a second on node200. With UV_PROJECT_ENVIRONMENT already pointing at the venv,
+# `uv run --no-sync` only means "use this venv's python", so calling it directly is equivalent and
+# removes the thing that wedges. The echo below exists so a silent log is diagnosable next time.
+exec /data5/jellyho/ACRFT/openpi/.venv/bin/python -u scripts/train_patch_critic_cached.py \
   --cache /data1/jellyho/pc_cache/yam_s347 \
   --outcomes /data5/jellyho/ACRFT/openpi/.scratch/yam_outcomes_347.jsonl \
   --homing-onsets /data5/jellyho/ACRFT/openpi/.scratch/yam_homing_onsets.json \
