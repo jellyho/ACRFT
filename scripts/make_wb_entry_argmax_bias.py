@@ -151,7 +151,7 @@ q-landscape-ood가 보고한 BC 샘플러 자체의 폭 σ≈{SIGMA_BC}과 같�
 <b>거리당 적대성이 더 높다</b>는 가설이고, 정책 샘플 뱅크가 도착하면 같은 스크립트로 직접 검증된다.</span></p>
 <div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
 <b>정정 2 (2026-09-02) — 위 잔차는 존재하지 않았다. 축이 틀렸다.</b>
-워커B(ACRFT-WS)가 단위를 지적했고, 그쪽 프로브의 frozen 출력으로 직접 계산해 확인했다.
+ACRFT-WS 세션이 단위를 지적했고, 그쪽 프로브의 frozen 출력으로 직접 계산해 확인했다.
 프로브가 보고하는 σ=0.009는 <code>bc.std(axis=0).mean()</code>(<code>probe_q_landscape.py:177</code>),
 즉 <b>좌표별 std의 평균</b>이다. 이 글의 축은 <code>norm(Δ)/√(H·AD)</code>, 즉 <b>차원당 RMS</b>이고,
 좌표가 이질적이면(30스텝 청크가 팔 관절과 그리퍼를 섞으므로 당연히 그렇다) Jensen 부등식으로
@@ -161,7 +161,7 @@ q-landscape-ood가 보고한 BC 샘플러 자체의 폭 σ≈{SIGMA_BC}과 같�
 <br><b>4.6배의 분해</b> (frozen probe 360 프레임에서 직접 재현; 네 숫자 모두 4자리 일치):
 <table class='num'><tr><th>단계</th><th>값</th><th>배수</th><th>누구 몫</th></tr>
 <tr><td>이 글이 인용했던 σ</td><td>0.0090</td><td>—</td><td>—</td></tr>
-<tr><td>프로브의 실제 mean-of-std</td><td>0.0185</td><td>2.06×</td><td>낡은 코드 주석. 프로즌 프로브의 값이었던 적이 없다 (워커B가 교체·푸시)</td></tr>
+<tr><td>프로브의 실제 mean-of-std</td><td>0.0185</td><td>2.06×</td><td>낡은 코드 주석. 프로즌 프로브의 값이었던 적이 없다 (ACRFT-WS가 교체·푸시)</td></tr>
 <tr><td>RMS-of-std (Jensen)</td><td>0.0295</td><td>1.60×</td><td>내가 지목한 기제 — 다만 크기는 <b>1.6배</b>다</td></tr>
 <tr><td>두 draw 사이 거리 (√2)</td><td>0.0417</td><td>1.41×</td><td>내 축은 구름 반경이 아니라 <b>후보−실행 청크 거리</b>다</td></tr>
 </table>
@@ -189,7 +189,7 @@ spread는 <b>{D["within_state_candidate_std"]:.1f}</b>다 — <b>{D["disagreemen
 LCB(β=1)를 걸어도 N=8에서 {AM[i8]:+.1f} → {LC[i8]:+.1f}, {(1 - LC[i8] / AM[i8]) * 100:.0f}%밖에 못 깎는다.
 <b>β를 올려서 될 일이 아니라, 측정 자체가 없다.</b> (그리고 K=2에서는 <code>mean − 1σ</code>가
 <code>min</code>과 <b>항등</b>임을 확인했다 — 부동소수점 오차 4.4e-16. 위 LCB 곡선은 독립 추정량이 아니라
-min 그 자체이고, β는 K=2에서 자유도가 아니다. 워커B(ACRFT-WS)의 지적.) 이는
+min 그 자체이고, β는 K=2에서 자유도가 아니다. ACRFT-WS의 지적.) 이는
 <span class='xref' data-eid='critic-detail-survey'>구현 디테일 서베이</span>의 가설 2(∇Q를 쓰는 방법은 전부 앙상블 10,
 우리는 2)에 처음으로 숫자를 붙인 것이다.</p>
 
@@ -274,7 +274,7 @@ model</b> and can leave it in directions the data never took, at the same distan
 <b>higher adversariality per unit distance</b> — and the policy-sample bank tests it directly with this same script.</span></p>
 <div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
 <b>Correction 2 (2026-09-02) — that residual did not exist. The axis was wrong.</b>
-Worker B (ACRFT-WS) flagged the units and their probe's own frozen output settles it. The sigma the
+The ACRFT-WS session flagged the units and their probe's own frozen output settles it. The sigma the
 probe reported as 0.009 is not the frozen probe's value at all, and the quantity it names is
 <code>bc.std(axis=0).mean()</code> (<code>probe_q_landscape.py:177</code>) — the <b>mean over
 coordinates of the per-coordinate std</b>. This entry's axis is <code>norm(delta)/sqrt(H*AD)</code>,
@@ -316,7 +316,7 @@ candidates that the arg-max exploits is <b>{D["within_state_candidate_std"]:.1f}
 <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b> of it. LCB at β=1 moves N=8 from {AM[i8]:+.1f} to {LC[i8]:+.1f},
 only {(1 - LC[i8] / AM[i8]) * 100:.0f}%. <b>Not a β to tune — a measurement that is missing.</b> (And at K=2, <code>mean − 1σ</code> is
 <b>identically</b> <code>min</code> — verified to 4.4e-16. The LCB curve above is therefore the min curve, not an
-independent estimator, and β is not a degree of freedom at K=2. Pointed out by worker B, ACRFT-WS.) This is the first
+independent estimator, and β is not a degree of freedom at K=2. Pointed out by the ACRFT-WS session.) This is the first
 number attached to hypothesis 2 of the
 <span class='xref' data-eid='critic-detail-survey'>implementation-detail survey</span> (every method that uses
 ∇Q runs a 10-ensemble; we ran 2).</p>

@@ -100,7 +100,7 @@ prefix가 하나뿐이므로, 이 통제군은 모든 critic 조건과 <b>critic
 동작 자체를 못 한다"</b>에 가깝다. 어느 쪽인지는 조향 구현 쪽(정규화 박스 이탈, ODE 파손)을 따로 봐야 한다. 임계값은 <b>방향에 무관</b>하므로 이 데이터만으로는 "gradient가 틀렸다"와 "그 크기의 주입은 방향이 뭐든 액션을 망친다"를 가를 수 없고, 가르는 통제군은 <b>같은 조향 루프에서 g를 랜덤 단위벡터로 바꾼 것</b>이다(commit 7c6af78).</p>
 
 <div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
-<b>추가 (2026-09-02) — 그 통제군의 결과가 도착했다.</b> 워커B(ACRFT-WS)가 같은 로봇·같은 critic 계열에서
+<b>추가 (2026-09-02) — 그 통제군의 결과가 도착했다.</b> ACRFT-WS 세션이 같은 로봇·같은 critic 계열에서
 바로 그 실험을 돌렸다. 시연자 앵커 기준, 정규화 행동단위 3까지 이동했을 때:
 <br><code>∇_a Q 방향 +32.8 ± 5.0 &nbsp; vs &nbsp; 무작위 단위방향 3개 −0.13 ± 0.49</code> — <b>200배, critic 9종 전부</b>.
 그리고 ∇_a Q 에너지의 <b>73%가 BC draw 16개가 펼치는 공간 밖</b>이다(우연이면 96%).
@@ -109,7 +109,7 @@ prefix가 하나뿐이므로, 이 통제군은 모든 critic 조건과 <b>critic
 <br>같은 인계에서 <b>축 분리</b>도 보고됐다 — BC 체크포인트를 100k/150k/200k로 바꾸면 선택 이득은
 +1.08 → +0.68로 줄지만 ∇Q 과대추정은 32.6/32.9/32.8로 <b>전혀 움직이지 않는다</b>. 조향 문제는
 정책을 바꿔서 고칠 수 없고 critic의 성질이라는 뜻이다.
-<br><b>출처와 한계</b>: 이 수치는 워커B의 <code>scripts/probe_q_landscape.py</code>(브랜치
+<br><b>출처와 한계</b>: 이 수치는 ACRFT-WS 세션의 <code>scripts/probe_q_landscape.py</code>(브랜치
 <code>probe/q-landscape</code>)에서 온 것으로, 그 브랜치가 origin에 없어 <b>이 세션에서 재현하지 않았다</b>.
 인계 내용 그대로 인용하며, 이 리포트의 나머지 수치와 달리 독립 검증되지 않았다.
 </div>
@@ -166,7 +166,7 @@ then collapse at 0.1 (7/10 episodes at stage 0)". That reads less like "the grad
 (leaving the normalized action box, breaking the ODE), not at the critic. A threshold is <b>direction-agnostic</b>, so this data alone cannot separate "the gradient points the wrong way" from "an injection that large damages the action whatever its direction"; the control that separates them is <b>the same steering loop with g replaced by a random unit vector</b> (commit 7c6af78).</p>
 
 <div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
-<b>Added 2026-09-02 — that control has now been run.</b> Worker B (ACRFT-WS) ran exactly it, on the same
+<b>Added 2026-09-02 — that control has now been run.</b> The ACRFT-WS session ran exactly it, on the same
 robot and the same critic family. Against the demonstrator anchor, moving out to 3 normalized action units:
 <br><code>along ∇_a Q: +32.8 ± 5.0 &nbsp; vs &nbsp; three random unit directions: −0.13 ± 0.49</code> — <b>200x, across all 9 critics</b>.
 And <b>73% of the ∇_a Q energy lies outside the span of 16 BC draws</b> (96% would be chance).
@@ -175,7 +175,7 @@ that large breaks it". Steering collapses because Q inflates along the one direc
 <br>The same handoff reports an <b>axis separation</b>: sweeping the BC checkpoint 100k/150k/200k shrinks the
 selection benefit (+1.08 → +0.68) while the ∇Q over-estimation does not move at all (32.6/32.9/32.8). Steering
 cannot be fixed by changing the policy — it is a property of the critic.
-<br><b>Provenance and limit</b>: these numbers come from worker B's <code>scripts/probe_q_landscape.py</code>
+<br><b>Provenance and limit</b>: these numbers come from the ACRFT-WS session's <code>scripts/probe_q_landscape.py</code>
 (branch <code>probe/q-landscape</code>), which is not on origin, so they were <b>not reproduced in this session</b>.
 They are quoted as handed over and, unlike every other number in this entry, are not independently verified.
 </div>
