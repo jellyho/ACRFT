@@ -4,15 +4,28 @@
 # lr 1e-4, K=2, min reduction, aug on, mc_floor on) EXCEPT the one factor named by NAME, so the
 # existing checkpoint is the control:
 #
-#   k10_min   sbatch --export=ALL,NAME=k10_min,K=10                              slurm/critic_ood.sbatch
-#   k10_mean  sbatch --export=ALL,NAME=k10_mean,K=10,RED=mean                    slurm/critic_ood.sbatch
-#   cql       sbatch --export=ALL,NAME=cql_shuffle,ACQL=1.0                      slurm/critic_ood.sbatch
-#   cql+bank  sbatch --export=ALL,NAME=cql_bank,ACQL=1.0,NEG=bank,BANK=<dir>     slurm/critic_ood.sbatch
+#   EDAC ladder (the design ACRFT-WS corrected). The matched pair must hold K FIXED and vary only
+#   the EDAC term, or a movement in frac_outside_span cannot be attributed: EDAC diversifies
+#   gradients ACROSS members, so pairing a K=2 arm against a K=10+EDAC arm changes ensemble size and
+#   the penalty at once, and "a bigger ensemble is more pessimistic off-support" explains the result
+#   just as well. K=32 because the shared trunk makes it nearly free (3.08 GB of activations against
+#   2.79 at K=10 and 2.68 at K=2) and EDAC's effect grows with ensemble size, so testing at small K
+#   hides it. Reduction is `mean`: with the pair matched on K, `min` would only make the absolute
+#   numbers K-dependent for reasons unrelated to the penalty, and pessimism belongs at the serving
+#   read (CriticQ.q_lcb) where beta is a free knob.
 #
-# Why the two K=10 arms and not one: turning K up while reducing by `min` confounds "more members"
-# (a better-estimated disagreement) with "more pessimism" (min-of-10 < min-of-2 by construction).
-# k10_mean moves the pessimism out of training and into the serving read (CriticQ.q_lcb), so the
-# two effects can be told apart.
+#   Labels are NEUTRAL on purpose -- ACRFT-WS scores the pair blind with probe_q_landscape.py, so the
+#   arm names must not say which is which. The mapping lives in .scratch/edac_ladder_map.json.
+#
+#     sbatch --export=ALL,NAME=arm_a_s0,K=32,RED=mean,SEED=0            slurm/critic_ood.sbatch
+#     sbatch --export=ALL,NAME=arm_b_s0,K=32,RED=mean,SEED=0,EDAC=1.0   slurm/critic_ood.sbatch
+#     ... seeds 0,1,2 for both; the architecture control is one cheap run:
+#     sbatch --export=ALL,NAME=arch_ctl_s0,K=2,RED=mean,SEED=0          slurm/critic_ood.sbatch
+#   whose anchor is the ALREADY-TRAINED fully-independent K=2 critic
+#   (.scratch/patch_critic_yam_s347_fixed_tau9_min_200k), so trunk sharing is tested without a new
+#   job for the anchor. One or two seeds is enough there -- its job is to catch a GROSS effect of
+#   sharing the trunk on grad_a Q, and a gross effect does not need three seeds to show.
+#
 #SBATCH --job-name=critic_ood
 #SBATCH --partition=debug
 #SBATCH --gres=gpu:1
@@ -23,6 +36,8 @@
 #SBATCH --output=/data5/jellyho/ACRFT/openpi/logs/critic_ood_%j.slurm.log
 export UV_PROJECT_ENVIRONMENT=/data5/jellyho/ACRFT/openpi/.venv
 export PYTHONPATH=/data5/jellyho/ACRFT/openpi:/data5/jellyho/ACRFT/openpi/src
+EDAC_ARGS=""
+if [ -n "${EDAC:-}" ]; then EDAC_ARGS="--edac-weight ${EDAC}"; fi
 CQL_ARGS=""
 if [ -n "${ACQL:-}" ]; then
   CQL_ARGS="--alpha-cql ${ACQL} --cql-negatives ${NEG:-shuffle} --cql-n ${CQLN:-8} --cql-batch ${CQLB:-64}"
@@ -43,6 +58,7 @@ exec /data5/jellyho/ACRFT/openpi/.venv/bin/python -u scripts/train_patch_critic_
   --norm-stats /data5/jellyho/ACRFT/openpi/assets/pi05_yam_lego_taxi_rlt/jellyho/yam_lego_taxi_s300/norm_stats.json \
   --macro-group-size 30 --expectile 0.9 --feat-dropout 0.1 --feat-noise 0.05 \
   --h-goal 30 --lr 1e-4 --steps "${STEPS:-200000}" \
-  --num-critics "${K:-2}" --q-reduction "${RED:-min}" ${CQL_ARGS} \
+  --num-critics "${K:-2}" --q-reduction "${RED:-min}" --seed "${SEED:-0}" \
+  --critic-arch "${ARCH:-shared}" ${EDAC_ARGS} ${CQL_ARGS} \
   --wandb --wandb-name "${NAME:?}" --wandb-group patch-critic-ood \
   --out "/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_${NAME}"

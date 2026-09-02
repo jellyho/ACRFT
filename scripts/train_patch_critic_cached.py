@@ -232,6 +232,14 @@ def main():
         default=0.01,
         help="pads the z-encoding support only (floq.py:369-370,486), NOT the noise interval",
     )
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="seeds parameter init, batch sampling and augmentation together. Seed replicates must "
+        "vary ONLY this -- if the recipe moves too, the seed term absorbs the recipe term and the "
+        "run-level CI stops meaning what it says.",
+    )
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -340,6 +348,7 @@ def main():
     spec["terminal"] = a.terminal
     spec["support"] = a.support
     spec["zero_init_head"] = a.zero_init_head
+    spec["seed"] = a.seed
     spec["value_head"] = a.value_head
     if a.value_head == "floq":
         spec["floq"] = {
@@ -481,7 +490,7 @@ def main():
     prefixes = list(range(a.macro_group_size, H + 1, a.macro_group_size))
     P_ = len(prefixes)
 
-    rng = jax.random.key(0)
+    rng = jax.random.key(a.seed)
     p2 = jnp.zeros((2, npatch, emb), jnp.float32)
     params = net.init(rng, p2, jnp.zeros((2, H, ad)), jnp.zeros((2, sd)))
     if a.value_head == "floq":
@@ -788,8 +797,8 @@ def main():
 
     a.out.mkdir(parents=True, exist_ok=True)
     carry = (params, tgt, opt, v_params, v_opt)
-    rng_np = np.random.default_rng(0)
-    aug_key = jax.random.key(1)
+    rng_np = np.random.default_rng(a.seed)
+    aug_key = jax.random.key(a.seed + 1)
     ar_h = np.arange(H)
     pref = np.asarray(prefixes)
     # ---- CQL negative bank (frozen-BC policy samples), if requested ---------------------------
