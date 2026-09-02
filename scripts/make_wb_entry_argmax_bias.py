@@ -164,7 +164,9 @@ BoN이 마주하는 것보다 <b>{WIDEST:.0f}배 넓은</b> — 즉 훨씬 <b>�
 <p>상태당 앙상블 불일치(K=2)는 <b>{D["ensemble_disagreement_std"]:.1f}</b>인데, arg-max가 착취하는 후보 간
 spread는 <b>{D["within_state_candidate_std"]:.1f}</b>다 — <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b>만 보고 있다.
 LCB(β=1)를 걸어도 N=8에서 {AM[i8]:+.1f} → {LC[i8]:+.1f}, {(1 - LC[i8] / AM[i8]) * 100:.0f}%밖에 못 깎는다.
-<b>β를 올려서 될 일이 아니라, 측정 자체가 없다.</b> 이는
+<b>β를 올려서 될 일이 아니라, 측정 자체가 없다.</b> (그리고 K=2에서는 <code>mean − 1σ</code>가
+<code>min</code>과 <b>항등</b>임을 확인했다 — 부동소수점 오차 4.4e-16. 위 LCB 곡선은 독립 추정량이 아니라
+min 그 자체이고, β는 K=2에서 자유도가 아니다. 워커B(ACRFT-WS)의 지적.) 이는
 <span class='xref' data-eid='critic-detail-survey'>구현 디테일 서베이</span>의 가설 2(∇Q를 쓰는 방법은 전부 앙상블 10,
 우리는 2)에 처음으로 숫자를 붙인 것이다.</p>
 
@@ -264,7 +266,9 @@ chance on a task that easy has no reason to separate candidates inside a σ≈{S
 <p>Per-state ensemble disagreement (K=2) is <b>{D["ensemble_disagreement_std"]:.1f}</b>, while the spread across
 candidates that the arg-max exploits is <b>{D["within_state_candidate_std"]:.1f}</b> — it sees
 <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b> of it. LCB at β=1 moves N=8 from {AM[i8]:+.1f} to {LC[i8]:+.1f},
-only {(1 - LC[i8] / AM[i8]) * 100:.0f}%. <b>Not a β to tune — a measurement that is missing.</b> This is the first
+only {(1 - LC[i8] / AM[i8]) * 100:.0f}%. <b>Not a β to tune — a measurement that is missing.</b> (And at K=2, <code>mean − 1σ</code> is
+<b>identically</b> <code>min</code> — verified to 4.4e-16. The LCB curve above is therefore the min curve, not an
+independent estimator, and β is not a degree of freedom at K=2. Pointed out by worker B, ACRFT-WS.) This is the first
 number attached to hypothesis 2 of the
 <span class='xref' data-eid='critic-detail-survey'>implementation-detail survey</span> (every method that uses
 ∇Q runs a 10-ensemble; we ran 2).</p>
