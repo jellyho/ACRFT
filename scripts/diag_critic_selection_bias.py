@@ -50,7 +50,23 @@ R = pathlib.Path(__file__).resolve().parents[1]
 
 # q-landscape-ood measured the SAME bias against the SAME anchor over the BC sampler's own draws.
 # Its two numbers are the only external points on this axis, so they are plotted, not restated.
-SIGMA_BC = 0.009  # per-dim std of the BC sampler's draws
+#
+# GETTING THE UNITS RIGHT COST US A FACTOR OF 4.6. The probe reports sigma = 0.009, but that is
+# `bc.std(axis=0).mean()` (probe_q_landscape.py:177) -- the MEAN over coordinates of the per-
+# coordinate std. This axis is a per-dimension RMS, `norm(delta)/sqrt(H*AD)`, and mean-of-std is
+# below RMS-of-std by Jensen whenever the coordinates are heterogeneous, which a 30-step chunk
+# mixing arm joints with grippers certainly is. Recovering the RMS from the probe's own frozen
+# output (slurm/probes/q_landscape.json.gz, origin/probe/q-landscape @ 0bc7bbf1):
+#     pc_sigma    = [0.4565, 0.2205]   std along PC1, PC2 of the 420-dim draws
+#     pc_var_frac = [0.544, 0.154]     share of the draw variance on each
+#     total variance = 0.4565^2 / 0.544 = 0.383
+#     per-coordinate RMS std = sqrt(0.383 / 420) = 0.0295
+#     distance between two independent draws = sqrt(2) * 0.0295 = 0.0417
+# So the BC cloud sits at 0.042 on this axis, not 0.009. At 0.042 the fitted power law gives +1.84,
+# against the probe's independently measured +1.88 -- which also DISSOLVES the 14x residual this
+# entry previously reported and hypothesised about ("BC draws are more adversarial per unit
+# distance"). There was no residual; the marker was in the wrong place.
+SIGMA_BC = 0.0417  # per-dim RMS distance between two BC draws, derived above
 BON_BIAS = 1.88  # arg-max bias at N=16 over those draws
 BON_CI = 0.62
 

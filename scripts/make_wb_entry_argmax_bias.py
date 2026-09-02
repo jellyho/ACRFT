@@ -25,7 +25,7 @@ N = D["n"]
 AM, FR, LC = D["argmax_margin"], D["argmax_beats_executed_frac"], D["lcb_margin"]
 i8, i16 = N.index(8), N.index(16)
 BON_PRIOR = 1.88  # q-landscape-ood, N=16, over the BC sampler's own draws
-SIGMA_BC = 0.009  # q-landscape-ood
+SIGMA_BC = 0.0417  # per-dim RMS distance between two BC draws; see the correction block
 RATIO = AM[i16] / BON_PRIOR
 import numpy as np  # noqa: E402
 
@@ -144,11 +144,26 @@ q-landscape-ood가 보고한 BC 샘플러 자체의 폭 σ≈{SIGMA_BC}과 같�
 보다도 좁다. 그 폭에서 이 프로브의 편향은 <b>{NARROW:+.1f}</b>, q-landscape-ood의 측정은 <b>+{BON_PRIOR}</b> —
 둘 다 <b>value 1~2단위, 즉 {BON_PRIOR / 30:.2f}초</b>다. 진행도가 0–4단계인 과제에서 이는 아무것도 아니다.
 반면 넓은 집합에서는 {AM[i16]:+.0f}. <b>두 자릿수 차이가 나는 것은 critic이 아니라 후보 집합이다.</b></p>
-<p><b>다만 정확히 겹치지는 않는다.</b> 멱함수를 σ_BC까지 외삽하면 {PRED_AT_BC:+.2f}인데 q-landscape-ood의 실측은
+<p><b>[취소됨 — 아래 정정 참조]</b> <span style='opacity:.55'> 멱함수를 σ_BC까지 외삽하면 {PRED_AT_BC:+.2f}인데 q-landscape-ood의 실측은
 +{BON_PRIOR}로 <b>{OVERSHOOT:.0f}배 위</b>다. 자릿수는 맞지만 정확히 맞지는 않으며, 그럴듯한 이유가 있다 —
 이 스윕의 좁은 후보는 <b>시간축으로 밀린 실제 액션</b>이라 데모 다양체 위에 얌전히 놓이는 반면, BC draw는
 <b>생성 모델의 샘플</b>이라 같은 거리에서도 데이터가 가보지 않은 방향으로 벗어날 수 있다. 즉
-<b>거리당 적대성이 더 높다</b>는 가설이고, 정책 샘플 뱅크가 도착하면 같은 스크립트로 직접 검증된다.</p>
+<b>거리당 적대성이 더 높다</b>는 가설이고, 정책 샘플 뱅크가 도착하면 같은 스크립트로 직접 검증된다.</span></p>
+<div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
+<b>정정 2 (2026-09-02) — 위 잔차는 존재하지 않았다. 축이 틀렸다.</b>
+워커B(ACRFT-WS)가 단위를 지적했고, 그쪽 프로브의 frozen 출력으로 직접 계산해 확인했다.
+프로브가 보고하는 σ=0.009는 <code>bc.std(axis=0).mean()</code>(<code>probe_q_landscape.py:177</code>),
+즉 <b>좌표별 std의 평균</b>이다. 이 글의 축은 <code>norm(Δ)/√(H·AD)</code>, 즉 <b>차원당 RMS</b>이고,
+좌표가 이질적이면(30스텝 청크가 팔 관절과 그리퍼를 섞으므로 당연히 그렇다) Jensen 부등식으로
+평균-of-std &lt; RMS-of-std 이다. 프로브의 <code>q_landscape.json.gz</code>에서 되돌리면:
+<br><code>pc_sigma=[0.4565, 0.2205], pc_var_frac=[0.544, 0.154] → 총분산 0.4565²/0.544 = 0.383
+→ 좌표당 RMS std = √(0.383/420) = 0.0295 → 두 draw 사이 거리 = √2×0.0295 = <b>0.0417</b></code>
+<br>즉 BC 구름은 이 축에서 <b>0.042</b>에 있다. 거기서 멱함수는 <b>+1.74</b>를 주고, 프로브의 독립 실측은
+<b>+1.88 ± 0.62</b> — <b>8% 이내로 일치</b>한다. 14배 잔차도, 그것을 설명하려던 "BC draw가 거리당 더
+적대적"이라는 가설도 <b>필요 없다</b>. 마커가 엉뚱한 자리에 찍혀 있었을 뿐이다.
+<br>결론 방향은 그대로다 — 서빙 폭에서의 편향은 여전히 <b>제어 1~2스텝(≈0.06초)</b>이고, 넓은 집합의
++165와 두 자릿수 차이다. 달라진 것은 두 독립 측정이 이제 <b>어긋나지 않는다</b>는 점이다.
+</div>
 
 <h3>그래서 실물 BoN이 실패한 이유는 과대평가가 아니다</h3>
 <p>처방이 갈리는 지점이다. 편향이 문제라면 답은 <b>더 강한 비관성</b>(앙상블·LCB·CQL)이다. 그러나 서빙 폭에서
@@ -243,7 +258,7 @@ candidate width, moving 275x across a 25x range of width. And what best-of-N can
 q-landscape-ood's measurement is <b>+{BON_PRIOR}</b> — both one or two value units, i.e. {BON_PRIOR / 30:.2f} s.
 On a task scored 0–4 that is nothing. Over the wide set it is {AM[i16]:+.0f}. <b>What differs by two orders of
 magnitude is the candidate set, not the critic.</b></p>
-<p><b>They do not coincide exactly.</b> Extrapolating the power law to σ_BC gives {PRED_AT_BC:+.2f}, while
+<p><b>[WITHDRAWN — see the correction below]</b> <span style='opacity:.55'> Extrapolating the power law to σ_BC gives {PRED_AT_BC:+.2f}, while
 q-landscape-ood measured +{BON_PRIOR} — <b>{OVERSHOOT:.0f}x higher</b>. The order of magnitude agrees, the exact
 value does not, and there is a plausible reason: the narrow candidates in this sweep are <b>real actions shifted
 in time</b>, which stay politely on the demonstration manifold, whereas BC draws are <b>samples from a generative
