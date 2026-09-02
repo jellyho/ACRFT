@@ -174,7 +174,11 @@ def probe_frame(pb, obs, bc_norm, norm_state, data_chunk, *, ray_sigmas, abs_ts,
     bc = pb.to_critic_space(bc_norm, norm_state, raw_state)  # [N, h, ad]
 
     centre = bc.mean(axis=0)
-    sigma = float(bc.std(axis=0).mean())  # the policy's own spread, one number
+    # The policy's own spread, one number: the MEAN of the per-coordinate stds. Not the RMS (Jensen:
+    # mean < RMS when coordinates are heterogeneous, and a 30-step chunk mixes joints and gripper) and
+    # not the spread along the draws' principal direction (pc_sigma, ~25x larger). The frozen 9-critic
+    # probe measures mean 0.0185 / RMS 0.0295 / PC1 0.457 -- quote the one you mean.
+    sigma = float(bc.std(axis=0).mean())
     if sigma < 1e-9:
         return None
 
@@ -188,8 +192,8 @@ def probe_frame(pb, obs, bc_norm, norm_state, data_chunk, *, ray_sigmas, abs_ts,
     # TWO parameterisations, because two methods reach different distances.
     #
     # In BC-sigma units: best-of-N can only pick among draws, so it never leaves the cloud -- a few
-    # sigma is the whole of what it can exploit. But sigma is small (~0.009 measured), so 8 sigma is
-    # still 0.07 of a box half-width and a sweep in sigma alone never goes off-support at all.
+    # sigma is the whole of what it can exploit. But sigma is small (mean-of-std ~0.02 measured), so 8
+    # sigma is still ~0.15 of a box half-width and a sweep in sigma alone never goes off-support at all.
     #
     # In ABSOLUTE normalized units: steering moves by alpha * ||v|| per step, which has nothing to
     # do with the policy's spread, so it reaches the box edge and past it. That is where the
@@ -208,7 +212,7 @@ def probe_frame(pb, obs, bc_norm, norm_state, data_chunk, *, ray_sigmas, abs_ts,
 
     # ---- the same field, in the plane the POLICY actually varies in --------------------------
     # The grid above is spanned by grad_a Q and something orthogonal to it, which answers "what
-    # does the exploit direction cost" but shows the BC cloud as a single dot -- sigma is ~0.009
+    # does the exploit direction cost" but shows the BC cloud as a single dot -- sigma is ~0.02
     # and the plane is 2 units wide. To see the cloud AND the field around it, project onto the
     # top two principal components OF THE DRAWS THEMSELVES: the two directions this policy is
     # actually uncertain about at this state.
