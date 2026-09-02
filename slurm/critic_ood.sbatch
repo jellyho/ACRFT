@@ -26,6 +26,27 @@
 #   job for the anchor. One or two seeds is enough there -- its job is to catch a GROSS effect of
 #   sharing the trunk on grad_a Q, and a gross effect does not need three seeds to show.
 #
+#
+# HOW TO READ THE SCORES, AND ONE TRAP. ACRFT-WS scores these with probe_q_landscape.py and reports
+# frac_outside_span, required rho, and BoN excess against the on-support bias.
+#
+#   required rho is a RATIO OF AGGREGATES -- mean-over-episodes of dQ divided by mean-over-episodes
+#   of the ensemble std, bootstrapped over episodes. It is NOT the mean of per-frame dQ/std. The
+#   per-frame version explodes wherever two members nearly agree, because a near-zero denominator
+#   enters the average: on the frozen nine it returns 7.80 / 14.30 / 29.1 where the correct values
+#   are 2.27 / 2.27 / 2.50. If anything on this side ever computes rho, use the aggregate ratio.
+#   ACRFT-WS hit this first and caught it; the wrong version would have shown a 1.8x mean-vs-min
+#   difference that does not exist and sent us re-running the anchor for nothing.
+#
+#   The training reduction does NOT move these metrics, which is why arch_ctl_s0 (mean) is compared
+#   against the existing independent K=2 anchor trained with min rather than a fresh matched anchor.
+#   Measured on the one matched pair in the frozen nine (g5_tau9_mean vs g5_tau9_min, identical in
+#   everything else): dQ at the box edge +1.5%, required rho at the box +0.4%, outside_span 0.0%,
+#   with the rho CIs [1.75, 2.98] and [1.81, 3.02] almost entirely overlapping. The spread ACROSS the
+#   nine critics is an order of magnitude larger (rho 1.64-2.50, outside_span 0.717-0.877). Caveat
+#   from ACRFT-WS: that is n=1 recipe pair, enough to say a comparison will not trip over the
+#   reduction, not enough to call the effect exactly zero.
+#
 #SBATCH --job-name=critic_ood
 #SBATCH --partition=debug
 #SBATCH --gres=gpu:1

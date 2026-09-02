@@ -23,6 +23,14 @@ them:
               independently trained checkpoints, then independent training does not decorrelate the
               failure direction, the correlation is coming from the data and the objective rather
               than from shared weights, and sharing a trunk is not what is costing us the signal.
+
+CORROBORATION FROM AN UNRELATED STATISTIC. ACRFT-WS's probe reports frac_outside_span on the same
+nine critics, and it splits by MACRO GROUP and nothing else: the fixed family (macro 30) sits at
+0.72-0.77, the g5 family (macro 5) at 0.83-0.88. That is the axis this script finds with gradient
+cosines -- cross-recipe pairs, which differ in macro group, drop to 0.185, while pairs sharing the
+recipe stay at 0.31-0.33 however independent their weights are. Two unrelated statistics picking out
+macro_group_size is why the ensemble design varies head-side structure rather than adding more
+identically-trained members.
 """
 
 # ruff: noqa: PLC0415
