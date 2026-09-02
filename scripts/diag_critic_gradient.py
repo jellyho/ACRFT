@@ -2,10 +2,17 @@
 
 Every arm in the extraction ring that moves the policy (FlowDPG, QAM, QPILOTS-U, and Q-VGM if we
 were to add it) consumes the same object: grad_A Q at an action the critic has never been trained
-on. Our real-robot evidence is ambiguous about whether that object carries signal -- BoN argmax over
-N=8 policy samples tied with no selection at all (1.70 vs 1.70) while the stochastic expectile
-lottery reached 2.70, and QPILOTS-U steering fell monotonically from 1.80 at alpha=0 to 0.30 at
-alpha=0.1. Both are consistent with "ranking usable, gradient not", and both cost robot trials.
+on. Our real-robot evidence is ambiguous about whether that object carries signal. Against the
+execution-length-matched control (bc30_ex_30 = 1.80: same 30-step chunk, same 30-step commitment,
+no critic), arg-max best-of-N over N=8 policy samples scores 1.70 (delta -0.10) while the stochastic
+expectile lottery over the SAME candidates scores 2.70 (delta +0.90, p=0.097); the two selection
+rules differ by +1.00 (p=0.060). QPILOTS-U steering is worse at every alpha tried, but NOT
+monotonically -- the sequence at alpha = 0, .005, .01, .025, .05, .1 is 1.80, 1.10, 1.30, 1.00,
+1.20, 0.30. The middle four are statistically indistinguishable from each other (Kruskal p=0.45)
+and only alpha=0.1 collapses, which is the signature of a MAGNITUDE THRESHOLD rather than a
+dose-response -- and a threshold is direction-agnostic, so this data cannot yet separate "the
+gradient points the wrong way" from "an injection that large damages the action whatever its
+direction". The control that separates them is a random-unit-vector arm at the same alphas.
 This script asks the same question on cached features for a few GPU-hours.
 
 The candidates are REAL policy samples (scripts/sample_policy_chunks.py), not dataset chunks: the
