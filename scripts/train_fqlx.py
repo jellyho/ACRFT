@@ -163,18 +163,13 @@ def main():
         print(f"wandb: {run.url}", flush=True)
 
     def save(step_i):
-        import orbax.checkpoint as ocp
+        from openpi.extraction.checkpoint import save_servable
 
-        path = (a.out / f"{step_i}").absolute()
-        with ocp.StandardCheckpointer() as c:
-            # with the backbone trainable the expert subtree is no longer the whole change, so
-            # saving only it would silently drop what was learned everywhere else
-            payload = (
-                {"params": nnx.State.merge(p_exp_s, p_rest).to_pure_dict()}
-                if a.train_backbone
-                else {"expert": p_exp_s.to_pure_dict()}
-            )
-            c.save(path, payload, force=True)
+        # the WHOLE model in the BC layout (<out>/<step>/params + assets): servable as-is, no export
+        # step, whichever subset was trained -- see openpi/extraction/checkpoint.py
+        path = save_servable(
+            a.out / f"{step_i}", nnx.State.merge(p_exp_s, p_rest).to_pure_dict(), assets_from=a.init_ckpt
+        )
         print(f"saved {path}", flush=True)
 
     rng = jax.random.key(0)
