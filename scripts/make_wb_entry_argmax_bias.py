@@ -25,7 +25,7 @@ N = D["n"]
 AM, FR, LC = D["argmax_margin"], D["argmax_beats_executed_frac"], D["lcb_margin"]
 i8, i16 = N.index(8), N.index(16)
 BON_PRIOR = 1.88  # q-landscape-ood, N=16, over the BC sampler's own draws
-SIGMA_BC = 0.009  # q-landscape-ood
+SIGMA_BC = 0.0417  # per-dim RMS distance between two BC draws; see the correction block
 RATIO = AM[i16] / BON_PRIOR
 import numpy as np  # noqa: E402
 
@@ -144,11 +144,34 @@ q-landscape-ood가 보고한 BC 샘플러 자체의 폭 σ≈{SIGMA_BC}과 같�
 보다도 좁다. 그 폭에서 이 프로브의 편향은 <b>{NARROW:+.1f}</b>, q-landscape-ood의 측정은 <b>+{BON_PRIOR}</b> —
 둘 다 <b>value 1~2단위, 즉 {BON_PRIOR / 30:.2f}초</b>다. 진행도가 0–4단계인 과제에서 이는 아무것도 아니다.
 반면 넓은 집합에서는 {AM[i16]:+.0f}. <b>두 자릿수 차이가 나는 것은 critic이 아니라 후보 집합이다.</b></p>
-<p><b>다만 정확히 겹치지는 않는다.</b> 멱함수를 σ_BC까지 외삽하면 {PRED_AT_BC:+.2f}인데 q-landscape-ood의 실측은
+<p><b>[취소됨 — 아래 정정 참조]</b> <span style='opacity:.55'> 멱함수를 σ_BC까지 외삽하면 {PRED_AT_BC:+.2f}인데 q-landscape-ood의 실측은
 +{BON_PRIOR}로 <b>{OVERSHOOT:.0f}배 위</b>다. 자릿수는 맞지만 정확히 맞지는 않으며, 그럴듯한 이유가 있다 —
 이 스윕의 좁은 후보는 <b>시간축으로 밀린 실제 액션</b>이라 데모 다양체 위에 얌전히 놓이는 반면, BC draw는
 <b>생성 모델의 샘플</b>이라 같은 거리에서도 데이터가 가보지 않은 방향으로 벗어날 수 있다. 즉
-<b>거리당 적대성이 더 높다</b>는 가설이고, 정책 샘플 뱅크가 도착하면 같은 스크립트로 직접 검증된다.</p>
+<b>거리당 적대성이 더 높다</b>는 가설이고, 정책 샘플 뱅크가 도착하면 같은 스크립트로 직접 검증된다.</span></p>
+<div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
+<b>정정 2 (2026-09-02) — 위 잔차는 존재하지 않았다. 축이 틀렸다.</b>
+ACRFT-WS 세션이 단위를 지적했고, 그쪽 프로브의 frozen 출력으로 직접 계산해 확인했다.
+프로브가 보고하는 σ=0.009는 <code>bc.std(axis=0).mean()</code>(<code>probe_q_landscape.py:177</code>),
+즉 <b>좌표별 std의 평균</b>이다. 이 글의 축은 <code>norm(Δ)/√(H·AD)</code>, 즉 <b>차원당 RMS</b>이고,
+좌표가 이질적이면(30스텝 청크가 팔 관절과 그리퍼를 섞으므로 당연히 그렇다) Jensen 부등식으로
+평균-of-std &lt; RMS-of-std 이다. 프로브의 <code>q_landscape.json.gz</code>에서 되돌리면:
+<br><code>pc_sigma=[0.4565, 0.2205], pc_var_frac=[0.544, 0.154] → 총분산 0.4565²/0.544 = 0.383
+→ 좌표당 RMS std = √(0.383/420) = 0.0295 → 두 draw 사이 거리 = √2×0.0295 = <b>0.0417</b></code>
+<br><b>4.6배의 분해</b> (frozen probe 360 프레임에서 직접 재현; 네 숫자 모두 4자리 일치):
+<table class='num'><tr><th>단계</th><th>값</th><th>배수</th><th>누구 몫</th></tr>
+<tr><td>이 글이 인용했던 σ</td><td>0.0090</td><td>—</td><td>—</td></tr>
+<tr><td>프로브의 실제 mean-of-std</td><td>0.0185</td><td>2.06×</td><td>낡은 코드 주석. 프로즌 프로브의 값이었던 적이 없다 (ACRFT-WS가 교체·푸시)</td></tr>
+<tr><td>RMS-of-std (Jensen)</td><td>0.0295</td><td>1.60×</td><td>내가 지목한 기제 — 다만 크기는 <b>1.6배</b>다</td></tr>
+<tr><td>두 draw 사이 거리 (√2)</td><td>0.0417</td><td>1.41×</td><td>내 축은 구름 반경이 아니라 <b>후보−실행 청크 거리</b>다</td></tr>
+</table>
+곱하면 4.63배. 첫 정정은 이 전부를 Jensen으로 돌렸으나 Jensen은 그중 1.6배뿐이다.
+<br>즉 BC 구름은 이 축에서 <b>0.042</b>에 있다. 거기서 멱함수는 <b>+1.74</b>를 주고, 프로브의 독립 실측은
+<b>+1.88 ± 0.62</b> — <b>8% 이내로 일치</b>한다. 14배 잔차도, 그것을 설명하려던 "BC draw가 거리당 더
+적대적"이라는 가설도 <b>필요 없다</b>. 마커가 엉뚱한 자리에 찍혀 있었을 뿐이다.
+<br>결론 방향은 그대로다 — 서빙 폭에서의 편향은 여전히 <b>제어 1~2스텝(≈0.06초)</b>이고, 넓은 집합의
++165와 두 자릿수 차이다. 달라진 것은 두 독립 측정이 이제 <b>어긋나지 않는다</b>는 점이다.
+</div>
 
 <h3>그래서 실물 BoN이 실패한 이유는 과대평가가 아니다</h3>
 <p>처방이 갈리는 지점이다. 편향이 문제라면 답은 <b>더 강한 비관성</b>(앙상블·LCB·CQL)이다. 그러나 서빙 폭에서
@@ -164,7 +187,9 @@ BoN이 마주하는 것보다 <b>{WIDEST:.0f}배 넓은</b> — 즉 훨씬 <b>�
 <p>상태당 앙상블 불일치(K=2)는 <b>{D["ensemble_disagreement_std"]:.1f}</b>인데, arg-max가 착취하는 후보 간
 spread는 <b>{D["within_state_candidate_std"]:.1f}</b>다 — <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b>만 보고 있다.
 LCB(β=1)를 걸어도 N=8에서 {AM[i8]:+.1f} → {LC[i8]:+.1f}, {(1 - LC[i8] / AM[i8]) * 100:.0f}%밖에 못 깎는다.
-<b>β를 올려서 될 일이 아니라, 측정 자체가 없다.</b> 이는
+<b>β를 올려서 될 일이 아니라, 측정 자체가 없다.</b> (그리고 K=2에서는 <code>mean − 1σ</code>가
+<code>min</code>과 <b>항등</b>임을 확인했다 — 부동소수점 오차 4.4e-16. 위 LCB 곡선은 독립 추정량이 아니라
+min 그 자체이고, β는 K=2에서 자유도가 아니다. ACRFT-WS의 지적.) 이는
 <span class='xref' data-eid='critic-detail-survey'>구현 디테일 서베이</span>의 가설 2(∇Q를 쓰는 방법은 전부 앙상블 10,
 우리는 2)에 처음으로 숫자를 붙인 것이다.</p>
 
@@ -241,12 +266,37 @@ candidate width, moving 275x across a 25x range of width. And what best-of-N can
 q-landscape-ood's measurement is <b>+{BON_PRIOR}</b> — both one or two value units, i.e. {BON_PRIOR / 30:.2f} s.
 On a task scored 0–4 that is nothing. Over the wide set it is {AM[i16]:+.0f}. <b>What differs by two orders of
 magnitude is the candidate set, not the critic.</b></p>
-<p><b>They do not coincide exactly.</b> Extrapolating the power law to σ_BC gives {PRED_AT_BC:+.2f}, while
+<p><b>[WITHDRAWN — see the correction below]</b> <span style='opacity:.55'> Extrapolating the power law to σ_BC gives {PRED_AT_BC:+.2f}, while
 q-landscape-ood measured +{BON_PRIOR} — <b>{OVERSHOOT:.0f}x higher</b>. The order of magnitude agrees, the exact
 value does not, and there is a plausible reason: the narrow candidates in this sweep are <b>real actions shifted
 in time</b>, which stay politely on the demonstration manifold, whereas BC draws are <b>samples from a generative
 model</b> and can leave it in directions the data never took, at the same distance. That is a hypothesis —
-<b>higher adversariality per unit distance</b> — and the policy-sample bank tests it directly with this same script.</p>
+<b>higher adversariality per unit distance</b> — and the policy-sample bank tests it directly with this same script.</span></p>
+<div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
+<b>Correction 2 (2026-09-02) — that residual did not exist. The axis was wrong.</b>
+The ACRFT-WS session flagged the units and their probe's own frozen output settles it. The sigma the
+probe reported as 0.009 is not the frozen probe's value at all, and the quantity it names is
+<code>bc.std(axis=0).mean()</code> (<code>probe_q_landscape.py:177</code>) — the <b>mean over
+coordinates of the per-coordinate std</b>. This entry's axis is <code>norm(delta)/sqrt(H*AD)</code>,
+a <b>per-dimension RMS</b> between two chunks. Recovered from <code>q_landscape.json.gz</code>:
+<br><code>pc_sigma=[0.4565, 0.2205], pc_var_frac=[0.544, 0.154] → total variance 0.4565²/0.544 = 0.383
+→ per-coordinate RMS std = sqrt(0.383/420) = 0.0295 → distance between two draws = sqrt(2)×0.0295 = <b>0.0417</b></code>
+<br><b>The 4.6x, decomposed</b> (reproduced from the frozen probe's 360 frames; all four to four digits):
+<table class='num'><tr><th>step</th><th>value</th><th>factor</th><th>whose</th></tr>
+<tr><td>sigma as this entry quoted it</td><td>0.0090</td><td>—</td><td>—</td></tr>
+<tr><td>the probe's actual mean-of-std</td><td>0.0185</td><td>2.06x</td><td>a stale code comment; never the frozen probe's value (worker B has replaced and pushed it)</td></tr>
+<tr><td>RMS-of-std (Jensen)</td><td>0.0295</td><td>1.60x</td><td>the mechanism I named — but it is <b>1.6x</b> of the gap</td></tr>
+<tr><td>distance between two draws (sqrt 2)</td><td>0.0417</td><td>1.41x</td><td>my axis is a <b>candidate-to-executed distance</b>, not a cloud radius</td></tr>
+</table>
+The product is 4.63x. My first correction charged all of it to Jensen; Jensen is 1.6x of it.
+<br>So the BC cloud sits at <b>0.042</b> on this axis, not 0.009. There the fitted power law gives
+<b>+1.74</b> against the probe's independently measured <b>+1.88 ± 0.62</b> — agreement within <b>8%</b>.
+Neither the 14x residual nor the "BC draws are more adversarial per unit distance" hypothesis invented
+to explain it is needed; the marker was in the wrong place.
+<br>The conclusion is unchanged in direction — the bias at serving width is still <b>one to two control
+steps (~0.06 s)</b>, two orders of magnitude below the wide set's +165. What changed is that two
+independent measurements now <b>agree</b> instead of conflicting.
+</div>
 
 <h3>So the robot's BoN failure is not over-estimation</h3>
 <p>This is where the prescriptions diverge. If bias were the problem, the answer is <b>more pessimism</b>
@@ -264,7 +314,9 @@ chance on a task that easy has no reason to separate candidates inside a σ≈{S
 <p>Per-state ensemble disagreement (K=2) is <b>{D["ensemble_disagreement_std"]:.1f}</b>, while the spread across
 candidates that the arg-max exploits is <b>{D["within_state_candidate_std"]:.1f}</b> — it sees
 <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b> of it. LCB at β=1 moves N=8 from {AM[i8]:+.1f} to {LC[i8]:+.1f},
-only {(1 - LC[i8] / AM[i8]) * 100:.0f}%. <b>Not a β to tune — a measurement that is missing.</b> This is the first
+only {(1 - LC[i8] / AM[i8]) * 100:.0f}%. <b>Not a β to tune — a measurement that is missing.</b> (And at K=2, <code>mean − 1σ</code> is
+<b>identically</b> <code>min</code> — verified to 4.4e-16. The LCB curve above is therefore the min curve, not an
+independent estimator, and β is not a degree of freedom at K=2. Pointed out by the ACRFT-WS session.) This is the first
 number attached to hypothesis 2 of the
 <span class='xref' data-eid='critic-detail-survey'>implementation-detail survey</span> (every method that uses
 ∇Q runs a 10-ensemble; we ran 2).</p>

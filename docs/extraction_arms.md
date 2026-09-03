@@ -54,15 +54,30 @@ line in `serving.py` rather than an edit spread across the serving stack.
 
 ## Weight-only arms
 
+Every trainer (awr / cfgrl / flowdpg / qam / fqlx) writes its checkpoint in the SAME layout the BC
+trainer writes -- `<out>/<step>/params/` (orbax `{"params": whole model}`) + `<out>/<step>/assets/`
+(norm stats, copied from `--init-ckpt`) -- so a run directory is servable the moment it lands. There is
+no export step and no expert-only save pipeline: the whole model is saved whichever subset was trained
+(~12 GB per step; user decision, 2026-09-03). Writer: `openpi/extraction/checkpoint.py::save_servable`.
+
 ```bash
-# 1. export the trainer's {"expert": ...} subtree onto the BC parameters
-uv run python scripts/export_extraction_checkpoint.py --arm dql        # awr | flowdpg | qam | dql | fqlx
+# 1. train; each saved step is already an openpi checkpoint
+sbatch --job-name=ex_qam slurm/extraction_train.sbatch qam --out /data1/jellyho/acrft_ckpts/extraction/qam_run2
+#    -> /data1/jellyho/acrft_ckpts/extraction/qam_run2/30000/{params,assets}
+
+# 1-legacy. runs from BEFORE 2026-09-03 are a bare orbax tree ({"expert": ...} for _run1,
+#    {"params": ...} for _bb) with no params/ or assets/; convert those once:
+uv run python scripts/export_extraction_checkpoint.py --arm qam           # _run1 (expert overlaid on BC)
+uv run python scripts/export_extraction_checkpoint.py --arm awr --run bb  # _bb   (whole model, as-is)
+#    -> /data1/jellyho/acrft_ckpts/extraction/exported/{qam_30000,awr_bb_30000}
+#    (the converter refuses a directory that already has params/ -- serve that one directly)
 
 # 2. serve it like any other checkpoint — the critic is not involved at inference
 uv run scripts/serve_policy.py --port 8000 \
     policy:checkpoint \
-    --policy.config pi05_yam_lego_taxi \
-    --policy.dir <exported checkpoint>
+    --policy.config pi05_yam_lego_taxi \\
+    --policy.dir /data1/jellyho/acrft_ckpts/extraction/qam_run2/30000   # any <out>/<step>, or exported/<...> for a converted legacy run
+#   cfgrl is the one arm whose model is a different config: serve it with --policy.config pi05_yam_lego_taxi_cfgrl
 ```
 
 **`cfgrl` is the exception**: its guidance weight lives in the *model config*, not in a serving
@@ -72,7 +87,7 @@ flag, so it needs its own config.
 uv run scripts/serve_policy.py --port 8000 \
     policy:checkpoint \
     --policy.config pi05_yam_lego_taxi_cfgrl \
-    --policy.dir <exported checkpoint>
+    --policy.dir /data1/jellyho/acrft_ckpts/extraction/qam_run2/30000   # any <out>/<step>, or exported/<...> for a converted legacy run
 ```
 
 `with_cfgrl(base, cfg_w=...)` builds that variant for any π₀.₅ task config, so the weight is a
