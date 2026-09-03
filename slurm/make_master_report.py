@@ -4381,6 +4381,23 @@ demo-MSE는 성공률의 프록시일 뿐이다. 확정은 "동일 모델 내 1-
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "guidance-sweep": {
+        "date": "2026-09-03 18:30",
+        "who": "워커B",
+        "where": "RTX 4080 로컬 · yam_lego_taxi 에피소드 182 프레임 1536 · critic g5_tau9min_200k_s347 · BC s300_h30 200k · 노이즈 4개 × α 7단",
+        "what": "노이즈를 고정하고 α만 올린 사다리. 배포 세기 α=0.1/0.2에서 행동이 정책 자신의 표집 산포의 5~11배만큼 이동하고, 정규화 박스 밖 비율이 1.5%→3.8%로 늘며, Q는 α=0.05에서 이미 시연자를 넘는다. 휘는 곳은 청크의 앞이 아니라 꼬리",
+        "how": "Pi0Steered.sample_steered가 노이즈를 인자로 받고 α=0이 같은 경로로 무조종 draw를 재현하는 성질을 이용 — 두 곡선의 차이가 조종항이지 표집 분산이 아니다. 거리는 좌표당 RMS ÷ BC σ, 노이즈 4개의 최소~최대 밴드, 출력 클립 없는 브랜치",
+        "why": "지금까지 조종 측정이 전부 집계(롤아웃 평균 변위, 프레임 평균 Q)라 '얼마나 틀어지는가'를 보여주지 못했고, Q-landscape가 통계로 말한 '지지집합을 떠나며 값이 오른다'를 한 장의 그림으로 확인하기 위해",
+        "phase": "진단·방법",
+        "tags": ["QPILOTS", "critic", "OOD", "steering", "extraction"],
+        "links": [
+            "q-landscape-ood",
+            "serving-rollouts-yam",
+            "floq",
+            "deas",
+            "conservatism",
+        ],
+    },
     "q-landscape-ood": {
         "date": "2026-09-02 16:10",
         "who": "\uc6cc\ucee4B",
@@ -5291,6 +5308,12 @@ entry(
     "완결",
     _QL_KO,
 )
+
+# The guidance sweep lives in its own module: this file is already 7k lines, and that entry is
+# self-contained (its numbers all come from one frozen probe).
+import _guidance_sweep_entry as _gs  # noqa: E402
+
+_gs.register(entry=entry, en=en, img=img, table=table, spec=spec, plots=P)
 
 
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]

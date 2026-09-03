@@ -34,6 +34,7 @@ box edge is visible rather than hidden. Panel 1 marks that edge.
 
 import argparse
 import dataclasses
+import gzip
 import json
 import logging
 import pathlib
@@ -156,6 +157,48 @@ def measure(wrapper, sampler, obs, data_chunk, *, alphas, n_bc, flow_steps, seed
     )
 
 
+def dump(sw: Sweep, path: pathlib.Path, *, critic: str) -> None:
+    """Freeze everything the figure needs, so a report build redraws it without a GPU.
+
+    Same contract as the q-landscape probe: the measurement needs a 3B policy and a critic, the
+    FIGURE is a pure function of what the measurement wrote. gzip because the arrays are the whole
+    point and a plain JSON of them is a few megabytes.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blob = {
+        "critic": critic,
+        "episode": sw.episode,
+        "frame": sw.frame,
+        "alphas": sw.alphas,
+        "sigma": sw.sigma,
+        "pc_sigma": sw.pc_sigma,
+        "q": sw.q.tolist(),
+        "q_data": sw.q_data,
+        "chunks": sw.chunks.tolist(),
+        "bc": sw.bc.tolist(),
+        "data": sw.data.tolist(),
+    }
+    path.write_bytes(gzip.compress(json.dumps(blob).encode()))
+    print("wrote", path)
+
+
+def load_dump(path: pathlib.Path) -> "tuple[Sweep, str]":
+    b = json.loads(gzip.decompress(pathlib.Path(path).read_bytes()))
+    sw = Sweep(
+        alphas=b["alphas"],
+        chunks=np.asarray(b["chunks"], np.float32),
+        bc=np.asarray(b["bc"], np.float32),
+        data=np.asarray(b["data"], np.float32),
+        q=np.asarray(b["q"], np.float32),
+        q_data=float(b["q_data"]),
+        sigma=float(b["sigma"]),
+        pc_sigma=float(b["pc_sigma"]),
+        episode=int(b["episode"]),
+        frame=int(b["frame"]),
+    )
+    return sw, str(b["critic"])
+
+
 def rms_sigma(delta: np.ndarray, sigma: float) -> float:
     """Displacement in units of the BC cloud's PER-COORDINATE spread.
 
@@ -176,7 +219,7 @@ def figure(sw: Sweep, out: pathlib.Path, *, critic_name: str, joints: int = 6) -
     apply()
     a = np.asarray(sw.alphas)
     ch = sw.chunks  # [S, A, H, AD]
-    ns, na, h, _ = ch.shape
+    ns, _, h, _ = ch.shape
     ref = ch[0]  # the noise shown joint-by-joint
     norm = mcolors.Normalize(a.min(), a.max())
     cmap = cm.viridis
@@ -332,6 +375,17 @@ def animation(sw: Sweep, out: pathlib.Path, *, critic_name: str, joints: int = 6
 
 def main(a):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if a.from_dump:
+        # Redraw only: no policy, no critic, no GPU. This is the path a report build takes.
+        sw, name = load_dump(pathlib.Path(a.from_dump))
+        out = pathlib.Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        figure(sw, out, critic_name=name, joints=a.joints)
+        if a.gif:
+            animation(sw, pathlib.Path(a.gif), critic_name=name, joints=a.joints, fps=a.fps)
+        return
+
     from dataset_reader import DatasetReader
     from dataset_reader import SequentialImages
 
@@ -340,6 +394,8 @@ def main(a):
     from openpi.training import config as _config
     from openpi.training import outcomes as _outcomes
 
+    if not a.critic or not a.policy_dir:
+        raise SystemExit("--critic and --policy-dir are required unless --from-dump is given")
     cfg = _config.get_config(a.policy_config)
     policy = _pc.create_trained_policy(cfg, pathlib.Path(a.policy_dir))
     wrapper = pcp.PatchCriticSelectPolicy(policy, a.critic, mode="qpilots", steer_alpha=a.alphas[0])
@@ -406,6 +462,8 @@ def main(a):
     figure(sw, out, critic_name=name, joints=a.joints)
     if a.gif:
         animation(sw, pathlib.Path(a.gif), critic_name=name, joints=a.joints, fps=a.fps)
+    if a.dump:
+        dump(sw, pathlib.Path(a.dump), critic=name)
     if a.json:
         pathlib.Path(a.json).write_text(
             json.dumps(
@@ -440,8 +498,8 @@ def main(a):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dataset", default=str(pathlib.Path.home() / "lerobot_data/yam_lego_taxi"))
-    ap.add_argument("--critic", required=True)
-    ap.add_argument("--policy-dir", required=True)
+    ap.add_argument("--critic", default=None)
+    ap.add_argument("--policy-dir", default=None)
     ap.add_argument("--policy-config", default="pi05_yam_lego_taxi")
     ap.add_argument("--episode", type=int, default=None)
     ap.add_argument("--frame", type=int, default=None)
@@ -455,5 +513,7 @@ if __name__ == "__main__":
     ap.add_argument("--out", default="guidance_sweep.png")
     ap.add_argument("--gif", default=None)
     ap.add_argument("--fps", type=int, default=6)
-    ap.add_argument("--json", default=None)
+    ap.add_argument("--json", default=None, help="small summary (scalars only)")
+    ap.add_argument("--dump", default=None, help="freeze the full measurement so the figure can be redrawn")
+    ap.add_argument("--from-dump", default=None, help="redraw from a frozen measurement; needs no GPU")
     main(ap.parse_args())

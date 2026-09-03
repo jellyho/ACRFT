@@ -440,6 +440,35 @@ def fig_33_q_landscape():
         )
 
 
+def fig_34_guidance_sweep():
+    """One fixed noise, alpha swept — redrawn from the frozen measurement, not from a saved PNG.
+
+    The measurement needs a GPU (the 3B policy plus a critic, seven alphas from four noises); the
+    figure is a pure function of what it wrote, so a report build reproduces it anywhere. Verified
+    byte-identical to the GPU run's own output.
+    """
+    import subprocess
+    import sys
+
+    probe = ROOT / "slurm/probes/guidance_sweep.json.gz"
+    if not probe.exists():
+        print(f"  (skip fig_34: {probe.name} not present)")
+        return
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "plot_guidance_sweep.py"),
+            "--from-dump",
+            str(probe),
+            "--out",
+            str(P / "34_guidance_sweep.png"),
+            "--gif",
+            str(P / "34_guidance_sweep.gif"),
+        ],
+        check=True,
+    )
+
+
 def main():
     P.mkdir(exist_ok=True)
     fig_16_v11()
@@ -450,6 +479,7 @@ def main():
     fig_31_three_forces()
     fig_32_p2_split()
     fig_33_q_landscape()
+    fig_34_guidance_sweep()
 
 
 if __name__ == "__main__":
