@@ -400,6 +400,61 @@ def _value_color(score: float, low: float, high: float) -> tuple:
     return tuple(int(a + (b - a) * t) for a, b in zip(cold, warm, strict=True))
 
 
+def _q_table_panel(scores, chosen: int, width: int, height: int) -> "np.ndarray":
+    """Every candidate's Q, as the number the critic actually produced.
+
+    The header already reports the winner's value and the spread, and the value strip plots the
+    winner over time -- both summaries. Neither answers "what did it give #5?", which is the
+    question you have when a run looks wrong: a critic that scores eight candidates within 0.5 of
+    each other is not selecting, it is picking noise, and that is invisible in a summary.
+
+    One row of cells rather than a list, because it has to sit under the cameras without taking a
+    camera's worth of height. Cells are tinted with the same cold-to-warm ramp as the fan paths
+    (`_value_color`), so a path in the video and its number here carry the same colour.
+    """
+    from PIL import Image, ImageDraw
+
+    scores = np.asarray(scores, dtype=float)
+    n = len(scores)
+    img = Image.new("RGB", (width, height), (16, 18, 24))
+    d = ImageDraw.Draw(img)
+    lo, hi = float(scores.min()), float(scores.max())
+    best = int(np.argmax(scores))
+    # "executed", not "chosen": only a best-of-N arm chooses. A steering arm (QPILOTS-U steers
+    # each Euler step) emits one action and records it as #0, so "chosen" claimed a decision that
+    # never happened. Saying which candidate scored highest instead is true for both, and for a
+    # BoN run it is the check you actually want -- an executed index that keeps missing the best
+    # one means the selection is not following the critic.
+    verdict = "= best" if best == chosen else f"(best: #{best})"
+    d.text((6, 1), f"critic Q per candidate — #{chosen} executed {verdict}, spread {hi - lo:.3g}",
+           font=_font(12), fill=(150, 160, 175))
+
+    top, pad = 17, 2
+    cell_w = (width - 2 * pad) / max(n, 1)
+    # Index and value on ONE line: the strip is ~36px tall next to 220px cameras, and stacking
+    # them cost a row the panel does not have -- the value was drawn past the bottom edge and
+    # clipped away, which looked like the number was simply missing.
+    show_value = cell_w >= 74
+    for i, v in enumerate(scores):
+        x0 = pad + i * cell_w
+        x1 = x0 + cell_w - 2
+        fill = _value_color(float(v), lo, hi)
+        d.rectangle([x0, top, x1, height - 2], fill=fill)
+        if i == chosen:
+            # The executed one, marked by shape as well as by being warmest -- at a near-zero
+            # spread every cell is the same colour and the ramp says nothing.
+            d.rectangle([x0, top, x1, height - 2], outline=(255, 255, 255), width=2)
+        ink = (10, 12, 16)
+        # A star on the highest-Q candidate when it is NOT the one executed: the gap between the
+        # outline and the star is the whole question for a value-guided run, and reading it off
+        # the numbers frame by frame is what this panel exists to avoid.
+        text = f"#{i}" + ("\u25c0" if i == chosen else ("\u2605" if i == best else ""))
+        if show_value:
+            text += " " + format(float(v), ".6g")
+        d.text((x0 + 5, top + 3), text, font=_font(12), fill=ink)
+    return np.asarray(img)
+
+
 _FAN_COLORS = {
     "left": ((20, 140, 95), (190, 255, 225)),
     "right": ((170, 95, 20), (255, 205, 140)),
@@ -591,7 +646,11 @@ def render(args: argparse.Namespace, progress: "Optional[Callable[[int, int], No
     # see _to_size). Native-resolution intrinsics are rescaled to that panel size so a projected
     # point still lands on the visible pixel it names.
     panel_h = args.height
-    panel_w = round(panel_h * 640 / 480)
+    # Even, for the same reason the strips below round their height: h264 with yuv420p subsamples
+    # chroma 2x2 and refuses an odd frame dimension. The frame's width is panel_w * n_panels, so an
+    # odd panel_w with an odd panel count kills the encode outright -- --height 220 gives 293 x 3 =
+    # 879 and ffmpeg exits with "width not divisible by 2" after the render has already run.
+    panel_w = 2 * round(panel_h * 640 / 480 / 2)
     wrist_intr = CameraIntrinsics(fx=args.fx, fy=args.fy, cx=args.cx, cy=args.cy, width=640, height=480).scaled_to(
         panel_w, panel_h
     )
@@ -836,6 +895,14 @@ def render(args: argparse.Namespace, progress: "Optional[Callable[[int, int], No
                     )
                 strip = _value_panel(chunk_base, frame_idx, n_frames, float(chunk_lengths[frame_idx]))
                 below = strip if below is None else np.concatenate([below, strip], axis=0)
+            if scores is not None and not getattr(args, "no_q_table", False):
+                # Repainted per replan, not per frame: the scores are one decision held across the
+                # chunk, so this only changes where `scores` does. getattr, because the GUI builds
+                # its own Namespace and an older one must not crash the renderer.
+                strip = _q_table_panel(
+                    scores, chosen, panel_w * len(panels), 2 * round(panel_h * 0.18 / 2)
+                )
+                below = strip if below is None else np.concatenate([below, strip], axis=0)
 
             header = (
                 f"{args.repo_id} · ep {args.episode} · chunk {block_idx + 1}/{len(blocks)}  "
@@ -923,6 +990,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-chunk-plot",
         action="store_true",
         help="omit the chunk-length strip (drawn under the cameras, sharing their time axis)",
+    )
+    p.add_argument(
+        "--no-q-table",
+        action="store_true",
+        help="omit the per-candidate critic Q row (drawn when the recording has critic_scores)",
     )
     p.add_argument("--replans", type=int, default=0, help="max replans to render (0 = the whole episode)")
     p.add_argument("--hold", type=int, default=1, help="repeat each rendered tick N times (>1 = slow motion)")

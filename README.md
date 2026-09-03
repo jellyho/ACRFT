@@ -31,7 +31,7 @@ on the same teleop set the policy was finetuned on — successes *and* failures.
    Stage 1     Base policy                     scripts/train.py --config pi05_yam_lego_taxi
    ─────────   An ordinary π₀.₅ flow-matching policy: horizon 30, relative joint actions. It is
                never modified again -- everything downstream reads it, nothing writes to it.
-                          │  the demos, plus their success/fail labels (outcomes.jsonl)
+                          │  the demos, plus their success/fail verdicts (next.success / next.done)
                           ▼
    Stage 2     Critic data                     scripts/convert_yam_to_patchcritic.py
    ─────────   3 cameras at 224, state[42], action[14], sparse terminal reward from the labels.
@@ -69,7 +69,7 @@ Key design choices, and where they live:
 | Cost-to-goal reward | `train_patch_critic_cached.py` | −1/step to an absorbing goal; values are comparable across states without a reward model |
 | N candidates, one backbone pass | `Pi0.sample_n_actions` | the VLM prefix runs once and its KV cache is tiled across the noise draws |
 | Scored in the critic's units | `policies/patch_critic_policy.py` | candidates are decoded to joint targets and re-normalized with the critic's own stats, so policy and critic need not share them |
-| Verdict at the handle | (robot repo) | every rollout is labelled success/fail on the arm, which is what `outcomes.jsonl` is |
+| Verdict at the handle | (robot repo) | every rollout is labelled success/fail on the arm; the recorder writes it into the dataset as `next.success` / `next.done` |
 
 ---
 
@@ -90,10 +90,21 @@ inference, serving and critic training. See
 
 ### Data
 
-YAM bimanual teleop as LeRobot v3.0, with an `outcomes.jsonl` sidecar giving each episode a
-success/fail label — written by the robot repo's recorder as the operator ends each rollout at the
-handle. `success_only` training resolves its episode list from that file; the critic uses both
-halves.
+YAM bimanual teleop as LeRobot v3.0. Each episode's verdict is part of the dataset itself: two
+per-frame bool features, `next.success` and `next.done`, True on the episode's last frame — `done`
+iff it was judged at all, `success` iff it succeeded. The robot repo's recorder writes them as the
+operator ends each rollout at the handle, and LeRobot keeps per-episode statistics for them, so the
+verdict is readable from `meta/episodes` alone and survives every delete / split / merge.
+
+`openpi.training.outcomes` is the only reader: `episode_outcomes(root)` returns
+`{episode: success | fail | unknown}`, and `None` when a dataset has no verdicts at all (which is
+"nothing to filter", not "everything failed" — the right default for demonstration sets that are
+successful by construction). `success_only` training resolves its episode list through it; the
+critic uses both halves, since the failures are its negatives.
+
+Datasets recorded before this carried an `outcomes.jsonl` sidecar. They are migrated in place with
+the recorder's `workstation/yam-data migrate-outcomes <dataset-dir>` (i2rt_rllab); until then,
+`success_only` refuses rather than guessing, and the recorder refuses to append.
 
 RoboCasa 365 demos (for the sim path) are in
 [examples/robocasa/README.md](examples/robocasa/README.md).
@@ -107,7 +118,6 @@ uv run scripts/train.py pi05_yam_lego_taxi --exp-name yam_bc
 # Stage 2 — critic data, then the frozen-feature cache
 uv run python scripts/convert_yam_to_patchcritic.py \
     --repo-id jellyho/yam_lego_taxi --root ~/lerobot_data \
-    --outcomes ~/lerobot_data/yam_lego_taxi/outcomes.jsonl \
     --max-frames 160000 --out ~/pc_rollouts/lego_taxi
 uv run python scripts/cache_patch_features.py --data ~/pc_rollouts/lego_taxi --out ~/pc_cache/yam_s347
 
@@ -472,7 +482,7 @@ src/openpi/patch_critic/critic.py        VLA-independent patch critic (frozen DI
 src/openpi/patch_critic/backbone.py      the frozen DINOv2 feature extractor
 src/openpi/patch_critic/preproc.py       shares the base VLA's state/action preprocessing
 src/openpi/patch_critic/spec.py          the critic's input contract, validated at serve time
-scripts/convert_yam_to_patchcritic.py    LeRobot demos + outcomes.jsonl -> per-step transitions
+scripts/convert_yam_to_patchcritic.py    LeRobot demos + their next.success verdicts -> per-step transitions
 scripts/cache_patch_features.py          precompute the frozen features once (~20-40x faster training)
 scripts/train_patch_critic_cached.py     patch-critic training from that cache
 scripts/score_critic_cached.py           success-vs-failure AUC + deep-atom diagnostics

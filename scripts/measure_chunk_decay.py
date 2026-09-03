@@ -28,6 +28,8 @@ import pathlib
 
 import numpy as np
 
+import openpi.training.outcomes as _outcomes
+
 CAMS = ("observation.images.agentview", "observation.images.wrist_left", "observation.images.wrist_right")
 OBS_KEYS = ("observation/image", "observation/wrist_image", "observation/image_right")
 
@@ -38,7 +40,11 @@ def main():
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi")
     ap.add_argument("--root", default="/data5/jellyho/yam_v2/lerobot")
-    ap.add_argument("--outcomes", default=".scratch/yam_outcomes_347.jsonl")
+    ap.add_argument(
+        "--outcomes",
+        default=None,
+        help="legacy outcomes.jsonl (deprecated: the verdict is read from the dataset's next.success / next.done)",
+    )
     ap.add_argument("--homing-onsets", type=pathlib.Path, default=pathlib.Path(".scratch/yam_homing_onsets.json"))
     ap.add_argument("--episodes", type=int, default=6, help="episodes per outcome class")
     ap.add_argument("--stride", type=int, default=40, help="frames between decision points")
@@ -55,11 +61,7 @@ def main():
     from openpi.policies import policy_config
     from openpi.training import config as _config
 
-    outc = {
-        int(json.loads(x)["episode"]): json.loads(x)["outcome"]
-        for x in pathlib.Path(a.outcomes).read_text().splitlines()
-        if x.strip()
-    }
+    outc = _outcomes.load_outcomes(_outcomes.dataset_root(a.repo_id, a.root), legacy_jsonl=a.outcomes)
     homing = json.loads(a.homing_onsets.read_text()) if a.homing_onsets.exists() else {}
     succ = [e for e in sorted(outc) if outc[e] == "success"][: a.episodes]
     fail = [e for e in sorted(outc) if outc[e] != "success"][: a.episodes]

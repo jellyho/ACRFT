@@ -309,29 +309,53 @@ class Pi0(_model.BaseModel):
 
         The chunks are model-space [N, H, action_dim]; the caller unnormalizes and scores them.
         """
-        observation = _model.preprocess_observation(None, observation, train=False)
         if observation.state.shape[0] != 1:
             raise ValueError(
                 f"sample_n_actions expects a batch-1 observation (one live frame), got " f"{observation.state.shape[0]}"
             )
+        return self.sample_n_actions_batched(rng, observation, num_samples=num_samples, num_steps=num_steps)[0]
 
+    def sample_n_actions_batched(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        num_samples: int,
+        num_steps: int | at.Int[at.Array, ""] = 10,
+    ) -> at.Float[at.Array, "b n ah ad"]:
+        """N candidate chunks for EACH of b states, one prefix pass per state. -> [b, n, ah, ad]
+
+        The offline analogue of ``sample_n_actions``: identical math, but the prefix batch is the b
+        states of an annotation batch rather than the serving path's single live frame. Offline
+        passes that need the policy's action DISTRIBUTION over the dataset (scripts/
+        sample_policy_chunks.py, which builds the CQL negative bank and the critic-diagnostic
+        candidate set) would otherwise hand-copy this loop, and a hand-copy that drifts from
+        ``_velocity`` does not fail -- it silently samples from a different policy than the one
+        being served.
+
+        ``jnp.repeat`` interleaves, so flattened row ``i*n + j`` is the j-th draw for state i, and
+        the final reshape puts it back at ``[i, j]``.
+        """
+        observation = _model.preprocess_observation(None, observation, train=False)
         prefix_mask, kv_cache = self._prefix_forward(observation)
 
         # KVCache is [layers, BATCH, ...]; the prefix is identical for every candidate, so tiling it
         # is exactly what running the prefix N times would have produced.
-        kv_n = jax.tree.map(lambda x: jnp.repeat(x, num_samples, axis=1), kv_cache)
+        kv_n = jax.tree.map(lambda x: jnp.repeat(x, num_samples, axis=1), kv_cache)  # KVCache is [L, B, ...]
         mask_n = jnp.repeat(prefix_mask, num_samples, axis=0)
         # Tiled whole rather than field-by-field: Observation type-checks a single batch axis across
         # images and state together. Only the state is read from here (pi05's suffix is actions +
         # time; pi0's adds a state token) -- the images are already baked into the cached prefix.
         obs_n = jax.tree.map(lambda x: jnp.repeat(x, num_samples, axis=0), observation)
 
+        b = prefix_mask.shape[0]
+        bn = b * num_samples
         dt = -1.0 / num_steps
-        noise = jax.random.normal(rng, (num_samples, self.action_horizon, self.action_dim))
+        noise = jax.random.normal(rng, (bn, self.action_horizon, self.action_dim))
 
         def step(carry):
             x_t, time = carry
-            v_t = self._velocity(obs_n, mask_n, kv_n, x_t, jnp.broadcast_to(time, num_samples))
+            v_t = self._velocity(obs_n, mask_n, kv_n, x_t, jnp.broadcast_to(time, bn))
             return x_t + dt * v_t, time + dt
 
         def cond(carry):
@@ -339,4 +363,4 @@ class Pi0(_model.BaseModel):
             return time >= -dt / 2
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
-        return x_0
+        return x_0.reshape(b, num_samples, self.action_horizon, self.action_dim)

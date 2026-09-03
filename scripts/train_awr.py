@@ -45,6 +45,12 @@ def main():
     ap.add_argument("--save-every", type=int, default=10000)
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("/data1/jellyho/acrft_ckpts/extraction/awr_run1"))
+    ap.add_argument(
+        "--train-backbone",
+        action="store_true",
+        help="train the WHOLE model, as the BC finetune did (no freeze_filter) -- otherwise only the "
+        "action expert, which keeps arms comparable but gives them a smaller budget than BC",
+    )
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-entity", default="jellyho_")
     ap.add_argument("--wandb-name", default="extract_awr_run1")
@@ -88,6 +94,10 @@ def main():
         nnx_utils.PathRegex(".*llm.*_1.*"),
         nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)|state_proj).*"),
     )
+    if a.train_backbone:
+        # BC trained everything (its config sets no freeze_filter), so matching its budget means
+        # matching what it was allowed to move, not just steps and batch.
+        expert_filter = nnx.Param
     tx = optax.adam(a.lr)
     opt = tx.init(params.filter(expert_filter))
 
@@ -128,7 +138,14 @@ def main():
 
         path = (a.out / f"{step_i}").absolute()
         with ocp2.StandardCheckpointer() as c2:
-            c2.save(path, {"expert": params.filter(expert_filter).to_pure_dict()}, force=True)
+            # with the backbone trainable the expert subtree is no longer the whole change, so
+            # saving only it would silently drop what was learned everywhere else
+            payload = (
+                {"params": params.to_pure_dict()}
+                if a.train_backbone
+                else {"expert": params.filter(expert_filter).to_pure_dict()}
+            )
+            c2.save(path, payload, force=True)
         print(f"saved {path}", flush=True)
 
     import time

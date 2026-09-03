@@ -56,6 +56,12 @@ def main():
     ap.add_argument("--save-every", type=int, default=10000)
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("/data1/jellyho/acrft_ckpts/extraction/qam_run1"))
+    ap.add_argument(
+        "--train-backbone",
+        action="store_true",
+        help="train the WHOLE model, as the BC finetune did (no freeze_filter) -- otherwise only the "
+        "action expert, which keeps arms comparable but gives them a smaller budget than BC",
+    )
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-entity", default="jellyho_")
     ap.add_argument("--wandb-name", default="extract_qam_run1")
@@ -94,6 +100,10 @@ def main():
         nnx_utils.PathRegex(".*llm.*_1.*"),
         nnx_utils.PathRegex(".*(action_(in|out)_proj|time_mlp_(in|out)|state_proj).*"),
     )
+    if a.train_backbone:
+        # BC trained everything (its config sets no freeze_filter), so matching its budget
+        # means matching what it was allowed to move, not just steps and batch.
+        expert_filter = nnx.Param
     # slow and fast differ ONLY in the (trainable) action expert; two full fp32 param sets
     # (~14GB each) plus the training program blew the 44GB L40S (round-5 smoke OOM). Share one
     # non-expert state and keep two expert subtrees — mathematically identical to qam.py's two
@@ -213,7 +223,14 @@ def main():
 
         path = (a.out / f"{step_i}").absolute()
         with ocp.StandardCheckpointer() as c:
-            c.save(path, {"expert": p_exp_f.to_pure_dict()}, force=True)
+            # with the backbone trainable the expert subtree is no longer the whole change, so
+            # saving only it would silently drop what was learned everywhere else
+            payload = (
+                {"params": nnx.State.merge(p_exp_f, p_rest).to_pure_dict()}
+                if a.train_backbone
+                else {"expert": p_exp_f.to_pure_dict()}
+            )
+            c.save(path, payload, force=True)
         print(f"saved {path}", flush=True)
 
     import numpy as np

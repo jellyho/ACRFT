@@ -95,7 +95,11 @@ def main():
     # ---- real-data (YAM) path: scripts/yam_fql_data.py conventions ----
     ap.add_argument("--yam-repo-id", default="jellyho/yam_lego_taxi")
     ap.add_argument("--yam-root", default="/data5/jellyho/yam_v2/lerobot")
-    ap.add_argument("--outcomes", default="/data5/jellyho/ACRFT/openpi/.scratch/yam_outcomes_347.jsonl")
+    ap.add_argument(
+        "--outcomes",
+        default=None,
+        help="legacy outcomes.jsonl (deprecated: the verdict is read from the dataset's next.success / next.done)",
+    )
     ap.add_argument("--homing-onsets", default="/data5/jellyho/ACRFT/openpi/.scratch/yam_homing_onsets.json")
     ap.add_argument("--h-goal", type=int, default=3)
     ap.add_argument("--failure-reward", type=float, default=None, help="failure terminal anchor; default v_min")
