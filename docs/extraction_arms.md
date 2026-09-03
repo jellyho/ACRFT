@@ -75,8 +75,9 @@ uv run python scripts/export_extraction_checkpoint.py --arm awr --run bb  # _bb 
 # 2. serve it like any other checkpoint — the critic is not involved at inference
 uv run scripts/serve_policy.py --port 8000 \
     policy:checkpoint \
-    --policy.config pi05_yam_lego_taxi \
+    --policy.config pi05_yam_lego_taxi \\
     --policy.dir /data1/jellyho/acrft_ckpts/extraction/qam_run2/30000   # any <out>/<step>, or exported/<...> for a converted legacy run
+#   cfgrl is the one arm whose model is a different config: serve it with --policy.config pi05_yam_lego_taxi_cfgrl
 ```
 
 **`cfgrl` is the exception**: its guidance weight lives in the *model config*, not in a serving
