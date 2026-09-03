@@ -33,6 +33,17 @@
 # its native libs (libavutil.so.56 absent -- the compute nodes have no ffmpeg), which is exactly why
 # the video backend below is pyav: pyav ships its own.
 #
+# AND THE GPU TYPE IS PINNED TO L40S FOR THE SAME REASON, FROM THE OTHER SIDE. Job 37276 landed on
+# node200 and warned "Found GPU0 NVIDIA B200 which is of cuda capability 10.0. Minimum and Maximum
+# cuda capability supported by this version of PyTorch is (5.0) - (9.0)". That was a warning and not
+# what actually killed the job -- a missing `accelerate` did, and the venv now carries
+# lerobot[training] -- but it is a real incompatibility that would have failed at the first kernel.
+# The two node types
+# want incompatible builds: node100's L40S sits behind a CUDA 12.2 driver, so torch must be cu126 or
+# older, while the B200 needs sm_100 support that only arrives with cu128, which that driver cannot
+# run. One venv cannot serve both, so this job takes the L40S where cu126 works -- which is also
+# where it belongs, since B200 time is what the extraction arms are queued for.
+#
 # Everything else follows the official 30 Hz recipe in docs/source/multi_task_dit.mdx (horizon 32,
 # n_action_steps 24) at the documented MINIMUM batch of 64 rather than its recommended 256-320,
 # which does not fit an L40S. B200 is deliberately avoided so the extraction-arm queue is not
@@ -40,7 +51,7 @@
 # overridden when the checkpoint is served (pi0.5 serves at 10 Euler steps).
 #SBATCH --job-name=mtdit_yam
 #SBATCH --partition=debug
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:L40S:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=100G
 #SBATCH --time=48:00:00

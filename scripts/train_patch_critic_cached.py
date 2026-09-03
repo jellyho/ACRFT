@@ -106,10 +106,22 @@ def main():
         help="weight of the CQL conservative term, DIMENSIONLESS: the raw value-unit gap is divided "
         "by the value span (v_max - v_min) before scaling, because our TD loss is a cross-entropy in "
         "nats and official CQL's is an MSE in value units squared -- see the comment at the term. "
+        "MEASURED RANGE: 10 and 30 DESTROY the value function -- see below -- and the usable range is "
+        "well under 1. "
         "0 = off = plain IQL, which NEVER queries an action outside the dataset and therefore leaves "
         "the Q of every sampled chunk unconstrained at serving time. This is the term that pushes those "
         "down. Provenance: aviralkumar2907/CQL rlkit/torch/sac/cql.py -- "
-        "`min_qf1_loss = logsumexp(cat_q1/temp).mean()*min_q_weight*temp - q1_pred.mean()*min_q_weight`.",
+        "`min_qf1_loss = logsumexp(cat_q1/temp).mean()*min_q_weight*temp - q1_pred.mean()*min_q_weight`. "
+        "WHY THE RANGE MATTERS. At alpha 10 and 30 the term wins outright: the critic separates the "
+        "executed chunk from wrong-state chunks almost perfectly (ranking accuracy 0.549 -> 0.994) "
+        "and stops being a value function while doing it. Spearman(Q, -time_to_goal) on demonstrated "
+        "chunks falls from +0.991 to +0.136 (alpha 10) and +0.082 (alpha 30), and Q's spread across "
+        "states collapses from 381 to 79. It is not an over-training effect: at alpha 10 the "
+        "correlation is already +0.287 by step 20k and never recovers, so there is no early stop that "
+        "rescues it. What those critics learned is 'is this the action that was demonstrated here', a "
+        "discriminator, not a value. Note also that measuring them with the selection-bias probe alone "
+        "would have shown a spectacular win, because that probe scores the very objective the term "
+        "optimises -- the value-correlation check is what catches it.",
     )
     ap.add_argument(
         "--cql-negatives",
