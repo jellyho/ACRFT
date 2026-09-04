@@ -310,6 +310,34 @@ def main():
         "vary ONLY this -- if the recipe moves too, the seed term absorbs the recipe term and the "
         "run-level CI stops meaning what it says.",
     )
+    ap.add_argument(
+        "--heldout-frac",
+        type=float,
+        default=0.0,
+        help="fraction of EPISODES held out of training and scored periodically. 0 = off, which is what "
+        "every critic in .scratch was trained with -- there is no validation split anywhere in this "
+        "repo's critic trainers, and at 200k x 256 = 51.2M draws over 937,993 frames that is 55 visits "
+        "per frame against ~10 parameters per training frame. EPISODES, not frames: cost_to_goal is "
+        "deterministic in (episode, frame), so a frame-level split leaks the answer from the neighbours "
+        "on either side (diag_action_identifiability.py:30-33 documents the same point). The split is "
+        "stratified by outcome so both sides carry failures, and the held-out episode list is written "
+        "into config.json so the diagnostics and scorers can consume the same one.",
+    )
+    ap.add_argument("--heldout-seed", type=int, default=12345, help="fixed so a re-run holds out the same episodes")
+    ap.add_argument(
+        "--eval-every",
+        type=int,
+        default=5000,
+        help="steps between held-out evaluations. Needs --heldout-frac > 0. What is scored is the thing "
+        "the serving path consumes and the thing the audit found does not transfer: Spearman(Q(demo "
+        "chunk), -time_to_goal) globally AND within-episode (the within-episode number is the honest "
+        "one -- across episodes the target itself disagrees at CV 0.188), plus success-vs-failure AUC "
+        "on early frames, where in-sample was 0.87-0.89 and episode-grouped CV on the same features "
+        "gave 0.490.",
+    )
+    ap.add_argument(
+        "--eval-frames", type=int, default=4096, help="fixed anchor set drawn once from the held-out episodes"
+    )
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -466,8 +494,31 @@ def main():
     outc = _outcomes.cache_outcomes(meta, legacy_jsonl=a.outcomes)
     homing = json.loads(a.homing_onsets.read_text()) if a.homing_onsets is not None else None
 
+    # ---- episode-level held-out split ---------------------------------------------------------
+    _eps_all = sorted(int(k) for k in meta["episodes"] if int(k) in outc)
+    heldout: set[int] = set()
+    if a.heldout_frac > 0:
+        _r = np.random.default_rng(a.heldout_seed)
+        for want in (True, False):  # stratify, so the held-out side carries failures too
+            grp = np.array([e for e in _eps_all if (outc[e] == "success") == want])
+            k = round(len(grp) * a.heldout_frac)
+            if k:
+                heldout.update(int(x) for x in _r.choice(grp, k, replace=False))
+        print(
+            f"held out {len(heldout)}/{len(_eps_all)} episodes "
+            f"({sum(outc[e] == 'success' for e in heldout)} success / "
+            f"{sum(outc[e] != 'success' for e in heldout)} fail), seed {a.heldout_seed}",
+            flush=True,
+        )
+
+    # Written into the checkpoint so the scorers and diagnostics can consume the SAME split rather
+    # than re-deriving one and quietly evaluating on frames the critic trained on.
+    spec["heldout_episodes"] = sorted(heldout) if heldout else None
+    spec["heldout_seed"] = a.heldout_seed if heldout else None
+
     # Build the flat table of valid CURRENT frames (homing tail dropped for failures at train time).
     cur_g0, cur_pos, cur_eff, cur_full, cur_succ = [], [], [], [], []
+    ho_g0, ho_pos, ho_eff, ho_succ = [], [], [], []
     for e_str, info in meta["episodes"].items():
         e = int(e_str)
         if e not in outc:
@@ -482,6 +533,12 @@ def main():
         ):
             eff = int(homing[str(e)]["homing_onset"])
         off = info["offset"]
+        if e in heldout:
+            ho_g0.append(np.full(eff, off))
+            ho_pos.append(np.arange(eff))
+            ho_eff.append(np.full(eff, eff))
+            ho_succ.append(np.full(eff, succ))
+            continue
         cur_g0.append(np.full(eff, off))
         cur_pos.append(np.arange(eff))
         cur_eff.append(np.full(eff, eff))
@@ -1017,6 +1074,66 @@ def main():
     _inv_dummy_p = jnp.zeros((a.batch, npatch, emb), jnp.float32)
     _inv_dummy_s = jnp.zeros((a.batch, sd), jnp.float32)
 
+    # ---- held-out evaluation ------------------------------------------------------------------
+    # A fixed anchor set drawn ONCE, so the curve across steps is a curve about the critic and not
+    # about which frames were sampled. Anchors come only from held-out episodes.
+    evalset = None
+    if heldout and a.eval_every:
+        ho_g0_a = np.concatenate(ho_g0).astype(np.int64)
+        ho_pos_a = np.concatenate(ho_pos).astype(np.int64)
+        ho_eff_a = np.concatenate(ho_eff).astype(np.int64)
+        ho_succ_a = np.concatenate(ho_succ).astype(bool)
+        _r = np.random.default_rng(a.heldout_seed + 1)
+        sel = _r.choice(len(ho_pos_a), min(a.eval_frames, len(ho_pos_a)), replace=False)
+        e_g0, e_pos, e_eff, e_succ = ho_g0_a[sel], ho_pos_a[sel], ho_eff_a[sel], ho_succ_a[sel]
+        e_gcur = e_g0 + e_pos
+        e_gch = e_g0[:, None] + np.clip(e_pos[:, None] + ar_h[None], 0, e_eff[:, None] - 1)
+        e_chunk = np.asarray(actions[e_gch.reshape(-1)]).reshape(len(sel), H, ad)
+        e_state = np.asarray(states[e_gcur])
+        if pre is not None:
+            e_chunk = pre.actions(e_chunk, e_state)
+            e_state = pre.state(e_state)
+        if pidx is not None:
+            e_state = e_state[..., pidx]
+        e_feat = np.asarray(feats[e_gcur])
+        # -time_to_goal in the TRUNCATED frame: the quantity cost_to_goal is a monotone function of.
+        e_ttg = (e_eff - e_pos).astype(np.float64)
+        e_epi = e_g0  # episode identity, for the within-episode correlation
+        evalset = (e_feat, e_chunk, e_state, e_ttg, e_succ, e_epi, e_pos)
+        print(f"held-out anchors: {len(sel)} frames from {len(np.unique(e_g0))} episodes", flush=True)
+
+    @jax.jit
+    def _eval_q(params, pcur, chunk, scur):
+        qd = net.apply(params, pcur.astype(jnp.float32), chunk, scur)[:, :, -1, :]
+        return from_logits(qd).min(0) if a.q_reduction == "min" else from_logits(qd).mean(0)
+
+    def _spearman(x, y):
+        rx = np.argsort(np.argsort(x)).astype(np.float64)
+        ry = np.argsort(np.argsort(y)).astype(np.float64)
+        return float(np.corrcoef(rx, ry)[0, 1]) if len(x) > 2 and rx.std() and ry.std() else float("nan")
+
+    def _auc(score, label):
+        if label.all() or not label.any():
+            return float("nan")
+        r = np.argsort(np.argsort(score)).astype(np.float64) + 1
+        n1 = int(label.sum())
+        return float((r[label].sum() - n1 * (n1 + 1) / 2) / (n1 * (len(label) - n1)))
+
+    def heldout_metrics(params):
+        f_, c_, s_, ttg, sc, epi, pos = evalset
+        q = np.asarray(_eval_q(params, jnp.asarray(f_), jnp.asarray(c_), jnp.asarray(s_)), np.float64)
+        # within-episode is the honest correlation: across episodes the TARGET itself disagrees
+        # (CV 0.188 in remaining time at matched task state), so a global number mixes the critic's
+        # skill with the pace of whichever episode a frame came from.
+        wi = [_spearman(q[epi == e], -ttg[epi == e]) for e in np.unique(epi) if (epi == e).sum() >= 8]
+        early = pos < 60
+        return {
+            "ho_spearman": _spearman(q, -ttg),
+            "ho_spearman_within_ep": float(np.nanmean(wi)) if wi else float("nan"),
+            "ho_auc_early": _auc(q[early], sc[early]),
+            "ho_q_mean": float(q.mean()),
+        }
+
     t0 = time.time()
     for s in range(a.steps):
         idx = rng_np.integers(0, M, size=a.batch)
@@ -1126,6 +1243,16 @@ def main():
                 f"v_mean {i['v_mean']:.2f}{invs}{cqls}  ({rate:.2f} it/s)",
                 flush=True,
             )
+        if evalset is not None and (s % a.eval_every == 0 or s == a.steps - 1):
+            hm = heldout_metrics(carry[0])
+            print(
+                f"  [held-out @ {s}] spearman {hm['ho_spearman']:+.3f} "
+                f"(within-ep {hm['ho_spearman_within_ep']:+.3f})  early-AUC {hm['ho_auc_early']:.3f}  "
+                f"q_mean {hm['ho_q_mean']:.1f}",
+                flush=True,
+            )
+            if wb is not None:
+                wb.log(hm, step=s)
         if a.save_every and (s + 1) % a.save_every == 0:
             a._step = s + 1
             _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
