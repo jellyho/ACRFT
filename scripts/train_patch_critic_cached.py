@@ -172,9 +172,13 @@ def main():
         "official alexmlamb/ControllableLatentState). 0 = off. Predict the action taken at t from the "
         "pair (z_t, z_{t+k}) -- repnet.py: `a_hat = self.multi_step_inv_model(z0, z1)` against the "
         "action AT t, with invnet.py concatenating `context = torch.cat((z0, z1), -1)` and NOT taking k "
-        "as an input. WHY HERE: a linear probe recovers episode identity from these features at accuracy "
-        "1.000 (chance 0.0019) and 70% of a frame's nearest neighbours are its own episode, so the "
-        "representation splits the task by episode rather than by state. An inverse objective keeps only "
+        "as an input. WHY HERE, with the sourcing corrected: the episode_acc 1.000 / knn_purity 0.698 "
+        "figures are RoboCasa PrepareCoffee, not YAM (see --cql-negatives). On YAM's own pooled DINOv2 "
+        "features knn_purity is 0.061 with 94% of neighbours cross-episode, so 'the representation splits "
+        "the task by episode' is NOT established here and this arm's motivation is weaker than first "
+        "written. What does hold on YAM: cost_to_goal is a frame-index target whose residual at matched "
+        "task state is CV 0.188 across episodes (p10-p90 1.51x), which only episode-specific pace "
+        "explains. An inverse objective keeps only "
         "what is needed to infer the ACTION, which is invariant to background, lighting and -- unlike our "
         "cost_to_goal target -- to how long this particular episode happened to take.",
     )
