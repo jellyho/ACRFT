@@ -183,11 +183,21 @@ BoN이 마주하는 것보다 <b>{WIDEST:.0f}배 넓은</b> — 즉 훨씬 <b>�
 {D["per_candidate_margin_median"]:+.1f}에 불과하다. 이렇게 쉬운 과제에서 우연보다 겨우 나은 critic이,
 σ≈{SIGMA_BC}짜리 구름 안에서 후보를 가려낼 이유가 없다.</p>
 
-<h3>앙상블은 이 불확실성을 측정하고 있지 않다</h3>
-<p>상태당 앙상블 불일치(K=2)는 <b>{D["ensemble_disagreement_std"]:.1f}</b>인데, arg-max가 착취하는 후보 간
-spread는 <b>{D["within_state_candidate_std"]:.1f}</b>다 — <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b>만 보고 있다.
+<h3>앙상블은 무엇을 재고 무엇을 못 재는가 <span class='sub'>(정정됨)</span></h3>
+<div class='missing'><b>정정 (2026-09-04).</b> 초판은 앙상블이 <b>"필요 신호의 4.7%만 측정"</b>한다고 썼다.
+그 비율은 <b>분자와 분모를 다른 대상에서</b> 잰 것이었다 — 분자는 <b>실행된 청크</b>에서의 불일치,
+분모는 <b>후보들</b> 사이의 spread. 실행된 청크는 목적함수가 유일하게 제약한 액션이라 불일치가 작을 수밖에
+없다. 같은 기준으로 다시 재면:
+<br><code>실행 청크에서의 불일치 {D["ensemble_disagreement_at_executed"]:.2f} · 후보에서의 불일치
+{D["ensemble_disagreement_at_candidates"]:.2f} · 후보 간 spread {D["within_state_candidate_std"]:.1f}
+→ 같은 기준 비율 <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b></code>
+<br>그리고 그 두 숫자의 비가 <b>{D["ood_separation"]:.1f}배</b>다 — 즉 K=2 앙상블은 <b>off-support 탐지기로는
+실제로 작동한다</b>. 내가 "측정 자체가 없다"고 쓴 것은 틀렸다. 정확한 진술은:
+<b>어디가 support 밖인지는 알려주지만, 거기서 Q가 얼마나 틀렸는지는 약하게만 알려준다</b>는 것이다.</div>
+<p>상태당 앙상블 불일치는 후보에서 <b>{D["ensemble_disagreement_at_candidates"]:.1f}</b>, arg-max가 착취하는
+후보 간 spread는 <b>{D["within_state_candidate_std"]:.1f}</b> — <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b>다.
 LCB(β=1)를 걸어도 N=8에서 {AM[i8]:+.1f} → {LC[i8]:+.1f}, {(1 - LC[i8] / AM[i8]) * 100:.0f}%밖에 못 깎는다.
-<b>β를 올려서 될 일이 아니라, 측정 자체가 없다.</b> (그리고 K=2에서는 <code>mean − 1σ</code>가
+<b>β를 올려서 될 일은 아니다.</b> (그리고 K=2에서는 <code>mean − 1σ</code>가
 <code>min</code>과 <b>항등</b>임을 확인했다 — 부동소수점 오차 4.4e-16. 위 LCB 곡선은 독립 추정량이 아니라
 min 그 자체이고, β는 K=2에서 자유도가 아니다. ACRFT-WS의 지적.) 이는
 <span class='xref' data-eid='critic-detail-survey'>구현 디테일 서베이</span>의 가설 2(∇Q를 쓰는 방법은 전부 앙상블 10,
@@ -310,11 +320,22 @@ executed at OTHER states — a task <b>{WIDEST:.0f}x wider</b>, and therefore fa
 of the time (chance 0.5), with a median margin of {D["per_candidate_margin_median"]:+.1f}. A critic barely above
 chance on a task that easy has no reason to separate candidates inside a σ≈{SIGMA_BC} cloud.</p>
 
-<h3>The ensemble is not measuring this uncertainty</h3>
-<p>Per-state ensemble disagreement (K=2) is <b>{D["ensemble_disagreement_std"]:.1f}</b>, while the spread across
-candidates that the arg-max exploits is <b>{D["within_state_candidate_std"]:.1f}</b> — it sees
-<b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b> of it. LCB at β=1 moves N=8 from {AM[i8]:+.1f} to {LC[i8]:+.1f},
-only {(1 - LC[i8] / AM[i8]) * 100:.0f}%. <b>Not a β to tune — a measurement that is missing.</b> (And at K=2, <code>mean − 1σ</code> is
+<h3>What the ensemble measures, and what it does not <span class='sub'>(corrected)</span></h3>
+<div class='missing'><b>Correction (2026-09-04).</b> The first version said the ensemble "measures only
+<b>4.7%</b> of the spread the arg-max exploits". That ratio took its <b>numerator and denominator from
+different things</b> — the numerator at the <b>executed chunk</b>, the denominator across <b>candidates</b>.
+The executed chunk is the one action the objective ever constrained, so its disagreement is small by
+construction. Like for like:
+<br><code>disagreement at the executed chunk {D["ensemble_disagreement_at_executed"]:.2f} · at candidates
+{D["ensemble_disagreement_at_candidates"]:.2f} · candidate spread {D["within_state_candidate_std"]:.1f}
+→ like-for-like ratio <b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b></code>
+<br>And the ratio between those two numerators is <b>{D["ood_separation"]:.1f}x</b> — so the K=2 ensemble
+<b>does work as an off-support detector</b>. "A measurement that is missing" was wrong. The accurate
+statement: it tells you WHERE you are off support, and only weakly HOW WRONG Q is once you are.</div>
+<p>Per-state ensemble disagreement at the candidates is <b>{D["ensemble_disagreement_at_candidates"]:.1f}</b>
+against a candidate spread of <b>{D["within_state_candidate_std"]:.1f}</b> —
+<b>{D["disagreement_to_spread_ratio"] * 100:.1f}%</b>. LCB at β=1 moves N=8 from {AM[i8]:+.1f} to {LC[i8]:+.1f},
+only {(1 - LC[i8] / AM[i8]) * 100:.0f}%. <b>Not a β to tune.</b> (And at K=2, <code>mean − 1σ</code> is
 <b>identically</b> <code>min</code> — verified to 4.4e-16. The LCB curve above is therefore the min curve, not an
 independent estimator, and β is not a degree of freedom at K=2. Pointed out by the ACRFT-WS session.) This is the first
 number attached to hypothesis 2 of the
@@ -362,7 +383,7 @@ entry = {
         "얼마나 멀리 뻗느냐에 비례하고, best-of-N이 뻗을 수 있는 거리는 샘플러 자신의 노이즈뿐이다. 따라서 실물에서 "
         "BoN이 무선택과 동률이었던 것은 과대평가가 아니라 그 폭에 신호가 없어서일 가능성이 높다(확률적 추첨이 "
         f"이긴 것과 정합). 판별력을 직접 재면 {D['ranking_accuracy']:.3f} — '다른 상태에서 실행된 청크'라는 훨씬 쉬운 "
-        f"과제에서도 우연(0.5)보다 겨우 낫다. 앙상블 K=2는 착취되는 spread의 {D['disagreement_to_spread_ratio'] * 100:.1f}%만 "
+        f"과제에서도 우연(0.5)보다 겨우 낫다. 앙상블 K=2는 착취되는 spread의 {D['disagreement_to_spread_ratio'] * 100:.1f}%를 "
         "측정 중이라 LCB가 듣지 않는다. LCB read·CQL/Cal-QL 보수항·배치 샘플러를 구현하고 critic 재학습 4종을 큐에 넣음."
     ),
     "tags": ["워커B", "critic", "OOD", "BoN", "진단", "CQL"],
