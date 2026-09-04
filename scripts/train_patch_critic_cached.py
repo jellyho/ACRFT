@@ -165,6 +165,51 @@ def main():
     )
     ap.add_argument("--cql-bank", type=pathlib.Path, default=None, help="dir from scripts/sample_policy_chunks.py")
     ap.add_argument(
+        "--inv-weight",
+        type=float,
+        default=0.0,
+        help="AC-State multi-step inverse auxiliary on the SHARED TRUNK (Lamb et al., arXiv 2207.08229; "
+        "official alexmlamb/ControllableLatentState). 0 = off. Predict the action taken at t from the "
+        "pair (z_t, z_{t+k}) -- repnet.py: `a_hat = self.multi_step_inv_model(z0, z1)` against the "
+        "action AT t, with invnet.py concatenating `context = torch.cat((z0, z1), -1)` and NOT taking k "
+        "as an input. WHY HERE: a linear probe recovers episode identity from these features at accuracy "
+        "1.000 (chance 0.0019) and 70% of a frame's nearest neighbours are its own episode, so the "
+        "representation splits the task by episode rather than by state. An inverse objective keeps only "
+        "what is needed to infer the ACTION, which is invariant to background, lighting and -- unlike our "
+        "cost_to_goal target -- to how long this particular episode happened to take.",
+    )
+    ap.add_argument(
+        "--inv-max-k",
+        type=int,
+        default=90,
+        help="largest gap, in frames, between the two observations. DEVIATION FROM THE OFFICIAL CODE, "
+        "stated because it is a real one: buffer.py sets `randk = maxk` -- always the LARGEST valid gap, "
+        "clamped by `steps_to_goal`. In their gridworld that is a handful of steps. Here it would be the "
+        "whole episode: at 30 Hz with ~2900-frame episodes it would ask which 14-dim action was taken at t "
+        "given a frame 90 SECONDS later, which carries no information about it. We sample k log-uniformly "
+        "in [1, inv_max_k] instead, so the pair spans easy and hard gaps. 90 frames = 3 s = 3x the chunk.",
+    )
+    ap.add_argument(
+        "--inv-bottleneck",
+        type=int,
+        default=64,
+        help="width of the projection the inverse head reads. The official information bottleneck is a "
+        "VECTOR QUANTIZER applied to z0/z1 (repnet.py: `z0, zq_loss0, ind = self.vq_layer(z0)`), and its "
+        "lossiness is what forces the encoder to DISCARD; a linear projection in the auxiliary branch only "
+        "adds pressure to RETAIN control-relevant information, it does not force anything out of the trunk. "
+        "That distinction is the main reason this arm might fail, and it is pre-registered as such: expect "
+        "act_cos to move before episode_acc does.",
+    )
+    ap.add_argument(
+        "--inv-zero-proprio",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="zero the proprio token in the AUXILIARY branch only. Our arms move smoothly, so the action at "
+        "t is largely predictable from proprio by interpolation -- the inverse task would then be solved "
+        "without the visual encoder learning anything, the same shape of shortcut as the episode cue in "
+        "--cql-negatives shuffle. Zeroing forces the pixels to carry it.",
+    )
+    ap.add_argument(
         "--backup",
         choices=["scalar", "distributional"],
         default="scalar",
@@ -478,6 +523,47 @@ def main():
         net = PatchCriticEnsemble(**_common)
         net_pm = PatchCriticEnsemble(**_common, per_member_actions=True)
     v_net = PatchV(num_atoms=a.num_atoms)
+
+    # ---- AC-State multi-step inverse auxiliary -------------------------------------------------
+    inv_mod = inv_trunk = None
+    if a.inv_weight > 0.0:
+        if a.critic_arch != "shared":
+            raise SystemExit(
+                "--inv-weight needs --critic-arch shared: it trains the shared TRUNK, and "
+                "PatchARQCritic has no action-independent half to attach to"
+            )
+        import flax.linen as _nn
+
+        from openpi.patch_critic.critic import PatchTrunk as _PatchTrunk
+
+        # The same module class the ensemble builds internally, applied to the ensemble's own trunk
+        # subtree. Reusing the weights rather than the module object keeps critic.py untouched and
+        # keeps the parameter tree byte-identical to a run without this flag.
+        inv_trunk = _PatchTrunk(num_layers=a.trunk_layers, num_heads=8, head_dim=48, mlp_dim=1024)
+
+        class _InvHead(_nn.Module):
+            """(z_t, z_{t+k}) -> the action taken AT t.
+
+            invnet.py concatenates the two latents and runs an MLP to action logits; `k` is not an
+            input, so the head cannot condition on how far apart the pair is and must read the
+            displacement out of the representation itself. Ours regresses a continuous 14-dim joint
+            delta instead of classifying one of n_actions, which is the only change the action space
+            forces.
+            """
+
+            bottleneck: int
+            out_dim: int
+
+            @_nn.compact
+            def __call__(self, z0, z1):
+                proj = _nn.Dense(self.bottleneck)
+                h = jnp.concatenate([proj(z0), proj(z1)], axis=-1)  # shared projection: the bottleneck
+                h = _nn.gelu(_nn.Dense(256)(_nn.LayerNorm()(h)))
+                h = _nn.gelu(_nn.Dense(256)(h))
+                return _nn.Dense(self.out_dim)(h)
+
+        inv_mod = _InvHead(bottleneck=a.inv_bottleneck, out_dim=ad)
+
     # ---- floq: a trunk + a velocity field replace the categorical read-out ----------------------
     floq_net = floq_trunk = None
     if a.value_head == "floq":
@@ -514,6 +600,19 @@ def main():
     rng = jax.random.key(a.seed)
     p2 = jnp.zeros((2, npatch, emb), jnp.float32)
     params = net.init(rng, p2, jnp.zeros((2, H, ad)), jnp.zeros((2, sd)))
+    if inv_mod is not None:
+        # Carried inside `params` under a key the ensemble never looks up: flax.apply resolves only
+        # the paths it needs, so an extra subtree is inert for `net.apply` while `tx.init(params)`
+        # picks it up and the existing optimizer trains it. That avoids threading a third parameter
+        # tree and optimizer through the carry, the jit signature and both loss paths.
+        _z = inv_trunk.apply({"params": params["params"]["PatchTrunk_0"]}, p2, jnp.zeros((2, sd)))
+        _zp = _z.mean(axis=-2)
+        params["params"]["inv_head"] = inv_mod.init(rng, _zp, _zp)["params"]
+        print(
+            f"AC-State inverse aux: lambda={a.inv_weight} max_k={a.inv_max_k} "
+            f"bottleneck={a.inv_bottleneck} zero_proprio={a.inv_zero_proprio}",
+            flush=True,
+        )
     if a.value_head == "floq":
         _mh = H // a.macro_group_size
         _tp = floq_trunk.init(rng, p2, jnp.zeros((2, sd)))
@@ -573,7 +672,9 @@ def main():
             )
         return jnp.stack(out, 1)
 
-    def loss_fn(params, v_params, tgt_p, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs):
+    def loss_fn(
+        params, v_params, tgt_p, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs, pinv, sinv
+    ):
         vlog = v_net.apply(
             jax.lax.stop_gradient(v_params), pnxt.reshape(-1, npatch, emb).astype(jnp.float32), snxt.reshape(-1, sd)
         ).reshape(-1, P_, a.num_atoms)
@@ -666,6 +767,25 @@ def main():
             # means "one span-fraction of conservatism per nat of TD loss".
             cql_loss = a.alpha_cql * cql_gap / (a.v_max - v_min)
 
+        # ---- AC-State multi-step inverse auxiliary ---------------------------------------------
+        inv_loss = jnp.asarray(0.0)
+        inv_r2 = jnp.asarray(0.0)
+        if a.inv_weight > 0.0:
+            tp = {"params": params["params"]["PatchTrunk_0"]}
+            sc = jnp.zeros_like(scur) if a.inv_zero_proprio else scur
+            si = jnp.zeros_like(sinv) if a.inv_zero_proprio else sinv
+            z0 = inv_trunk.apply(tp, pcur.astype(jnp.float32), sc).mean(axis=-2)  # [B, d]
+            z1 = inv_trunk.apply(tp, pinv.astype(jnp.float32), si).mean(axis=-2)
+            a_hat = inv_mod.apply({"params": params["params"]["inv_head"]}, z0, z1)
+            # the action taken AT t, which for a chunk policy is the chunk's first step
+            tgt_a = chunk[:, 0, :]
+            inv_loss = jnp.mean(jnp.square(a_hat - tgt_a))
+            # MSE alone cannot tell learning from regression-to-the-mean, and the mean action here is
+            # a strong predictor (the arms move smoothly). R2 against the batch's own variance is the
+            # readable form: <=0 means the head is not beating the constant predictor, and if it never
+            # leaves 0 the auxiliary is shaping nothing no matter how good the loss curve looks.
+            inv_r2 = 1.0 - inv_loss / (jnp.mean(jnp.var(tgt_a, axis=0)) + 1e-8)
+
         # ---- EDAC ensemble-diversity penalty on grad_a Q ---------------------------------------
         # An et al., "Uncertainty-Based Offline RL with Diversified Q-Ensemble" (NeurIPS 2021).
         # Transcribed from the official snu-mllab/EDAC sac.py: tile the action so every member
@@ -715,8 +835,10 @@ def main():
         wexp = jnp.abs(a.expectile - (u < 0).astype(jnp.float32))
         v_ce = -jnp.sum(jax.lax.stop_gradient(qd_probs) * jax.nn.log_softmax(vlog_c, -1), -1)
         v_loss = jnp.sum(wexp * v_ce) / u.shape[0]
-        return q_loss + v_loss + cql_loss + edac_loss, {
+        return q_loss + v_loss + cql_loss + edac_loss + a.inv_weight * inv_loss, {
             "q_loss": q_loss,
+            "inv_loss": inv_loss,
+            "inv_r2": inv_r2,
             "v_loss": v_loss,
             "cql_gap": cql_gap,
             "cql_clamped": cql_clamped,
@@ -799,7 +921,7 @@ def main():
         return x
 
     @jax.jit
-    def step(carry, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, bank_negs):
+    def step(carry, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, bank_negs, pinv, sinv):
         kc, kn, kq = jax.random.split(key, 3)
         pcur, pnxt = _augment(kc, pcur), _augment(kn, pnxt)
         negs = _negatives(kq, chunk, bank_negs) if a.alpha_cql > 0.0 else bank_negs
@@ -815,7 +937,7 @@ def main():
             tgt = optax.incremental_update(params, tgt, a.target_tau)
             return (params, tgt, opt, v_params, v_opt), info
         (_, info), (gp, gv) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(
-            params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs
+            params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs, pinv, sinv
         )
         up, opt = tx.update(gp, opt, params)
         params = optax.apply_updates(params, up)
@@ -886,6 +1008,11 @@ def main():
         def bank_negs_of(gcur, g0=None, eff=None, s_raw=None):
             return _dummy
 
+    # Inert placeholders when the auxiliary is off: shapes must still be static for the jit, and
+    # `a.inv_weight > 0.0` is a closure constant so the branch that reads them is traced out.
+    _inv_dummy_p = jnp.zeros((a.batch, npatch, emb), jnp.float32)
+    _inv_dummy_s = jnp.zeros((a.batch, sd), jnp.float32)
+
     t0 = time.time()
     for s in range(a.steps):
         idx = rng_np.integers(0, M, size=a.batch)
@@ -922,6 +1049,22 @@ def main():
         # Built BEFORE pre.state() rewrites s_cur_raw below: `within` needs the raw state to express
         # another timestep's absolute joint targets as a delta from here.
         host_negs = bank_negs_of(gcur, g0, eff, s_cur_raw)
+        if a.inv_weight > 0.0:
+            # k log-uniform in [1, inv_max_k], clamped to what is left of the TRUNCATED episode --
+            # past eff lie the homing frames, and a pair straddling them would be asking which action
+            # was taken at t given a frame from the return-to-home motion.
+            room = np.maximum(eff - pos - 1, 1)
+            kk = np.minimum(np.exp(rng_np.uniform(0.0, np.log(a.inv_max_k + 1.0), size=a.batch)).astype(np.int64), room)
+            ginv = gcur + np.maximum(kk, 1)
+            pinv = jnp.asarray(np.asarray(feats[ginv]))
+            s_inv_raw = np.asarray(states[ginv])
+            if pre is not None:
+                s_inv_raw = pre.state(s_inv_raw)
+            if pidx is not None:
+                s_inv_raw = s_inv_raw[..., pidx]
+            sinv = jnp.asarray(s_inv_raw)
+        else:
+            pinv, sinv = _inv_dummy_p, _inv_dummy_s
         s_nxt_raw = np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd_raw)
         if pre is not None:
             # delta is taken against the chunk's BASE frame, exactly as the base VLA does
@@ -955,6 +1098,8 @@ def main():
             jnp.asarray(valid),
             jnp.asarray(mc),
             host_negs,
+            pinv,
+            sinv,
         )
         if wb is not None and s % 100 == 0:
             wb.log({k: float(v) for k, v in info.items()}, step=s)
@@ -965,6 +1110,7 @@ def main():
             rate = (s + 1) / (time.time() - t0)
             if s > 20:
                 rate = (s - s_warm) / (time.time() - t_warm)
+            invs = f"  inv {i['inv_loss']:.4f} r2 {i['inv_r2']:+.3f}" if a.inv_weight > 0.0 else ""
             cqls = (
                 f"  cql_gap {i['cql_gap']:.2f} clamped {i['cql_clamped']:.2f} exceeds {i['cql_exceeds']:.2f}"
                 if a.alpha_cql > 0.0
@@ -973,7 +1119,7 @@ def main():
             cqls += f"  edac_cos {i['edac_cos']:.3f}" if a.edac_weight > 0.0 else ""
             print(
                 f"step {s:6d}  q_loss {i['q_loss']:.4f}  v_loss {i['v_loss']:.4f}  q_mean {i['q_mean']:.2f}  "
-                f"v_mean {i['v_mean']:.2f}{cqls}  ({rate:.2f} it/s)",
+                f"v_mean {i['v_mean']:.2f}{invs}{cqls}  ({rate:.2f} it/s)",
                 flush=True,
             )
         if a.save_every and (s + 1) % a.save_every == 0:

@@ -59,6 +59,8 @@ export UV_PROJECT_ENVIRONMENT=/data5/jellyho/ACRFT/openpi/.venv
 export PYTHONPATH=/data5/jellyho/ACRFT/openpi:/data5/jellyho/ACRFT/openpi/src
 EDAC_ARGS=""
 if [ -n "${EDAC:-}" ]; then EDAC_ARGS="--edac-weight ${EDAC}"; fi
+INV_ARGS=""
+if [ -n "${INV:-}" ]; then INV_ARGS="--inv-weight ${INV} --inv-max-k ${INVK:-90} --inv-bottleneck ${INVB:-64}"; fi
 CQL_ARGS=""
 if [ -n "${ACQL:-}" ]; then
   CQL_ARGS="--alpha-cql ${ACQL} --cql-negatives ${NEG:-shuffle} --cql-n ${CQLN:-8} --cql-batch ${CQLB:-64}"
@@ -80,6 +82,6 @@ exec /data5/jellyho/ACRFT/openpi/.venv/bin/python -u scripts/train_patch_critic_
   --macro-group-size 30 --expectile 0.9 --feat-dropout 0.1 --feat-noise 0.05 \
   --h-goal 30 --lr 1e-4 --steps "${STEPS:-200000}" \
   --num-critics "${K:-2}" --q-reduction "${RED:-min}" --seed "${SEED:-0}" \
-  --critic-arch "${ARCH:-shared}" --value-head "${VH:-categorical}" --floq-steps "${FSTEPS:-8}" ${EDAC_ARGS} ${CQL_ARGS} \
+  --critic-arch "${ARCH:-shared}" --value-head "${VH:-categorical}" --floq-steps "${FSTEPS:-8}" ${EDAC_ARGS} ${CQL_ARGS} ${INV_ARGS} \
   --wandb --wandb-name "${NAME:?}" --wandb-group patch-critic-ood \
   --out "/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_${NAME}"
