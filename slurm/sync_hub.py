@@ -246,8 +246,16 @@ def main():
         raise SystemExit("nothing to publish")
 
     api = HfApi()
+    # Read at a PINNED revision and commit against it. entries.json is a whole-blob replacement on
+    # a file every worker publishes to, so without parent_commit the merge cannot conflict -- it
+    # just restores the snapshot read minutes ago, silently deleting anything published in between.
+    # The figure uploads make that window seconds to minutes wide. scripts/SPACE_ENTRIES_SCHEMA.md
+    # step 3 mandates parent_commit, and worker A's publisher already does this; this file did not.
+    head = api.repo_info(SPACE, repo_type="space").sha
     live = json.loads(
-        pathlib.Path(hf_hub_download(SPACE, "entries.json", repo_type="space", force_download=True)).read_text()
+        pathlib.Path(
+            hf_hub_download(SPACE, "entries.json", repo_type="space", revision=head, force_download=True)
+        ).read_text()
     )
 
     # Figures out of the base64 bodies, one directory per entry so a re-publish overwrites its own
@@ -296,13 +304,22 @@ def main():
     if size_mb > 9.5:
         raise RuntimeError(f"entries.json {size_mb:.1f}MB — 10MB LFS 경계 초과 위험, 본문을 더 줄여야 함")
 
-    res = api.create_commit(
-        repo_id=SPACE,
-        repo_type="space",
-        operations=[CommitOperationAdd(path_in_repo="entries.json", path_or_fileobj=str(tmp)), *ops],
-        commit_message=f"worker-B: {len(ours)} entries [{mm.GIT_STAMP}]",
-        create_pr=True,
-    )
+    try:
+        res = api.create_commit(
+            repo_id=SPACE,
+            repo_type="space",
+            operations=[CommitOperationAdd(path_in_repo="entries.json", path_or_fileobj=str(tmp)), *ops],
+            commit_message=f"worker-B: {len(ours)} entries [{mm.GIT_STAMP}]",
+            create_pr=True,
+            parent_commit=head,
+        )
+    except Exception as e:
+        # Someone published while we were uploading. Re-read and retry rather than overwrite them:
+        # the merge itself would succeed and take their entry with it.
+        raise SystemExit(
+            f"허브가 읽은 시점({head[:8]}) 이후 바뀌었다 — 남의 엔트리를 덮어쓰지 않으려고 중단한다. "
+            f"다시 실행하면 최신 상태를 다시 읽는다.\n  {type(e).__name__}: {e}"
+        ) from e
     if res.pr_url is None:
         print("허브 동기화: 변경 없음 — PR 생략")
         return

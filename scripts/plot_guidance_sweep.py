@@ -77,8 +77,11 @@ class Sweep:
     data: np.ndarray  # [H, AD] the demonstrator's continuation, policy-normalized
     q: np.ndarray  # [A] pessimistic Q of each steered chunk, critic's own reduction
     q_data: float
-    sigma: float  # mean PER-COORDINATE std of the BC cloud
+    sigma: float  # mean PER-COORDINATE std of the BC cloud, over the ROBOT's dims only
     pc_sigma: float  # std along the draws' first principal direction, for reference
+    action_dim: int  # the robot's real action width; the model pads beyond it
+    draw_to_draw: float  # RMS distance between two BC draws, in units of sigma -- the honest
+    # "this is the policy's own spread" reference for a displacement measured FROM one draw
     episode: int
     frame: int
 
@@ -106,7 +109,13 @@ def measure(wrapper, sampler, obs, data_chunk, *, alphas, n_bc, flow_steps, seed
     proprio = np.asarray(wrapper._critic_proprio(obs["observation/state"]), np.float32)
     feats_j = jnp.asarray(feats)[None] if feats.ndim == 2 else jnp.asarray(feats)
     prop_j = jnp.asarray(proprio)[None] if proprio.ndim == 1 else jnp.asarray(proprio)
-    ad = sampler.critic.config["action_dim"]
+    # The ROBOT's action width, not the model's. pi05 runs a 32-wide action head and
+    # PadStatesAndActions zero-pads YAM's 14 joints out to it, so 18 of every 32 coordinates are
+    # padding with a std of 0.0008 against the real joints' 0.031. Averaging them into a
+    # "per-coordinate sigma" made it 2.2x too small, inflated every displacement 1.47x and
+    # deflated every out-of-box fraction by exactly 14/32. Everything below is measured on
+    # [:ad] for that reason.
+    ad = int(getattr(wrapper, "_robot_action_dim", 0) or sampler.critic.config["action_dim"])
     k, c = sampler.to_critic_space
 
     # One rng per NOISE, reused across the whole alpha ladder: sample_steered draws x0 from it, so
@@ -128,18 +137,22 @@ def measure(wrapper, sampler, obs, data_chunk, *, alphas, n_bc, flow_steps, seed
             for al in alphas
         ]
         chunks.append(np.stack(row))
-    chunks = np.stack(chunks)  # [S, A, H, AD]
+    chunks = np.stack(chunks)  # [S, A, H, model AD]
 
     def q_of(chunk_norm):
         a = jnp.asarray(chunk_norm)[None, : sampler.critic_horizon, :ad] * k + c
         return float(np.asarray(sampler._q(feats_j, a, prop_j, reduce="pess"))[0])
 
     q = np.array([[q_of(ch) for ch in row] for row in chunks], np.float32)  # [S, A]
+    # Q was scored on the model-width chunk (q_of slices to :ad itself, as the critic requires).
+    # From here on everything is the robot's dims only.
+    chunks = chunks[..., :ad]
+    bc = bc[..., :ad]
 
     # The demonstrator's continuation, put through the POLICY's normalization so it lands in the
     # same space as the draws. Its Q is the anchor: an action known to have reached the goal.
     pre = wrapper._pol._input_transform
-    dn = np.asarray(pre({**obs, "actions": data_chunk})["actions"], np.float32)
+    dn = np.asarray(pre({**obs, "actions": data_chunk})["actions"], np.float32)[..., :ad]
     return Sweep(
         alphas=list(map(float, alphas)),
         chunks=chunks,
@@ -148,6 +161,8 @@ def measure(wrapper, sampler, obs, data_chunk, *, alphas, n_bc, flow_steps, seed
         q=q,
         q_data=q_of(dn),
         sigma=float(bc.std(axis=0).mean()),
+        action_dim=ad,
+        draw_to_draw=_draw_to_draw(bc),
         pc_sigma=float(
             np.linalg.svd(bc.reshape(len(bc), -1) - bc.reshape(len(bc), -1).mean(0), compute_uv=False)[0]
             / max(len(bc) - 1, 1) ** 0.5
@@ -172,6 +187,8 @@ def dump(sw: Sweep, path: pathlib.Path, *, critic: str) -> None:
         "alphas": sw.alphas,
         "sigma": sw.sigma,
         "pc_sigma": sw.pc_sigma,
+        "action_dim": sw.action_dim,
+        "draw_to_draw": sw.draw_to_draw,
         "q": sw.q.tolist(),
         "q_data": sw.q_data,
         "chunks": sw.chunks.tolist(),
@@ -193,18 +210,35 @@ def load_dump(path: pathlib.Path) -> "tuple[Sweep, str]":
         q_data=float(b["q_data"]),
         sigma=float(b["sigma"]),
         pc_sigma=float(b["pc_sigma"]),
+        action_dim=int(b["action_dim"]),
+        draw_to_draw=float(b["draw_to_draw"]),
         episode=int(b["episode"]),
         frame=int(b["frame"]),
     )
     return sw, str(b["critic"])
 
 
+def _draw_to_draw(bc: np.ndarray) -> float:
+    """RMS distance between two BC draws, in units of the per-coordinate sigma.
+
+    The displacement in this figure is measured FROM one particular draw, so "how far the policy
+    already moves on its own" is a draw-to-DRAW distance, not a draw-to-mean one. For independent
+    coordinates that is sqrt(2), but it is measured rather than assumed.
+    """
+    sigma = float(bc.std(axis=0).mean())
+    if len(bc) < 2 or sigma < 1e-12:
+        return float("nan")
+    d = [float(np.sqrt(np.mean((bc[i] - bc[j]) ** 2)) / sigma) for i in range(len(bc)) for j in range(i + 1, len(bc))]
+    return float(np.mean(d))
+
+
 def rms_sigma(delta: np.ndarray, sigma: float) -> float:
     """Displacement in units of the BC cloud's PER-COORDINATE spread.
 
-    A raw ``norm(delta)`` over a 30x14 chunk divided by a per-coordinate sigma inflates the number
-    by sqrt(420) ~ 20.5, which reads as hundreds of sigma when each coordinate moved a few. Root
-    MEAN square, so one unit here means "every coordinate moved by one BC sigma".
+    A raw ``norm(delta)`` over the whole chunk divided by a per-coordinate sigma inflates the
+    number by sqrt(number of coordinates), which reads as hundreds of sigma when each coordinate
+    moved a few. Root MEAN square, so one unit here means "every coordinate moved by one BC
+    sigma". ``delta`` must already be sliced to the robot's real action width.
     """
     return float(np.sqrt(np.mean(np.square(delta))) / max(sigma, 1e-9))
 
@@ -255,8 +289,17 @@ def figure(sw: Sweep, out: pathlib.Path, *, critic_name: str, joints: int = 6) -
             ax.fill_between(np.arange(h), per.min(0), per.max(0), color=cc, alpha=0.16, lw=0)
     ax.set_xlabel("step in the chunk")
     ax.set_ylabel("displacement from this noise's\n$\\alpha{=}0$ draw (BC $\\sigma$ per coordinate)")
-    ax.axhline(1, color=GRAY, ls="--", lw=1.0)
-    ax.text(h - 1, 1, "the policy's own spread ($1\\sigma$)  ", ha="right", va="bottom", fontsize=8, color=GRAY)
+    # The reference is draw-to-DRAW, because the displacement above is measured from one draw.
+    ax.axhline(sw.draw_to_draw, color=GRAY, ls="--", lw=1.0)
+    ax.text(
+        h - 1,
+        sw.draw_to_draw,
+        "two BC draws differ by this much  ",
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color=GRAY,
+    )
     ax.set_title("where steering bites", fontsize=11)
 
     # --- 3. the policy's own plane ------------------------------------------------------------
@@ -311,7 +354,7 @@ def figure(sw: Sweep, out: pathlib.Path, *, critic_name: str, joints: int = 6) -
     cb.set_label("$\\alpha$", fontsize=9)
     fig.suptitle(
         f"one noise draw, steered harder and harder   ·   episode {sw.episode} frame {sw.frame}   ·   "
-        f"{critic_name}   ·   {ns} noises",
+        f"{critic_name}   ·   {ns} noises   ·   {sw.action_dim} joints",
         fontsize=12,
         y=1.08,
     )
@@ -450,10 +493,13 @@ def main(a):
             100 * oob.mean(),
         )
     logging.info(
-        "demonstrator Q %+8.2f   BC sigma %.4f per coordinate (%.3f along PC1)",
+        "demonstrator Q %+8.2f   BC sigma %.4f per coordinate over %d joints (%.3f along PC1); "
+        "two BC draws differ by %.2f sigma",
         sw.q_data,
         sw.sigma,
+        sw.action_dim,
         sw.pc_sigma,
+        sw.draw_to_draw,
     )
 
     out = pathlib.Path(a.out)
@@ -475,8 +521,10 @@ def main(a):
                     "n_noise": int(len(sw.chunks)),
                     "q": sw.q.tolist(),
                     "q_data": sw.q_data,
+                    "action_dim": sw.action_dim,
                     "sigma_per_coordinate": sw.sigma,
                     "sigma_pc1": sw.pc_sigma,
+                    "draw_to_draw_sigma": sw.draw_to_draw,
                     "displacement_sigma_per_coordinate": [
                         [rms_sigma(sw.chunks[si, ai] - sw.chunks[si, 0], sw.sigma) for ai in range(len(sw.alphas))]
                         for si in range(len(sw.chunks))
