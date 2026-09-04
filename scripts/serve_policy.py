@@ -104,6 +104,13 @@ class Args:
     # because this file already talks about alpha-Flow a few options down. Unused by other modes.
     steer_alpha: float | None = None
 
+    # What --critic-mode qpilots ascends: "critic" (default, QPILOTS-U as published), "negated"
+    # (-Q), or "random" (a fixed random unit direction). The last two are controls for whether the
+    # steering collapse at alpha=0.1 is about the critic's DIRECTION or the injection's MAGNITUDE --
+    # Eq. 17 normalizes every gradient to the drift norm, so all three inject the same displacement
+    # at the same alpha. See ArmSpec.steer_value.
+    steer_value: str | None = None
+
     # Record N unconditional draws (and, for qpilots, the unsteered twin from the same noise)
     # alongside the chunk the arm actually executes, so a recording can say how far the arm moved
     # from the BC policy and whether that move stayed inside the policy's own spread. They are
@@ -281,6 +288,7 @@ def _build_critic_policy(policy, args: Args):
             mode=mode,
             extraction_head=args.extraction_head,
             steer_alpha=args.steer_alpha,
+            steer_value=args.steer_value,
             drift_samples=args.drift_samples,
             **samples,
             **steps,
