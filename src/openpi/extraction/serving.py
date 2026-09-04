@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import logging
 import pathlib
 from typing import Any
 
@@ -181,6 +182,7 @@ class ArmChunkSampler:
 
     def __init__(self, spec: ArmSpec, served_model=None):
         self.spec = spec
+        self._warned_rho = False
         if spec.arm == "qpilots" and served_model is not None:
             # Steer the policy that is actually being served, whatever checkpoint it came from.
             # Re-tagged as the subclass that owns the steered sampler; it shares the served
@@ -227,11 +229,39 @@ class ArmChunkSampler:
     # Pi0.sample_actions(noise=seed). A copy does not fail when it drifts -- it silently serves a
     # base that is no longer the base being served, which is how this ring once lost nine arms.
 
+    #: Below this many members, the `mean - rho*std` read is refused and falls back to the mean.
+    #: rho=0.5 is transplanted from QAM (agents/qam.py:33) and so is the reduction -- but QAM sizes
+    #: its ensemble for it at num_qs=10 (qam.py:424; RLPD's config.py:7 likewise). At K=2, jnp.std
+    #: with ddof=0 is just |q1-q2|/2: a single-sample estimate carrying ~75% relative sampling error,
+    #: and it is DIFFERENTIATED, because this same read is the value function QPILOTS steers along.
+    #: Measured on 64 on-manifold states: the std term contributes 59.6 of gradient magnitude against
+    #: 123.5 from the mean term -- a third of every steering step -- in a direction near-orthogonal to
+    #: it (cos -0.078). That is not pessimism, it is noise injected into the drift, and the alpha
+    #: sweep it produced fell to 0.30 at alpha=0.1. Ten members is where the transplant came from, so
+    #: ten is where it is allowed.
+    MIN_MEMBERS_FOR_PESSIMISM = 10
+
     def _q(self, feats, chunk, proprio, *, reduce: str):
         logits = self.critic.net.apply({"params": self.critic.params}, feats, chunk, proprio)
         q = self.critic.hl.from_logits(logits)[..., -1]  # [K, B]
         if reduce == "min":
             return q.min(axis=0)
+        k = q.shape[0]
+        if self.spec.rho and k < self.MIN_MEMBERS_FOR_PESSIMISM:
+            if not self._warned_rho:
+                object.__setattr__(self, "_warned_rho", True)
+                logging.warning(
+                    "critic has K=%d members; refusing the rho=%.2f pessimistic read (needs K>=%d) and "
+                    "using the ensemble MEAN. At K=%d, std is |q1-q2|/2 -- a single-sample estimate that "
+                    "contributed ~34%% of the steering gradient in a direction near-orthogonal to the "
+                    "value gradient. Train a K>=%d critic to enable it.",
+                    k,
+                    self.spec.rho,
+                    self.MIN_MEMBERS_FOR_PESSIMISM,
+                    k,
+                    self.MIN_MEMBERS_FOR_PESSIMISM,
+                )
+            return q.mean(axis=0)
         return q.mean(axis=0) - self.spec.rho * q.std(axis=0)  # pessimistic, QPILOTS Eq. 12
 
     @functools.cached_property
