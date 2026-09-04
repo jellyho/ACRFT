@@ -553,7 +553,13 @@ class PatchCriticSelectPolicy(BasePolicy):
                 f"state width {state.shape[0]} but the critic was trained on {want_sd} "
                 f"({self._state_key}); the proprio channels would land in the wrong slots"
             )
-        if self._norm_stats is not None and self._pre is None and not self._warned_state:
+        # `self._pre is None` used to gate this too, which silently disabled the tripwire on every
+        # pi05-space critic -- i.e. on every critic actually deployed. The gate was wrong on its own
+        # terms: out_of_range compares the RAW state against the RAW dataset range, and whether a
+        # DOWNSTREAM transform later normalizes that state has no bearing on whether the number
+        # arriving from the robot is in units the critic ever saw. Measured cost of keeping it: 0
+        # false positives over 2340 real cache states, so it was pure loss of coverage.
+        if self._norm_stats is not None and not self._warned_state:
             from openpi.patch_critic import spec as critic_spec
 
             bad = critic_spec.out_of_range(self._norm_stats, state)

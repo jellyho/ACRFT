@@ -26,7 +26,7 @@ branch = subprocess.run(
 
 TABLE = f"""<div class='tblwrap'><table class='num'>
 <tr><th>연구</th><th>베이스 정책</th><th>가치함수가 채점하는 것</th><th>critic 학습</th><th>추출/선택 방식</th><th>평가</th></tr>
-<tr><td><b>V-GPS</b><br><span class='sub'>2410.13816</span></td><td>OpenVLA·Octo 등 5종 (동결)</td><td><b>단일 7차원 액션</b></td><td>오프라인 <b>Cal-QL</b> 1M 스텝 (IQL τ=0.7도 검증), ResNet-34+FiLM, clipped double Q</td><td>K=10~50 재순위, argmax 또는 <b>온도 softmax</b> (β∈{{0, 0.1, 1.0}})</td><td>실물 WidowX 6태스크 + SIMPLER</td></tr>
+<tr><td><b>V-GPS</b><br><span class='sub'>2410.13816</span></td><td>OpenVLA·Octo 등 5종 (동결)</td><td><b>단일 7차원 액션</b></td><td>오프라인 <b>Cal-QL</b> 1M 스텝 (IQL τ=0.7도 검증), ResNet-34+FiLM, clipped double Q</td><td>K=10~50 재순위. <b>실물은 K=50 + argmax(β→0)</b>; 온도 softmax β∈{{0, 0.1, 1.0}}은 시뮬 스윕 (App. B.2)</td><td>실물 WidowX 6태스크 + SIMPLER</td></tr>
 <tr><td><b>Q-VGM</b><br><span class='sub'>2606.08015</span></td><td><b>π0.5</b> (VLM 동결, action expert만)</td><td><b>청크 H=5</b> (7-DoF → 35차원)</td><td>오프라인 Cal-QL 앙상블, LayerNorm, <b>액션을 매 은닉층에 재결합</b>, 이후 동결</td><td>∇Q를 velocity로 변환: 1-step 투영 → J회 ascent → <b>keep-best, 실패 시 base 액션으로 폴백</b> → residual matching. BPTT 없음</td><td>LIBERO 40 + RoboTwin 10 + 실물 2태스크</td></tr>
 <tr><td><b>RoboMonkey</b><br><span class='sub'>2506.17811</span></td><td>OpenVLA·CogACT·Octo·SpatialVLA</td><td>—</td><td><b>Q함수 없음.</b> 7B VLM <b>선호 학습 verifier</b></td><td>샘플 + 가우시안 섭동 + 다수결 → verifier 선택. 샘플 수에 대한 <b>거듭제곱 스케일링 법칙</b> (1만 샘플에서 RMSE −59.3%)</td><td>V-GPS보다 우수하다고 보고</td></tr>
 <tr><td><b>RIPT-VLA</b><br><span class='sub'>2505.17016</span></td><td>VLA 사후학습</td><td>—</td><td><b>가치함수 자체를 쓰지 않음</b> (희소 이진 보상)</td><td>정책 경사 (leave-one-out 이점)</td><td>시뮬</td></tr>
@@ -99,11 +99,20 @@ QPILOTS의 Tweedie 투영과 같은 문제 인식이다.</li>
 안전밸브가 없다 — 우리 α 스윕에서 조향이 <b>켜는 순간부터</b> 손해였던 것(1.80 → 1.10)은 개선이 없을 때
 되돌릴 방법이 없었기 때문일 수 있다.</p>
 
-<h3>발견 4 — 선택 규칙은 argmax가 유일한 선택지가 아니다</h3>
-<p>V-GPS는 재순위에 <b>온도 softmax</b>를 쓰며 β∈{{0, 0.1, 1.0}}을 스윕한다(β→0이 argmax). 이는 우리가
-실물에서 관측한 것과 같은 구조다 — <span class='xref' data-eid='serving-rollouts-yam'>argmax는 무효, 확률적
-선택(implicit)은 유효</span>. IDQL의 expectile 추첨과 V-GPS의 온도 softmax는 형태는 달라도 <b>"최고를 고르지
-말고 좋은 쪽으로 치우쳐 뽑아라"</b>는 같은 처방이다. 우리 결과는 이 처방을 지지한다.</p>
+<h3>발견 4 — 선택 규칙 <span class='sub'>(정정됨)</span></h3>
+<div class='missing'><b>정정 (2026-09-04).</b> 초판은 <b>"V-GPS는 온도 softmax를 쓴다 … 우리 결과는 이
+처방을 지지한다"</b>고 썼다. <b>논문을 다시 읽으니 틀렸고, 부호가 반대다.</b> App. B.2:
+<i>"In the real-world evaluations with the Cal-QL value function, we used K = 50 and we found selecting the
+action <b>greedily by setting β → 0</b> leads to satisfactory results. In simulation, we swept over
+K = {{10, 50}} and β = {{0, 0.1, 1.0}} and report the <b>best result for each policy</b>."</i>
+<br>즉 <b>V-GPS의 실물 규칙은 argmax</b>이고, β 스윕은 시뮬레이션 한정이며 거기서도 "정책별 최고치 보고"라
+soft가 greedy를 이겼다는 근거가 아니다. 우리 실물 결과를 지지하기는커녕 <b>반대 방향의 증거</b>다 —
+실물 하드웨어에서 K=50 argmax가 만족스럽게 작동했다는 보고이므로.
+<br>그리고 우리 쪽 근거도 부족했다: argmax(1.70)와 무선택(1.70)이 <b>정확히 같고</b>, 추첨(2.70)의 우위는
+p=0.06–0.097로 <b>유의하지 않다</b>(n=10). <span class='xref' data-eid='argmax-width'>argmax-width</span>의
+정정 참조. "우리 결과는 이 처방을 지지한다"는 문장을 철회한다.</div>
+<p><b>남는 것은 K다.</b> V-GPS는 실물에서 <b>K=50</b>, IDQL 기본값은 64인데 <b>우리는 N=8</b>이었다. 선택
+규칙이 아니라 <b>후보 수</b>가 우리와 이 문헌 사이의 확인된 차이다.</p>
 <p>또 RoboMonkey는 <b>샘플 수에 대한 거듭제곱 스케일링 법칙</b>을 보고한다(1만 샘플에서 RMSE −59.3%).
 우리 N=8은 그 곡선의 맨 왼쪽 끝이다.</p>
 
@@ -208,11 +217,22 @@ action if it did not improve. Steering is "adopt if better", not "always apply".
 implementation has that valve — and our sweep showed steering costing <b>from the moment it is switched
 on</b> (1.80 → 1.10), which is what having no way to revert looks like.</p>
 
-<h3>Finding 4 — argmax is not the only selection rule in this literature</h3>
-<p>V-GPS re-ranks with a <b>temperature softmax</b>, sweeping β∈{{0, 0.1, 1.0}} (β→0 is argmax). That is the
-same structure we observed on hardware — <span class='xref' data-eid='serving-rollouts-yam'>argmax inert,
-stochastic selection effective</span>. IDQL's expectile lottery and V-GPS's temperature are different forms
-of one prescription: <b>do not take the best, lean toward the good ones.</b> Our result supports it.</p>
+<h3>Finding 4 — the selection rule <span class='sub'>(corrected)</span></h3>
+<div class='missing'><b>Correction (2026-09-04).</b> The first version said <b>"V-GPS re-ranks with a
+temperature softmax … our result supports it"</b>. <b>Re-reading the paper, that is wrong, and the sign is
+backwards.</b> App. B.2: <i>"In the real-world evaluations with the Cal-QL value function, we used K = 50 and
+we found selecting the action <b>greedily by setting β → 0</b> leads to satisfactory results. In simulation,
+we swept over K = {{10, 50}} and β = {{0, 0.1, 1.0}} and report the <b>best result for each policy</b>."</i>
+<br>So <b>V-GPS's real-robot rule IS arg-max</b>; the β sweep is simulation-only and reports a per-policy
+best, which is not evidence that soft beat greedy. Far from supporting our reading, it is evidence the other
+way — a report that K=50 arg-max worked satisfactorily on hardware.
+<br>Our own side was thin too: arg-max (1.70) and no selection (1.70) are <b>exactly equal</b>, and the
+lottery's edge (2.70) is <b>not significant</b> at p=0.06–0.097 with n=10 — see the correction in
+<span class='xref' data-eid='argmax-width'>argmax-width</span>. The sentence "our result supports it" is
+withdrawn.</div>
+<p><b>What survives is K.</b> V-GPS runs <b>K=50</b> on hardware and IDQL's default is 64, while <b>we ran
+N=8</b>. The confirmed difference between us and this literature is the number of candidates, not the rule
+used to pick among them.</p>
 <p>RoboMonkey additionally reports a <b>power-law scaling in the number of samples</b> (RMSE −59.3% at 10,000
 samples). Our N=8 sits at the far-left end of that curve.</p>
 
@@ -265,7 +285,7 @@ entry = {
     "tags": ["워커B", "서베이", "VLA", "RL", "critic", "문헌"],
     "status": "finding",
     "phase": "진단·방법",
-    "links": ["critic-detail-survey", "serving-rollouts-yam", "extraction-suite-yam", "deas"],
+    "links": ["argmax-width", "critic-detail-survey", "serving-rollouts-yam", "extraction-suite-yam", "deas"],
     "body_html": f'<div class="wbx wbx-ko">{KO}</div><div class="wbx wbx-en">{EN}</div>',
 }
 out = R / ".scratch/vla_rl_survey_entry.json"
