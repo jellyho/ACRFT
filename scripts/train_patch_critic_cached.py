@@ -125,11 +125,20 @@ def main():
     )
     ap.add_argument(
         "--cql-negatives",
-        choices=["shuffle", "uniform", "both", "bank"],
+        choices=["shuffle", "within", "uniform", "both", "bank"],
         default="shuffle",
         help="where the OOD action candidates come from. shuffle: in-batch permutation, i.e. a REAL "
         "chunk paired with the WRONG state -- free, and on-manifold so the critic cannot reject it on "
-        "action statistics alone. uniform: U(-1,1) in normalized action space, official CQL's "
+        "action statistics alone. WITH ONE SHORTCUT: a batch drawn uniformly from 938k frames almost "
+        "always pairs across EPISODES, and a linear probe recovers episode identity from these frozen "
+        "DINOv2 features at accuracy 1.000 against a chance of 0.0019, with 70% of a frame's nearest "
+        "neighbours from its own episode (.scratch/probe_cheap_z.json). So a cross-episode negative can "
+        "be pushed down by noticing the episode rather than by understanding the state -- a cue that does "
+        "not exist at serving time, where the policy's own sample carries no episode. That is one "
+        "mechanism behind what alpha 10/30 did above: a discriminator with a collapsed value function. "
+        "within: the same construction drawn from the SAME EPISODE at a different time, which removes "
+        "that cue and leaves only the discrimination we actually need. uniform: U(-1,1) in normalized "
+        "action space, official CQL's "
         "`random_actions_tensor ... .uniform_(-1,1)` with num_random=10. bank: chunks actually drawn "
         "from the frozen BC policy (scripts/sample_policy_chunks.py) -- the distribution our arms "
         "really score, and therefore the correctly targeted negative. both: shuffle + uniform.",
@@ -552,8 +561,8 @@ def main():
         official CQL's candidate set includes the data action outright in min_q_version < 3.)
         """
         Bc = min(a.cql_batch, chunk.shape[0])
-        if a.cql_negatives == "bank":
-            return bank_negs
+        if a.cql_negatives in ("bank", "within"):
+            return bank_negs  # built host-side by bank_negs_of
         out = []
         if a.cql_negatives in ("shuffle", "both"):
             out.extend(chunk[jax.random.permutation(k, chunk.shape[0])][:Bc] for k in jax.random.split(key, a.cql_n))
@@ -619,6 +628,8 @@ def main():
         # the term (Q-VGM arXiv 2606.08015v1 App. A: "log sum_A exp Q_m(s,A)", no density term).
         cql_loss = jnp.asarray(0.0)
         cql_gap = jnp.asarray(0.0)
+        cql_clamped = jnp.asarray(0.0)
+        cql_exceeds = jnp.asarray(0.0)
         if a.alpha_cql > 0.0:
             Bc = negs.shape[0]
             nneg = negs.shape[1]
@@ -630,10 +641,20 @@ def main():
                     jnp.repeat(scur[:Bc], nneg, 0),
                 )[:, :, -1, :]
             ).reshape(-1, Bc, nneg)  # [K, Bc, n]
+            # How much of the term is LIVE, reported every step because a silently dead
+            # conservative term looks exactly like a conservative term that did not help.
+            # `clamped` is the fraction of negatives Cal-QL floors at the MC return: those
+            # contribute a stop_gradient'd constant, so at clamped -> 1 this whole loss has no
+            # gradient and the run is a no-op with a plausible-looking loss curve. `exceeds` is the
+            # fraction scoring above the DEMONSTRATED chunk -- what there is to push down at all.
+            cql_clamped = jnp.mean(qn < jax.lax.stop_gradient(mc[:Bc])[None, :, None])
             if a.calql and a.cql_negatives != "uniform":
                 # Cal-QL Eq. 6: never penalise below the behaviour policy's own achieved return.
                 qn = jnp.maximum(qn, jax.lax.stop_gradient(mc[:Bc])[None, :, None])
+            else:
+                cql_clamped = jnp.asarray(0.0)
             q_data = from_logits(pred[:, :Bc, -1, :])  # [K, Bc]
+            cql_exceeds = jnp.mean(qn > q_data[..., None])
             ood = a.cql_temp * jax.scipy.special.logsumexp(qn / a.cql_temp, axis=-1)
             cql_gap = jnp.mean(ood - q_data)  # raw VALUE units, so it stays interpretable in the log
             # Scale conversion, required and not present in official CQL. There the TD loss is
@@ -698,6 +719,8 @@ def main():
             "q_loss": q_loss,
             "v_loss": v_loss,
             "cql_gap": cql_gap,
+            "cql_clamped": cql_clamped,
+            "cql_exceeds": cql_exceeds,
             "edac_cos": edac_cos,
             "q_mean": jnp.mean(from_logits(pred)),
             "v_mean": jnp.mean(vbar),
@@ -836,12 +859,31 @@ def main():
         )
         n_use = min(a.cql_n, bank_chunks.shape[1])
 
-        def bank_negs_of(gcur):
+        def bank_negs_of(gcur, g0=None, eff=None, s_raw=None):
             return jnp.asarray(np.asarray(bank_chunks[pick[gcur[: a.cql_batch]]][:, :n_use], np.float32))
+    elif a.alpha_cql > 0.0 and a.cql_negatives == "within":
+        Bc_ = min(a.cql_batch, a.batch)
+
+        def bank_negs_of(gcur, g0=None, eff=None, s_raw=None):
+            """`cql_n` chunks executed elsewhere in the SAME episode, presented as candidates HERE.
+
+            Normalized against the CURRENT state, not their own base frame: a candidate at this state
+            is a set of absolute joint targets expressed as a delta from where the arms are now, which
+            is the space the policy's own proposal lives in. Normalizing against the negative's own
+            origin would hand the critic a chunk whose delta is measured from somewhere else --
+            rejectable as a coordinate artifact rather than as a bad action.
+            """
+            e = np.maximum(eff[:Bc_], 1)
+            pos2 = rng_np.integers(0, e[:, None], size=(Bc_, a.cql_n))
+            g = g0[:Bc_, None, None] + np.clip(pos2[..., None] + ar_h[None, None, :], 0, e[:, None, None] - 1)
+            raw = np.asarray(actions[g.reshape(-1)]).reshape(Bc_ * a.cql_n, H, ad)
+            if pre is not None:
+                raw = pre.actions(raw, np.repeat(s_raw[:Bc_], a.cql_n, 0))
+            return jnp.asarray(raw.reshape(Bc_, a.cql_n, H, ad), jnp.float32)
     else:
         _dummy = jnp.zeros((min(a.cql_batch, a.batch), 1, H, ad), jnp.float32)
 
-        def bank_negs_of(gcur):
+        def bank_negs_of(gcur, g0=None, eff=None, s_raw=None):
             return _dummy
 
     t0 = time.time()
@@ -877,6 +919,9 @@ def main():
         gch = g0[:, None] + np.clip(hpos, 0, eff[:, None] - 1)
         chunk = np.asarray(actions[gch.reshape(-1)]).reshape(a.batch, H, ad)
         s_cur_raw = np.asarray(states[gcur])
+        # Built BEFORE pre.state() rewrites s_cur_raw below: `within` needs the raw state to express
+        # another timestep's absolute joint targets as a delta from here.
+        host_negs = bank_negs_of(gcur, g0, eff, s_cur_raw)
         s_nxt_raw = np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd_raw)
         if pre is not None:
             # delta is taken against the chunk's BASE frame, exactly as the base VLA does
@@ -909,7 +954,7 @@ def main():
             jnp.asarray(done_nxt),
             jnp.asarray(valid),
             jnp.asarray(mc),
-            bank_negs_of(gcur),
+            host_negs,
         )
         if wb is not None and s % 100 == 0:
             wb.log({k: float(v) for k, v in info.items()}, step=s)
@@ -920,7 +965,11 @@ def main():
             rate = (s + 1) / (time.time() - t0)
             if s > 20:
                 rate = (s - s_warm) / (time.time() - t_warm)
-            cqls = f"  cql_gap {i['cql_gap']:.2f}" if a.alpha_cql > 0.0 else ""
+            cqls = (
+                f"  cql_gap {i['cql_gap']:.2f} clamped {i['cql_clamped']:.2f} exceeds {i['cql_exceeds']:.2f}"
+                if a.alpha_cql > 0.0
+                else ""
+            )
             cqls += f"  edac_cos {i['edac_cos']:.3f}" if a.edac_weight > 0.0 else ""
             print(
                 f"step {s:6d}  q_loss {i['q_loss']:.4f}  v_loss {i['v_loss']:.4f}  q_mean {i['q_mean']:.2f}  "
