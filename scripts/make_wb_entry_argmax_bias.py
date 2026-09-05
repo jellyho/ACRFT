@@ -80,8 +80,10 @@ CORR_KO = """<div style='border-left:4px solid #c44;background:#fff5f5;padding:1
 추첨 vs 무선택 <b>Δ=+1.00, 95% CI [−0.05, +2.05], p=0.060</b> — <b>유의하지 않다.</b>
 따라서 <b>세 조건은 통계적으로 서로 구분되지 않으며</b>, "덜 고르는 규칙이 이겼다"는 아래 문장들은
 유의하지 않은 차이에 기댄 것이므로 취소한다. Δ=1.0을 잡으려면 조건당 30–40 에피소드가 필요하다.
-<br><b>이 글의 오프라인 측정(판별 정확도 0.566, 폭-편향 멱함수, 앙상블 4.7%)은 로봇 결과와 독립적으로
-성립하며 영향받지 않는다.</b> 영향받는 것은 그것을 실물 결과와 잇는 해석뿐이다.
+<br><b>이 글의 오프라인 측정(판별 정확도 0.566, 폭-편향 멱함수)은 로봇 결과와 독립적으로 성립하며
+영향받지 않는다.</b> (초판의 이 문장은 "앙상블 4.7%"도 함께 옹호했는데, 그 수치는 <b>2026-09-04에 별도로
+철회</b>했다 — 아래 앙상블 절의 정정 참조. 로봇 결과와 무관하게 성립한다는 말은 맞았지만, 그 계산 자체가
+틀렸다.) 영향받는 것은 그것을 실물 결과와 잇는 해석뿐이다.
 </div>"""
 CORR_EN = """<div style='border-left:4px solid #c44;background:#fff5f5;padding:10px 14px;margin:12px 0'>
 <b>Correction (2026-09-02, same day as publication).</b> The first version of this entry described the
@@ -93,8 +95,11 @@ statistics from the raw data does not support that — n=10 per condition, integ
 Lottery vs no selection: <b>Δ=+1.00, 95% CI [−0.05, +2.05], p=0.060</b> — <b>not significant.</b>
 <b>All three conditions are statistically indistinguishable</b>, so the sentences below that lean on
 "the rule that selects less won" are withdrawn. Detecting Δ=1.0 needs 30–40 episodes per condition.
-<br><b>The offline measurements in this entry (0.566 discrimination, the width–bias power law, the
-4.7% ensemble ratio) hold independently of the robot result and are unaffected.</b> What is affected
+<br><b>The offline measurements in this entry (0.566 discrimination, the width–bias power law) hold
+independently of the robot result and are unaffected.</b> (The first version of this sentence also
+vouched for "the 4.7% ensemble ratio", which was <b>separately retracted on 2026-09-04</b> — see the
+correction in the ensemble section below. Independent of the robot result it was; correctly computed
+it was not.) What is affected
 is only the interpretation that joins them to it.
 </div>"""
 
