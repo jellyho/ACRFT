@@ -75,6 +75,10 @@ SAMPLER_ARMS = ("qpilots", *LATENT_ARMS, "flowdagger")
 #: against. Only qpilots today; the constant exists so that adding a second steering arm is a
 #: one-line change here rather than a hunt for `== "qpilots"` across the serving stack.
 STEERING_ARMS = frozenset({"qpilots"})
+#: What a steering arm ascends. See ArmSpec.steer_value -- `negated` and `random` are the controls
+#: that separate a wrong-direction gradient from an over-large injection.
+STEER_VALUES = ("critic", "negated", "random")
+
 CRITIC_ARMS = ("qpilots", "idql", "bon")
 ALL_ARMS = (*EXPERT_ARMS, *LATENT_ARMS, "flowdagger", *CRITIC_ARMS, "bc")
 
@@ -118,6 +122,32 @@ class ArmSpec:
     n_samples: int = 8
     ode_steps: int = 10
 
+    #: WHAT the steering ascends. The robot alpha sweep (1.80, 1.10, 1.30, 1.00, 1.20, 0.30 at
+    #: alpha = 0, .005, .01, .025, .05, .1) is not a dose-response: the middle four are mutually
+    #: indistinguishable (Kruskal p=0.45) across an 8x range of injected displacement, and only
+    #: alpha=0.1 collapses. A magnitude threshold is DIRECTION-AGNOSTIC, so that sweep alone cannot
+    #: tell "the critic's gradient points the wrong way" from "an injection that large damages the
+    #: action whatever its direction". These modes are the control that separates them, and they
+    #: cost one substitution because the value function was already injected rather than baked in:
+    #:   critic   ascend the pessimistic ensemble Q (QPILOTS-U as published)
+    #:   negated  ascend -Q. If this BEATS `critic`, the gradient is anti-correlated with quality.
+    #:   random   ascend <a_hat, u> for one fixed random unit direction u per chunk, supported on
+    #:            exactly the sub-array the critic reads. Eq. 17 rescales every gradient to the
+    #:            drift norm, so this arm injects the SAME displacement magnitude at the same alpha
+    #:            and differs only in direction. If it also collapses at alpha=0.1, the damage is
+    #:            the injection, not the critic.
+    #: `random` is coherent across the chunk rather than resampled per Euler step, deliberately: a
+    #: per-step redraw random-walks and partly cancels, which would understate a systematically
+    #: wrong direction and make the control easier to pass than the hypothesis it is testing.
+    #:
+    #: Caveat, measured in pi0_steered_test.py: the arms are magnitude-matched at INJECTION, not
+    #: exactly at the output. `sample_steered` returns clip(x, -1, 1), so where a coordinate sits on
+    #: the box boundary an outward push is truncated and an inward one is not, and the realized
+    #: displacement becomes direction-dependent (~1.6x across directions in that fixture, where 37.5%
+    #: of coordinates were on the boundary). Report the realized displacement per arm from the
+    #: unsteered twin rather than assuming alpha fixes it.
+    steer_value: str = "critic"
+
 
 def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
     """Conventional checkpoint layout of the extraction runs (`<arm>_run1/<step>`)."""
@@ -144,6 +174,8 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
         spec.critic = CRITIC
     for k, v in over.items():
         setattr(spec, k, v)
+    if spec.steer_value not in STEER_VALUES:
+        raise ValueError(f"unknown steer_value {spec.steer_value!r}; known: {STEER_VALUES}")
     return spec
 
 
@@ -285,6 +317,12 @@ class ArmChunkSampler:
             model = nnx.merge(graphdef, state)
             x0 = jax.random.normal(rng, (obs.state.shape[0], self.H, self.AD))
 
+            sign = -1.0 if self.spec.steer_value == "negated" else 1.0
+            # One direction per chunk, drawn from the SAME rng the noise came from so a rerun of
+            # this arm is bit-reproducible, and folded so it is independent of x0.
+            u = jax.random.normal(jax.random.fold_in(rng, 0x5EED), (ch, ad))
+            u = u / (jnp.linalg.norm(u) + 1e-8)
+
             def value_fn(a_hat):
                 # Into the CRITIC's space before scoring, and this is the whole reason the caller
                 # passes k/c: `a_hat` is normalized by the POLICY's statistics, and the critic was
@@ -296,8 +334,14 @@ class ArmChunkSampler:
                 # Sliced to the critic's horizon too, which the selection path also does: a critic
                 # shorter than the policy's chunk (h30 critic, h50 policy) was otherwise being
                 # handed 50 steps it was never trained to read.
+                if self.spec.steer_value == "random":
+                    # Supported on exactly the sub-array the critic reads, so the control does not
+                    # get to push on padding dimensions the critic never touches. No k/c: an
+                    # affine map of the argument cannot change a random direction into a less
+                    # random one, and leaving it out keeps u a unit vector in the space it lives in.
+                    return jnp.sum(a_hat[:, :ch, :ad] * u)
                 a = a_hat[:, :ch, :ad] * k + c
-                return self._q(feats, a, proprio, reduce="pess").sum()
+                return sign * self._q(feats, a, proprio, reduce="pess").sum()
 
             def draw(a):
                 # preprocess=False: __call__ has already preprocessed, and doing it twice would

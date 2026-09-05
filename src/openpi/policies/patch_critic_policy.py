@@ -101,6 +101,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         *,
         mode: str = "bon",
         steer_alpha: float | None = None,
+        steer_value: str | None = None,
         drift_samples: int = 0,
         camera_keys=YAM_CAMERA_KEYS,
         state_key: str = YAM_STATE_KEY,
@@ -379,6 +380,7 @@ class PatchCriticSelectPolicy(BasePolicy):
                 self._arm,
                 critic=pathlib.Path(critic_dir),
                 **({"alpha": float(steer_alpha)} if steer_alpha is not None else {}),
+                **({"steer_value": steer_value} if steer_value is not None else {}),
                 **({"latent_actor": pathlib.Path(extraction_head)} if self._arm in ("lps", "lpsd") else {}),
                 **({"steering_head": pathlib.Path(extraction_head)} if self._arm == "flowdagger" else {}),
             )
