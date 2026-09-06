@@ -83,12 +83,12 @@ def sampler():
 
 def _draw(s, mode, alpha):
     obj, obs, feats, proprio = s
-    obj = dataclasses.replace(obj.spec, steer_value=mode) and obj  # keep the object, swap the spec
     obj.spec = dataclasses.replace(obj.spec, steer_value=mode)
     # a fresh jit per mode: steer_value is read inside the traced closure, not passed as an arg
     obj.__dict__.pop("_steer_jit", None)
     k, c = obj.to_critic_space
-    out = obj._steer_jit(obj.params, jax.random.key(3), obs, feats, proprio, AD, float(alpha), False, k, c)
+    paired = False  # one chunk, not the arm's twin -- alpha=0 is a rung of the ladder here
+    out = obj._steer_jit(obj.params, jax.random.key(3), obs, feats, proprio, AD, float(alpha), paired, k, c)
     return np.asarray(out[0], np.float64)
 
 
