@@ -28,6 +28,7 @@ from plot_style import apply
 
 C = pathlib.Path(os.environ.get("CACHE_DIR", "/scratch/jellyho/acrft"))  # same override as make_master_report
 P = C / "plots"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 TCRIT = {2: 12.706, 3: 4.303, 4: 3.182, 8: 2.365, 16: 2.131}
 
 
@@ -389,6 +390,85 @@ def fig_32_p2_split():
     plt.close(fig)
 
 
+def fig_33_q_landscape():
+    """The Q-landscape probe, regenerated from its raw JSON so figure and data cannot drift.
+
+    The plotting lives in scripts/plot_q_landscape*.py -- the probe itself needs a GPU (a 3B policy
+    and nine critics), but the figures are pure functions of the JSON it wrote, so a report build
+    reproduces them anywhere. Two files: the single-critic anatomy and the nine-critic comparison.
+    """
+    import subprocess
+    import sys
+
+    probe = ROOT / "slurm/probes/q_landscape.json.gz"
+    if not probe.exists():
+        print(f"  (skip fig_33: {probe.name} not present)")
+        return
+    # The single-critic panels are PINNED to the checkpoint the report's prose quotes. Left to the
+    # default they take whichever critic sorts first, and the figures would then illustrate numbers
+    # measured on a different one -- silently, since both are real measurements.
+    anatomy = "patch_critic_yam_s347_fixed_tau9_min_200k"
+    root = str(ROOT)
+    jobs = (
+        # (script, extra args) -- plot_ood writes two files, so it is passed both output paths
+        (
+            "plot_ood.py",
+            [
+                "--critic-name",
+                anatomy,
+                "--out-bon",
+                str(P / "33_ood_1_bon.png"),
+                "--out-steer",
+                str(P / "33_ood_2_steering.png"),
+                "--summary",
+                str(P / "33_ood_summary.json"),
+            ],
+        ),
+        (
+            "plot_ood_axes.py",
+            ["--root", root, "--out", str(P / "33_ood_3_axes.png"), "--summary", str(P / "33_ood_axes_summary.json")],
+        ),
+        (
+            "plot_q_landscape_critics.py",
+            ["--out", str(P / "33_ood_4_critics.png"), "--summary", str(P / "33_ood_critics_summary.json")],
+        ),
+    )
+    for script, extra in jobs:
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / script), "--probe", str(probe), *extra],
+            check=True,
+        )
+
+
+def fig_34_guidance_sweep():
+    """One fixed noise, alpha swept — redrawn from the frozen measurement, not from a saved PNG.
+
+    The measurement needs a GPU (the 3B policy plus a critic, seven alphas from four noises); the
+    figure is a pure function of what it wrote, so a report build reproduces it anywhere. Verified
+    byte-identical to the GPU run's own output.
+    """
+    import subprocess
+    import sys
+
+    probe = ROOT / "slurm/probes/guidance_sweep.json.gz"
+    if not probe.exists():
+        print(f"  (skip fig_34: {probe.name} not present)")
+        return
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "plot_guidance_sweep.py"),
+            "--from-dump",
+            str(probe),
+            "--out",
+            str(P / "34_guidance_sweep.png"),
+            "--gif",
+            str(P / "34_guidance_sweep.gif"),
+        ],
+        check=True,
+    )
+
+
 def main():
     P.mkdir(exist_ok=True)
     fig_16_v11()
@@ -398,6 +478,8 @@ def main():
     fig_30_af_sched()
     fig_31_three_forces()
     fig_32_p2_split()
+    fig_33_q_landscape()
+    fig_34_guidance_sweep()
 
 
 if __name__ == "__main__":

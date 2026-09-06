@@ -76,6 +76,9 @@ class Pi0Steered(Pi0):
         replaces the paper's sigma schedule, and it is why alpha is a per-domain constant rather
         than a function of t.
 
+        The chunk is returned unclipped, like every other sampler in this repo (see the note at
+        the return). A caller that needs it bounded should bound it, and say so.
+
         `alpha=0` reproduces the unsteered sampler THROUGH THIS SAME PATH -- not through
         `sample_actions` -- which is how a caller measures what steering displaced. Passing the
         same `noise` to both draws makes the difference the steering term and nothing else.
@@ -129,4 +132,19 @@ class Pi0Steered(Pi0):
                 gn = jnp.linalg.norm(g.reshape(batch, -1), axis=-1).reshape(-1, 1, 1)
                 v = v - alpha * (vn / (gn + 1e-8)) * g  # Eq. 17
             x = x - dt * v
-        return jnp.clip(x, -1.0, 1.0)
+        # NOT clipped to [-1, 1], deliberately. It was, and that made qpilots the only arm with an
+        # extra output transformation: sample_actions (BC, flowdagger), sample_n_actions (bon,
+        # implicit) and decode_latent (lps/lpsd) all return the integrator's output as it is. In a
+        # campaign whose comparisons are method-only-diff, one arm silently truncating its actions
+        # is a difference that has nothing to do with the method.
+        #
+        # It also blinded the readout it was measured with: the twin takes this same path, so two
+        # saturated draws differ by less than they were steered, and hard steering reported as
+        # LOW drift -- indistinguishable from steering that did nothing.
+        #
+        # Measured cost of removing it, on the real checkpoint: the BC sampler leaves the box on
+        # 0-0.62% of entries across three seeds (max |a| = 1.024), so this changes little for
+        # alpha=0 and is the honest number for larger alpha, where it is exactly what a caller
+        # wants to see. The straight-through clip inside the loop STAYS -- that one is the paper's,
+        # and it keeps the value read inside the region the critic was trained on.
+        return x

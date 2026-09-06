@@ -85,7 +85,7 @@ def test_alpha_zero_reproduces_the_unsteered_sampler(fixture):
     for i in range(n):
         v = model._velocity(obs, prefix_mask, kv, x, jnp.full((1,), 1.0 - i / n))
         x = x - (1.0 / n) * v
-    direct = np.asarray(jnp.clip(x, -1.0, 1.0))
+    direct = np.asarray(x)
 
     assert np.allclose(unsteered, direct, atol=2e-2), np.abs(unsteered - direct).max()
 
@@ -141,14 +141,34 @@ def test_the_same_noise_is_what_makes_the_twin_comparable(fixture):
     assert not np.allclose(same, diff, atol=1e-3)
 
 
-def test_output_stays_in_the_box(fixture):
-    """The critic was trained on normalized actions in [-1, 1]; steering must not serve a chunk
-    outside the box it was scored in."""
+def test_the_output_is_not_clipped(fixture):
+    """It used to be, and that made qpilots the only arm with an extra output transformation --
+    sample_actions, sample_n_actions and decode_latent all return the integrator's output as it is.
+    A method-only-diff comparison cannot carry a truncation that belongs to one arm.
+
+    It also blinded the readout: the twin takes the same path, so two saturated draws differ by
+    less than they were steered, and hard steering reported as LOW drift -- which reads exactly
+    like steering that did nothing.
+
+    Asserted by pushing hard enough that a clip would be visible.
+    """
     _cfg, _base, model, obs, noise = fixture
-    value_fn = lambda a: jnp.sum(a) * 1e3  # noqa: E731 - pushes hard at the boundary
+    value_fn = lambda a: jnp.sum(a) * 1e3  # noqa: E731 - pushes hard past the boundary
     out = _draw(model, obs, noise, value_fn, 5.0)
-    assert out.min() >= -1.0
-    assert out.max() <= 1.0
+    assert out.max() > 1.0, "steering this hard must leave the box, not be truncated at it"
+
+
+def test_the_straight_through_clip_inside_the_loop_stays(fixture):
+    """Removing the OUTPUT clip is not removing the paper's. Eq. 14's value is read inside the
+    region the critic was trained on, while the gradient still flows for samples outside it --
+    that one is what makes steering well-behaved past the boundary, and it is not the same clip."""
+    import inspect
+
+    from openpi.models.pi0_steered import Pi0Steered
+
+    src = inspect.getsource(Pi0Steered.sample_steered)
+    body = src[src.index("for i in range(num_steps):") :]
+    assert "stop_gradient(jnp.clip(a_hat, -1, 1)" in body
 
 
 def test_it_matches_the_pre_refactor_serving_loop(fixture):
@@ -182,7 +202,7 @@ def test_it_matches_the_pre_refactor_serving_loop(fixture):
             gn = jnp.linalg.norm(g.reshape(x.shape[0], -1), axis=-1).reshape(-1, 1, 1)
             v = v - alpha * (vn / (gn + 1e-8)) * g
         x = x - dt * v
-    old = np.asarray(jnp.clip(x, -1.0, 1.0))
+    old = np.asarray(x)
 
     new = _draw(model, obs, noise, value_fn, alpha, steps=n)
     assert np.array_equal(old, new), np.abs(old - new).max()

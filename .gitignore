@@ -177,3 +177,18 @@ cython_debug/
 third_party/robocasa-gr1-tabletop-tasks/
 third_party/robosuite-gr1/
 .venv-gr1/
+
+# report build scratch (figures and the master report regenerate from slurm/probes/*)
+.hubcache/
+hub_figs/
+q_landscape.json
+q_landscape*_summary.json
+probe_base_*.json
+probe_rollout_*.json
+probe_n50.json
+ood_*summary.json
+
+# Scratch a review or a probe leaves behind. Committed once by a `git add -A`; the PR carried
+# eleven of them, including files a review agent wrote inside the worktree.
+.scratch_gs/
+.probe_status.py
