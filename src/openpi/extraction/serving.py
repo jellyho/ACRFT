@@ -59,7 +59,8 @@ from openpi.models import pi0_steered as _pi0_steered
 from openpi.training import config as _config
 from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
-BC_CKPT = pathlib.Path("/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/100000")
+# 200000, not 100000: every robot evaluation in this project ran the 200k step (user, 2026-09-06), and until now every default here said 100k -- so an arm trained from 100k would have had its expert subtree overlaid on a base it was never fine-tuned against.
+BC_CKPT = pathlib.Path("/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000")
 AF_CKPT = pathlib.Path("/data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000")
 CRITIC = pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_fixed_tau9_min_200k")
 CKPT_ROOT = pathlib.Path("/data1/jellyho/acrft_ckpts/extraction")
