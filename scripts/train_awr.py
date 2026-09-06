@@ -33,7 +33,7 @@ def main():
         "--init-ckpt",
         type=pathlib.Path,
         default=pathlib.Path(
-            "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/100000"
+            "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000"
         ),
     )
     ap.add_argument("--advantage", type=pathlib.Path, default=R / ".scratch/extraction/advantage_fixed_tau9min")
@@ -134,18 +134,11 @@ def main():
         print(f"wandb: {run.url}", flush=True)
 
     def save(step_i):
-        import orbax.checkpoint as ocp2
+        from openpi.extraction.checkpoint import save_servable
 
-        path = (a.out / f"{step_i}").absolute()
-        with ocp2.StandardCheckpointer() as c2:
-            # with the backbone trainable the expert subtree is no longer the whole change, so
-            # saving only it would silently drop what was learned everywhere else
-            payload = (
-                {"params": params.to_pure_dict()}
-                if a.train_backbone
-                else {"expert": params.filter(expert_filter).to_pure_dict()}
-            )
-            c2.save(path, payload, force=True)
+        # the WHOLE model in the BC layout (<out>/<step>/params + assets): servable as-is, no export
+        # step, whichever subset was trained -- see openpi/extraction/checkpoint.py
+        path = save_servable(a.out / f"{step_i}", params.to_pure_dict(), assets_from=a.init_ckpt)
         print(f"saved {path}", flush=True)
 
     import time

@@ -226,3 +226,55 @@ def test_preprocess_is_not_applied_twice(fixture):
         )
     )
     assert np.array_equal(a, b)
+
+
+# ---------------------------------------------------------------------------------------------
+# the direction/magnitude control
+
+
+def test_the_injected_magnitude_does_not_depend_on_the_value_function_scale(fixture):
+    """Eq. 17 rescales the value gradient to the drift's own norm, so ||alpha*(vn/gn)*g|| = alpha*vn
+    for ANY g. Multiplying the value function by 1e4 must therefore change nothing at all.
+
+    This is the exact form of the property the `negated`/`random` control arms rest on: what alpha
+    injects is a displacement of a size set by the drift, not by the critic's units. Without it a
+    random-direction arm would not be a fair control -- it would be a different perturbation size.
+    """
+    _cfg, _base, model, obs, noise = fixture
+    v = lambda a: -jnp.sum(jnp.square(a - 0.3))  # noqa: E731
+    base = _draw(model, obs, noise, v, 0.0, steps=2)
+    d1 = np.linalg.norm(_draw(model, obs, noise, v, 0.15, steps=2) - base)
+    d2 = np.linalg.norm(_draw(model, obs, noise, lambda a: 1e4 * v(a), 0.15, steps=2) - base)
+    assert d1 > 1e-4, "steering did nothing at alpha=0.15"
+    np.testing.assert_allclose(d2, d1, rtol=1e-3)
+
+
+def test_direction_changes_where_the_chunk_lands_but_not_the_order_of_the_step(fixture):
+    """Same alpha, three directions: the landing points differ, the step sizes stay comparable.
+
+    Comparable and NOT identical, and the reason is worth pinning because it qualifies how the
+    robot control arm should be read. The injected DRIFT is exactly magnitude-matched (previous
+    test), but `sample_steered` returns `clip(x, -1, 1)`, and in this fixture 37.5% of the output
+    coordinates sit on that boundary. A push outward there is truncated and a push inward is not,
+    so the REALIZED displacement is direction-dependent even though the injection is not -- here by
+    up to ~1.6x. The control arms remain magnitude-matched at injection, which is the claim; they
+    are not exactly matched at the output, which is a caveat, not a defect.
+    """
+    _cfg, _base, model, obs, noise = fixture
+    u = jax.random.normal(jax.random.key(3), noise.shape[1:])
+    u = u / jnp.linalg.norm(u)
+    fns = {
+        "critic-like": lambda a: -jnp.sum(jnp.square(a - 0.3)),
+        "negated": lambda a: jnp.sum(jnp.square(a - 0.3)),
+        "random": lambda a: jnp.sum(a * u),
+    }
+    base = _draw(model, obs, noise, fns["critic-like"], 0.0, steps=2)
+    assert np.mean(np.abs(base) >= 0.999) > 0, "fixture no longer clips; tighten this test"
+    out = {k: _draw(model, obs, noise, f, 0.15, steps=2) for k, f in fns.items()}
+    disp = {k: float(np.linalg.norm(v - base)) for k, v in out.items()}
+    assert min(disp.values()) > 1e-4, f"steering did nothing: {disp}"
+    assert max(disp.values()) / min(disp.values()) < 2.0, f"clip alone should not do more than ~2x: {disp}"
+    # and they land somewhere genuinely different -- a control that coincides with what it controls
+    # for would pass every magnitude check while testing nothing
+    for k in ("negated", "random"):
+        assert np.linalg.norm(out[k] - out["critic-like"]) > 1e-4, f"{k} landed on top of critic-like"

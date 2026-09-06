@@ -21,11 +21,12 @@ REPO = "jellyho/acrft-yam-extraction"
 ROOT = pathlib.Path("/data1/jellyho/acrft_ckpts/extraction")
 
 ABOUT = {
-    "awr": ("AWR", "xbpeng/awr awr_agent.py:403,407,41", "expert overlay; advantage-weighted flow-BC"),
-    "cfgrl": ("CFGRL", "kvfrans/cfgrl iql_diffusion.py:157,170-179,213", "expert+opt_embed; CFG sampling at w"),
-    "flowdpg": ("FlowDPG", "arXiv 2606.22303 Eq. 4-9 (no official code)", "expert overlay; Tweedie + twin-min grad-Q"),
-    "qam": ("QAM", "ColinQiyangLi/qam agents/qam.py:49-145", "expert overlay; adjoint-matched fast field"),
-    "fqlx": ("QC-FQL one-step", "seohong/fql actor loss, frozen critic", "expert overlay; distill teacher + (-Q)"),
+    "awr": ("AWR", "xbpeng/awr awr_agent.py:403,407,41", "advantage-weighted flow-BC"),
+    "cfgrl": ("CFGRL", "kvfrans/cfgrl iql_diffusion.py:157,170-179,213", "CFG sampling at w"),
+    "flowdpg": ("FlowDPG", "arXiv 2606.22303 Eq. 4-9 (no official code)", "Tweedie + twin-min grad-Q"),
+    "qam": ("QAM", "ColinQiyangLi/qam agents/qam.py:49-145", "adjoint-matched fast field"),
+    "dql": ("DQL", "Zhendong-Wang .../ql_diffusion.py:140-148", "BC + eta*(-Q) with BPTT"),
+    "fqlx": ("QC-FQL one-step", "seohong/fql actor loss, frozen critic", "distill teacher + (-Q)"),
     "lps": ("LPS", "author's lps.py:185-199 (ddpg)", "latent actor MLP over the frozen alpha-Flow one-step base"),
     "lpsd": ("LPSD", "author's lps.py:201-224 (onestep_ddpg)", "latent actor + anchor MSE"),
     "flowdagger": ("FlowDAgger", "microsoft/FlowDAgger", "DCT steering head predicting the sampler's seed"),
@@ -102,7 +103,7 @@ tags: [robotics, offline-rl, vla, pi0.5, policy-extraction]
 
 Policy-extraction methods applied to the same pi0.5 base and the same frozen patch critic, as a
 **method-only-diff** comparison ring: identical BC init
-(`yam_bc_s300_h30_successonly/100000`), critic `patch_critic_yam_s347_fixed_tau9_min_200k` frozen,
+(`yam_bc_s300_h30_successonly/200000`), critic `patch_critic_yam_s347_fixed_tau9_min_200k` frozen,
 and only the extraction objective differs between arms.
 
 Runs suffixed **`_bb`** match the BC fine-tune's own training budget: the **whole model** is
@@ -114,9 +115,14 @@ Runs suffixed **`_run1`** are the earlier pass with the backbone frozen and the 
 only** trainable. They are a smaller budget than BC's and are kept for comparison, not as the
 headline result.
 
-| folder | method | step | size | provenance | what it swaps |
+| folder | method | step | size | provenance | what the objective swaps |
 |---|---|---|---|---|---|
 {rows}
+
+How the weights are delivered follows the suffix, not the arm: a `_bb` folder is a **whole openpi
+checkpoint** (load it directly); a `_run1` folder is an **action-expert subtree** that is overlaid
+on the BC checkpoint at serving time. CFGRL additionally carries an optimality embedding and is
+served through its own config.
 
 Each implementation carries file/line-level provenance comments from the official code (or the
 paper + appendices where no code exists). Two further arms need **no weights** — QPILOTS-U
@@ -128,13 +134,13 @@ philippe-eecs/IDQL) — they run from the BC checkpoint plus the critic.
 There is ONE serving entry point, `scripts/serve_policy.py`. Arms reach it two ways, and which
 way depends on whether the arm changed the policy's weights or only how a chunk is chosen.
 
-**Weight-only arms** (`awr`, `flowdpg`, `qam`, `fqlx`) fine-tune the pi0.5 action expert,
+**Weight-only arms** (`awr`, `flowdpg`, `qam`, `dql`, `fqlx`) fine-tune the pi0.5 action expert,
 so they are exported to ordinary openpi checkpoints and served like any checkpoint:
 
 ```bash
-uv run python scripts/export_extraction_checkpoint.py --arm qam          # -> exported/qam_30000
+uv run python scripts/export_extraction_checkpoint.py --arm dql          # -> exported/dql_30000
 uv run python scripts/serve_policy.py --port 8000 policy:checkpoint \
-    --policy.config pi05_yam_lego_taxi --policy.dir <exported>/qam_30000
+    --policy.config pi05_yam_lego_taxi --policy.dir <exported>/dql_30000
 ```
 
 **CFGRL** additionally carries the optimality embedding and samples with classifier-free
@@ -179,7 +185,7 @@ trains against has a single group, where adaptive is bon under another name.
     api.upload_file(
         path_or_fileobj=str(tmp), path_in_repo="README.md", repo_id=a.repo, repo_type="model", commit_message="README"
     )
-    print(f"\ndone: https://huggingface.co/{a.repo}  ({len(uploaded)} arms: {', '.join(uploaded)})")
+    print(f"\ndone: https://huggingface.co/{a.repo}  ({len(uploaded)} runs: {chr(44).join(r[1] for r in uploaded)})")
 
 
 if __name__ == "__main__":

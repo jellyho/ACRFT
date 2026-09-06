@@ -97,7 +97,22 @@ prefix가 하나뿐이므로, 이 통제군은 모든 critic 조건과 <b>critic
 (p={ST["spearman_no01_p"]:.3f}), 중간 네 수준(0.005~0.05)은 서로 구분되지 않는다(Kruskal p={ST["kruskal_mid_p"]:.3f}).
 모양은 "켜면 일정량 손해(α>0 풀링 n=50: Δ={ST["pooled_on_delta"]:+.2f} [{ST["pooled_on_ci"][0]:+.2f}, {ST["pooled_on_ci"][1]:+.2f}], p={ST["pooled_on_p"]:.3f}),
 0.1에서 붕괴(stage 0이 7/10)"이다. 이는 "gradient가 조금씩 잘못된 방향을 가리킨다"보다 <b>"조향이 켜지는 순간 무언가가 깨지고, 0.1에서는 정책이
-동작 자체를 못 한다"</b>에 가깝다. 어느 쪽인지는 조향 구현 쪽(정규화 박스 이탈, ODE 파손)을 따로 봐야 한다. 임계값은 <b>방향에 무관</b>하므로 이 데이터로는 "gradient가 틀렸다"와 "그 크기의 주입은 방향이 뭐든 액션을 망친다"를 가를 수 없다 — 가르는 통제군은 <b>같은 조향 루프에서 g를 랜덤 단위벡터로 바꾼 것</b>이다(commit 7c6af78).</p>
+동작 자체를 못 한다"</b>에 가깝다. 어느 쪽인지는 조향 구현 쪽(정규화 박스 이탈, ODE 파손)을 따로 봐야 한다. 임계값은 <b>방향에 무관</b>하므로 이 데이터만으로는 "gradient가 틀렸다"와 "그 크기의 주입은 방향이 뭐든 액션을 망친다"를 가를 수 없고, 가르는 통제군은 <b>같은 조향 루프에서 g를 랜덤 단위벡터로 바꾼 것</b>이다(commit 7c6af78).</p>
+
+<div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
+<b>추가 (2026-09-02) — 그 통제군의 결과가 도착했다.</b> ACRFT-WS 세션이 같은 로봇·같은 critic 계열에서
+바로 그 실험을 돌렸다. 시연자 앵커 기준, 정규화 행동단위 3까지 이동했을 때:
+<br><code>∇_a Q 방향 +32.8 ± 5.0 &nbsp; vs &nbsp; 무작위 단위방향 3개 −0.13 ± 0.49</code> — <b>200배, critic 9종 전부</b>.
+그리고 ∇_a Q 에너지의 <b>73%가 BC draw 16개가 펼치는 공간 밖</b>이다(우연이면 96%).
+<br>따라서 위 양자택일은 <b>해소된다</b>: 과대추정은 <b>방향-특이적</b>이며 "그 크기면 뭐든 망가진다"가 아니다.
+조향이 무너지는 이유는 critic의 gradient가 가리키는 그 방향에서만 Q가 부풀기 때문이다.
+<br>같은 인계에서 <b>축 분리</b>도 보고됐다 — BC 체크포인트를 100k/150k/200k로 바꾸면 선택 이득은
++1.08 → +0.68로 줄지만 ∇Q 과대추정은 32.6/32.9/32.8로 <b>전혀 움직이지 않는다</b>. 조향 문제는
+정책을 바꿔서 고칠 수 없고 critic의 성질이라는 뜻이다.
+<br><b>출처와 한계</b>: 이 수치는 ACRFT-WS 세션의 <code>scripts/probe_q_landscape.py</code>(브랜치
+<code>probe/q-landscape</code>)에서 온 것으로, 그 브랜치가 origin에 없어 <b>이 세션에서 재현하지 않았다</b>.
+인계 내용 그대로 인용하며, 이 리포트의 나머지 수치와 달리 독립 검증되지 않았다.
+</div>
 
 <h3>오늘 세 번 틀린 이유 — 한 표로</h3>
 <p>오전의 "15/15가 BC보다 나쁘다"는 <code>bc50_ex_10</code>(3.10)과 비교한 것이다. 그 비교는 <b>두 가지를 동시에</b> 바꾼다:</p>
@@ -148,7 +163,22 @@ selection off {T["fixed_implicit_bon1"]["mean"]:.2f} (p={T["fixed_implicit_bon1"
 The shape is "a fixed cost for turning it on (pooled α>0, n=50: Δ={ST["pooled_on_delta"]:+.2f} [{ST["pooled_on_ci"][0]:+.2f}, {ST["pooled_on_ci"][1]:+.2f}], p={ST["pooled_on_p"]:.3f}),
 then collapse at 0.1 (7/10 episodes at stage 0)". That reads less like "the gradient points slightly wrong" and more like
 <b>"something breaks the moment steering is on, and at 0.1 the policy cannot act at all"</b>. Which it is needs a look at the steering implementation
-(leaving the normalized action box, breaking the ODE), not at the critic. A threshold is <b>direction-agnostic</b>, so this data cannot separate "the gradient points the wrong way" from "an injection that large damages the action whatever its direction" — the control that separates them is <b>the same steering loop with g replaced by a random unit vector</b> (commit 7c6af78).</p>
+(leaving the normalized action box, breaking the ODE), not at the critic. A threshold is <b>direction-agnostic</b>, so this data alone cannot separate "the gradient points the wrong way" from "an injection that large damages the action whatever its direction"; the control that separates them is <b>the same steering loop with g replaced by a random unit vector</b> (commit 7c6af78).</p>
+
+<div style='border-left:4px solid #2a7;background:#f2fbf6;padding:10px 14px;margin:12px 0'>
+<b>Added 2026-09-02 — that control has now been run.</b> The ACRFT-WS session ran exactly it, on the same
+robot and the same critic family. Against the demonstrator anchor, moving out to 3 normalized action units:
+<br><code>along ∇_a Q: +32.8 ± 5.0 &nbsp; vs &nbsp; three random unit directions: −0.13 ± 0.49</code> — <b>200x, across all 9 critics</b>.
+And <b>73% of the ∇_a Q energy lies outside the span of 16 BC draws</b> (96% would be chance).
+<br>So the disjunction above <b>resolves</b>: the over-estimation is <b>direction-specific</b>, not "anything
+that large breaks it". Steering collapses because Q inflates along the one direction the critic's gradient points.
+<br>The same handoff reports an <b>axis separation</b>: sweeping the BC checkpoint 100k/150k/200k shrinks the
+selection benefit (+1.08 → +0.68) while the ∇Q over-estimation does not move at all (32.6/32.9/32.8). Steering
+cannot be fixed by changing the policy — it is a property of the critic.
+<br><b>Provenance and limit</b>: these numbers come from the ACRFT-WS session's <code>scripts/probe_q_landscape.py</code>
+(branch <code>probe/q-landscape</code>), which is not on origin, so they were <b>not reproduced in this session</b>.
+They are quoted as handed over and, unlike every other number in this entry, are not independently verified.
+</div>
 
 <h3>Why the same data gave three wrong answers — one table</h3>
 <p>The morning's "15/15 worse than BC" compared against <code>bc50_ex_10</code> (3.10). That comparison changes <b>two things at once</b>:</p>
@@ -182,7 +212,13 @@ entry = {
     ),
     "tags": ["워커B", "실물", "LEGOPROG", "통제군", "정정", "QPILOTS"],
     "phase": "실물 평가",
-    "links": ["serving-rollouts-yam", "argmax-width", "q-landscape-ood", "critic-detail-survey"],
+    "links": [
+        "serving-rollouts-yam",
+        "argmax-width",
+        "q-landscape-ood",
+        "critic-detail-survey",
+        "extraction-suite-yam",
+    ],
     "body_html": f'<div class="wbx wbx-ko">{KO}</div><div class="wbx wbx-en">{EN}</div>',
 }
 out = R / ".scratch/operating_point_entry.json"

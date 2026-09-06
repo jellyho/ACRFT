@@ -26,6 +26,7 @@ from openpi.patch_critic import spec as critic_spec
 from openpi.patch_critic.critic import HLGauss
 from openpi.patch_critic.critic import PatchCriticEnsemble
 from openpi.patch_critic.critic import PatchV
+from openpi.patch_critic.critic import SharedTrunkCriticEnsemble
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,7 +66,12 @@ class CriticQ:
         that have nothing to do with epistemic uncertainty. LCB separates the two -- the ensemble
         size sets how well the disagreement is ESTIMATED, `beta` sets how much pessimism is
         APPLIED -- so a K=10 critic can be read at the same conservatism as a K=2 one, or at more.
-        beta=0 recovers q_mean; beta -> large approaches (a smooth version of) q_min.
+        beta=0 recovers q_mean. beta -> large does NOT approach q_min, which an earlier version of
+        this docstring claimed: mean - beta*std passes THROUGH the min and diverges below it, since
+        for K members the min sits at a finite multiple of the std. At K=2 that multiple is exactly
+        1 -- std is |q1-q2|/2 and the min is the mean minus that -- so beta=1 IS q_min, verified to
+        6.1e-05 over 32 states, and any beta>1 is strictly more pessimistic than the min. So on a
+        K=2 critic "use LCB instead of min" is a no-op at beta=1 and an extrapolation past it above.
 
         This is the standard offline-RL pessimistic read (SAC-N / EDAC, An et al. NeurIPS 2021 Eq. 3
         uses min over N; the mean-minus-std form is the LCB variant used by e.g. PBRL and by the
@@ -105,13 +111,24 @@ def load(critic_dir) -> CriticQ:
         delta=isp["delta_mode"] == "joint",
     )
     pidx = isp.get("proprio_indices")
-    net = PatchCriticEnsemble(
-        action_dim=cc["action_dim"],
-        horizon=cc["horizon"],
-        num_critics=cc["num_critics"],
-        macro_group_size=cc["macro_group_size"],
-        num_atoms=cc["num_atoms"],
-    )
+    common = {
+        "action_dim": cc["action_dim"],
+        "horizon": cc["horizon"],
+        "num_critics": cc["num_critics"],
+        "macro_group_size": cc["macro_group_size"],
+        "num_atoms": cc["num_atoms"],
+    }
+    # Which ensemble was trained is recorded in the checkpoint's own input_spec, so a served critic
+    # cannot be rebuilt with the wrong architecture. Older checkpoints predate the field and are
+    # independent by construction.
+    if isp.get("critic_arch", "independent") == "shared":
+        net = SharedTrunkCriticEnsemble(
+            **common,
+            trunk_layers=isp.get("trunk_layers", 3),
+            head_layers=isp.get("head_layers", 2),
+        )
+    else:
+        net = PatchCriticEnsemble(**common)
 
     def _unwrap(raw):
         # the msgpacks store the full variables dict {"params": ...} (score_critic_cached.py:43,55

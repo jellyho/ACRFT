@@ -45,7 +45,7 @@ def main():
         "--init-ckpt",
         type=pathlib.Path,
         default=pathlib.Path(
-            "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/100000"
+            "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000"
         ),
     )
     ap.add_argument("--expert-ckpt", type=pathlib.Path, default=None, help="orbax {'expert': ...} overlay dir")
