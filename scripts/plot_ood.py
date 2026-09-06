@@ -205,6 +205,7 @@ def fig_steer(rows, eps, name, out):
     std = ray.std(axis=1)
     span = np.asarray([r["grad_in_draw_span"] for r in rows], np.float64)
     chance = float(np.mean([r["grad_in_draw_span_chance"] for r in rows]))
+    dim = float(np.mean([r["draw_span_dim"] for r in rows]))
 
     fig, axes = plt.subplots(1, 3, figsize=(15.5, 4.2))
 
@@ -276,7 +277,15 @@ def fig_steer(rows, eps, name, out):
     ax.text(
         0.03,
         0.95,
-        f"{100 * (1 - span.mean()):.0f}% of $\\nabla_a Q$ points OUT of\nthe subspace the policy explores\n(chance would be {100 * (1 - chance):.0f}%)",
+        # Both halves, because the first alone reads as "the gradient points where the policy never
+        # goes" and the comparison to chance says the opposite: 27% of the energy inside a 16-of-420
+        # subspace is 7x MORE concentrated there than a random direction would be. The gradient
+        # mostly leaves the span, AND it is strongly drawn to it. Stating only the first was the
+        # error.
+        f"{100 * span.mean():.0f}% of $\\nabla_a Q$'s energy lies INSIDE the\n"
+        f"{int(round(dim))}-dim subspace the {int(round(dim))} draws span, where chance is "
+        f"{100 * chance:.0f}%\n"
+        f"({span.mean() / max(chance, 1e-9):.1f}$\\times$ concentrated) \u2014 but {100 * (1 - span.mean()):.0f}% still leaves it",
         transform=ax.transAxes,
         va="top",
         fontsize=9,

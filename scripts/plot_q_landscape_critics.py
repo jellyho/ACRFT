@@ -103,7 +103,11 @@ def main(a):
         for i, v in enumerate(vals):
             sub = [n for n in names if axes_of(n)[key] == v]
             stack = np.concatenate([C[n]["mean"] for n in sub])
-            gr = [f"{n}|{e}" for n in sub for e in C[n]["eps"]]  # critic x episode
+            # EPISODE, not critic x episode. Every critic scores the same 20 episodes on the same
+            # frames and the same BC draws, so keying on the pair told the t-CI it had up to 140
+            # independent units when it has 20, and the bands came out 1.4-2.0x too narrow --
+            # which is what the augmentation panel's apparent separation was resting on.
+            gr = [e for n in sub for e in C[n]["eps"]]
             m, h = _ci(stack, gr)
             lab = f"{key}={v}  (n={len(sub)})"
             ax.plot(ts, m, color=PALETTE[i], lw=2, label=lab)
