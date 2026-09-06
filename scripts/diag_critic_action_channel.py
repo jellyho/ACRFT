@@ -179,10 +179,10 @@ def collect(a):
     rng = jax.random.key(a.seed)
     pick = np.random.default_rng(a.seed)
     rows = []
-    for ep in pick.permutation(ok):
+    for ep_raw in pick.permutation(ok):
         if len(rows) >= a.frames:
             break
-        ep = int(ep)
+        ep = int(ep_raw)
         n = reader.episode_length(ep)
         acts = reader.column(ep, "action")
         states = reader.column(ep, "observation.state")
