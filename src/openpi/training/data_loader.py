@@ -353,6 +353,7 @@ def create_data_loader(
     shuffle: bool = False,
     num_batches: int | None = None,
     skip_norm_stats: bool = False,
+    auto_norm_stats: bool = True,
     framework: Literal["jax", "pytorch"] = "jax",
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
     """Create a data loader for training.
@@ -363,9 +364,17 @@ def create_data_loader(
         shuffle: Whether to shuffle the data.
         num_batches: Determines the number of batches to return.
         skip_norm_stats: Whether to skip data normalization.
+        auto_norm_stats: Resolve norm stats as a cache keyed on the episode subset and horizon,
+            recomputing on a miss instead of loading whatever shares the asset NAME. Off restores
+            the name-keyed behaviour. See openpi.training.norm_stats_cache.
         framework: The framework to use ("jax" or "pytorch").
     """
     data_config = config.data.create(config.assets_dirs, config.model)
+    if auto_norm_stats and not skip_norm_stats and data_config.rlds_data_dir is None:
+        # The single place the training path resolves stats, so the single place this belongs.
+        from openpi.training import norm_stats_cache
+
+        data_config = norm_stats_cache.ensure_norm_stats(config, data_config)
     logging.info(f"data_config: {data_config}")
 
     if data_config.rlds_data_dir is not None:
