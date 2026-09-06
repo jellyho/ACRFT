@@ -85,6 +85,18 @@ def main():
         offset[e] = N
         N += full_len[e]
     print(f"{len(episodes)} episodes, N={N} frames", flush=True)
+    # Native frame geometry, read off the dataset rather than the resized tensors this script sees:
+    # CriticClipDataset already resized to img_size, so by the time frames arrive here the source
+    # shape is gone. It is recorded because a serving-time squash-vs-pad mismatch is invisible at
+    # equal shape (see openpi.patch_critic.spec input_spec / PatchCriticSelectPolicy._note_geometry).
+    _source_hw = None
+    try:
+        shp = ds.ds.meta.features[CAMS[0]]["shape"]
+        hw = [int(v) for v in shp if int(v) != 3]
+        _source_hw = hw[:2] if len(hw) >= 2 else None
+    except Exception as e:
+        print(f"  (could not read source frame geometry: {e})", flush=True)
+    print(f"  source frame geometry: {_source_hw} -> {a.img_size} by SQUASH (cv2.INTER_AREA)", flush=True)
 
     bb = DinoV2Backbone(a.backbone, dtype=getattr(jnp, a.dino_dtype))
     grid = int(bb.num_patches(a.img_size) ** 0.5)
@@ -163,6 +175,11 @@ def main():
         "backbone": a.backbone,
         "cams": CAMS,
         "img_size": a.img_size,
+        # The geometry the features were built FROM, and how it was mapped to img_size. Recorded
+        # because a server cannot recover it: this resize SQUASHES (aspect ratio not preserved), and
+        # an already-square arrival is indistinguishable from a letterboxed one at serving time.
+        "source_hw": _source_hw,
+        "resize_mode": "squash",
         "horizon": a.horizon,
         "episodes": {
             str(e): {

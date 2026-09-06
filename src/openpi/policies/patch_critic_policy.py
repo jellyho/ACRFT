@@ -36,10 +36,23 @@ YAM_CAMERA_KEYS = ("observation/image", "observation/wrist_image", "observation/
 YAM_STATE_KEY = "observation/state"
 
 
-def _parse_image(image, size):
-    # INTER_AREA, not bilinear: the feature cache the critic trained on downsamples 480x640 -> 224 with
-    # cv2.INTER_AREA, and bilinear downsampling aliases. Measured drift between the two was 5.5% mean /
-    # 21% max relative L2 per patch token -- small, but free to remove.
+def _parse_image(image, size, *, arrived: list | None = None):
+    """Client image -> the uint8 HWC square the critic's cache was built from.
+
+    INTER_AREA, not bilinear: the feature cache downsamples 480x640 -> 224 with cv2.INTER_AREA, and
+    bilinear downsampling aliases. Measured drift between the two was 5.5% mean / 21% max relative
+    L2 per patch token -- small, but free to remove.
+
+    THE SQUASH IS PART OF THE CONTRACT AND IT IS NOT SELF-ENFORCING. This resize destroys aspect
+    ratio, exactly as the cache did. A client that pre-processes with `resize_with_pad` -- which is
+    what openpi's own documented client, examples/droid/main.py and the lab's YAM bridge all do --
+    hands over an ALREADY-SQUARE letterboxed frame, and then this call is a no-op and the mismatch
+    is invisible: no shape error, no exception, a plausible Q. Measured on 18 frames: the padded
+    convention drifts patch tokens by 0.636 relative L2 and moves V by 222.5 mean / 894 max, POSITIVE
+    on every frame -- the critic reads the state as systematically closer to the goal, against a V
+    spread of 338 and a whole arg-max selection effect of +100.6. So `arrived` collects the shape as
+    received, before any resize, for the caller to log, record and check.
+    """
     import cv2
 
     x = np.asarray(image)
@@ -47,6 +60,8 @@ def _parse_image(image, size):
         x = (np.clip(x, 0, 1) * 255).astype(np.uint8)
     if x.ndim == 3 and x.shape[0] == 3 and x.shape[-1] != 3:
         x = np.transpose(x, (1, 2, 0))  # CHW -> HWC
+    if arrived is not None:
+        arrived.append((int(x.shape[0]), int(x.shape[1])))
     return cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA)
 
 
@@ -86,6 +101,7 @@ class PatchCriticSelectPolicy(BasePolicy):
         *,
         mode: str = "bon",
         steer_alpha: float | None = None,
+        steer_value: str | None = None,
         drift_samples: int = 0,
         camera_keys=YAM_CAMERA_KEYS,
         state_key: str = YAM_STATE_KEY,
@@ -354,6 +370,8 @@ class PatchCriticSelectPolicy(BasePolicy):
             self._expectile = float(cc.get("expectile", 0.9))
             logging.info("critic mode implicit: expectile %.2f weights over adv = Q - V", self._expectile)
 
+        #: Shapes as received from the client, checked once. See _parse_image.
+        self._arrived_hw: tuple | None = None
         self._arm_sampler = None
         if self._arm is not None:
             from openpi.extraction import serving as _serving
@@ -362,6 +380,7 @@ class PatchCriticSelectPolicy(BasePolicy):
                 self._arm,
                 critic=pathlib.Path(critic_dir),
                 **({"alpha": float(steer_alpha)} if steer_alpha is not None else {}),
+                **({"steer_value": steer_value} if steer_value is not None else {}),
                 **({"latent_actor": pathlib.Path(extraction_head)} if self._arm in ("lps", "lpsd") else {}),
                 **({"steering_head": pathlib.Path(extraction_head)} if self._arm == "flowdagger" else {}),
             )
@@ -477,8 +496,46 @@ class PatchCriticSelectPolicy(BasePolicy):
         else:
             logging.info("policy->critic action map calibrated (affine to %.1e)", err)
 
+    def _note_geometry(self, arrived: list) -> None:
+        """Check the arriving image geometry once, and say what it was.
+
+        This is the only place the squash-vs-pad contract can be caught, and it cannot be caught by
+        a shape equality test: an already-224x224 arrival passes any such test under BOTH conventions
+        while meaning different things (see _parse_image). What CAN be decided is whether the frames
+        arrived native -- non-square, aspect ratio matching what the cache was built from -- in which
+        case this server does the squash itself and the contract holds by construction.
+        """
+        if not arrived or self._arrived_hw == tuple(arrived):
+            return
+        self._arrived_hw = tuple(arrived)
+        uniq = sorted(set(arrived))
+        square = [hw for hw in uniq if hw[0] == hw[1]]
+        src = (self._spec or {}).get("source_hw")
+        logging.info("critic images arrive as %s; the cache was built from %s", uniq, src or "an unrecorded shape")
+        if square:
+            logging.warning(
+                "critic images arrive ALREADY SQUARE %s. The feature cache was built by SQUASHING "
+                "non-square frames (cv2.INTER_AREA, aspect ratio not preserved), so a client that "
+                "pre-processed with resize_with_pad has letterboxed these and this server's resize is "
+                "a no-op -- a mismatch that raises nothing and still returns a plausible Q. Measured "
+                "cost of that convention: V shifts by 222.5 mean / 894 max, positive on every frame, "
+                "against a V spread of 338. Send NATIVE frames and let this server do the resize.",
+                square,
+            )
+        elif src and any((hw[0] / hw[1]) != (src[0] / src[1]) for hw in uniq):
+            logging.warning(
+                "critic images arrive at %s but the cache was built from %s -- a different aspect "
+                "ratio, so the squash lands differently than it did in training.",
+                uniq,
+                src,
+            )
+
     def _patches_of(self, obs):
-        imgs = np.stack([_parse_image(obs[k], self._img_size) for k in self._camera_keys])  # [ncam,S,S,3]
+        arrived: list = []
+        imgs = np.stack(
+            [_parse_image(obs[k], self._img_size, arrived=arrived) for k in self._camera_keys]
+        )  # [ncam,S,S,3]
+        self._note_geometry(arrived)
         x = jnp.asarray(self._to_nchw(imgs), jnp.float32)[None]  # [1,ncam,3,S,S]
         return self._patchify(x)[0]  # [P,D]
 
@@ -498,7 +555,13 @@ class PatchCriticSelectPolicy(BasePolicy):
                 f"state width {state.shape[0]} but the critic was trained on {want_sd} "
                 f"({self._state_key}); the proprio channels would land in the wrong slots"
             )
-        if self._norm_stats is not None and self._pre is None and not self._warned_state:
+        # `self._pre is None` used to gate this too, which silently disabled the tripwire on every
+        # pi05-space critic -- i.e. on every critic actually deployed. The gate was wrong on its own
+        # terms: out_of_range compares the RAW state against the RAW dataset range, and whether a
+        # DOWNSTREAM transform later normalizes that state has no bearing on whether the number
+        # arriving from the robot is in units the critic ever saw. Measured cost of keeping it: 0
+        # false positives over 2340 real cache states, so it was pure loss of coverage.
+        if self._norm_stats is not None and not self._warned_state:
             from openpi.patch_critic import spec as critic_spec
 
             bad = critic_spec.out_of_range(self._norm_stats, state)

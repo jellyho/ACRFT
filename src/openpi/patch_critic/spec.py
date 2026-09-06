@@ -35,6 +35,11 @@ def input_spec(meta: dict, *, horizon: int) -> dict:
         "cameras": list(meta["cams"]),  # ORDER IS PART OF THE CONTRACT
         "num_cameras": len(meta["cams"]),
         "img_size": int(meta["img_size"]),
+        # How the frames the cache was built from were mapped to img_size. `squash` does not preserve
+        # aspect ratio, so a client that letterboxed with resize_with_pad supplies a DIFFERENT image
+        # at the same shape -- which no shape check can catch. Absent on pre-2026-09 caches.
+        "source_hw": meta.get("source_hw"),
+        "resize_mode": meta.get("resize_mode", "squash"),
         "image_preprocess": PREPROCESS,
         "backbone": meta["backbone"],
         "num_patches": int(meta["npatch"]),
@@ -88,6 +93,10 @@ def check(spec: dict, *, model_action_dim: int, num_cameras: int, img_size: int)
     ):
         if want is not None and got != want:
             problems.append(f"{what}: critic trained with {want}, server supplies {got}")
+    # resize_mode is deliberately NOT a problem here even when it disagrees, because this function
+    # only sees server constants: what actually arrives from the client is a per-request fact and is
+    # checked there (PatchCriticSelectPolicy._note_geometry). Recording it is what makes that check
+    # possible at all -- see the comment on the field in input_spec.
     return problems
 
 

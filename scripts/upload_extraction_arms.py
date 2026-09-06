@@ -103,7 +103,7 @@ tags: [robotics, offline-rl, vla, pi0.5, policy-extraction]
 
 Policy-extraction methods applied to the same pi0.5 base and the same frozen patch critic, as a
 **method-only-diff** comparison ring: identical BC init
-(`yam_bc_s300_h30_successonly/100000`), critic `patch_critic_yam_s347_fixed_tau9_min_200k` frozen,
+(`yam_bc_s300_h30_successonly/200000`), critic `patch_critic_yam_s347_fixed_tau9_min_200k` frozen,
 and only the extraction objective differs between arms.
 
 Runs suffixed **`_bb`** match the BC fine-tune's own training budget: the **whole model** is

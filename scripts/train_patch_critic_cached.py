@@ -125,11 +125,20 @@ def main():
     )
     ap.add_argument(
         "--cql-negatives",
-        choices=["shuffle", "uniform", "both", "bank"],
+        choices=["shuffle", "within", "uniform", "both", "bank"],
         default="shuffle",
         help="where the OOD action candidates come from. shuffle: in-batch permutation, i.e. a REAL "
         "chunk paired with the WRONG state -- free, and on-manifold so the critic cannot reject it on "
-        "action statistics alone. uniform: U(-1,1) in normalized action space, official CQL's "
+        "action statistics alone. WITH ONE SHORTCUT: a batch drawn uniformly from 938k frames almost "
+        "always pairs across EPISODES, and a linear probe recovers episode identity from these frozen "
+        "DINOv2 features at accuracy 1.000 against a chance of 0.0019, with 70% of a frame's nearest "
+        "neighbours from its own episode (.scratch/probe_cheap_z.json). So a cross-episode negative can "
+        "be pushed down by noticing the episode rather than by understanding the state -- a cue that does "
+        "not exist at serving time, where the policy's own sample carries no episode. That is one "
+        "mechanism behind what alpha 10/30 did above: a discriminator with a collapsed value function. "
+        "within: the same construction drawn from the SAME EPISODE at a different time, which removes "
+        "that cue and leaves only the discrimination we actually need. uniform: U(-1,1) in normalized "
+        "action space, official CQL's "
         "`random_actions_tensor ... .uniform_(-1,1)` with num_random=10. bank: chunks actually drawn "
         "from the frozen BC policy (scripts/sample_policy_chunks.py) -- the distribution our arms "
         "really score, and therefore the correctly targeted negative. both: shuffle + uniform.",
@@ -155,6 +164,55 @@ def main():
         "that split. `lower_bounds` is the same mc return array --mc-floor already uses.",
     )
     ap.add_argument("--cql-bank", type=pathlib.Path, default=None, help="dir from scripts/sample_policy_chunks.py")
+    ap.add_argument(
+        "--inv-weight",
+        type=float,
+        default=0.0,
+        help="AC-State multi-step inverse auxiliary on the SHARED TRUNK (Lamb et al., arXiv 2207.08229; "
+        "official alexmlamb/ControllableLatentState). 0 = off. Predict the action taken at t from the "
+        "pair (z_t, z_{t+k}) -- repnet.py: `a_hat = self.multi_step_inv_model(z0, z1)` against the "
+        "action AT t, with invnet.py concatenating `context = torch.cat((z0, z1), -1)` and NOT taking k "
+        "as an input. WHY HERE, with the sourcing corrected: the episode_acc 1.000 / knn_purity 0.698 "
+        "figures are RoboCasa PrepareCoffee, not YAM (see --cql-negatives). On YAM's own pooled DINOv2 "
+        "features knn_purity is 0.061 with 94% of neighbours cross-episode, so 'the representation splits "
+        "the task by episode' is NOT established here and this arm's motivation is weaker than first "
+        "written. What does hold on YAM: cost_to_goal is a frame-index target whose residual at matched "
+        "task state is CV 0.188 across episodes (p10-p90 1.51x), which only episode-specific pace "
+        "explains. An inverse objective keeps only "
+        "what is needed to infer the ACTION, which is invariant to background, lighting and -- unlike our "
+        "cost_to_goal target -- to how long this particular episode happened to take.",
+    )
+    ap.add_argument(
+        "--inv-max-k",
+        type=int,
+        default=90,
+        help="largest gap, in frames, between the two observations. DEVIATION FROM THE OFFICIAL CODE, "
+        "stated because it is a real one: buffer.py sets `randk = maxk` -- always the LARGEST valid gap, "
+        "clamped by `steps_to_goal`. In their gridworld that is a handful of steps. Here it would be the "
+        "whole episode: at 30 Hz with ~2900-frame episodes it would ask which 14-dim action was taken at t "
+        "given a frame 90 SECONDS later, which carries no information about it. We sample k log-uniformly "
+        "in [1, inv_max_k] instead, so the pair spans easy and hard gaps. 90 frames = 3 s = 3x the chunk.",
+    )
+    ap.add_argument(
+        "--inv-bottleneck",
+        type=int,
+        default=64,
+        help="width of the projection the inverse head reads. The official information bottleneck is a "
+        "VECTOR QUANTIZER applied to z0/z1 (repnet.py: `z0, zq_loss0, ind = self.vq_layer(z0)`), and its "
+        "lossiness is what forces the encoder to DISCARD; a linear projection in the auxiliary branch only "
+        "adds pressure to RETAIN control-relevant information, it does not force anything out of the trunk. "
+        "That distinction is the main reason this arm might fail, and it is pre-registered as such: expect "
+        "act_cos to move before episode_acc does.",
+    )
+    ap.add_argument(
+        "--inv-zero-proprio",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="zero the proprio token in the AUXILIARY branch only. Our arms move smoothly, so the action at "
+        "t is largely predictable from proprio by interpolation -- the inverse task would then be solved "
+        "without the visual encoder learning anything, the same shape of shortcut as the episode cue in "
+        "--cql-negatives shuffle. Zeroing forces the pixels to carry it.",
+    )
     ap.add_argument(
         "--backup",
         choices=["scalar", "distributional"],
@@ -251,6 +309,34 @@ def main():
         help="seeds parameter init, batch sampling and augmentation together. Seed replicates must "
         "vary ONLY this -- if the recipe moves too, the seed term absorbs the recipe term and the "
         "run-level CI stops meaning what it says.",
+    )
+    ap.add_argument(
+        "--heldout-frac",
+        type=float,
+        default=0.0,
+        help="fraction of EPISODES held out of training and scored periodically. 0 = off, which is what "
+        "every critic in .scratch was trained with -- there is no validation split anywhere in this "
+        "repo's critic trainers, and at 200k x 256 = 51.2M draws over 937,993 frames that is 55 visits "
+        "per frame against ~10 parameters per training frame. EPISODES, not frames: cost_to_goal is "
+        "deterministic in (episode, frame), so a frame-level split leaks the answer from the neighbours "
+        "on either side (diag_action_identifiability.py:30-33 documents the same point). The split is "
+        "stratified by outcome so both sides carry failures, and the held-out episode list is written "
+        "into config.json so the diagnostics and scorers can consume the same one.",
+    )
+    ap.add_argument("--heldout-seed", type=int, default=12345, help="fixed so a re-run holds out the same episodes")
+    ap.add_argument(
+        "--eval-every",
+        type=int,
+        default=5000,
+        help="steps between held-out evaluations. Needs --heldout-frac > 0. What is scored is the thing "
+        "the serving path consumes and the thing the audit found does not transfer: Spearman(Q(demo "
+        "chunk), -time_to_goal) globally AND within-episode (the within-episode number is the honest "
+        "one -- across episodes the target itself disagrees at CV 0.188), plus success-vs-failure AUC "
+        "on early frames, where in-sample was 0.87-0.89 and episode-grouped CV on the same features "
+        "gave 0.490.",
+    )
+    ap.add_argument(
+        "--eval-frames", type=int, default=4096, help="fixed anchor set drawn once from the held-out episodes"
     )
     ap.add_argument("--mc-floor", default=True, action=argparse.BooleanOptionalAction)
     ap.add_argument("--target-tau", type=float, default=0.005)
@@ -408,8 +494,31 @@ def main():
     outc = _outcomes.cache_outcomes(meta, legacy_jsonl=a.outcomes)
     homing = json.loads(a.homing_onsets.read_text()) if a.homing_onsets is not None else None
 
+    # ---- episode-level held-out split ---------------------------------------------------------
+    _eps_all = sorted(int(k) for k in meta["episodes"] if int(k) in outc)
+    heldout: set[int] = set()
+    if a.heldout_frac > 0:
+        _r = np.random.default_rng(a.heldout_seed)
+        for want in (True, False):  # stratify, so the held-out side carries failures too
+            grp = np.array([e for e in _eps_all if (outc[e] == "success") == want])
+            k = round(len(grp) * a.heldout_frac)
+            if k:
+                heldout.update(int(x) for x in _r.choice(grp, k, replace=False))
+        print(
+            f"held out {len(heldout)}/{len(_eps_all)} episodes "
+            f"({sum(outc[e] == 'success' for e in heldout)} success / "
+            f"{sum(outc[e] != 'success' for e in heldout)} fail), seed {a.heldout_seed}",
+            flush=True,
+        )
+
+    # Written into the checkpoint so the scorers and diagnostics can consume the SAME split rather
+    # than re-deriving one and quietly evaluating on frames the critic trained on.
+    spec["heldout_episodes"] = sorted(heldout) if heldout else None
+    spec["heldout_seed"] = a.heldout_seed if heldout else None
+
     # Build the flat table of valid CURRENT frames (homing tail dropped for failures at train time).
     cur_g0, cur_pos, cur_eff, cur_full, cur_succ = [], [], [], [], []
+    ho_g0, ho_pos, ho_eff, ho_succ = [], [], [], []
     for e_str, info in meta["episodes"].items():
         e = int(e_str)
         if e not in outc:
@@ -424,6 +533,12 @@ def main():
         ):
             eff = int(homing[str(e)]["homing_onset"])
         off = info["offset"]
+        if e in heldout:
+            ho_g0.append(np.full(eff, off))
+            ho_pos.append(np.arange(eff))
+            ho_eff.append(np.full(eff, eff))
+            ho_succ.append(np.full(eff, succ))
+            continue
         cur_g0.append(np.full(eff, off))
         cur_pos.append(np.arange(eff))
         cur_eff.append(np.full(eff, eff))
@@ -469,6 +584,47 @@ def main():
         net = PatchCriticEnsemble(**_common)
         net_pm = PatchCriticEnsemble(**_common, per_member_actions=True)
     v_net = PatchV(num_atoms=a.num_atoms)
+
+    # ---- AC-State multi-step inverse auxiliary -------------------------------------------------
+    inv_mod = inv_trunk = None
+    if a.inv_weight > 0.0:
+        if a.critic_arch != "shared":
+            raise SystemExit(
+                "--inv-weight needs --critic-arch shared: it trains the shared TRUNK, and "
+                "PatchARQCritic has no action-independent half to attach to"
+            )
+        import flax.linen as _nn
+
+        from openpi.patch_critic.critic import PatchTrunk as _PatchTrunk
+
+        # The same module class the ensemble builds internally, applied to the ensemble's own trunk
+        # subtree. Reusing the weights rather than the module object keeps critic.py untouched and
+        # keeps the parameter tree byte-identical to a run without this flag.
+        inv_trunk = _PatchTrunk(num_layers=a.trunk_layers, num_heads=8, head_dim=48, mlp_dim=1024)
+
+        class _InvHead(_nn.Module):
+            """(z_t, z_{t+k}) -> the action taken AT t.
+
+            invnet.py concatenates the two latents and runs an MLP to action logits; `k` is not an
+            input, so the head cannot condition on how far apart the pair is and must read the
+            displacement out of the representation itself. Ours regresses a continuous 14-dim joint
+            delta instead of classifying one of n_actions, which is the only change the action space
+            forces.
+            """
+
+            bottleneck: int
+            out_dim: int
+
+            @_nn.compact
+            def __call__(self, z0, z1):
+                proj = _nn.Dense(self.bottleneck)
+                h = jnp.concatenate([proj(z0), proj(z1)], axis=-1)  # shared projection: the bottleneck
+                h = _nn.gelu(_nn.Dense(256)(_nn.LayerNorm()(h)))
+                h = _nn.gelu(_nn.Dense(256)(h))
+                return _nn.Dense(self.out_dim)(h)
+
+        inv_mod = _InvHead(bottleneck=a.inv_bottleneck, out_dim=ad)
+
     # ---- floq: a trunk + a velocity field replace the categorical read-out ----------------------
     floq_net = floq_trunk = None
     if a.value_head == "floq":
@@ -505,6 +661,19 @@ def main():
     rng = jax.random.key(a.seed)
     p2 = jnp.zeros((2, npatch, emb), jnp.float32)
     params = net.init(rng, p2, jnp.zeros((2, H, ad)), jnp.zeros((2, sd)))
+    if inv_mod is not None:
+        # Carried inside `params` under a key the ensemble never looks up: flax.apply resolves only
+        # the paths it needs, so an extra subtree is inert for `net.apply` while `tx.init(params)`
+        # picks it up and the existing optimizer trains it. That avoids threading a third parameter
+        # tree and optimizer through the carry, the jit signature and both loss paths.
+        _z = inv_trunk.apply({"params": params["params"]["PatchTrunk_0"]}, p2, jnp.zeros((2, sd)))
+        _zp = _z.mean(axis=-2)
+        params["params"]["inv_head"] = inv_mod.init(rng, _zp, _zp)["params"]
+        print(
+            f"AC-State inverse aux: lambda={a.inv_weight} max_k={a.inv_max_k} "
+            f"bottleneck={a.inv_bottleneck} zero_proprio={a.inv_zero_proprio}",
+            flush=True,
+        )
     if a.value_head == "floq":
         _mh = H // a.macro_group_size
         _tp = floq_trunk.init(rng, p2, jnp.zeros((2, sd)))
@@ -552,8 +721,8 @@ def main():
         official CQL's candidate set includes the data action outright in min_q_version < 3.)
         """
         Bc = min(a.cql_batch, chunk.shape[0])
-        if a.cql_negatives == "bank":
-            return bank_negs
+        if a.cql_negatives in ("bank", "within"):
+            return bank_negs  # built host-side by bank_negs_of
         out = []
         if a.cql_negatives in ("shuffle", "both"):
             out.extend(chunk[jax.random.permutation(k, chunk.shape[0])][:Bc] for k in jax.random.split(key, a.cql_n))
@@ -564,7 +733,9 @@ def main():
             )
         return jnp.stack(out, 1)
 
-    def loss_fn(params, v_params, tgt_p, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs):
+    def loss_fn(
+        params, v_params, tgt_p, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs, pinv, sinv
+    ):
         vlog = v_net.apply(
             jax.lax.stop_gradient(v_params), pnxt.reshape(-1, npatch, emb).astype(jnp.float32), snxt.reshape(-1, sd)
         ).reshape(-1, P_, a.num_atoms)
@@ -619,6 +790,8 @@ def main():
         # the term (Q-VGM arXiv 2606.08015v1 App. A: "log sum_A exp Q_m(s,A)", no density term).
         cql_loss = jnp.asarray(0.0)
         cql_gap = jnp.asarray(0.0)
+        cql_clamped = jnp.asarray(0.0)
+        cql_exceeds = jnp.asarray(0.0)
         if a.alpha_cql > 0.0:
             Bc = negs.shape[0]
             nneg = negs.shape[1]
@@ -630,10 +803,20 @@ def main():
                     jnp.repeat(scur[:Bc], nneg, 0),
                 )[:, :, -1, :]
             ).reshape(-1, Bc, nneg)  # [K, Bc, n]
+            # How much of the term is LIVE, reported every step because a silently dead
+            # conservative term looks exactly like a conservative term that did not help.
+            # `clamped` is the fraction of negatives Cal-QL floors at the MC return: those
+            # contribute a stop_gradient'd constant, so at clamped -> 1 this whole loss has no
+            # gradient and the run is a no-op with a plausible-looking loss curve. `exceeds` is the
+            # fraction scoring above the DEMONSTRATED chunk -- what there is to push down at all.
+            cql_clamped = jnp.mean(qn < jax.lax.stop_gradient(mc[:Bc])[None, :, None])
             if a.calql and a.cql_negatives != "uniform":
                 # Cal-QL Eq. 6: never penalise below the behaviour policy's own achieved return.
                 qn = jnp.maximum(qn, jax.lax.stop_gradient(mc[:Bc])[None, :, None])
+            else:
+                cql_clamped = jnp.asarray(0.0)
             q_data = from_logits(pred[:, :Bc, -1, :])  # [K, Bc]
+            cql_exceeds = jnp.mean(qn > q_data[..., None])
             ood = a.cql_temp * jax.scipy.special.logsumexp(qn / a.cql_temp, axis=-1)
             cql_gap = jnp.mean(ood - q_data)  # raw VALUE units, so it stays interpretable in the log
             # Scale conversion, required and not present in official CQL. There the TD loss is
@@ -644,6 +827,25 @@ def main():
             # makes alpha_cql dimensionless and portable across reward scales -- alpha_cql=1 then
             # means "one span-fraction of conservatism per nat of TD loss".
             cql_loss = a.alpha_cql * cql_gap / (a.v_max - v_min)
+
+        # ---- AC-State multi-step inverse auxiliary ---------------------------------------------
+        inv_loss = jnp.asarray(0.0)
+        inv_r2 = jnp.asarray(0.0)
+        if a.inv_weight > 0.0:
+            tp = {"params": params["params"]["PatchTrunk_0"]}
+            sc = jnp.zeros_like(scur) if a.inv_zero_proprio else scur
+            si = jnp.zeros_like(sinv) if a.inv_zero_proprio else sinv
+            z0 = inv_trunk.apply(tp, pcur.astype(jnp.float32), sc).mean(axis=-2)  # [B, d]
+            z1 = inv_trunk.apply(tp, pinv.astype(jnp.float32), si).mean(axis=-2)
+            a_hat = inv_mod.apply({"params": params["params"]["inv_head"]}, z0, z1)
+            # the action taken AT t, which for a chunk policy is the chunk's first step
+            tgt_a = chunk[:, 0, :]
+            inv_loss = jnp.mean(jnp.square(a_hat - tgt_a))
+            # MSE alone cannot tell learning from regression-to-the-mean, and the mean action here is
+            # a strong predictor (the arms move smoothly). R2 against the batch's own variance is the
+            # readable form: <=0 means the head is not beating the constant predictor, and if it never
+            # leaves 0 the auxiliary is shaping nothing no matter how good the loss curve looks.
+            inv_r2 = 1.0 - inv_loss / (jnp.mean(jnp.var(tgt_a, axis=0)) + 1e-8)
 
         # ---- EDAC ensemble-diversity penalty on grad_a Q ---------------------------------------
         # An et al., "Uncertainty-Based Offline RL with Diversified Q-Ensemble" (NeurIPS 2021).
@@ -694,10 +896,14 @@ def main():
         wexp = jnp.abs(a.expectile - (u < 0).astype(jnp.float32))
         v_ce = -jnp.sum(jax.lax.stop_gradient(qd_probs) * jax.nn.log_softmax(vlog_c, -1), -1)
         v_loss = jnp.sum(wexp * v_ce) / u.shape[0]
-        return q_loss + v_loss + cql_loss + edac_loss, {
+        return q_loss + v_loss + cql_loss + edac_loss + a.inv_weight * inv_loss, {
             "q_loss": q_loss,
+            "inv_loss": inv_loss,
+            "inv_r2": inv_r2,
             "v_loss": v_loss,
             "cql_gap": cql_gap,
+            "cql_clamped": cql_clamped,
+            "cql_exceeds": cql_exceeds,
             "edac_cos": edac_cos,
             "q_mean": jnp.mean(from_logits(pred)),
             "v_mean": jnp.mean(vbar),
@@ -776,7 +982,7 @@ def main():
         return x
 
     @jax.jit
-    def step(carry, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, bank_negs):
+    def step(carry, key, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, bank_negs, pinv, sinv):
         kc, kn, kq = jax.random.split(key, 3)
         pcur, pnxt = _augment(kc, pcur), _augment(kn, pnxt)
         negs = _negatives(kq, chunk, bank_negs) if a.alpha_cql > 0.0 else bank_negs
@@ -792,7 +998,7 @@ def main():
             tgt = optax.incremental_update(params, tgt, a.target_tau)
             return (params, tgt, opt, v_params, v_opt), info
         (_, info), (gp, gv) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(
-            params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs
+            params, v_params, tgt, pcur, pnxt, chunk, scur, snxt, cum, reward_nxt, done_nxt, valid, mc, negs, pinv, sinv
         )
         up, opt = tx.update(gp, opt, params)
         params = optax.apply_updates(params, up)
@@ -836,13 +1042,97 @@ def main():
         )
         n_use = min(a.cql_n, bank_chunks.shape[1])
 
-        def bank_negs_of(gcur):
+        def bank_negs_of(gcur, g0=None, eff=None, s_raw=None):
             return jnp.asarray(np.asarray(bank_chunks[pick[gcur[: a.cql_batch]]][:, :n_use], np.float32))
+    elif a.alpha_cql > 0.0 and a.cql_negatives == "within":
+        Bc_ = min(a.cql_batch, a.batch)
+
+        def bank_negs_of(gcur, g0=None, eff=None, s_raw=None):
+            """`cql_n` chunks executed elsewhere in the SAME episode, presented as candidates HERE.
+
+            Normalized against the CURRENT state, not their own base frame: a candidate at this state
+            is a set of absolute joint targets expressed as a delta from where the arms are now, which
+            is the space the policy's own proposal lives in. Normalizing against the negative's own
+            origin would hand the critic a chunk whose delta is measured from somewhere else --
+            rejectable as a coordinate artifact rather than as a bad action.
+            """
+            e = np.maximum(eff[:Bc_], 1)
+            pos2 = rng_np.integers(0, e[:, None], size=(Bc_, a.cql_n))
+            g = g0[:Bc_, None, None] + np.clip(pos2[..., None] + ar_h[None, None, :], 0, e[:, None, None] - 1)
+            raw = np.asarray(actions[g.reshape(-1)]).reshape(Bc_ * a.cql_n, H, ad)
+            if pre is not None:
+                raw = pre.actions(raw, np.repeat(s_raw[:Bc_], a.cql_n, 0))
+            return jnp.asarray(raw.reshape(Bc_, a.cql_n, H, ad), jnp.float32)
     else:
         _dummy = jnp.zeros((min(a.cql_batch, a.batch), 1, H, ad), jnp.float32)
 
-        def bank_negs_of(gcur):
+        def bank_negs_of(gcur, g0=None, eff=None, s_raw=None):
             return _dummy
+
+    # Inert placeholders when the auxiliary is off: shapes must still be static for the jit, and
+    # `a.inv_weight > 0.0` is a closure constant so the branch that reads them is traced out.
+    _inv_dummy_p = jnp.zeros((a.batch, npatch, emb), jnp.float32)
+    _inv_dummy_s = jnp.zeros((a.batch, sd), jnp.float32)
+
+    # ---- held-out evaluation ------------------------------------------------------------------
+    # A fixed anchor set drawn ONCE, so the curve across steps is a curve about the critic and not
+    # about which frames were sampled. Anchors come only from held-out episodes.
+    evalset = None
+    if heldout and a.eval_every:
+        ho_g0_a = np.concatenate(ho_g0).astype(np.int64)
+        ho_pos_a = np.concatenate(ho_pos).astype(np.int64)
+        ho_eff_a = np.concatenate(ho_eff).astype(np.int64)
+        ho_succ_a = np.concatenate(ho_succ).astype(bool)
+        _r = np.random.default_rng(a.heldout_seed + 1)
+        sel = _r.choice(len(ho_pos_a), min(a.eval_frames, len(ho_pos_a)), replace=False)
+        e_g0, e_pos, e_eff, e_succ = ho_g0_a[sel], ho_pos_a[sel], ho_eff_a[sel], ho_succ_a[sel]
+        e_gcur = e_g0 + e_pos
+        e_gch = e_g0[:, None] + np.clip(e_pos[:, None] + ar_h[None], 0, e_eff[:, None] - 1)
+        e_chunk = np.asarray(actions[e_gch.reshape(-1)]).reshape(len(sel), H, ad)
+        e_state = np.asarray(states[e_gcur])
+        if pre is not None:
+            e_chunk = pre.actions(e_chunk, e_state)
+            e_state = pre.state(e_state)
+        if pidx is not None:
+            e_state = e_state[..., pidx]
+        e_feat = np.asarray(feats[e_gcur])
+        # -time_to_goal in the TRUNCATED frame: the quantity cost_to_goal is a monotone function of.
+        e_ttg = (e_eff - e_pos).astype(np.float64)
+        e_epi = e_g0  # episode identity, for the within-episode correlation
+        evalset = (e_feat, e_chunk, e_state, e_ttg, e_succ, e_epi, e_pos)
+        print(f"held-out anchors: {len(sel)} frames from {len(np.unique(e_g0))} episodes", flush=True)
+
+    @jax.jit
+    def _eval_q(params, pcur, chunk, scur):
+        qd = net.apply(params, pcur.astype(jnp.float32), chunk, scur)[:, :, -1, :]
+        return from_logits(qd).min(0) if a.q_reduction == "min" else from_logits(qd).mean(0)
+
+    def _spearman(x, y):
+        rx = np.argsort(np.argsort(x)).astype(np.float64)
+        ry = np.argsort(np.argsort(y)).astype(np.float64)
+        return float(np.corrcoef(rx, ry)[0, 1]) if len(x) > 2 and rx.std() and ry.std() else float("nan")
+
+    def _auc(score, label):
+        if label.all() or not label.any():
+            return float("nan")
+        r = np.argsort(np.argsort(score)).astype(np.float64) + 1
+        n1 = int(label.sum())
+        return float((r[label].sum() - n1 * (n1 + 1) / 2) / (n1 * (len(label) - n1)))
+
+    def heldout_metrics(params):
+        f_, c_, s_, ttg, sc, epi, pos = evalset
+        q = np.asarray(_eval_q(params, jnp.asarray(f_), jnp.asarray(c_), jnp.asarray(s_)), np.float64)
+        # within-episode is the honest correlation: across episodes the TARGET itself disagrees
+        # (CV 0.188 in remaining time at matched task state), so a global number mixes the critic's
+        # skill with the pace of whichever episode a frame came from.
+        wi = [_spearman(q[epi == e], -ttg[epi == e]) for e in np.unique(epi) if (epi == e).sum() >= 8]
+        early = pos < 60
+        return {
+            "ho_spearman": _spearman(q, -ttg),
+            "ho_spearman_within_ep": float(np.nanmean(wi)) if wi else float("nan"),
+            "ho_auc_early": _auc(q[early], sc[early]),
+            "ho_q_mean": float(q.mean()),
+        }
 
     t0 = time.time()
     for s in range(a.steps):
@@ -877,6 +1167,25 @@ def main():
         gch = g0[:, None] + np.clip(hpos, 0, eff[:, None] - 1)
         chunk = np.asarray(actions[gch.reshape(-1)]).reshape(a.batch, H, ad)
         s_cur_raw = np.asarray(states[gcur])
+        # Built BEFORE pre.state() rewrites s_cur_raw below: `within` needs the raw state to express
+        # another timestep's absolute joint targets as a delta from here.
+        host_negs = bank_negs_of(gcur, g0, eff, s_cur_raw)
+        if a.inv_weight > 0.0:
+            # k log-uniform in [1, inv_max_k], clamped to what is left of the TRUNCATED episode --
+            # past eff lie the homing frames, and a pair straddling them would be asking which action
+            # was taken at t given a frame from the return-to-home motion.
+            room = np.maximum(eff - pos - 1, 1)
+            kk = np.minimum(np.exp(rng_np.uniform(0.0, np.log(a.inv_max_k + 1.0), size=a.batch)).astype(np.int64), room)
+            ginv = gcur + np.maximum(kk, 1)
+            pinv = jnp.asarray(np.asarray(feats[ginv]))
+            s_inv_raw = np.asarray(states[ginv])
+            if pre is not None:
+                s_inv_raw = pre.state(s_inv_raw)
+            if pidx is not None:
+                s_inv_raw = s_inv_raw[..., pidx]
+            sinv = jnp.asarray(s_inv_raw)
+        else:
+            pinv, sinv = _inv_dummy_p, _inv_dummy_s
         s_nxt_raw = np.asarray(states[gnxt.reshape(-1)]).reshape(a.batch, P_, sd_raw)
         if pre is not None:
             # delta is taken against the chunk's BASE frame, exactly as the base VLA does
@@ -909,7 +1218,9 @@ def main():
             jnp.asarray(done_nxt),
             jnp.asarray(valid),
             jnp.asarray(mc),
-            bank_negs_of(gcur),
+            host_negs,
+            pinv,
+            sinv,
         )
         if wb is not None and s % 100 == 0:
             wb.log({k: float(v) for k, v in info.items()}, step=s)
@@ -920,13 +1231,28 @@ def main():
             rate = (s + 1) / (time.time() - t0)
             if s > 20:
                 rate = (s - s_warm) / (time.time() - t_warm)
-            cqls = f"  cql_gap {i['cql_gap']:.2f}" if a.alpha_cql > 0.0 else ""
+            invs = f"  inv {i['inv_loss']:.4f} r2 {i['inv_r2']:+.3f}" if a.inv_weight > 0.0 else ""
+            cqls = (
+                f"  cql_gap {i['cql_gap']:.2f} clamped {i['cql_clamped']:.2f} exceeds {i['cql_exceeds']:.2f}"
+                if a.alpha_cql > 0.0
+                else ""
+            )
             cqls += f"  edac_cos {i['edac_cos']:.3f}" if a.edac_weight > 0.0 else ""
             print(
                 f"step {s:6d}  q_loss {i['q_loss']:.4f}  v_loss {i['v_loss']:.4f}  q_mean {i['q_mean']:.2f}  "
-                f"v_mean {i['v_mean']:.2f}{cqls}  ({rate:.2f} it/s)",
+                f"v_mean {i['v_mean']:.2f}{invs}{cqls}  ({rate:.2f} it/s)",
                 flush=True,
             )
+        if evalset is not None and (s % a.eval_every == 0 or s == a.steps - 1):
+            hm = heldout_metrics(carry[0])
+            print(
+                f"  [held-out @ {s}] spearman {hm['ho_spearman']:+.3f} "
+                f"(within-ep {hm['ho_spearman_within_ep']:+.3f})  early-AUC {hm['ho_auc_early']:.3f}  "
+                f"q_mean {hm['ho_q_mean']:.1f}",
+                flush=True,
+            )
+            if wb is not None:
+                wb.log(hm, step=s)
         if a.save_every and (s + 1) % a.save_every == 0:
             a._step = s + 1
             _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)

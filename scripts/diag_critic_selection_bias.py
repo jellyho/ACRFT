@@ -29,7 +29,15 @@ reject it on action statistics, only on whether it fits THIS state. We report
                best-of-N at serving reaches only as far as the sampler's own noise. Read together
                they say the serving question is not "does argmax select over-estimates" but
                "is there anything to select at that width at all".
-  scales       per-state ensemble disagreement vs the within-state spread over candidates. If
+  scales       ensemble disagreement vs the within-state spread over candidates -- BOTH MEASURED ON
+               THE CANDIDATES. An earlier version took the numerator at the EXECUTED chunk and the
+               denominator across candidates, which is not a ratio of comparable things: the executed
+               chunk is the one action the objective ever constrained, so its disagreement is small
+               by construction. That published 0.047 where the like-for-like figure is 0.299, and led
+               to the claim that a K=2 ensemble "measures nothing" -- which is wrong. What it does
+               carry is an OOD signal: disagreement 4.09 at the executed chunk against 33.79 at
+               transplants and 30.14 at uniform chunks, an 8.3x separation. A usable detector of
+               being off-support; a weak estimator of how wrong Q is once there. If
                disagreement << spread, the ensemble is not measuring the uncertainty that the
                arg-max is exploiting, and no amount of LCB beta will fix it -- only more members.
 
@@ -213,6 +221,7 @@ def main():
     q_mean = jax.jit(critic.q_mean)
     q_lcb = jax.jit(lambda f, c, p: critic.q_lcb(f, c, p, a.lcb_beta))
     q_dis = jax.jit(critic.q_disagreement)
+    dis_cand: list = []  # disagreement ON THE CANDIDATES -- see the `scales` note above
 
     q_exec = np.asarray(q_mean(F, jnp.asarray(dch), P))
     QN, QL = [], []
@@ -220,6 +229,7 @@ def main():
         p = rng.permutation(S)
         QN.append(np.asarray(q_mean(F, jnp.asarray(dch[p]), P)))
         QL.append(np.asarray(q_lcb(F, jnp.asarray(dch[p]), P)))
+        dis_cand.append(np.asarray(q_dis(F, jnp.asarray(dch[p]), P)))
     QN, QL = np.stack(QN, 1), np.stack(QL, 1)  # [S, C]
 
     ns = [n for n in (1, 2, 4, 8, 16, 32, 64) if n <= a.candidates]
@@ -233,12 +243,20 @@ def main():
         "per_candidate_margin_mean": float((QN - q_exec[:, None]).mean()),
         "per_candidate_margin_median": float(np.median(QN - q_exec[:, None])),
         "ranking_accuracy": float(np.mean(q_exec[:, None] > QN)),
-        "ensemble_disagreement_std": float(np.mean(np.asarray(q_dis(F, jnp.asarray(dch), P)))),
+        # named for what it is: disagreement at the ONE action the objective constrained. Small by
+        # construction, and NOT the numerator for the ratio below.
+        "ensemble_disagreement_at_executed": float(np.mean(np.asarray(q_dis(F, jnp.asarray(dch), P)))),
+        "ensemble_disagreement_at_candidates": float(np.mean(np.stack(dis_cand, 1))),
         "within_state_candidate_std": float(np.mean(np.std(QN, 1))),
         "between_state_std": float(np.std(QN.mean(1))),
         "num_critics": int(critic.config["num_critics"]),
     }
-    res["disagreement_to_spread_ratio"] = res["ensemble_disagreement_std"] / (res["within_state_candidate_std"] + 1e-9)
+    res["disagreement_to_spread_ratio"] = res["ensemble_disagreement_at_candidates"] / (
+        res["within_state_candidate_std"] + 1e-9
+    )
+    res["ood_separation"] = res["ensemble_disagreement_at_candidates"] / (
+        res["ensemble_disagreement_at_executed"] + 1e-9
+    )
     argmax_m, lcb_m, argmax_f = [], [], []
     for n in ns:
         argmax_m.append(float((QN[:, :n].max(1) - q_exec).mean()))
@@ -303,8 +321,11 @@ def main():
     )
     print(f"ranking accuracy (executed > transplanted): {res['ranking_accuracy']:.3f}   chance 0.5")
     print(
-        f"ensemble disagreement {res['ensemble_disagreement_std']:.1f} vs within-state spread "
-        f"{res['within_state_candidate_std']:.1f}  (ratio {res['disagreement_to_spread_ratio']:.3f})"
+        f"ensemble disagreement: {res['ensemble_disagreement_at_executed']:.2f} at the executed chunk, "
+        f"{res['ensemble_disagreement_at_candidates']:.2f} at candidates "
+        f"({res['ood_separation']:.1f}x OOD separation); candidate spread "
+        f"{res['within_state_candidate_std']:.1f}, like-for-like ratio "
+        f"{res['disagreement_to_spread_ratio']:.3f}"
     )
     print("\n n    argmax margin  frac>0      LCB margin        envelope")
     for i, n in enumerate(ns):
