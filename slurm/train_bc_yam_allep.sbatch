@@ -5,11 +5,12 @@
 # 300 successes only; the 47 failures were dropped. This is the same config WITHOUT that flag, which
 # is the whole method-only-diff: same model, same horizon, same schedule, same steps.
 #
-# Norm stats are recomputed here rather than borrowed. --data.assets.asset-id is deliberately NOT
-# passed: the s300h30 asset's quantiles were computed on the 300 successes, and reusing them on a
-# 347-episode run would silently normalize the new data by the old data's spread. That does mean the
-# comparison against the s300 policy carries two differences (episodes AND stats), which is inherent
-# -- the statistics ARE a property of the data -- and is worth stating when the two are compared.
+# Norm stats: --data.assets.asset-id is deliberately NOT passed, which makes asset_id fall back to
+# the repo id (config.py:204) and load assets/pi05_yam_lego_taxi/jellyho/yam_lego_taxi -- the
+# ALL-347 asset. That is the right one here; the success-only run uses yam_lego_taxi_s300, and the
+# two differ by up to 2.5% in action q99. Nothing is recomputed. The comparison against the s300
+# policy therefore carries two differences (episodes AND statistics), which is inherent -- the
+# statistics ARE a property of the data -- and is worth stating whenever the two are compared.
 #SBATCH --job-name=bc_allep
 #SBATCH --partition=debug
 #SBATCH --gres=gpu:B200:1

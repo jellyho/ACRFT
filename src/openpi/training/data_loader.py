@@ -184,12 +184,15 @@ def _check_norm_stats_provenance(data_config: _config.DataConfig, dataset_meta) 
     if prov is None:
         logging.warning(
             "norm stats for asset '%s' carry no provenance.json -- cannot verify they were computed "
-            "on THIS dataset generation (repo %s: %d episodes / %d frames). Recompute with "
-            "scripts/compute_norm_stats.py to stamp provenance.",
+            "on THIS dataset generation (repo %s: %d episodes / %d frames) NOR on the episode subset "
+            "this run trains on (%s). Recompute with scripts/compute_norm_stats.py to stamp "
+            "provenance; until then a success-only asset and an all-episodes one are "
+            "indistinguishable by name.",
             data_config.asset_id,
             data_config.repo_id,
             dataset_meta.total_episodes,
             dataset_meta.total_frames,
+            f"{len(data_config.episodes)} episodes" if data_config.episodes else "all",
         )
         return
     computed = prov.get("computed_on", prov)
@@ -199,6 +202,17 @@ def _check_norm_stats_provenance(data_config: _config.DataConfig, dataset_meta) 
     for key, live in (("total_episodes", dataset_meta.total_episodes), ("total_frames", dataset_meta.total_frames)):
         if key in computed and int(computed[key]) != int(live):
             mismatches.append(f"{key} {computed[key]} != {live}")
+    # The SUBSET actually trained on, which the three fields above cannot express: they are all
+    # properties of the whole dataset, so a success-only asset and an all-episodes one agree on every
+    # one of them and differ only here. compute_norm_stats.py already records this (its
+    # `episodes_subset`); nothing read it until now, which is why --data.success-only could be paired
+    # with all-episode statistics -- measured at 2.5% apart in action q99 on this dataset -- and the
+    # only signal was an asset name someone had to remember to pass.
+    want = sorted(data_config.episodes) if data_config.episodes else "all"
+    got = computed.get("episodes_subset")
+    if got is not None and got != want:
+        n_got, n_want = (len(x) if isinstance(x, list) else x for x in (got, want))
+        mismatches.append(f"episodes_subset {n_got} != {n_want} (the stats describe a different episode set)")
     if mismatches:
         raise ValueError(
             f"norm stats provenance mismatch for asset '{data_config.asset_id}': {'; '.join(mismatches)}. "
