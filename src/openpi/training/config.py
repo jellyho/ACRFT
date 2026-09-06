@@ -1542,9 +1542,16 @@ _CONFIGS.append(
     # which is where the operator's homing motion (and their hand) enters the cameras. So
     # success_only is left off here - there is nothing left to filter.
     #
-    # repo_id resolves under HF_LEROBOT_HOME; point that at
-    # /NHNHOME/WORKSPACE/gwanwoo/rl_specialist/cache/huggingface/lerobot to use the local copy, or
-    # override with --data.repo-id Gwanwoo/lerobot_cable_tie_100_clean to pull from the Hub.
+    # jellyho/yam_cable_tie on the Hub: 160 episodes / 251,080 frames / 30 fps, the same three
+    # cameras as the lego set. It replaces rl_specialist/lerobot_cable_tie_100_clean, which resolved
+    # under an NHNHOME path that does not mount on this cluster and does not exist on the Hub under
+    # that name or under Gwanwoo/ (both checked, RepositoryNotFoundError).
+    #
+    # NOTE for --data.success-only: this dataset carries NO episode verdicts. Unlike jellyho/
+    # yam_lego_taxi it has neither `next.success` nor `next.done` among its frame features, so
+    # success_episode_indices finds nothing and the flag raises rather than silently training on
+    # everything. Migrating verdicts in (the recorder's `workstation/yam-data migrate-outcomes`) is
+    # what a success-only cable-tie run needs first.
     TrainConfig(
         name="pi05_yam_cable_tie",
         model=pi0_config.Pi0Config(
@@ -1554,7 +1561,7 @@ _CONFIGS.append(
             discrete_state_input=False,
         ),
         data=LeRobotYAMDataConfig(
-            repo_id="rl_specialist/lerobot_cable_tie_100_clean",
+            repo_id="jellyho/yam_cable_tie",
             delta_mode="joint",
             base_config=DataConfig(prompt_from_task=True),
         ),
@@ -1566,9 +1573,7 @@ _CONFIGS.append(
         num_train_steps=100_000,
         save_interval=10_000,
         action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
-        # There is no launcher script for this config, so the lab entity is set here rather than
-        # passed on the command line the way run_train_yam.sh does it.
-        wandb_entity="RSS-PFT_RLLAB",
+        wandb_entity="jellyho_",
     )
 )
 
