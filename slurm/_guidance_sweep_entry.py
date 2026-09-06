@@ -88,17 +88,17 @@ def register(*, entry, en, img, table, spec, plots):
     head_en = f"{lo:.1f}–{hi:.1f}×" if abs(hi - lo) > 0.05 else f"{lo:.1f}×"
     uniform = all(0.75 < r < 1.6 for r in f["tail_dep"])
 
-    common = dict(
-        ep=ep,
-        fr=fr,
-        ns=f["ns"],
-        ad=b["action_dim"],
-        sigma=f["sigma"],
-        d2d=f["d2d"],
-        pc=b["pc_sigma"],
-        critic=b["critic"],
-        qd=b["q_data"],
-    )
+    common = {
+        "ep": ep,
+        "fr": fr,
+        "ns": f["ns"],
+        "ad": b["action_dim"],
+        "sigma": f["sigma"],
+        "d2d": f["d2d"],
+        "pc": b["pc_sigma"],
+        "critic": b["critic"],
+        "qd": b["q_data"],
+    }
 
     ko = _ko(f, common, head, uniform, img, table, spec, png, gif)
     en_body = _en(f, common, head_en, uniform, img, table, spec, png, gif)

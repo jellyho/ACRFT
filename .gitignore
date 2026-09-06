@@ -187,3 +187,8 @@ probe_base_*.json
 probe_rollout_*.json
 probe_n50.json
 ood_*summary.json
+
+# Scratch a review or a probe leaves behind. Committed once by a `git add -A`; the PR carried
+# eleven of them, including files a review agent wrote inside the worktree.
+.scratch_gs/
+.probe_status.py
