@@ -5179,7 +5179,9 @@ _QL_KO = (
     + img(P / "33_ood_3_axes.png", "what moves the two failures: base strength, N, and where the state came from")
     + "<p class='cap'><b>왼쪽</b> — BC 체크포인트 100k/150k/200k. 초록(왼쪽 축)은 교차-critic으로 채점한 "
     "best-of-N 진짜 이득, 빨강(오른쪽 축)은 ∇Q 방향 t=3.0의 과대추정. <b>두 축이 따로 논다.</b> "
-    "<b>가운데</b> — 후보 수 N=16 vs 50(DEAS 실물·V-GPS가 쓰는 값). 둘 다 안 움직인다. "
+    "<b>가운데</b> — 후보 수 N=16 vs 50(DEAS 실물·V-GPS가 쓰는 값). <b>선택 이득은 움직이고</b>"
+    "(+0.68 → +0.88), <b>∇Q 과대추정은 안 움직인다</b>(32.8 → 32.9). 이 패널의 선택 곡선은 "
+    "한 번 정정됐다 — 아래 정정 항목을 보라. "
     "<b>오른쪽</b> — 상태를 어디서 뽑았나에 따른 순위 신호/잡음 비. 파랑이 시연, 주황이 배포된 정책이 "
     "실제로 도달한 상태다. 점선(=1) 아래는 순위가 잡음 지배라는 뜻이다.</p>"
     + table(
@@ -5188,12 +5190,21 @@ _QL_KO = (
             ["BC 100k (약함)", "0.0048%", "1.10", "<b>+1.08</b>", "32.6"],
             ["BC 150k", "0.0031%", "0.85", "+0.82", "32.9"],
             ["BC 200k (기본)", "0.0020%", "0.71", "+0.68", "32.8"],
-            ["BC 200k, N=50", "0.0021%", "0.72", "+0.71", "32.9"],
+            ["BC 200k, N=50", "0.0021%", "0.72", "<b>+0.88</b>", "32.9"],
         ],
     )
     + "<ul>"
-    "<li><b>N 부족은 기각.</b> DEAS 실물과 V-GPS가 쓰는 N=50으로 올려도 진짜 이득이 +0.68 → +0.71이고 "
-    "편향은 +0.51 → +0.56으로 같이 자란다.</li>"
+    "<li><b>정정 (2026-09-06) — N 부족은 기각되지 않는다.</b> 이 자리에는 "
+    "<s>'N=50으로 올려도 진짜 이득이 +0.68 → +0.71이라 N 부족은 기각'</s>이라고 적혀 있었다. 틀렸다. "
+    "선택 코드가 후보 부분집합을 <code>min(16, N)</code>으로 잘라(plot_ood_axes.py:64) N=50 팔도 실제로는 "
+    "best-of-16이었다. 두 점이 같게 나온 것은 측정이 아니라 구성이었고, 사전 등록해 둔 반론 "
+    "'DEAS·V-GPS는 N≈50을 쓴다, 너희가 적게 썼다'는 <b>한 번도 검정되지 않았다</b>. "
+    "캡을 제거하면 같은 얼린 프로브에서 진짜 이득이 <b>+0.68 → +0.88</b>이고(에피소드 짝지은 "
+    "Δ = +0.197 ± 0.080, 유의), k를 훑으면 0.24 / 0.43 / 0.59 / 0.71 / 0.82 / 0.88 "
+    "(k = 2, 4, 8, 16, 32, 50)로 단조 증가한다. 편향도 +0.51 → +0.69로 같이 자란다. "
+    "즉 <b>후보를 늘리면 선택 이득은 실제로 커진다</b>. "
+    "다만 이 정정은 <b>∇Q 과대추정에는 닿지 않는다</b> — 그 계열은 q_absray에서 나오고 캡을 지나지 않으며 "
+    "32.8 / 32.9로 평평하다. 조향에 대한 판정은 그대로다.</li>"
     "<li><b>베이스 강도는 선택에만 걸린다.</b> 덜 학습된 정책은 후보가 덜 균질해 행동 분산이 2.4배, 진짜 "
     "이득이 59% 크다(+1.08 vs +0.68). V-GPS가 제너럴리스트 베이스에서 성공한 이유가 이것이다. "
     "<b>그런데 ∇Q 과대추정은 32.6 / 32.9 / 32.8로 전혀 안 움직인다.</b></li>"
@@ -5427,7 +5438,9 @@ en(
     + img(P / "33_ood_3_axes.png", "what moves the two failures: base strength, N, and where the state came from")
     + "<p class='cap'><b>Left</b> — BC checkpoints at 100k/150k/200k. Green (left axis) is the cross-critic-scored "
     "real best-of-N gain; red (right axis) is the gradient overestimation at t=3.0. <b>The two axes move "
-    "independently.</b> <b>Middle</b> — N=16 vs 50 (what DEAS's real robot and V-GPS use). Neither moves. "
+    "independently.</b> <b>Middle</b> — N=16 vs 50 (what DEAS's real robot and V-GPS use). <b>The selection "
+    "gain does move</b> (+0.68 to +0.88); <b>the gradient overestimation does not</b> (32.8 to 32.9). The "
+    "selection curve in this panel has been corrected once — see the correction below. "
     "<b>Right</b> — ranking signal divided by ranking noise, by where the state came from: blue is demonstrations, "
     "orange is states a deployed policy actually reached. Below the dashed line the ranking is noise-dominated.</p>"
     + table(
@@ -5436,12 +5449,21 @@ en(
             ["BC 100k (weaker)", "0.0048%", "1.10", "<b>+1.08</b>", "32.6"],
             ["BC 150k", "0.0031%", "0.85", "+0.82", "32.9"],
             ["BC 200k (default)", "0.0020%", "0.71", "+0.68", "32.8"],
-            ["BC 200k, N=50", "0.0021%", "0.72", "+0.71", "32.9"],
+            ["BC 200k, N=50", "0.0021%", "0.72", "<b>+0.88</b>", "32.9"],
         ],
     )
     + "<ul>"
-    "<li><b>Too few candidates: rejected.</b> At N=50 — what DEAS's real robot and V-GPS use — the real gain "
-    "moves +0.68 to +0.71 while the bias grows +0.51 to +0.56.</li>"
+    "<li><b>Correction (2026-09-06) — too few candidates is NOT rejected.</b> This said "
+    "<s>at N=50 the real gain moves +0.68 to +0.71, so the objection is rejected</s>. That was wrong. "
+    "The selection code capped the candidate subset at <code>min(16, N)</code> (plot_ood_axes.py:64), so "
+    "the N=50 arm was still a best-of-16. The two points matched by construction, not by measurement, and "
+    "the pre-registered objection — DEAS and V-GPS use N about 50, you under-powered it — was <b>never "
+    "actually tested</b>. With the cap removed, on the same frozen probe, the real gain moves "
+    "<b>+0.68 to +0.88</b> (episode-paired Δ = +0.197 ± 0.080, significant), and sweeping k is monotone: "
+    "0.24 / 0.43 / 0.59 / 0.71 / 0.82 / 0.88 at k = 2, 4, 8, 16, 32, 50. The bias grows with it, +0.51 to "
+    "+0.69. So <b>more candidates really does buy more selection gain</b>. The correction does <b>not</b> "
+    "touch the gradient result: that series comes from q_absray, never passes through the cap, and is flat "
+    "at 32.8 / 32.9. The verdict on steering stands.</li>"
     "<li><b>Base strength touches selection only.</b> A less-trained policy has less homogeneous draws: 2.4x the "
     "action variance and 59% more real gain (+1.08 vs +0.68). That is why V-GPS gains on generalist bases. "
     "<b>But the gradient overestimation is 32.6 / 32.9 / 32.8 — flat.</b></li>"

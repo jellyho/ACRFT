@@ -61,7 +61,11 @@ def measure(path):
     Q = Q - Q.mean(2, keepdims=True)
     C, F, N = Q.shape
     rng = np.random.default_rng(0)
-    idx = rng.integers(0, N, size=(F, 300, min(16, N)))
+    # Select over the WHOLE pool. This used to be min(16, N), which capped the subset at 16 in every
+    # arm -- so the 50-draw probe was still a best-of-16 and the panel's "more candidates changes
+    # neither" was true by construction. It is not: sweeping k on the same frozen 50-draw probe is
+    # monotone (0.24, 0.43, 0.59, 0.71, 0.82, 0.88 at k = 2, 4, 8, 16, 32, 50).
+    idx = rng.integers(0, N, size=(F, 300, N))
     own, real = [], []
     for a in range(C):
         s = np.take_along_axis(Q[a][:, None, :], idx, 2)

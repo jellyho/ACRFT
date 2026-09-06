@@ -99,7 +99,21 @@ def main(a):
     # With K=2, min IS mean - 1*std exactly. So mean / mean-0.5s / min is not three estimators but
     # one family at k = 0, 0.5, 1 -- the honest statement is which k would restore parity, not
     # "even the min fails".
-    k_needed = np.where(std > 1e-9, d_mean / np.maximum(std, 1e-9), np.nan)
+    #
+    # A RATIO OF AGGREGATES, per episode, not the average of per-frame d/std. This used to be the
+    # per-frame ratio, which explodes on frames where the two heads nearly agree: on the pinned
+    # checkpoint it read 29.1 at the box edge and 176.5 at t=3 against the 2.50 and 4.64 that
+    # plot_ood.py computes on the same probe -- and 2.50 / 4.64 are what the report publishes.
+    # plot_ood.py:250 already carried the fix and the reason; this script did not.
+    def _k_needed(eps_):
+        keys = sorted(set(eps_))
+        grp = {k: [i for i, g in enumerate(eps_) if g == k] for k in keys}
+        per_d = np.stack([d_mean[grp[k]].mean(axis=0) for k in keys])
+        per_s = np.stack([std[grp[k]].mean(axis=0) for k in keys])
+        return per_d, per_s
+
+    per_d, per_s = _k_needed(eps)
+    k_needed = per_d.mean(axis=0) / np.maximum(per_s.mean(axis=0), 1e-9)  # [T]
 
     fig, axes = plt.subplots(1, 5, figsize=(21, 3.6))
 
@@ -220,8 +234,15 @@ def main(a):
     # The k that would restore parity with the demonstrator, per frame, at the box edge and the end.
     i_box = int(np.argmin(abs(ts - 1.0)))
     for tag, idx in (("at_box", i_box), ("at_end", -1)):
-        km, kh = _ci(k_needed[:, idx][:, None], eps)
-        j[f"k_needed_{tag}"] = {"mean": float(km[0]), "ci95": float(kh[0])}
+        rng_b = np.random.default_rng(0)
+        boot = np.stack(
+            [
+                per_d[b].mean(axis=0) / np.maximum(per_s[b].mean(axis=0), 1e-9)
+                for b in rng_b.integers(0, per_d.shape[0], size=(400, per_d.shape[0]))
+            ]
+        )
+        lo_b, hi_b = np.percentile(boot[:, idx], [2.5, 97.5])
+        j[f"k_needed_{tag}"] = {"mean": float(k_needed[idx]), "ci95_lo": float(lo_b), "ci95_hi": float(hi_b)}
     # How much of the chunk actually left the box at each distance -- "box edge" on the x axis is a
     # displacement LENGTH, not a statement that any coordinate left [-1, 1].
     j["outbox_absray"] = float(np.mean([r["outbox_absray"] for r in rows]))
