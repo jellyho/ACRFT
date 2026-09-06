@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import json
 import logging
 import pathlib
 from typing import Any
@@ -156,11 +157,30 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
         raise ValueError(f"unknown arm {arm!r}; known: {ALL_ARMS}")
     spec = ArmSpec(arm=arm, base_ckpt=AF_CKPT if arm in LATENT_ARMS else BC_CKPT)
     run = CKPT_ROOT / f"{arm}_run1"
+    # An arm saved in the BC layout carries its own base (arm_meta.json) and is servable as-is; a
+    # LEGACY expert-only arm is a subtree of absolute weights co-adapted with the backbone it was
+    # trained on, so serving it on any other base is silently wrong. Neither can be inferred from a
+    # module-level constant, which is exactly the mistake this guards: BC_CKPT said 100000 for
+    # months while the robot ran 200000, and moving the constant to 200000 would have re-based every
+    # already-trained expert arm without a word.
+    LEGACY_EXPERT_BASE = BC_CKPT.with_name("100000")
     if arm in EXPERT_ARMS:
         steps = sorted((int(p.name) for p in run.iterdir() if p.name.isdigit()), reverse=True)
         if not steps:
             raise FileNotFoundError(f"no checkpoints under {run}")
         spec.expert_ckpt = run / str(step or steps[0])
+        meta = spec.expert_ckpt / "arm_meta.json"
+        if meta.exists():
+            spec.base_ckpt = pathlib.Path(json.loads(meta.read_text())["init_ckpt"])
+        else:
+            spec.base_ckpt = LEGACY_EXPERT_BASE
+            logging.warning(
+                "%s has no arm_meta.json (pre-2026-09-06 checkpoint); assuming it was trained from %s, "
+                "which was the trainers' --init-ckpt default at the time. Serving it on any other base "
+                "pairs an expert subtree with a backbone it was never fine-tuned against.",
+                spec.expert_ckpt,
+                LEGACY_EXPERT_BASE.name,
+            )
     elif arm in LATENT_ARMS:
         cands = sorted(run.glob("latent_actor_*.msgpack"), key=lambda p: int(p.stem.split("_")[-1]), reverse=True)
         if not cands:
