@@ -33,7 +33,16 @@ CAMS = ["observation.images.agentview", "observation.images.wrist_left", "observ
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi")
-    ap.add_argument("--root", default="/data5/jellyho/yam_v2/lerobot")
+    # One --root, two incompatible contracts: LeRobotDataset treats it as THE dataset directory
+    # (lerobot_dataset.py:97) while outcomes.dataset_root() reads it as <root>/<repo_id>. The lego
+    # default satisfied both only by accident -- /data5/jellyho/yam_v2/lerobot is itself a lego
+    # dataset dir AND contains jellyho/yam_lego_taxi/. For any other dataset no single value works.
+    # None lets both sides resolve through HF_LEROBOT_HOME, which is the only way they agree.
+    ap.add_argument(
+        "--root",
+        default=None,
+        help="dataset directory; None (default) = wherever LeRobot resolves --repo-id via HF_LEROBOT_HOME",
+    )
     ap.add_argument(
         "--outcomes",
         default=None,

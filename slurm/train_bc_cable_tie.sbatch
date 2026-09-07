@@ -22,9 +22,15 @@ export PYTHONPATH=/data5/jellyho/ACRFT/openpi/src:/data5/jellyho/ACRFT/openpi/pa
 export XLA_PYTHON_CLIENT_MEM_FRACTION=1.0
 SUCC_ARGS=""
 if [ -n "${SUCCESS:-}" ]; then SUCC_ARGS="--data.success-only"; fi
+# The critic scores this policy's actions, so the two must share ONE norm_stats.json -- not merely
+# equal numbers. Naming the asset pins the file; leaving it unset lets norm_stats_cache resolve by
+# content into a key-suffixed sibling instead, which is very likely identical and is exactly the
+# "very likely" that the alpha-Flow 08-23 mis-normalization was.
+ASSET_ARGS=""
+if [ -n "${ASSET_ID:-}" ]; then ASSET_ARGS="--data.assets.asset-id ${ASSET_ID}"; fi
 echo "[$(date +%T)] bc_cable starting on $(hostname) (success_only=${SUCCESS:-0})"
 exec /data5/jellyho/ACRFT/openpi/.venv/bin/python -u scripts/train.py pi05_yam_cable_tie \
   --exp-name="${NAME:-yam_bc_cable_tie_all160}" --project-name yam-rlt --wandb-entity jellyho_ \
   --checkpoint-base-dir /data1/jellyho/acrft_ckpts --overwrite \
-  --num-train-steps "${STEPS:-100000}" --save-interval "${SAVE:-25000}" ${SUCC_ARGS} \
+  --num-train-steps "${STEPS:-100000}" --save-interval "${SAVE:-25000}" ${SUCC_ARGS} ${ASSET_ARGS} \
   --num-workers 12

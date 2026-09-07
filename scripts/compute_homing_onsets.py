@@ -18,11 +18,45 @@ import pathlib
 import numpy as np
 
 
+def _homing_onset(seq: np.ndarray, teleop_value: float, tol: int) -> int:
+    """Start of the trailing homing run, or ``len(seq)`` when the episode has no homing tail.
+
+    The obvious reading -- 1 + the last teleop frame -- assumes the homing run is the strict suffix
+    of the episode. Every jellyho/yam_cable_tie episode breaks that assumption by exactly one frame:
+    each ends [... 4. 4. 4. 4. 0.], so the last teleop frame is the LAST frame, the onset comes out
+    as the episode length, and all 14,324 homing frames (5.7% of the set) stay labelled as task
+    progress. Since homing_onset is the denominator of the whole cost_to_goal target, that is not a
+    cosmetic error.
+
+    So find the last run of homing frames instead and accept it as the tail when it reaches within
+    `tol` frames of the end. A stray teleop frame after the arms have already gone home does not
+    make the episode task behaviour again.
+    """
+    homing = seq != teleop_value
+    L = len(seq)
+    if not homing.any():
+        return L
+    idx = np.flatnonzero(homing)
+    if idx[-1] < L - 1 - tol:  # the last homing run is interior, not a tail
+        return L
+    # walk back over the contiguous run that ends at idx[-1]
+    breaks = np.flatnonzero(np.diff(idx) > 1)
+    return int(idx[breaks[-1] + 1] if len(breaks) else idx[0])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo-id", default="jellyho/yam_lego_taxi")
-    ap.add_argument("--root", default="/data5/jellyho/yam_v2/lerobot")
+    # None = wherever LeRobot resolves --repo-id (HF_LEROBOT_HOME). A hard-coded default is how a
+    # cable-tie invocation ends up reading lego frames.
+    ap.add_argument("--root", default=None)
     ap.add_argument("--teleop-value", type=float, default=0.0, help="control_mode value during teleop (task)")
+    ap.add_argument(
+        "--tol",
+        type=int,
+        default=5,
+        help="a homing run counts as the trailing tail if it reaches within this many frames of the end",
+    )
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/yam_homing_onsets.json"))
     a = ap.parse_args()
 
@@ -41,9 +75,7 @@ def main():
         s, t = starts[e], ends[e]
         seq = cm[s:t]
         L = t - s
-        # onset = 1 + last teleop frame (start of the trailing homing run); no teleop -> keep all
-        teleop = np.flatnonzero(seq == a.teleop_value)
-        onset = int(teleop[-1]) + 1 if len(teleop) else L
+        onset = _homing_onset(seq, a.teleop_value, a.tol)
         out[str(e)] = {"len": int(L), "homing_onset": int(onset), "task_frac": round(onset / L, 3)}
         fracs.append(onset / L)
 
