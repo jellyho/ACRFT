@@ -1547,11 +1547,13 @@ _CONFIGS.append(
     # under an NHNHOME path that does not mount on this cluster and does not exist on the Hub under
     # that name or under Gwanwoo/ (both checked, RepositoryNotFoundError).
     #
-    # NOTE for --data.success-only: this dataset carries NO episode verdicts. Unlike jellyho/
-    # yam_lego_taxi it has neither `next.success` nor `next.done` among its frame features, so
-    # success_episode_indices finds nothing and the flag raises rather than silently training on
-    # everything. Migrating verdicts in (the recorder's `workstation/yam-data migrate-outcomes`) is
-    # what a success-only cable-tie run needs first.
+    # --data.success-only resolves 150 of the 160 episodes. It did not until 2026-09-07, and the
+    # reason is worth keeping: the verdicts landed on `main` on 09-02, but lerobot pins
+    # CODEBASE_VERSION = "v3.0" and resolves that TAG for every read (lerobot_dataset.py:83, :96),
+    # and the tag still pointed before the verdict commit. Every consumer saw a dataset without
+    # next.success / next.done while the Hub page showed one with them. The same was true of
+    # jellyho/yam_lego_taxi; its success-only runs worked only because a local cache predated the
+    # tag, i.e. they would not have reproduced on a clean machine. See scripts/move_lerobot_v3_tag.py.
     TrainConfig(
         name="pi05_yam_cable_tie",
         model=pi0_config.Pi0Config(
