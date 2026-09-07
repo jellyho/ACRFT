@@ -72,3 +72,25 @@ def test_identical_numbers_filed_twice_resolve_without_complaint(tmp_path):
     _write(tmp_path / "cfg_b" / "x", prov)
     dc = _DC(tuple(range(300)))
     assert nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30) is not None
+
+
+def test_naming_an_asset_that_does_not_exist_is_an_error_not_a_silent_skip(tmp_path):
+    """Naming an asset is how a run is pinned to one statistics file; a missing file is a typo.
+
+    The old behaviour logged "skipping" and trained with norm_stats=None, which looks exactly like
+    training with normalization until the checkpoint is deployed. It is the failure mode a BC job
+    starting before its norm-stats job finishes would have hit.
+    """
+    import dataclasses
+
+    from openpi.training import config as _config
+
+    cfg = _config.get_config("pi05_yam_cable_tie")
+    cfg = dataclasses.replace(
+        cfg,
+        data=dataclasses.replace(
+            cfg.data, assets=dataclasses.replace(cfg.data.assets, asset_id="jellyho/no_such_asset")
+        ),
+    )
+    with pytest.raises(FileNotFoundError, match="named explicitly"):
+        cfg.data.create(cfg.assets_dirs, cfg.model)

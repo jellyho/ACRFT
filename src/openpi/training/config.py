@@ -206,14 +206,18 @@ class DataConfigFactory(abc.ABC):
             self.base_config or DataConfig(),
             repo_id=repo_id,
             asset_id=asset_id,
-            norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            norm_stats=self._load_norm_stats(
+                epath.Path(self.assets.assets_dir or assets_dirs), asset_id, required=self.assets.asset_id is not None
+            ),
             norm_stats_provenance=self._load_norm_stats_provenance(
                 epath.Path(self.assets.assets_dir or assets_dirs), asset_id
             ),
             use_quantile_norm=(model_config.model_type != ModelType.PI0) and not self.force_mean_std_norm,
         )
 
-    def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
+    def _load_norm_stats(
+        self, assets_dir: epath.Path, asset_id: str | None, *, required: bool = False
+    ) -> dict[str, _transforms.NormStats] | None:
         if asset_id is None:
             return None
         try:
@@ -222,6 +226,17 @@ class DataConfigFactory(abc.ABC):
             logging.info(f"Loaded norm stats from {data_assets_dir}")
             return norm_stats
         except FileNotFoundError:
+            # Falling back to un-normalized training is a reasonable default when the asset id was
+            # merely inferred from the repo id. It is never reasonable when someone NAMED the asset:
+            # naming it is how you pin a run to one statistics file, so a missing file is a typo or a
+            # job that started before the stats job finished -- and silently training without
+            # normalization looks exactly like training with it until the checkpoint is deployed.
+            if required:
+                raise FileNotFoundError(
+                    f"norm stats asset '{asset_id}' was named explicitly but does not exist at "
+                    f"{data_assets_dir}. Compute it (slurm/norm_stats.sbatch with "
+                    f"ASSET_ID={asset_id}) or drop --data.assets.asset-id to resolve stats by content."
+                ) from None
             logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
         return None
 

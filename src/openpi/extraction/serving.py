@@ -156,7 +156,16 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
     if arm not in ALL_ARMS:
         raise ValueError(f"unknown arm {arm!r}; known: {ALL_ARMS}")
     spec = ArmSpec(arm=arm, base_ckpt=AF_CKPT if arm in LATENT_ARMS else BC_CKPT)
-    run = CKPT_ROOT / f"{arm}_run1"
+    # The newest run, not run1. Retraining onto a fresh suffix rather than overwriting is what keeps
+    # a half-finished job from leaving a mix of two bases in one directory, and it preserves the
+    # record of what an earlier robot session actually served. Every arm on disk before 2026-09-07
+    # was trained from the 100k base while the robot ran 200k, so "newest" is also "correct".
+    runs = sorted(
+        (d for d in CKPT_ROOT.glob(f"{arm}_run*") if d.is_dir() and d.name[len(arm) + 4 :].isdigit()),
+        key=lambda d: int(d.name[len(arm) + 4 :]),
+        reverse=True,
+    )
+    run = runs[0] if runs else CKPT_ROOT / f"{arm}_run1"
     # An arm saved in the BC layout carries its own base (arm_meta.json) and is servable as-is; a
     # LEGACY expert-only arm is a subtree of absolute weights co-adapted with the backbone it was
     # trained on, so serving it on any other base is silently wrong. Neither can be inferred from a
