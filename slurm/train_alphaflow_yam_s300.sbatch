@@ -20,5 +20,5 @@ exec uv run --no-sync python scripts/train.py pi05_yam_lego_taxi_alphaflow \
   --exp-name=yam_alphaflow_s300_200k --project-name yam-rlt --wandb-entity RSS-PFT_RLLAB \
   --checkpoint-base-dir /data1/jellyho/acrft_ckpts --overwrite \
   --num-train-steps 200000 --save-interval 50000 \
-  --data.assets.asset-id jellyho/yam_lego_taxi_s300h30 --data.success-only \
+  --data.success-only \
   --num-workers 12

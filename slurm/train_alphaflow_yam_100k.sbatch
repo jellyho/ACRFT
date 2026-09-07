@@ -23,5 +23,5 @@ exec /data5/jellyho/ACRFT/openpi/.venv/bin/python -u scripts/train.py pi05_yam_l
   --exp-name="${NAME:-yam_alphaflow_s300_100k}" --project-name yam-rlt --wandb-entity jellyho_ \
   --checkpoint-base-dir /data1/jellyho/acrft_ckpts --overwrite \
   --num-train-steps "${STEPS:-100000}" --save-interval "${SAVE:-25000}" \
-  --data.assets.asset-id jellyho/yam_lego_taxi_s300h30 --data.success-only \
+  --data.success-only \
   --num-workers 12

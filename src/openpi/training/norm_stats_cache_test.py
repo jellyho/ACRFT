@@ -1,79 +1,74 @@
-"""The cache key, and the one case it must not touch.
+"""The cache must find statistics by what they were computed on, not by where someone filed them."""
 
-Stats are found by NAME today: asset_id falls back to the repo id, so one config trained with and
-without --data.success-only resolves to the same file. Those two differ by up to 2.5% in action q99
-on the YAM lego assets -- enough to mis-normalize everything, never enough to NaN.
-"""
-
-import dataclasses
 import json
+import pathlib
 
-from openpi.training import config as _config
+import numpy as np
+import pytest
+
+from openpi.shared import normalize as _normalize
 from openpi.training import norm_stats_cache as nsc
 
 
-def _cfg(**over):
-    c = _config.get_config("pi05_yam_lego_taxi")
-    return dataclasses.replace(c, **over) if over else c
+class _DC:
+    def __init__(self, episodes, repo_id="jellyho/yam_lego_taxi"):
+        self.episodes, self.repo_id = episodes, repo_id
 
 
-def test_the_key_separates_success_only_from_all_episodes():
-    c = _cfg()
-    dc_all = c.data.create(c.assets_dirs, c.model)
-    c2 = dataclasses.replace(c, data=dataclasses.replace(c.data, success_only=True))
-    dc_sub = c2.data.create(c2.assets_dirs, c2.model)
-    assert dc_all.episodes is None
-    assert dc_sub.episodes is not None
-    assert nsc.stats_key(dc_all, c.model.action_horizon) != nsc.stats_key(dc_sub, c.model.action_horizon)
+def _write(d: pathlib.Path, prov: dict, scale: float = 1.0):
+    d.mkdir(parents=True, exist_ok=True)
+    _normalize.save(d, {"actions": _normalize.NormStats(mean=np.zeros(4) + scale, std=np.ones(4))})
+    (d / "provenance.json").write_text(json.dumps(prov))
 
 
-def test_the_key_is_stable_across_calls():
-    c = _cfg()
-    dc = c.data.create(c.assets_dirs, c.model)
-    assert nsc.stats_key(dc, 30) == nsc.stats_key(dc, 30)
+def test_prose_provenance_is_matched_on_its_episode_count(tmp_path):
+    """The real YAM lego h30 asset describes its subset in a sentence; the count is what we can check.
 
-
-def test_horizon_is_part_of_the_key():
-    c = _cfg()
-    dc = c.data.create(c.assets_dirs, c.model)
-    assert nsc.stats_key(dc, 30) != nsc.stats_key(dc, 50)
-
-
-def test_an_explicit_asset_id_is_left_alone(caplog):
-    """Pinning a run to another run's statistics is how a schedule-only comparison is made; the
-    cache must not override it, stamped or not."""
-    c = _config.get_config("pi05_yam_lego_taxi_alphaflow")
-    c = dataclasses.replace(
-        c, data=dataclasses.replace(c.data, assets=dataclasses.replace(c.data.assets, asset_id="jellyho/pinned"))
+    This is the case that forced launchers to hard-code --data.assets.asset-id, and a hard-coded id
+    is what went stale and killed the alpha-Flow 100k run.
+    """
+    _write(
+        tmp_path / "pi05_yam_lego_taxi_rlt" / "jellyho" / "yam_lego_taxi_s300h30",
+        {"computed_on": {"repo_id": "jellyho/yam_lego_taxi", "episodes_subset": "success-only (300/347)"}},
     )
-    dc = dataclasses.replace(c.data.create(c.assets_dirs, c.model), asset_id="jellyho/pinned")
-    with caplog.at_level("INFO"):
-        out = nsc.ensure_norm_stats(c, dc)
-    assert out is dc
-    assert "named explicitly" in caplog.text
+    dc = _DC(tuple(range(300)))
+    hit = nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30)
+    assert hit is not None
+    assert hit[0] == 1
+    assert "yam_lego_taxi_s300h30" in str(hit[2])
 
 
-def test_a_stamped_sibling_is_a_hit(tmp_path):
-    c = _cfg()
-    dc = dataclasses.replace(c.data.create(c.assets_dirs, c.model), repo_id="fake/repo", asset_id="fake/repo")
-    c = dataclasses.replace(c, assets_base_dir=str(tmp_path)) if hasattr(c, "assets_base_dir") else c
-    key = nsc.stats_key(dc, c.model.action_horizon)
-    d = tmp_path / f"fake/repo__{key}"
-    d.mkdir(parents=True)
-    (d / "provenance.json").write_text(json.dumps({"stats_key": key}))
-    assert nsc._provenance_key(d) == key
+def test_a_different_subset_size_is_not_a_match(tmp_path):
+    _write(
+        tmp_path / "cfg" / "jellyho" / "yam_lego_taxi",
+        {"computed_on": {"repo_id": "jellyho/yam_lego_taxi", "episodes_subset": "success-only (300/347)"}},
+    )
+    dc = _DC(tuple(range(347)))
+    assert nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30) is None
 
 
-def test_an_unstamped_directory_is_not_a_hit(tmp_path):
-    d = tmp_path / "asset"
-    d.mkdir()
-    assert nsc._provenance_key(d) is None
-    (d / "provenance.json").write_text(json.dumps({"computed_on": {"repo_id": "x"}}))
-    assert nsc._provenance_key(d) is None, "a legacy provenance stamp carries no stats_key and must not count"
+def test_a_stated_horizon_that_disagrees_is_not_a_match(tmp_path):
+    _write(
+        tmp_path / "cfg" / "a",
+        {"computed_on": {"repo_id": "jellyho/yam_lego_taxi", "episodes_subset": "all", "action_horizon": 50}},
+    )
+    dc = _DC(None)
+    assert nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30) is None
 
 
-def test_corrupt_provenance_does_not_crash(tmp_path):
-    d = tmp_path / "asset"
-    d.mkdir()
-    (d / "provenance.json").write_text("{not json")
-    assert nsc._provenance_key(d) is None
+def test_two_assets_claiming_the_same_data_but_holding_different_numbers_refuse_to_resolve(tmp_path):
+    """Silently picking one would reintroduce exactly the mis-normalization this cache exists to stop."""
+    prov = {"computed_on": {"repo_id": "jellyho/yam_lego_taxi", "episodes_subset": "success-only (300/347)"}}
+    _write(tmp_path / "cfg_a" / "x", prov, scale=1.0)
+    _write(tmp_path / "cfg_b" / "x", prov, scale=2.0)
+    dc = _DC(tuple(range(300)))
+    with pytest.raises(ValueError, match="DIFFERENT numbers"):
+        nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30)
+
+
+def test_identical_numbers_filed_twice_resolve_without_complaint(tmp_path):
+    prov = {"computed_on": {"repo_id": "jellyho/yam_lego_taxi", "episodes_subset": "success-only (300/347)"}}
+    _write(tmp_path / "cfg_a" / "x", prov)
+    _write(tmp_path / "cfg_b" / "x", prov)
+    dc = _DC(tuple(range(300)))
+    assert nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30) is not None

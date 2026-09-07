@@ -210,9 +210,27 @@ def _check_norm_stats_provenance(data_config: _config.DataConfig, dataset_meta) 
     # only signal was an asset name someone had to remember to pass.
     want = sorted(data_config.episodes) if data_config.episodes else "all"
     got = computed.get("episodes_subset")
-    if got is not None and got != want:
-        n_got, n_want = (len(x) if isinstance(x, list) else x for x in (got, want))
-        mismatches.append(f"episodes_subset {n_got} != {n_want} (the stats describe a different episode set)")
+    if got is not None:
+        comparable = got == "all" or isinstance(got, list)
+        if not comparable:
+            # A hand-written description like "success-only (300/347 via outcomes.jsonl)" says the
+            # right thing to a person and nothing a machine can check against an episode list. It is
+            # not evidence of a mismatch and must not be treated as one -- this fired on
+            # jellyho/yam_lego_taxi_s300h30, whose stats ARE the ones that run wanted.
+            logging.warning(
+                "norm stats for asset '%s' record episodes_subset as free text (%r), which cannot be "
+                "checked against the %s this run resolved. Recompute with compute_norm_stats.py to "
+                "replace it with the episode list.",
+                data_config.asset_id,
+                got,
+                f"{len(data_config.episodes)} episodes" if data_config.episodes else "all episodes",
+            )
+        elif got != want:
+
+            def _n(x):
+                return f"{len(x)} episodes" if isinstance(x, list) else str(x)
+
+            mismatches.append(f"episodes_subset is {_n(got)} but this run trains on {_n(want)}")
     if mismatches:
         raise ValueError(
             f"norm stats provenance mismatch for asset '{data_config.asset_id}': {'; '.join(mismatches)}. "
