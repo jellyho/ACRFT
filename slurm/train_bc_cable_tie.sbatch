@@ -5,11 +5,10 @@
 #   sbatch                                   slurm/train_bc_cable_tie.sbatch   # all 160 episodes
 #   sbatch --export=ALL,SUCCESS=1,NAME=...   slurm/train_bc_cable_tie.sbatch   # success-only
 #
-# SUCCESS=1 does not work yet, and fails loudly rather than quietly: this dataset carries no episode
-# verdicts -- it has neither `next.success` nor `next.done` among its frame features, unlike
-# jellyho/yam_lego_taxi which has both and resolves to 300 of 347. Verdicts have to be migrated into
-# the dataset first (the recorder's `workstation/yam-data migrate-outcomes`); the flag is wired here
-# so the run is one word away once they are.
+# SUCCESS=1 resolves 150 of the 160 episodes. It did not until the dataset's v3.0 TAG was moved onto
+# main on 2026-09-07: the verdicts were pushed on 09-02, but lerobot resolves the tag for every read
+# (CODEBASE_VERSION, lerobot_dataset.py:83) and the tag still pointed before that commit, so
+# next.success / next.done were invisible to training while the Hub page showed them.
 #SBATCH --job-name=bc_cable
 #SBATCH --partition=debug
 #SBATCH --gres=gpu:B200:1
