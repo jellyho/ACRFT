@@ -57,7 +57,7 @@ def main():
         default=5,
         help="a homing run counts as the trailing tail if it reaches within this many frames of the end",
     )
-    ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/yam_homing_onsets.json"))
+    ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path(".scratch/yam_homing_onsets_recomputed.json"))
     a = ap.parse_args()
 
     import lerobot.datasets.lerobot_dataset as lrd

@@ -156,16 +156,24 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
     if arm not in ALL_ARMS:
         raise ValueError(f"unknown arm {arm!r}; known: {ALL_ARMS}")
     spec = ArmSpec(arm=arm, base_ckpt=AF_CKPT if arm in LATENT_ARMS else BC_CKPT)
+
     # The newest run, not run1. Retraining onto a fresh suffix rather than overwriting is what keeps
     # a half-finished job from leaving a mix of two bases in one directory, and it preserves the
     # record of what an earlier robot session actually served. Every arm on disk before 2026-09-07
     # was trained from the 100k base while the robot ran 200k, so "newest" is also "correct".
+    def _steps(d):
+        return sorted((int(q.name) for q in d.iterdir() if q.name.isdigit()), reverse=True) if d.is_dir() else []
+
     runs = sorted(
         (d for d in CKPT_ROOT.glob(f"{arm}_run*") if d.is_dir() and d.name[len(arm) + 4 :].isdigit()),
         key=lambda d: int(d.name[len(arm) + 4 :]),
         reverse=True,
     )
-    run = runs[0] if runs else CKPT_ROOT / f"{arm}_run1"
+    # The newest run that actually HOLDS a checkpoint. Newest-by-name alone would hand back a run
+    # directory that a training job has created but not yet saved into -- a window that opens on
+    # every retrain and never closes if the job dies -- and the resulting FileNotFoundError would
+    # land at load time in a robot session rather than falling back to the arm that does exist.
+    run = next((d for d in runs if _steps(d)), None) or (runs[0] if runs else CKPT_ROOT / f"{arm}_run1")
     # An arm saved in the BC layout carries its own base (arm_meta.json) and is servable as-is; a
     # LEGACY expert-only arm is a subtree of absolute weights co-adapted with the backbone it was
     # trained on, so serving it on any other base is silently wrong. Neither can be inferred from a
@@ -174,7 +182,7 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
     # already-trained expert arm without a word.
     LEGACY_EXPERT_BASE = BC_CKPT.with_name("100000")
     if arm in EXPERT_ARMS:
-        steps = sorted((int(p.name) for p in run.iterdir() if p.name.isdigit()), reverse=True)
+        steps = _steps(run)
         if not steps:
             raise FileNotFoundError(f"no checkpoints under {run}")
         spec.expert_ckpt = run / str(step or steps[0])
