@@ -186,7 +186,7 @@ def gen_self_rollouts(rng_seed, pi, n_ep, exec_k=H):
                 o = o2
                 if done:
                     break
-            if len(ep) and ep[-1][6]:
+            if ep and ep[-1][6]:
                 break
         acts = [e[2] for e in ep]
         for i, (o_, hf, a, r, o2, hf2, d) in enumerate(ep):

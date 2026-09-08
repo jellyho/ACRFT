@@ -70,7 +70,7 @@ def build(path: pathlib.Path, out: pathlib.Path, max_demos=None, gamma=0.99):
         "task": path.stem,
         "env_name": env_args["env_name"],
         "demos": len(keys),
-        "frames": int(len(payload["obs"])),
+        "frames": len(payload["obs"]),
         "obs_dim": int(payload["obs"].shape[1]),
         "action_dim": int(payload["action"].shape[1]),
         "ep_len_mean": float(np.mean(lengths)),

@@ -51,14 +51,34 @@ srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
     XLA_PYTHON_CLIENT_PREALLOCATE=false MUJOCO_GL=egl \
     uv run --no-sync python scripts/serve_policy.py --critic \
       --config pi05_yam_lego_taxi \
-      --checkpoint checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/125000 \  # any saved BC step; HF backup: jellyho/pi05_yam_lego_taxi_h30_s300
+      --checkpoint checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000 \  # 200000, not 125000: only 100000 and 200000 exist on disk, and 200000 is the step every robot session ran
       --critic /data5/jellyho/critics/yam/g5_s347 \
       --mode adaptive --num-samples 8 --port 8000'
 ```
 
-Wait for `Serving ... listening on 0.0.0.0:8000`. The base checkpoint above is the s300 run; swap in
-whichever step you are evaluating, and **record it in the report** — a value comparison is only valid
-between method-only-diff checkpoints.
+Wait for `Serving ... listening on 0.0.0.0:8000`. Swap in whichever step you are evaluating, and
+**record it in the report** — a value comparison is only valid between method-only-diff checkpoints.
+
+Two things about that checkpoint, both established 2026-09-07 and both counter to its name:
+
+* **It is not the s300 run.** Despite `s300` and `successonly` in the path it trained on ALL 347
+  episodes, failures included. The launch argv is the record — wandb `jellyho_/acrft/v3ffoek0`,
+  `wandb-metadata.json`: `pi05_yam_lego_taxi --exp-name yam_bc_s300_h30_successonly --overwrite`,
+  with no `--data.success-only` and no `--data.assets.asset-id`. It logged `success_only=False`,
+  resolved `episodes=None`, and baked the repo-id-fallback all-347 statistics (md5
+  `70418210e195f595`). Its h50 sibling, launched 15 minutes later the same way, is the same story.
+  No genuinely success-only BC policy exists. Two runs are affected and only two: everything
+  launched through a script, including the whole s100/s200/s300 scaling study and
+  `yam_lego_taxi_rlt_s300_successonly`, really did pass the flag.
+
+* **The critic normalizes in a different space than the policy it scores.** The critic is trained
+  against `assets/pi05_yam_lego_taxi_rlt/jellyho/yam_lego_taxi_s300/norm_stats.json` (md5
+  `2f9d182d`, recorded in its own `config.json` as `norm_stats_digest 594fbf72e2809b17`), so passing
+  that file below is correct for the critic — it must be fed what it was trained on. The policy
+  meanwhile runs on its own baked `70418210`. Measured difference: action q99 1.91% relative, action
+  span ratio 0.9993, state q99 7.08e-2 absolute. Small, and small enough that it does not explain
+  any selection result, but it means critic scores and policy actions are not in one space. Removing
+  it needs a critic retrained on the policy's own statistics, not a change to this command.
 
 ### In-process, without a server
 
@@ -76,7 +96,7 @@ snapshot_download("jellyho/patch_critic_yam_lego_taxi", repo_type="model",
 
 policy = policy_config.create_trained_policy(
     _config.get_config("pi05_yam_lego_taxi"),  # BC config (the deploy default going forward)
-    "checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/125000",
+    "checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000",
 )
 wrapped = PatchCriticSelectPolicy(
     policy, "/data5/jellyho/critics/yam/fixed_pi05_s347", mode="bon", default_samples=8,

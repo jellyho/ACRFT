@@ -17,7 +17,12 @@ def test_save_servable_round_trips_through_the_serving_readers(tmp_path: pathlib
 
     step = save_servable(tmp_path / "run" / "30000", params, assets_from=init)
 
-    assert sorted(p.name for p in step.iterdir()) == ["assets", "params"]
+    assert sorted(p.name for p in step.iterdir()) == ["arm_meta.json", "assets", "params"]
+    # arm_meta.json is the point of the layout, so assert its CONTENT, not just that a file is there:
+    # every arm on disk before 2026-09-07 lacks it, and each is a delta learned against a base
+    # nobody recorded -- the trainers defaulted to BC step 100000 for months while the robot ran
+    # 200000, and the published model card asserted 200000 for all of them.
+    assert json.loads((step / "arm_meta.json").read_text())["init_ckpt"] == str(init.absolute())
     back = _model.restore_params(step / "params", restore_type=np.ndarray)
     np.testing.assert_array_equal(back["a"]["w"], params["a"]["w"])
     np.testing.assert_array_equal(back["b"], params["b"])

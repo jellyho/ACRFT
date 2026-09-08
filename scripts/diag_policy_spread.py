@@ -67,7 +67,11 @@ def main():
         lo, hi = e["offset"], e["offset"] + e["full_len"]
         epid[lo:hi], ep_end[lo:hi], succ[i] = i, hi - 1, bool(e["success"])
         h = hom.get(k, hom.get(str(k)))
-        eff_end[lo:hi] = lo + (int(h) if isinstance(h, int | float) else e["full_len"]) - 1
+        # The onsets file stores {"len", "homing_onset", "task_frac"} per episode, not a bare int.
+        # Reading it as a scalar made the fallback fire every time, so homing truncation has NEVER
+        # applied here -- independent of which onsets file is supplied.
+        onset = h.get("homing_onset") if isinstance(h, dict) else (int(h) if isinstance(h, int | float) else None)
+        eff_end[lo:hi] = lo + (onset if onset is not None else e["full_len"]) - 1
 
     pool = np.arange(0, n_all, 12)
     pool = pool[succ[epid[pool]]]

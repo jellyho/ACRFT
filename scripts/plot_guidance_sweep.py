@@ -518,7 +518,7 @@ def main(a):
                     "frame": fr,
                     "critic": name,
                     "alphas": sw.alphas,
-                    "n_noise": int(len(sw.chunks)),
+                    "n_noise": len(sw.chunks),
                     "q": sw.q.tolist(),
                     "q_data": sw.q_data,
                     "action_dim": sw.action_dim,

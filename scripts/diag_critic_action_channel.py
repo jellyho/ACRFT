@@ -308,7 +308,7 @@ def analyse(rows, a):
     curve = {}
     for frac in (0.34, 0.67, 1.0):
         eps_all = np.unique(epi)
-        take = set(eps_all[: max(2, int(round(frac * len(eps_all))))])
+        take = set(eps_all[: max(2, round(frac * len(eps_all)))])
         m = np.array([e in take for e in epi])
         if m.sum() < 200:
             continue
@@ -322,7 +322,7 @@ def analyse(rows, a):
     delivered = gap_channel / gap_ceiling if abs(gap_ceiling) > 1e-9 else float("nan")
     out = {
         "n_frames": len(rows),
-        "n_episodes": int(len(np.unique(epi))),
+        "n_episodes": len(np.unique(epi)),
         "state_dims": int(S.shape[1]),
         "r2": {
             "state": base,

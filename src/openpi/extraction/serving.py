@@ -62,6 +62,7 @@ from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
 # 200000, not 100000: every robot evaluation in this project ran the 200k step (user, 2026-09-06), and until now every default here said 100k -- so an arm trained from 100k would have had its expert subtree overlaid on a base it was never fine-tuned against.
 BC_CKPT = pathlib.Path("/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000")
+LEGACY_EXPERT_BASE = BC_CKPT.with_name("100000")
 AF_CKPT = pathlib.Path("/data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000")
 CRITIC = pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_fixed_tau9_min_200k")
 CKPT_ROOT = pathlib.Path("/data1/jellyho/acrft_ckpts/extraction")
@@ -156,18 +157,40 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
     if arm not in ALL_ARMS:
         raise ValueError(f"unknown arm {arm!r}; known: {ALL_ARMS}")
     spec = ArmSpec(arm=arm, base_ckpt=AF_CKPT if arm in LATENT_ARMS else BC_CKPT)
-    run = CKPT_ROOT / f"{arm}_run1"
+
+    # The newest run, not run1. Retraining onto a fresh suffix rather than overwriting is what keeps
+    # a half-finished job from leaving a mix of two bases in one directory, and it preserves the
+    # record of what an earlier robot session actually served. Every arm on disk before 2026-09-07
+    # was trained from the 100k base while the robot ran 200k, so "newest" is also "correct".
+    def _steps(d):
+        return sorted((int(q.name) for q in d.iterdir() if q.name.isdigit()), reverse=True) if d.is_dir() else []
+
+    runs = sorted(
+        (d for d in CKPT_ROOT.glob(f"{arm}_run*") if d.is_dir() and d.name[len(arm) + 4 :].isdigit()),
+        key=lambda d: int(d.name[len(arm) + 4 :]),
+        reverse=True,
+    )
+    # The newest run that actually HOLDS a checkpoint. Newest-by-name alone would hand back a run
+    # directory that a training job has created but not yet saved into -- a window that opens on
+    # every retrain and never closes if the job dies -- and the resulting FileNotFoundError would
+    # land at load time in a robot session rather than falling back to the arm that does exist.
+    run = next((d for d in runs if _steps(d)), None) or (runs[0] if runs else CKPT_ROOT / f"{arm}_run1")
     # An arm saved in the BC layout carries its own base (arm_meta.json) and is servable as-is; a
     # LEGACY expert-only arm is a subtree of absolute weights co-adapted with the backbone it was
     # trained on, so serving it on any other base is silently wrong. Neither can be inferred from a
     # module-level constant, which is exactly the mistake this guards: BC_CKPT said 100000 for
     # months while the robot ran 200000, and moving the constant to 200000 would have re-based every
     # already-trained expert arm without a word.
-    LEGACY_EXPERT_BASE = BC_CKPT.with_name("100000")
     if arm in EXPERT_ARMS:
-        steps = sorted((int(p.name) for p in run.iterdir() if p.name.isdigit()), reverse=True)
+        steps = _steps(run)
         if not steps:
             raise FileNotFoundError(f"no checkpoints under {run}")
+        if step is not None and step not in steps:
+            raise FileNotFoundError(
+                f"{arm}: step {step} is not in {run} (has {steps}). The newest populated run dir is "
+                "chosen first, so an older run's step is not reachable by number alone -- name the "
+                "checkpoint with expert_ckpt= if that is what you want."
+            )
         spec.expert_ckpt = run / str(step or steps[0])
         meta = spec.expert_ckpt / "arm_meta.json"
         if meta.exists():
@@ -181,7 +204,10 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
                 spec.expert_ckpt,
                 LEGACY_EXPERT_BASE.name,
             )
-    elif arm in LATENT_ARMS:
+    elif arm in LATENT_ARMS and "latent_actor" not in over:
+        # ... unless the caller named one. serve_policy.py REQUIRES --extraction-head for lps/lpsd and
+        # forwards it as latent_actor=, so raising here on a missing conventional path would reject
+        # the only supported way to serve these arms.
         cands = sorted(run.glob("latent_actor_*.msgpack"), key=lambda p: int(p.stem.split("_")[-1]), reverse=True)
         if not cands:
             raise FileNotFoundError(f"no latent actor under {run}")

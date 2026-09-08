@@ -64,3 +64,22 @@ def test_legacy_stats_without_provenance_warn_and_name_the_subset(caplog):
         data_loader._check_norm_stats_provenance(_cfg(episodes=tuple(range(300)), prov=None), _Meta())
     assert "300 episodes" in caplog.text
     assert "indistinguishable by name" in caplog.text
+
+
+def test_free_text_subset_warns_and_does_not_raise(caplog):
+    """A hand-written provenance says the right thing to a person and nothing checkable to a machine.
+
+    jellyho/yam_lego_taxi_s300h30 records "all 347 episodes" (it read "success-only (300/347 via outcomes.jsonl)" until 2026-09-07, when the wandb argv proved that run trained on all 347). Those ARE the
+    stats the alpha-Flow run wanted, and an earlier version of this check killed the run over the
+    representation rather than the content.
+    """
+    prov = _FULL | {"episodes_subset": "success-only (300/347 via outcomes.jsonl)"}
+    with caplog.at_level(logging.WARNING):
+        data_loader._check_norm_stats_provenance(_cfg(episodes=tuple(range(300)), prov=prov), _Meta())
+    assert "free text" in caplog.text
+
+
+def test_a_real_list_mismatch_still_raises():
+    prov = _FULL | {"episodes_subset": list(range(299))}
+    with pytest.raises(ValueError, match="episodes_subset"):
+        data_loader._check_norm_stats_provenance(_cfg(episodes=tuple(range(300)), prov=prov), _Meta())

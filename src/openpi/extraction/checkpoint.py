@@ -21,6 +21,7 @@ import json
 import os
 import pathlib
 import shutil
+import tempfile
 
 from flax import traverse_util
 import orbax.checkpoint as ocp
@@ -52,8 +53,17 @@ def save_servable(step_dir: pathlib.Path | str, params: dict, *, assets_from: pa
     if tmp.exists():
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
-    with ocp.StandardCheckpointer() as c:
-        c.save(tmp / "params", {"params": params})
+    # Orbax writes through TensorStore, which takes file locks, and file locking does not work on
+    # this cluster's NFS mounts. Measured on node100: this exact save to /data1 or /data5 never
+    # returns (90 s timeout, process asleep in poll() with the GPU idle and RSS frozen), while the
+    # identical save to the node's local ext4 /tmp completes in 0.3 s. Five extraction arms hung
+    # this way at their first save after nine hours of training, leaving only
+    # `<step>.tmp/params.orbax-checkpoint-tmp-0` behind. Everything else here -- copytree, the json,
+    # the rename -- is ordinary file IO and works on NFS, so only the orbax write is staged locally.
+    with tempfile.TemporaryDirectory(prefix="openpi_ckpt_") as stage:
+        with ocp.StandardCheckpointer() as c:
+            c.save(pathlib.Path(stage) / "params", {"params": params})
+        shutil.copytree(pathlib.Path(stage) / "params", tmp / "params")
     shutil.copytree(assets_src, tmp / "assets")
     # The base this run started from, recorded WITH the arm. A whole-model save does not need it to
     # be served -- that is the point of this layout -- but the provenance question it answers is one

@@ -32,6 +32,13 @@ def main():
     ap.add_argument("--run", default="run1", help="run suffix: run1 = expert-only, bb = backbone (whole model)")
     ap.add_argument("--base-config", default="pi05_yam_lego_taxi", help="the task config the arm was trained on")
     ap.add_argument("--out", type=pathlib.Path, default=None)
+    ap.add_argument(
+        "--base-ckpt",
+        type=pathlib.Path,
+        default=None,
+        help="base the expert subtree was trained against; default LEGACY_EXPERT_BASE (BC 100000), "
+        "which is what every checkpoint this script converts was trained from",
+    )
     a = ap.parse_args()
 
     import flax.nnx as nnx
@@ -59,7 +66,13 @@ def main():
     cfg = _config.get_config(cfg_name)
     model = cfg.model.create(jax.random.key(0))
     _graphdef, state = nnx.split(model)
-    params = CheckpointWeightLoaderKeepMissing(str(serving.BC_CKPT / "params")).load(state.to_pure_dict())
+    # LEGACY_EXPERT_BASE, not BC_CKPT. This script exists to convert PRE-2026-09-03 expert-only runs
+    # (it exits on anything already servable), and every one of those was trained from BC step 100000
+    # -- that was the trainers' --init-ckpt default at the time. BC_CKPT moved to 200000 because that
+    # is what the robot serves, so reading it here would silently re-base each legacy arm onto a
+    # backbone it was never fine-tuned against. --base-ckpt overrides for an arm known to differ.
+    base = a.base_ckpt or serving.LEGACY_EXPERT_BASE
+    params = CheckpointWeightLoaderKeepMissing(str(base / "params")).load(state.to_pure_dict())
 
     import numpy as np
     import orbax.checkpoint as ocp
