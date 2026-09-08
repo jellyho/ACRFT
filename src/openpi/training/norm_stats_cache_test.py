@@ -9,6 +9,7 @@ import pytest
 
 from openpi.shared import normalize as _normalize
 from openpi.training import config as _config
+from openpi.training import data_loader
 from openpi.training import norm_stats_cache as nsc
 import openpi.transforms as _transforms
 
@@ -19,6 +20,7 @@ class _DC:
 
     def __init__(self, episodes, repo_id="jellyho/yam_lego_taxi", transforms=()):
         self.episodes, self.repo_id = episodes, repo_id
+        self.drop_failure_homing = False
         self.repack_transforms = _transforms.Group(inputs=())
         self.data_transforms = _transforms.Group(inputs=tuple(transforms))
 
@@ -100,8 +102,13 @@ def test_naming_an_asset_that_does_not_exist_is_an_error_not_a_silent_skip(tmp_p
             cfg.data, assets=dataclasses.replace(cfg.data.assets, asset_id="jellyho/no_such_asset")
         ),
     )
+    # The error moved: create() must NOT raise (compute_norm_stats names the asset it is about to
+    # write and calls create() only to build transforms), so the training path enforces it instead.
+    dc = cfg.data.create(cfg.assets_dirs, cfg.model)
+    assert dc.norm_stats_required
+    assert dc.norm_stats is None
     with pytest.raises(FileNotFoundError, match="named explicitly"):
-        cfg.data.create(cfg.assets_dirs, cfg.model)
+        data_loader.create_torch_dataset(dc, cfg.model.action_horizon, cfg.model, skip_videos=True)
 
 
 def test_failure_homing_is_dropped_and_success_homing_is_not(tmp_path, monkeypatch):
@@ -129,7 +136,7 @@ def test_failure_homing_is_dropped_and_success_homing_is_not(tmp_path, monkeypat
     monkeypatch.setattr(progress, "homing_onsets", lambda *a, **k: {0: 7, 1: 7})
     monkeypatch.setattr(progress, "success_episode_indices", lambda *a, **k: [0])
     cfg = dataclasses.replace(_config.DataConfig(), repo_id="x/y", drop_failure_homing=True)
-    out = data_loader._drop_failure_homing(_DS(), cfg)
+    out = data_loader._drop_failure_homing(_DS(), cfg, action_horizon=1)
     kept = set(out.indices)
     assert kept == set(range(10)) | set(range(10, 17)), "ep0 kept whole; ep1 cut from its onset"
     assert len(kept) == 17
@@ -142,7 +149,7 @@ def test_the_filter_refuses_rather_than_guessing_when_control_mode_is_missing(tm
     monkeypatch.setattr(progress, "homing_onsets", lambda *a, **k: None)
     cfg = dataclasses.replace(_config.DataConfig(), repo_id="x/y", drop_failure_homing=True)
     with pytest.raises(ValueError, match="observation.control_mode"):
-        data_loader._drop_failure_homing(object(), cfg)
+        data_loader._drop_failure_homing(object(), cfg, action_horizon=1)
 
 
 def test_delta_mode_does_not_collide_in_the_key(tmp_path):

@@ -69,7 +69,7 @@ def test_legacy_stats_without_provenance_warn_and_name_the_subset(caplog):
 def test_free_text_subset_warns_and_does_not_raise(caplog):
     """A hand-written provenance says the right thing to a person and nothing checkable to a machine.
 
-    jellyho/yam_lego_taxi_s300h30 records "success-only (300/347 via outcomes.jsonl)". Those ARE the
+    jellyho/yam_lego_taxi_s300h30 records "all 347 episodes" (it read "success-only (300/347 via outcomes.jsonl)" until 2026-09-07, when the wandb argv proved that run trained on all 347). Those ARE the
     stats the alpha-Flow run wanted, and an earlier version of this check killed the run over the
     representation rather than the content.
     """

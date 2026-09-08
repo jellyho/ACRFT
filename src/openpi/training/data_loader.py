@@ -259,6 +259,12 @@ def create_torch_dataset(
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
+    if data_config.norm_stats_required and data_config.norm_stats is None:
+        raise FileNotFoundError(
+            f"norm stats asset '{data_config.asset_id}' was named explicitly but does not exist. "
+            "Compute it (slurm/norm_stats.sbatch with ASSET_ID=...) or drop --data.assets.asset-id "
+            "to let the content cache resolve stats for this episode subset."
+        )
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     _check_norm_stats_provenance(data_config, dataset_meta)
     dataset = lerobot_dataset.LeRobotDataset(
@@ -276,7 +282,7 @@ def create_torch_dataset(
         dataset._query_videos = _StubVideoQuery()
 
     if data_config.drop_failure_homing:
-        dataset = _drop_failure_homing(dataset, data_config)
+        dataset = _drop_failure_homing(dataset, data_config, action_horizon)
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])
@@ -284,7 +290,7 @@ def create_torch_dataset(
     return dataset
 
 
-def _drop_failure_homing(dataset, data_config: _config.DataConfig):
+def _drop_failure_homing(dataset, data_config: _config.DataConfig, action_horizon: int):
     """Remove the trailing return-to-home frames of FAILURE episodes from the training pool.
 
     This is the only frame-level filter in the BC path -- everything else here selects whole
@@ -316,7 +322,11 @@ def _drop_failure_homing(dataset, data_config: _config.DataConfig):
     ep = np.asarray(hf["episode_index"], np.int64).reshape(-1)
     fr = np.asarray(hf["frame_index"], np.int64).reshape(-1)
     cut = np.array([onsets.get(int(e), 1 << 30) for e in ep], np.int64)
-    drop = (~np.isin(ep, list(succ))) & (fr >= cut)
+    # Cut action_horizon-1 frames EARLIER than the onset. A sample's target is the H-step action
+    # chunk starting at its own frame, and LeRobot clamps only at the episode end, so a kept frame at
+    # onset-1 would still supervise actions reaching into the give-up tail -- the very motion this
+    # filter exists to remove, just arriving as a target instead of as an input.
+    drop = (~np.isin(ep, list(succ))) & (fr >= cut - (action_horizon - 1))
     keep = np.flatnonzero(~drop)
     n_ep = len(set(ep[drop].tolist()))
     logging.info(

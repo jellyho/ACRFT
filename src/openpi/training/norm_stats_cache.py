@@ -26,14 +26,24 @@ import json
 import logging
 import pathlib
 import re
+import shutil
 
 import numpy as np
 import tqdm
 
 from openpi.shared import normalize as _normalize
 from openpi.training import config as _config
+import openpi.transforms as _transforms
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class _RemoveStrings(_transforms.DataTransformFn):
+    """Drop non-numeric fields before collation (the prompt), as compute_norm_stats.py does."""
+
+    def __call__(self, x: dict) -> dict:
+        return {k: v for k, v in x.items() if not np.issubdtype(np.asarray(v).dtype, np.str_)}
 
 
 def _transform_fingerprint(data_config: _config.DataConfig) -> list:
@@ -69,6 +79,10 @@ def stats_key(data_config: _config.DataConfig, action_horizon: int) -> str:
         # The config NAME is not in the key on purpose -- stats belong to data, not to a config -- so
         # everything a config does that changes the numbers has to be in here explicitly.
         "transforms": _transform_fingerprint(data_config),
+        # A frame filter changes the pool the statistics are computed over while leaving `episodes`
+        # untouched, so without this a run with the failure give-up tails cut and one without hash
+        # identically and share one asset.
+        "drop_failure_homing": bool(data_config.drop_failure_homing),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=repr).encode()).hexdigest()[:12]
 
@@ -125,7 +139,12 @@ def _match(prov: dict, data_config: _config.DataConfig, key: str, horizon: int) 
     if isinstance(subset, list):
         return (2, f"episode list ({len(subset)})") if sorted(subset) == (want or []) else None
     if want is None:
-        return (1, "declared: all episodes") if subset == "all" else None
+        # Prose counts here too. This branch used to accept only the literal "all", which rejected
+        # the very record this repo writes: the corrected s300h30 provenance says "all 347 episodes",
+        # so an all-episodes run could not match its own stats and fell through to a recompute.
+        if isinstance(subset, str) and re.search(r"\ball\b", subset):
+            return 1, f"declared: {subset!r}"
+        return None
     n = _declared_episode_count(subset)
     return (1, f"declared {n} episodes: {subset!r}") if n == len(want) else None
 
@@ -232,7 +251,19 @@ def ensure_norm_stats(
             else "declared -- the record describes its subset in prose, so "
             "the episode COUNT is all that could be checked",
         )
-        return _resolved(data_config, d, pathlib.Path(config.assets_base_dir), _normalize.load(d))
+        # Copy it under THIS config's assets dir. asset_id is relative to assets_dirs everywhere it
+        # is consumed -- the checkpoint saves <ckpt>/assets/<asset_id> and serving re-derives the id
+        # from the config -- so returning a path that starts with another config's name produces a
+        # checkpoint whose norm stats cannot be resolved at serving time. Copying is a few KB and
+        # makes the checkpoint self-contained.
+        local = base / f"{asset}__{key}"
+        if not local.is_dir():
+            local.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(d, local)
+            (local / "provenance.json").write_text(
+                json.dumps({"stats_key": key, "copied_from": str(d), **_provenance(d)}, indent=1)
+            )
+        return _resolved(data_config, local, base, _normalize.load(local))
 
     why = "no stamped stats for this episode subset" if primary.is_dir() else "no stats on disk"
     logger.warning(
@@ -271,7 +302,18 @@ def _compute(config: _config.TrainConfig, data_config: _config.DataConfig, *, ma
     # skip_videos is what makes recompute-on-miss affordable at all -- the frames are never decoded.
     dataset = _dl.create_torch_dataset(data_config, config.model.action_horizon, config.model, skip_videos=True)
     dataset = _dl.TransformedDataset(
-        dataset, [*data_config.repack_transforms.inputs, *data_config.data_transforms.inputs]
+        dataset,
+        [
+            *data_config.repack_transforms.inputs,
+            *data_config.data_transforms.inputs,
+            # Without this, recompute-on-miss is dead on every prompt_from_task config -- which is all
+            # of the YAM ones. YAMInputs passes `prompt` straight through, and the jax-framework
+            # TorchDataLoader cannot collate a Python string, so the worker dies and takes the job with
+            # it. scripts/compute_norm_stats.py has always applied RemoveStrings for exactly this
+            # reason; the cache has to as well, and it is why the cache appeared to work -- every
+            # verification so far happened to hit an existing asset and never reached this path.
+            _RemoveStrings(),
+        ],
     )
     n = len(dataset) if max_frames is None else min(len(dataset), max_frames)
     nb = max(n // config.batch_size, 1)

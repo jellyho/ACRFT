@@ -31,9 +31,9 @@
 #    homing run -- and the old "onset = 1 + last teleop frame" rule therefore returned the episode
 #    length for all 160, leaving every homing tail (5.77% of frames) labelled as task progress. Since
 #    homing_onset is the denominator of the whole cost_to_goal target, that is not cosmetic. The same
-#    bug affects 275 of 347 LEGO episodes; .scratch/yam_homing_onsets_fixed.json holds the corrected
-#    lego onsets, and .scratch/yam_homing_onsets.json is deliberately left alone because it is the
-#    record of what the existing lego critic was actually trained on.
+#    bug affects 275 of 347 LEGO episodes. .scratch/yam_homing_onsets.json now holds the CORRECTED
+#    onsets for lego, and the file the existing critics were trained on is preserved beside it as
+#    .scratch/yam_homing_onsets_stale_pre_20260907.json -- do not train against that one.
 #
 #  * --preload, and --mem raised to 120G. The lego arms could not preload (138 GB of features); cable
 #    tie's cache is 37 GB, so it fits in RAM and per-step NFS gathers become RAM reads.

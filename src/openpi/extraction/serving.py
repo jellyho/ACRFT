@@ -62,6 +62,7 @@ from openpi.training.weight_loaders import CheckpointWeightLoaderKeepMissing
 
 # 200000, not 100000: every robot evaluation in this project ran the 200k step (user, 2026-09-06), and until now every default here said 100k -- so an arm trained from 100k would have had its expert subtree overlaid on a base it was never fine-tuned against.
 BC_CKPT = pathlib.Path("/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000")
+LEGACY_EXPERT_BASE = BC_CKPT.with_name("100000")
 AF_CKPT = pathlib.Path("/data1/jellyho/acrft_ckpts/pi05_yam_lego_taxi_alphaflow/yam_alphaflow_200k/200000")
 CRITIC = pathlib.Path("/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_fixed_tau9_min_200k")
 CKPT_ROOT = pathlib.Path("/data1/jellyho/acrft_ckpts/extraction")
@@ -180,11 +181,16 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
     # module-level constant, which is exactly the mistake this guards: BC_CKPT said 100000 for
     # months while the robot ran 200000, and moving the constant to 200000 would have re-based every
     # already-trained expert arm without a word.
-    LEGACY_EXPERT_BASE = BC_CKPT.with_name("100000")
     if arm in EXPERT_ARMS:
         steps = _steps(run)
         if not steps:
             raise FileNotFoundError(f"no checkpoints under {run}")
+        if step is not None and step not in steps:
+            raise FileNotFoundError(
+                f"{arm}: step {step} is not in {run} (has {steps}). The newest populated run dir is "
+                "chosen first, so an older run's step is not reachable by number alone -- name the "
+                "checkpoint with expert_ckpt= if that is what you want."
+            )
         spec.expert_ckpt = run / str(step or steps[0])
         meta = spec.expert_ckpt / "arm_meta.json"
         if meta.exists():
@@ -198,7 +204,10 @@ def default_spec(arm: str, step: int | None = None, **over: Any) -> ArmSpec:
                 spec.expert_ckpt,
                 LEGACY_EXPERT_BASE.name,
             )
-    elif arm in LATENT_ARMS:
+    elif arm in LATENT_ARMS and "latent_actor" not in over:
+        # ... unless the caller named one. serve_policy.py REQUIRES --extraction-head for lps/lpsd and
+        # forwards it as latent_actor=, so raising here on a missing conventional path would reject
+        # the only supported way to serve these arms.
         cands = sorted(run.glob("latent_actor_*.msgpack"), key=lambda p: int(p.stem.split("_")[-1]), reverse=True)
         if not cands:
             raise FileNotFoundError(f"no latent actor under {run}")

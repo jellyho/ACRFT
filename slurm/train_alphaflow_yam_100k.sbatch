@@ -15,6 +15,10 @@
 #SBATCH --chdir=/data5/jellyho/ACRFT/openpi
 #SBATCH --output=/data5/jellyho/ACRFT/openpi/logs/af_100k_%j.slurm.log
 export LEROBOT_VIDEO_BACKEND=pyav
+# flock does not return on this cluster's NFS mounts and HuggingFace datasets takes one per
+# cache entry, so a job with its arrow cache there sits in D state forever writing nothing.
+export HF_DATASETS_CACHE=/tmp/hf_datasets_cache_${SLURM_JOB_ID:-$$}
+find /tmp -maxdepth 1 -name 'hf_datasets_cache_*' -mtime +1 -exec rm -rf {} + 2>/dev/null
 export UV_PROJECT_ENVIRONMENT=/data5/jellyho/ACRFT/openpi/.venv
 export PYTHONPATH=/data5/jellyho/ACRFT/openpi/src:/data5/jellyho/ACRFT/openpi/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}
 export XLA_PYTHON_CLIENT_MEM_FRACTION=1.0

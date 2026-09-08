@@ -5,7 +5,10 @@ directly: observation.control_mode == 0.0 during teleop, == 4.0 during the homin
 homing frames are not task behaviour; for FAILURE episodes we drop them (a failure's homing = "arms back
 near home, task not done", which visually collides with SUCCESS starts and would mislabel the critic).
 
-homing_onset(e) = 1 + (last teleop frame index) = start of the trailing homing run. Writes
+homing_onset(e) = the start of the LAST run of homing frames, when that run reaches within --tol
+frames of the episode end. Not "1 + the last teleop frame": 275 of 347 lego and 160 of 160 cable-tie
+episodes end [... 4. 4. 4. 4. 0.], one stray teleop frame after the arms are already home, and that
+rule returns the episode length for every one of them -- finding no homing at all. Writes
 {episode: {"len": L, "homing_onset": k, "task_frac": k/L}} to --out (JSON). No video is decoded.
 
     uv run python scripts/compute_homing_onsets.py --out .scratch/yam_homing_onsets.json
