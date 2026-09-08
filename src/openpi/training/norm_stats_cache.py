@@ -36,14 +36,41 @@ from openpi.training import config as _config
 logger = logging.getLogger(__name__)
 
 
+def _transform_fingerprint(data_config: _config.DataConfig) -> list:
+    """Identify the transform pipeline `_compute` runs, since the statistics are OF its output.
+
+    `delta_mode` is the case that matters: pi05_yam_lego_taxi pushes JointDeltaActions and
+    pi05_yam_lego_taxi_none does not, so one produces ~0-centred joint deltas and the other
+    radians-scale absolute targets from the same episodes of the same repo. Without this in the key
+    they collide, and because the search deliberately crosses config directories, the collision is
+    not hypothetical -- a joint run loads the absolute stats and normalizes every action by a mean
+    1.74 rad off with 2.3-2.5x the std, reported as a proven match.
+    """
+    out = []
+    for t in [*data_config.repack_transforms.inputs, *data_config.data_transforms.inputs]:
+        fields = {}
+        for k, v in vars(t).items():
+            if k.startswith("_"):
+                continue
+            try:
+                fields[k] = np.asarray(v).tolist() if isinstance(v, np.ndarray) else repr(v)
+            except (TypeError, ValueError):
+                fields[k] = repr(v)
+        out.append([type(t).__name__, sorted(fields.items())])
+    return out
+
+
 def stats_key(data_config: _config.DataConfig, action_horizon: int) -> str:
     """What the statistics depend on and can differ within one config."""
     payload = {
         "repo_id": data_config.repo_id,
         "episodes": sorted(data_config.episodes) if data_config.episodes else "all",
         "action_horizon": int(action_horizon),
+        # The config NAME is not in the key on purpose -- stats belong to data, not to a config -- so
+        # everything a config does that changes the numbers has to be in here explicitly.
+        "transforms": _transform_fingerprint(data_config),
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=repr).encode()).hexdigest()[:12]
 
 
 def _provenance(d: pathlib.Path) -> dict:
@@ -141,6 +168,24 @@ def _digest(stats) -> str:
     return hashlib.sha256(json.dumps(flat, sort_keys=True).encode()).hexdigest()
 
 
+def _resolved(data_config: _config.DataConfig, d: pathlib.Path, base: pathlib.Path, stats) -> _config.DataConfig:
+    """Point the config at `d` -- statistics, asset id AND provenance.
+
+    Carrying the provenance over is not bookkeeping. `create_base_config` read a provenance record
+    for the asset it resolved BY NAME, and `_check_norm_stats_provenance` runs afterwards on whatever
+    the config holds. Leave it behind and that check validates a file this run no longer uses: it
+    aborts a run whose statistics are right (a success-only run resolving the 300-episode asset dies
+    on the all-episode record left over from the repo-id fallback), and, worse, the generation guard
+    -- total_episodes / total_frames against the live dataset -- never runs on the file that IS used.
+    """
+    return dataclasses.replace(
+        data_config,
+        norm_stats=stats,
+        asset_id=str(d.relative_to(base)),
+        norm_stats_provenance=_provenance(d) or None,
+    )
+
+
 def ensure_norm_stats(
     config: _config.TrainConfig, data_config: _config.DataConfig, *, max_frames: int | None = None
 ) -> _config.DataConfig:
@@ -170,7 +215,7 @@ def ensure_norm_stats(
     for d in (keyed, primary):
         if d.is_dir() and _provenance_key(d) == key:
             logger.info("norm stats: cache hit for key %s at %s", key, d)
-            return dataclasses.replace(data_config, norm_stats=_normalize.load(d), asset_id=str(d.relative_to(base)))
+            return _resolved(data_config, d, base, _normalize.load(d))
 
     # Nothing under this config's own directory. Statistics do not belong to a config, so look for
     # them wherever they were computed -- this is what lets a launcher stop naming an asset by hand.
@@ -187,11 +232,7 @@ def ensure_norm_stats(
             else "declared -- the record describes its subset in prose, so "
             "the episode COUNT is all that could be checked",
         )
-        return dataclasses.replace(
-            data_config,
-            norm_stats=_normalize.load(d),
-            asset_id=str(d.relative_to(pathlib.Path(config.assets_base_dir))),
-        )
+        return _resolved(data_config, d, pathlib.Path(config.assets_base_dir), _normalize.load(d))
 
     why = "no stamped stats for this episode subset" if primary.is_dir() else "no stats on disk"
     logger.warning(
@@ -211,6 +252,7 @@ def ensure_norm_stats(
         json.dumps(
             {
                 "stats_key": key,
+                "transforms": _transform_fingerprint(data_config),
                 "computed_on": {
                     "repo_id": data_config.repo_id,
                     "episodes_subset": sorted(data_config.episodes) if data_config.episodes else "all",
@@ -220,7 +262,7 @@ def ensure_norm_stats(
             indent=1,
         )
     )
-    return dataclasses.replace(data_config, norm_stats=stats, asset_id=str(keyed.relative_to(base)))
+    return _resolved(data_config, keyed, base, stats)
 
 
 def _compute(config: _config.TrainConfig, data_config: _config.DataConfig, *, max_frames: int | None):

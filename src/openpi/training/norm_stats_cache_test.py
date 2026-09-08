@@ -10,11 +10,17 @@ import pytest
 from openpi.shared import normalize as _normalize
 from openpi.training import config as _config
 from openpi.training import norm_stats_cache as nsc
+import openpi.transforms as _transforms
 
 
 class _DC:
-    def __init__(self, episodes, repo_id="jellyho/yam_lego_taxi"):
+    """A DataConfig stand-in. It has to carry the transform groups: they are part of the key now,
+    because the statistics are of the transforms' OUTPUT and the search crosses config directories."""
+
+    def __init__(self, episodes, repo_id="jellyho/yam_lego_taxi", transforms=()):
         self.episodes, self.repo_id = episodes, repo_id
+        self.repack_transforms = _transforms.Group(inputs=())
+        self.data_transforms = _transforms.Group(inputs=tuple(transforms))
 
 
 def _write(d: pathlib.Path, prov: dict, scale: float = 1.0):
@@ -137,3 +143,35 @@ def test_the_filter_refuses_rather_than_guessing_when_control_mode_is_missing(tm
     cfg = dataclasses.replace(_config.DataConfig(), repo_id="x/y", drop_failure_homing=True)
     with pytest.raises(ValueError, match="observation.control_mode"):
         data_loader._drop_failure_homing(object(), cfg)
+
+
+def test_delta_mode_does_not_collide_in_the_key(tmp_path):
+    """Joint deltas and absolute joint targets are different numbers from the same episodes.
+
+    The search deliberately crosses config directories, so anything a config does that changes the
+    statistics has to be in the key. It was not: pi05_yam_lego_taxi (JointDeltaActions) and
+    pi05_yam_lego_taxi_none (no delta transform) hashed identically, and a joint run would load the
+    absolute stats as a "proven" match -- a 1.74 rad mean offset with 2.3-2.5x the std, silently.
+    """
+    joint = _config.get_config("pi05_yam_lego_taxi")
+    absolute = _config.get_config("pi05_yam_lego_taxi_none")
+    kj = nsc.stats_key(joint.data.create(joint.assets_dirs, joint.model), joint.model.action_horizon)
+    ka = nsc.stats_key(absolute.data.create(absolute.assets_dirs, absolute.model), absolute.model.action_horizon)
+    assert kj != ka
+    # ... while two configs that really do share a transform pipeline and data must still share stats.
+    rlt = _config.get_config("pi05_yam_lego_taxi_rlt")
+    assert nsc.stats_key(rlt.data.create(rlt.assets_dirs, rlt.model), rlt.model.action_horizon) == kj
+
+
+def test_resolving_an_asset_carries_its_provenance(tmp_path):
+    """Otherwise the downstream check validates a file the run no longer uses."""
+    prov = {"computed_on": {"repo_id": "jellyho/yam_lego_taxi", "episodes_subset": list(range(300))}}
+    d = tmp_path / "cfg" / "asset"
+    _write(d, prov)
+    dc = dataclasses.replace(
+        _config.DataConfig(),
+        repo_id="jellyho/yam_lego_taxi",
+        norm_stats_provenance={"computed_on": {"episodes_subset": "all"}},  # the stale, name-resolved one
+    )
+    out = nsc._resolved(dc, d, tmp_path, _normalize.load(d))
+    assert out.norm_stats_provenance["computed_on"]["episodes_subset"] == list(range(300))

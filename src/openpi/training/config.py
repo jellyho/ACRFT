@@ -1605,9 +1605,15 @@ _CONFIGS.append(
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=100_000,
-        save_interval=10_000,
-        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
+        # These four were being passed on every command line, which is how a run ends up defined by
+        # what someone typed rather than by the config it names. Anything that defines the EXPERIMENT
+        # belongs here; only the machine's own facts (--checkpoint-base-dir, --num-workers) stay on
+        # the command line, so the same config reproduces the run on another server.
+        save_interval=25_000,
+        keep_period=100_000,
+        project_name="yam-rlt",
         wandb_entity="jellyho_",
+        action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
     )
 )
 
@@ -1845,6 +1851,55 @@ def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:
 
 
 _CONFIGS.append(_robocasa365_pretrain_config())
+
+
+def _data_condition(base: TrainConfig, suffix: str, doc: str, **data_kwargs) -> TrainConfig:
+    """A named config for one episode/frame condition, derived from `base`.
+
+    The condition belongs in the config, not in a flag on the command line, because a flag can be
+    forgotten and a config name cannot. That is not hypothetical: the deployed BC policy is called
+    `yam_bc_s300_h30_successonly` and trained on ALL 347 episodes. wandb kept the argv --
+    `pi05_yam_lego_taxi --exp-name yam_bc_s300_h30_successonly --overwrite` -- with no
+    --data.success-only anywhere on it, and its h50 sibling was typed the same way fifteen minutes
+    later. Two runs, months of downstream work, one missing flag. Naming the condition in the config
+    makes that mistake impossible to make silently: `--exp-name` is a label, `--config-name` is the
+    experiment.
+
+    Each variant also gets its own `assets_dirs` and `checkpoint_dir` for free (both derive from the
+    config name), so two conditions can never share a norm-stats file or a checkpoint directory by
+    accident. Norm stats still resolve themselves: the content cache finds an existing asset computed
+    on this exact episode set wherever it was filed, and computes one only on a genuine miss.
+    """
+    return dataclasses.replace(base, name=f"{base.name}_{suffix}", data=dataclasses.replace(base.data, **data_kwargs))
+
+
+# The YAM data conditions, as configs rather than as flags. Only the two BC bases that experiments
+# actually compare are expanded -- the h50 and absolute-action variants would double the registry for
+# combinations nothing runs.
+for _base_name in ("pi05_yam_lego_taxi", "pi05_yam_cable_tie"):
+    _base = next(c for c in _CONFIGS if c.name == _base_name)
+    _CONFIGS.append(
+        _data_condition(
+            _base,
+            "success",
+            "successful episodes only",
+            success_only=True,
+        )
+    )
+    # Keeps the failure episodes for their task behaviour and drops only their return-to-home tails:
+    # a failure's homing is the operator retracting from a task that is NOT done, the one signal in
+    # the set that teaches give up. Measured on lego, those frames sit at cosine 0.956 from their
+    # nearest success-task frame while the action they teach is 3.5x further away than that
+    # neighbour's -- near-identical picture, opposite action. This is the arm that separates
+    # "failure demonstrations help" from "give-up supervision hurts"; `_success` removes both at once.
+    _CONFIGS.append(
+        _data_condition(
+            _base,
+            "nogiveup",
+            "all episodes, failure give-up tails cut",
+            drop_failure_homing=True,
+        )
+    )
 
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
