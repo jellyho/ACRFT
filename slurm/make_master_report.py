@@ -69,6 +69,13 @@ def spec(rows):
     return "<table class='spec'>" + "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows) + "</table>"
 
 
+def table(head, rows):
+    """A plain numeric table -- `class='num'`, the same one the older entries build by hand."""
+    h = "".join(f"<th>{c}</th>" for c in head)
+    body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f"<table class='num'><tr>{h}</tr>{body}</table>"
+
+
 def run_level(root, mode, prefixes):
     ds = []
     for pre in prefixes:
@@ -4374,6 +4381,42 @@ demo-MSE는 성공률의 프록시일 뿐이다. 확정은 "동일 모델 내 1-
 # 모든 리포트에 표준 5W1H 헤더를 달고(과학 보고 원칙), 연결된 리포트를 명시한다.
 # date: 허브(시간순 정렬)에 쓰는 실제 ISO 날짜. links: 이 리포트가 근거로 삼거나 후속으로 이어지는 eid.
 META = {
+    "guidance-sweep": {
+        "date": "2026-09-03 18:30",
+        "who": "워커B",
+        "where": "RTX 4080 로컬 · yam_lego_taxi 에피소드 182 프레임 1536 · critic g5_tau9min_200k_s347 · BC s300_h30 200k · 노이즈 4개 × α 7단",
+        "what": "노이즈를 고정하고 α만 올린 사다리. 배포 세기 α=0.1/0.2에서 행동이 정책 자신의 표집 산포의 5~11배만큼 이동하고, 정규화 박스 밖 비율이 1.5%→3.8%로 늘며, Q는 α=0.05에서 이미 시연자를 넘는다. 휘는 곳은 청크의 앞이 아니라 꼬리",
+        "how": "Pi0Steered.sample_steered가 노이즈를 인자로 받고 α=0이 같은 경로로 무조종 draw를 재현하는 성질을 이용 — 두 곡선의 차이가 조종항이지 표집 분산이 아니다. 거리는 좌표당 RMS ÷ BC σ, 노이즈 4개의 최소~최대 밴드, 출력 클립 없는 브랜치",
+        "why": "지금까지 조종 측정이 전부 집계(롤아웃 평균 변위, 프레임 평균 Q)라 '얼마나 틀어지는가'를 보여주지 못했고, Q-landscape가 통계로 말한 '지지집합을 떠나며 값이 오른다'를 한 장의 그림으로 확인하기 위해",
+        "phase": "진단·방법",
+        "tags": ["QPILOTS", "critic", "OOD", "steering", "extraction"],
+        "links": [
+            "q-landscape-ood",
+            "serving-rollouts-yam",
+            "floq",
+            "deas",
+            "conservatism",
+        ],
+    },
+    "q-landscape-ood": {
+        "date": "2026-09-02 16:10",
+        "who": "\uc6cc\ucee4B",
+        "where": "RTX 4080 \ub85c\uceec \u00b7 yam_lego_taxi 347ep \u00b7 40\ud504\ub808\uc784/20\uc5d0\ud53c\uc18c\ub4dc \u00b7 critic 9\uc885 \u00b7 BC 100k/150k/200k \u00b7 \ub864\uc544\uc6c3 4\uc885(bon8/implicit/qpilots 0.05,0.1)",
+        "what": "\uc2e4\ubb3c \uc2e4\ud328 \ub450 \uac1c\uc758 \uae30\uc81c\ub97c \uac00\ub985 \u2014 critic\uc740 99.998% V(s)(\ud589\ub3d9\uc774 Q \ubd84\uc0b0\uc758 0.002%). \uc120\ud0dd\uc740 \uc0c1\uae08\uc774 \uc791\uace0(\uc9c4\uc9dc +0.68\uc2a4\ud15d, \uc8fc\uc7a5\uc758 43%\uac00 \ud3b8\ud5a5), \uc870\ud5a5\uc740 \u2207\u2090Q \ubc29\ud5a5 +32.9 vs \ubb34\uc791\uc704 \u22120.13(200\ubc30). \ubca0\uc774\uc2a4\ub97c \uc57d\ud558\uac8c \ud558\uba74 \uc120\ud0dd \uc774\ub4dd\uc740 \ucee4\uc9c0\uc9c0\ub9cc(+1.08) \u2207Q \uacfc\ub300\ucd94\uc815\uc740 \ubd88\ubcc0(32.6/32.9/32.8)",
+        "how": "probe_q_landscape.py \u2014 \uc11c\ube59 \ub798\ud37c \uc704\uc5d0\uc11c BC draw 1\ud68c\ub97c 9 critic\uc774 \uacf5\uc720 \ucc44\uc810. \uc575\ucee4\ub294 \uc131\uacf5 \uc5d0\ud53c\uc18c\ub4dc\uc758 \uc2dc\uc5f0\uc790 \uccad\ud06c, \ubb34\uc791\uc704 \ubc29\ud5a5 \ub300\uc870\uad70, \uad50\ucc28-critic \ucc44\uc810\uc73c\ub85c \ud3b8\ud5a5 \ubd84\ub9ac, \uc5d0\ud53c\uc18c\ub4dc \ud074\ub7ec\uc2a4\ud130 95% t-CI",
+        "why": "\uc2e4\ubb3c\uc5d0\uc11c argmax(1.70)\uac00 BC(2.1)\ubcf4\ub2e4 \ub099\uace0 QPILOTS\uac00 \u03b1=0.005\ubd80\ud130 \uc190\ud574\uc778 \uc774\uc720\ub97c \uae30\uc81c\ub85c \uc124\uba85\ud558\uace0, \uc138 \ud6c4\ubcf4 \uc124\uba85(N \ubd80\uc871/\ubca0\uc774\uc2a4 \uac15\ub3c4/IQL\uc758 OOD \ubbf8\uc81c\uc57d) \uc911 \uc5b4\ub290 \uac83\uc774 \uc8fc\ubc94\uc778\uc9c0 \uac00\ub9ac\uae30 \uc704\ud574",
+        "phase": "\uc9c4\ub2e8\u00b7\ubc29\ubc95",
+        "tags": ["QPILOTS", "critic", "OOD", "BoN", "extraction", "IQL"],
+        "links": [
+            "serving-rollouts-yam",
+            "deas",
+            "calql",
+            "conservatism",
+            "vbias",
+            "papers-value-steering",
+            "critic-pfx",
+        ],
+    },
     "alphaflow-1step-gate": {
         "date": "2026-08-22 11:30",
         "who": "워커B",
@@ -5042,9 +5085,503 @@ def _decorate(eid, body):
     return w6 + body + tail
 
 
+# ---------------------------------------------------------------- Q-landscape / OOD overestimation
+_QL_SPEC = spec(
+    [
+        ("데이터", "yam_lego_taxi 347ep — critic 자신의 학습셋. 성공 300ep에서만 프레임 추출"),
+        (
+            "표본",
+            "40 프레임 / 20 에피소드(에피소드당 2). CI는 <b>에피소드로 클러스터</b> — 같은 궤적의 두 프레임은 독립 표본이 아니다",
+        ),
+        ("정책", "pi05_yam_lego_taxi bc_s300_h30 — 200000(기본), 100000·150000(베이스 강도 축)"),
+        (
+            "critic",
+            "patch_critic_yam_s347 9종 — expectile .7/.9 × macro 30/5 × floor on/off × aug/noaug. 전부 K=2, <b>OOD 페널티 없음</b>",
+        ),
+        ("앵커", "그 프레임에서 <b>시연자가 실제로 한 다음 30스텝</b>. 성공 에피소드이므로 목표 도달이 확인된 행동"),
+        ("단위", "Q는 cost-to-goal — <b>+1 = 목표까지 한 제어 스텝(30fps에서 33ms) 가깝다고 critic이 주장</b>"),
+    ]
+)
+
+_QL_KO = (
+    "<p><b>왜 이걸 쟀나.</b> 같은 로봇에서 나온 "
+    "<span class='xref' data-eid='serving-rollouts-yam'>실물 롤아웃 1차</span>가 세 가지를 관측했다: "
+    "argmax N=8이 <b>1.70</b>으로 BC 기준선(2.1)보다 낮고, implicit N=8은 <b>2.70</b>으로 최고이며, "
+    "QPILOTS 조향은 α=0(1.80)이 최적이고 α=0.005부터 이미 손해, α=0.1에서 0.30으로 붕괴했다. "
+    "<i>같은 critic에서 순위(선택)는 되는데 기울기(조향)는 안 된다.</i> 이 프로브는 그 이유를 "
+    "critic 자신의 학습 데이터 위에서 잰다 — off-support가 학습 때와 같은 뜻이 되도록.</p>"
+    "<p><b>무엇에 대고 재는가.</b> support 밖 Q에는 정답이 없다 — 그게 문제의 본질이다. 그래서 "
+    "<b>시연자의 실제 다음 30스텝</b>을 앵커로 쓴다: 목표에 도달한 것이 확인된 행동이고, critic은 "
+    "cost-to-goal이므로 이보다 크게 나은 값을 내놓을 수 없어야 한다.</p>"
+    + _QL_SPEC
+    + "<h4>0. critic은 사실상 Q(s,a)가 아니라 V(s)다</h4>"
+    "<p>Q 분산 중 <b>행동이 설명하는 비율이 0.001~0.002%</b>다(9종 전부). 상태 간 std는 198~258 스텝인데 "
+    "같은 상태 안 행동 간 std는 0.56~1.0 스텝이다. 정규화 행동 공간의 박스 전체를 훑어도 0.006%다.</p>"
+    "<p>이유는 데이터에 있다. 시연 데이터는 각 상태마다 시연자가 한 행동 <b>하나</b>만 결과 라벨과 함께 "
+    "갖는다 — 반사실이 없다. 행동을 구분하라는 학습 신호가 존재하지 않으니, critic이 할 수 있는 최선은 "
+    "아주 좋은 V(s)를 배우는 것이고(정답 대비 진행도 상관 r=0.91~0.99), 행동 입력은 남는 자유도로 방치된다. "
+    "IQL의 expectile 회귀가 OOD 행동을 <i>질의하지 않도록</i> 설계된 것과도 일관된다 — 버그가 아니라 "
+    "이 데이터로 이 알고리즘을 쓰면 나오는 결과다.</p>"
+    "<p>정답 대비 보정도 함께 쟀다. 데이터셋은 각 프레임의 진짜 남은 스텝 수(에피소드 길이 − 프레임)를 "
+    "알고, Q는 <code>n = log(1+Q(1−γ))/log γ</code>로 역변환된다. 9종 전부 남은 시간을 "
+    "<b>11~37% 과소평가</b>하며, 그 크기는 expectile이 전부 설명한다(0.7 → −11~14%, 0.9 → −30~37%). "
+    "즉 support 위에서조차 낙관적이다.</p>"
+    "<h4>1. 선택(best-of-N) — 상금이 작고, 그중 43%가 편향</h4>"
+    + img(
+        P / "33_ood_1_bon.png",
+        "best-of-N: how much the draws differ, the prize against the claim, and whether the two heads agree",
+    )
+    + "<p class='cap'><b>왼쪽</b> — 한 프레임에서 뽑은 BC 후보 16개의 점수를, 그 프레임 평균을 뺀 값으로 "
+    "모은 히스토그램(단위: cost-to-goal 스텝). 폭이 곧 선택으로 벌 수 있는 전부다. 잡음을 걷어낸 진짜 "
+    "퍼짐은 <b>0.71 ± 0.19</b>, 순위 잡음은 <b>0.49 ± 0.09</b>. "
+    "<b>가운데</b> — 초록은 <i>완벽한 선택자</i>가 N개 중 최고를 골라 벌 수 있는 최대치, 빨강은 critic이 "
+    "자기 선택에 매긴 값. 빨강이 위에 있는 만큼이 승자의 저주다. "
+    "<b>오른쪽</b> — 같은 후보에 대해 두 앙상블 head가 매긴 점수. 두 head가 최고 후보에 동의하는 비율은 "
+    "<b>42%</b>다(우연 6%). 이 패널이 말하지 <i>않는</i> 것: 어느 후보가 실제로 좋은지에 대한 정답은 "
+    "어디에도 없다 — 후보들은 실행된 적이 없고 critic이 자기 점수를 자기가 매긴다.</p>"
+    "<p>그래서 편향을 <b>따로</b> 쟀다. critic A로 고르고 <b>나머지 8개</b>로 채점하면 편향 없는 평가가 된다:</p>"
+    + table(
+        ["N=16", "critic이 주장하는 이득", "다른 critic 8개의 채점", "편향"],
+        [["", "+1.20 ± 0.16", "<b>+0.69 ± 0.22</b>", "+0.51 ± 0.16"]],
+    )
+    + "<p><b>best-of-16의 진짜 가치는 +0.69 스텝 = 0.023초</b>이고, 주장의 43%가 편향이다. head 2개로 잰 "
+    "하한(+0.47)과 거의 일치한다. 앙상블을 4개로 키우면 편향이 절반(+0.19)으로 줄고 진짜 이득은 +0.80으로 "
+    "오른다 — head가 아니라 <i>독립 학습된 critic</i>이어야 한다(같은 critic 안 head 2개는 백본을 공유한다).</p>"
+    "<h4>2. 조향 — 기울기는 데이터가 제약한 적 없는 방향을 가리킨다</h4>"
+    + img(
+        P / "33_ood_2_steering.png",
+        "steering: Q is flat where the policy varies, climbs along the gradient, and pessimism cannot reach it",
+    )
+    + "<p class='cap'><b>왼쪽</b> — BC draw 16개의 상위 두 주성분이 만드는 평면(이 상태에서 정책이 실제로 "
+    "흔들리는 두 방향)에서의 Q. 타원이 그 구름의 ±2σ다. <b>박스 전체를 훑어도 Q 변동이 −0.7~+0.9</b>밖에 "
+    "안 된다 — 정책이 흔드는 방향들은 거의 Q-평평하다. "
+    "<b>가운데</b> — ∇<sub>a</sub>Q 방향으로 밀었을 때. x는 420개 숫자로 된 청크 전체의 L2 변위이고 "
+    "단위는 정규화 행동 단위다(1.0이 좌표마다 1을 더한다는 뜻이 아니다). 박스 경계에서 <b>+12.7 ± 1.6</b>, "
+    "3배 거리에서 <b>+32.9 ± 5.0</b> — 목표에 실제로 도달한 시연자보다 33스텝(1.1초) 낫다는 주장이다. "
+    "<b>오른쪽</b> — 그걸 되돌리려면 필요한 비관 계수 ρ. 박스 경계에서 <b>2.5</b>, 3배에서 <b>4.6</b>이 "
+    "필요한데 QPILOTS 기본값은 0.5고 K=2에서 가능한 최대(min)가 1.0이다.</p>"
+    "<p><b>대조군이 결정적이다.</b> ∇Q는 정의상 Q가 가장 빨리 오르는 방향이므로 "
+    "'그 방향으로 Q가 오른다'만으로는 동어반복이다. 같은 거리를 <b>무작위 단위 방향</b> 3개로 가면:</p>"
+    + table(
+        ["거리(정규화 행동 단위)", "∇<sub>a</sub>Q 방향", "무작위 방향", "배수"],
+        [
+            ["1.0 (박스 경계)", "+12.6 ± 1.6", "−0.06 ± 0.16", "—"],
+            ["3.0", "<b>+32.8 ± 5.0</b>", "<b>−0.13 ± 0.49</b>", "200×"],
+        ],
+    )
+    + "<p>무작위 방향은 <b>부호가 음수</b>다 — 아무 데로나 분포를 벗어나면 critic이 제대로 페널티를 준다. "
+    "오차가 넓게 퍼진 게 아니라 <b>아주 좁은 방향에 몰려 있고</b>, gradient는 정의상 정확히 그 방향을 "
+    "찾아낸다. 9종 전부 같다(∇ +20~+33, 무작위 −0.43~+0.36). "
+    "<b>정정 (2026-09-06)</b>: 이 자리에 <s>'∇<sub>a</sub>Q 에너지의 73%가 BC draw 16개가 span하는 "
+    "부분공간 밖(우연이면 96%)'</s>이라고만 적어 두었다. 숫자는 맞지만 읽기가 틀렸다. "
+    "73% &lt; 96%는 <b>기울기가 우연보다 정책의 탐색 방향 쪽에 훨씬 더 쏠려 있다</b>는 뜻이다 — "
+    "420차원 중 16차원 부분공간에 에너지의 27%가 있고 우연이면 3.8%이니 <b>7.1배 집중</b>이다. "
+    "동시에 73%는 여전히 그 밖으로 나간다. 두 진술이 다 참이고, 앞의 것만 적어 "
+    "'기울기가 정책이 안 가는 곳을 가리킨다'로 읽히게 한 것이 잘못이다.</p>"
+    "<p><b>조향은 critic이 좋아하는 행동을 찾는 절차가 아니라, critic이 행동 입력을 무시하다 남긴 "
+    "미세한 기울기를 최대로 타고 올라가는 절차다.</b></p>"
+    "<h4>3. 무엇이 이걸 바꾸고 무엇이 안 바꾸나 — 세 후보 설명의 판정</h4>"
+    + img(P / "33_ood_3_axes.png", "what moves the two failures: base strength, N, and where the state came from")
+    + "<p class='cap'><b>왼쪽</b> — BC 체크포인트 100k/150k/200k. 초록(왼쪽 축)은 교차-critic으로 채점한 "
+    "best-of-N 진짜 이득, 빨강(오른쪽 축)은 ∇Q 방향 t=3.0의 과대추정. <b>두 축이 따로 논다.</b> "
+    "<b>가운데</b> — 후보 수 N=16 vs 50(DEAS 실물·V-GPS가 쓰는 값). <b>선택 이득은 움직이고</b>"
+    "(+0.68 → +0.88), <b>∇Q 과대추정은 안 움직인다</b>(32.8 → 32.9). 이 패널의 선택 곡선은 "
+    "한 번 정정됐다 — 아래 정정 항목을 보라. "
+    "<b>오른쪽</b> — 상태를 어디서 뽑았나에 따른 순위 신호/잡음 비. 파랑이 시연, 주황이 배포된 정책이 "
+    "실제로 도달한 상태다. 점선(=1) 아래는 순위가 잡음 지배라는 뜻이다.</p>"
+    + table(
+        ["", "행동분산비", "순위 신호", "BoN 진짜 이득", "∇Q t=3.0"],
+        [
+            ["BC 100k (약함)", "0.0048%", "1.10", "<b>+1.08</b>", "32.6"],
+            ["BC 150k", "0.0031%", "0.85", "+0.82", "32.9"],
+            ["BC 200k (기본)", "0.0020%", "0.71", "+0.68", "32.8"],
+            ["BC 200k, N=50", "0.0021%", "0.72", "<b>+0.88</b>", "32.9"],
+        ],
+    )
+    + "<ul>"
+    "<li><b>정정 (2026-09-06) — N 부족은 기각되지 않는다.</b> 이 자리에는 "
+    "<s>'N=50으로 올려도 진짜 이득이 +0.68 → +0.71이라 N 부족은 기각'</s>이라고 적혀 있었다. 틀렸다. "
+    "선택 코드가 후보 부분집합을 <code>min(16, N)</code>으로 잘라(plot_ood_axes.py:64) N=50 팔도 실제로는 "
+    "best-of-16이었다. 두 점이 같게 나온 것은 측정이 아니라 구성이었고, 사전 등록해 둔 반론 "
+    "'DEAS·V-GPS는 N≈50을 쓴다, 너희가 적게 썼다'는 <b>한 번도 검정되지 않았다</b>. "
+    "캡을 제거하면 같은 얼린 프로브에서 진짜 이득이 <b>+0.68 → +0.88</b>이고(에피소드 짝지은 "
+    "Δ = +0.197 ± 0.080, 유의), k를 훑으면 0.24 / 0.43 / 0.59 / 0.71 / 0.82 / 0.88 "
+    "(k = 2, 4, 8, 16, 32, 50)로 단조 증가한다. 편향도 +0.51 → +0.69로 같이 자란다. "
+    "즉 <b>후보를 늘리면 선택 이득은 실제로 커진다</b>. "
+    "다만 이 정정은 <b>∇Q 과대추정에는 닿지 않는다</b> — 그 계열은 q_absray에서 나오고 캡을 지나지 않으며 "
+    "32.8 / 32.9로 평평하다. 조향에 대한 판정은 그대로다.</li>"
+    "<li><b>베이스 강도는 선택에만 걸린다.</b> 덜 학습된 정책은 후보가 덜 균질해 행동 분산이 2.4배, 진짜 "
+    "이득이 59% 크다(+1.08 vs +0.68). V-GPS가 제너럴리스트 베이스에서 성공한 이유가 이것이다. "
+    "<b>그런데 ∇Q 과대추정은 32.6 / 32.9 / 32.8로 전혀 안 움직인다.</b></li>"
+    "<li><b>배포 상태에서는 순위가 실제로 무너진다.</b> 신호/잡음이 시연 1.45 → implicit 0.92 → "
+    "bon8 0.87 → qpilots α=0.1 <b>0.58</b>. 에피소드 초반 프레임으로 위상을 맞춰도 유지된다"
+    "(시연 초반 1.69 vs qpilots 0.58). critic을 exploit하는 정책은 <b>자기가 가장 못 믿을 상태로 "
+    "스스로 흘러간다.</b></li>"
+    "</ul>"
+    "<p>→ <b>조향 문제는 정책을 바꿔서 못 고친다. critic의 성질이다.</b></p>"
+    "<h4>4. 9종 전부에서 나타난다</h4>"
+    + img(
+        P / "33_ood_4_critics.png",
+        "nine critics: the rise by expectile, by augmentation, all nine, and what min() removes",
+    )
+    + "<p class='cap'>같은 프레임·같은 BC draw로 critic 9종을 채점했다. <b>평평한 critic은 없다</b> "
+    "(t=3에서 +20~+33). 사전에 예상한 축은 갈리지 않았다 — expectile 0.7→0.9는 −1.6, mc_floor는 −1.8로 "
+    "CI 안에서 구분되지 않는다(단, <i>절대 보정</i>은 expectile이 전부 설명한다 — 위 0절). 실제로 가른 것은 "
+    "<b>macro_group_size</b>이고, 다른 축이 모두 같은 짝 4쌍에서 4/4 같은 방향이다(+4.3~+8.7, macro=30이 "
+    "더 낙관적). macro=5는 청크를 6개 commitment prefix로 나눠 감독하므로 제약점이 6배 많다. "
+    "<b>잠정</b> — 사후 관찰이고 critic 9개(짝 4쌍)에 근거한다.</p>"
+    "<p class='cap'>이 패널의 'min'은 별개 추정량이 아니다. K=2에서 <code>min ≡ mean − 1σ</code>가 "
+    "항등식이므로 mean / mean−0.5σ / min은 한 가족의 k = 0, 0.5, 1이다. 따라서 이 그림이 보이는 것은 "
+    "'가장 강한 비관성도 실패한다'가 아니라 <b>'k ≤ 1이 실패한다'</b>이며, 실제로 필요한 k는 2.5~4.6이다.</p>"
+    "<h4>5. 표준 처방(CQL/Cal-QL)이 왜 이걸 못 잡나</h4>"
+    "<p>CQL 계열은 <code>log Σ<sub>a</sub> exp Q(s,a) − Q(s,a<sub>데이터</sub>)</code>를 페널티로 걸어 "
+    "데이터 밖 행동의 Q를 눌러 내린다. 그 합은 <b>균등 무작위 행동</b>과 <b>정책 샘플</b>에서 뽑은 a로 "
+    "근사한다. 그 두 곳에 무엇이 있는지 쟀다 — 시연자 대비 Q 초과분:</p>"
+    + table(
+        ["샘플링 위치", "시연자보다 높은 비율", "평균 초과"],
+        [
+            ["정책 샘플 16개 (CQL이 쓰는 곳 ①)", "51.7%", "+0.11"],
+            ["무작위 방향 (CQL이 쓰는 곳 ②)", "49.5%", "+0.03"],
+            ["정책 평면 박스 전체", "54.0%", "+0.11"],
+            ["<b>∇Q 방향 (조향이 가는 곳)</b>", "<b>99.4%</b>", "<b>+18.21</b>"],
+        ],
+    )
+    + "<p><b>CQL이 찌르는 두 곳은 이미 멀쩡하다</b>(동전 던지기, 평균 +0.03~+0.11). 과대추정은 균등 "
+    "샘플링으로도 정책 샘플링으로도 사실상 도달할 수 없는 좁은 방향에 산다 — 420차원에서 무작위로 뽑아 "
+    "그 방향에 걸릴 확률은 0에 가깝다. 이것이 이 리포의 "
+    "<span class='xref' data-eid='calql'>CalQL arm</span>이 null(n=8, Δ̄=−0.018 CI[−0.103,+0.068])이었던 "
+    "이유로 보인다 — 페널티가 공회전한 것이 맞고, 원인은 '후보가 in-support여서'가 아니라 "
+    "<b>'페널티가 샘플하는 모든 곳이 이미 멀쩡해서'</b>다. 우리 trainer에는 CQL 항이 아예 없다"
+    '(<code>train_patch_critic.py:328</code> — "Cal-QL\'s calibration idea <i>without</i> the CQL penalty").</p>'
+    "<h4>판정</h4><ul>"
+    "<li><b>확정</b> — critic은 행동을 거의 구분하지 않는다(0.002%). 선택의 상금은 +0.69스텝(0.023초)이고 "
+    "주장의 43%가 편향이다.</li>"
+    "<li><b>확정</b> — 오차는 넓게 퍼진 것이 아니라 좁은 방향에 몰려 있다(∇Q +32.9 vs 무작위 −0.13). "
+    "9종 전부. 비관성으로 못 막는다(필요 ρ 2.5~4.6, 가능 최대 1.0).</li>"
+    "<li><b>확정</b> — 후보 수(N=50)도, 베이스 강도(100k~200k)도 조향 과대추정을 바꾸지 않는다. "
+    "베이스 강도는 <i>선택</i> 이득만 바꾼다.</li>"
+    "<li><b>확정</b> — 배포 상태에서 순위가 무너진다(1.45 → 0.58). 위상 대조군을 통과한다.</li>"
+    "<li><b>확정</b> — critic 간 불일치는 support 위에서 0.70 스텝(신호 0.71과 같은 크기)이고 "
+    "t=3.0에서 8.55로 <b>12배</b> 자란다. 같은 critic 안 head 2개는 4.50 → 7.42로 1.6배밖에 안 자란다 — "
+    "epistemic uncertainty를 재려면 head가 아니라 독립 학습된 critic이어야 한다.</li>"
+    "<li><b>잠정</b> — macro_group_size가 낙관 정도를 가른다(4/4 일관).</li>"
+    "<li><b>미검정</b> — OOD 제약이 있는 critic(EDAC의 gradient 다양화, 적대적 샘플 CQL)이 ∇Q 상승을 "
+    "줄이는가. 워커D에 인계.</li>"
+    "</ul>"
+    "<h4>실행 권고</h4><ul>"
+    "<li><b>argmax로 서빙하지 말 것.</b> 실물에서 BC 기준선보다 낮았고(1.70 vs 2.1), 편향이 상금의 43%다. "
+    "implicit(2.70)처럼 최댓값에 커밋하지 않는 규칙을 쓸 것.</li>"
+    "<li><b>∇Q 기반 arm(QPILOTS·QAM·FlowDPG)은 OOD 제약이 있는 critic이 나오기 전까지 보류.</b> "
+    "그 방향은 데이터가 제약한 적이 없다.</li>"
+    "<li><b>오프라인 critic 합의로 서빙 규칙을 고르지 말 것.</b> 이번에 세 번 실물과 반대였다 "
+    "(오프라인은 argmax 우세, 실물은 implicit 우세). 교차 채점은 <i>독립적인</i> 잡음만 걷어낼 뿐 "
+    "<i>공유</i> 편향은 못 걷어내는데, 9종은 생각만큼 독립적이지 않다 — 후보 순위에 대한 critic 간 "
+    "Spearman이 <b>0.50</b>(argmax 일치 37%)로, <b>같은 critic 안 head 2개의 0.50(일치 42%)과 사실상 "
+    "같다</b>. 그래서 교차-critic으로 잰 편향(+0.51)과 head로 잰 편향(+0.47)이 거의 일치한다.</li>"
+    "</ul>"
+    "<h4>한계</h4><ul>"
+    "<li><b>행동 품질에 대한 오프라인 정답이 없다.</b> 진행도에 대해서는 데이터셋이 정답을 주지만"
+    "(0절), 어느 <i>행동</i>이 좋은지는 반사실이 없어 알 수 없다 — 그게 진단 내용 자체다. "
+    "이 프로브는 실물의 argmax(1.70) &lt; BC(2.1)를 설명하지 못한다.</li>"
+    "<li>모든 프레임이 <b>성공한 시연</b>에서 왔다(롤아웃 비교 제외). 조향이 실제로 도달하는 실패·복구 "
+    "상태의 커버가 없다.</li>"
+    "<li>40프레임/20에피소드는 critic을 개별로 순위 매기기엔 부족하다 — CI가 겹치는 쌍이 여럿이다. "
+    "실물은 조건당 10 에피소드다.</li>"
+    "<li>과제·로봇·베이스 정책 계열이 각각 하나다.</li>"
+    "</ul>"
+    "<h4>문헌에서의 자리</h4>"
+    "<p>추론 시점에 critic을 쓰는 선행은 대부분 <b>Cal-QL</b>이다 — V-GPS(2410.13816, K=50), "
+    "Q-VGM(2606.08015), CO-RFT(2508.02219, 다만 학습 전용). Cal-QL은 OOD 행동의 Q에 명시적 페널티를 "
+    "건다. DEAS(2510.07730)만 expectile 계열이고, detached value learning으로 값을 in-distribution 쪽으로 "
+    "유도한다. <b>우리만 순수 IQL로 추론 시점에 exploit한다.</b></p>"
+    "<p>가장 가까운 것은 <b>QGF</b>(2606.11087)다 — IQL critic으로 flow 정책을 테스트 시점에 gradient "
+    "조향하는, QPILOTS와 사실상 같은 구조다. 같은 실패를 관측하지만"
+    '(<i>"an overly large guidance weight can also hurt performance by pushing the actions outside of '
+    'the dataset support"</i>) 원칙적인 가중치 결정 방법이 없고 민감도 분석만 있다. 우리 기여는 '
+    "<b>그 범위가 0으로 붕괴하는 체제와 그 기제</b>다.</p>"
+    "<p>진단의 직접 처방은 <b>EDAC</b>(An et al., NeurIPS 2021)로 보인다 — 앙상블 멤버들의 "
+    "∂Q/∂a 코사인 유사도에 페널티를 걸어 OOD 행동의 Q 분산을 키운다. 우리 측정("
+    '"앙상블 불일치가 ∇Q 방향으로 충분히 안 자란다")을 정면으로 겨냥하는 유일한 계열이고, <b>미시험</b>이다.</p>'
+    "<h4>재현</h4>"
+    "<pre><code>uv run python scripts/probe_q_landscape.py \\\n"
+    "  --critic ~/hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_*/ \\\n"
+    "  --policy-dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000 \\\n"
+    "  --frames 40 --per-episode 2 --n-bc 16 --grid-n 21 --grid-max 2.0\n"
+    "# 롤아웃 상태:  --dataset ~/lerobot_rollout/&lt;run&gt; --all-outcomes --per-episode 4\n"
+    "uv run python scripts/plot_ood.py           # 1·2번 그림\n"
+    "uv run python scripts/plot_ood_axes.py      # 3번 그림\n"
+    "uv run python scripts/plot_q_landscape_critics.py   # 4번 그림</code></pre>"
+    "<p>원본은 <code>slurm/probes/q_landscape.json.gz</code>로 리포에 있고, "
+    "<code>make_figures.py</code>의 <code>fig_33_q_landscape()</code>가 리포트 생성마다 거기서 그림을 "
+    "다시 만든다 — 그림과 데이터가 어긋날 수 없게. 프로브는 서빙 래퍼 위에 만들어져 정규화·proprio·"
+    "policy→critic 맵이 롤아웃이 쓰는 것과 동일하다.</p>"
+)
+
+entry(
+    "2026-09-02 16:10",
+    "q-landscape-ood",
+    "critic은 행동을 거의 안 보고, 오차는 기울기 방향에만 몰려 있다 — 실물 실패 두 개의 기제",
+    "완결",
+    _QL_KO,
+)
+
+# The guidance sweep lives in its own module: this file is already 7k lines, and that entry is
+# self-contained (its numbers all come from one frozen probe).
+import _guidance_sweep_entry as _gs  # noqa: E402
+
+_gs.register(entry=entry, en=en, img=img, table=table, spec=spec, plots=P)
+
+
 ENTRIES[:] = [(d, eid, t, st, _decorate(eid, b)) for d, eid, t, st, b in ENTRIES]
 
 # ================================================================== English versions (KO/EN toggle)
+
+_QL_SPEC_EN = spec(
+    [
+        ("Data", "yam_lego_taxi, 347 episodes — the critic's own training set. Frames only from the 300 successes"),
+        (
+            "Sample",
+            "40 frames / 20 episodes (2 each). CIs are <b>clustered by episode</b> — two frames from one trajectory are not two draws",
+        ),
+        (
+            "Policy",
+            "pi05_yam_lego_taxi bc_s300_h30 — 200000 (default), plus 100000 and 150000 for the base-strength axis",
+        ),
+        (
+            "Critics",
+            "9 × patch_critic_yam_s347 — expectile .7/.9 × macro 30/5 × floor on/off × aug/noaug. All K=2, <b>no OOD penalty</b>",
+        ),
+        (
+            "Anchor",
+            "<b>the demonstrator's own next 30 actions</b> at that frame. Successful episodes, so it is known to have reached the goal",
+        ),
+        (
+            "Units",
+            "Q is cost-to-goal — <b>+1 means the critic claims one control step (33 ms at 30 fps) closer to the goal</b>",
+        ),
+    ]
+)
+
+en(
+    "q-landscape-ood",
+    "The critic barely looks at the action, and its error lives only along the gradient — the mechanism behind two real-robot failures",
+    "<p><b>Why this was measured.</b> The "
+    "<span class='xref' data-eid='serving-rollouts-yam'>first real rollouts</span> on this robot observed three "
+    "things: argmax N=8 scored <b>1.70</b>, BELOW the BC baseline of 2.1; implicit N=8 scored <b>2.70</b>, the "
+    "best of anything tried; and QPILOTS steering was best at alpha=0 (1.80), already losing at alpha=0.005, "
+    "collapsing to 0.30 at alpha=0.1. <i>With the same critic, ranking works and the gradient does not.</i> This "
+    'probe measures why, on the critic\'s OWN training data, so that "off-support" means what it meant during '
+    "fitting.</p>"
+    "<p><b>What it is measured against.</b> There is no ground truth for Q off-support — that is the problem "
+    "itself. So the anchor is <b>the demonstrator's actual next 30 actions</b>: known to have reached the goal, "
+    "and scored by a cost-to-goal critic that should not be able to beat it by much.</p>"
+    + _QL_SPEC_EN
+    + "<h4>0. The critic is not really Q(s,a); it is V(s)</h4>"
+    "<p>The action explains <b>0.001-0.002% of Q's variance</b> (all nine). Between-state std is 198-258 steps; "
+    "between-action std at a fixed state is 0.56-1.0 steps. Sweeping the whole normalized action box gives 0.006%.</p>"
+    "<p>The reason is in the data. A demonstration dataset holds exactly <b>one</b> action per state with an "
+    "outcome label — there are no counterfactuals, so no training signal ever asks the critic to discriminate "
+    "between actions at a fixed state. The best it can do is learn a very good V(s) (progress correlation against "
+    "ground truth r=0.91-0.99) and leave the action input as slack. This is consistent with IQL by design: its "
+    "expectile regression exists precisely to avoid <i>querying</i> OOD actions.</p>"
+    "<p>Calibration against ground truth was measured too. The dataset knows the true steps remaining at every "
+    "frame (episode length minus frame index), and Q inverts as <code>n = log(1+Q(1-g))/log g</code>. All nine "
+    "<b>underestimate the remaining time by 11-37%</b>, and the size is entirely explained by the expectile "
+    "(0.7 gives -11 to -14%, 0.9 gives -30 to -37%). So the critic is already optimistic ON support.</p>"
+    "<h4>1. Selection (best-of-N) — the prize is small and 43% of it is bias</h4>"
+    + img(
+        P / "33_ood_1_bon.png",
+        "best-of-N: how much the draws differ, the prize against the claim, and whether the two heads agree",
+    )
+    + "<p class='cap'><b>Left</b> — the 16 BC candidates at a frame, scored and centred on that frame's own mean "
+    "(cost-to-goal steps); the width IS everything selection can win. De-noised spread <b>0.71 +/- 0.19</b>, "
+    "ranking noise <b>0.49 +/- 0.09</b>. <b>Middle</b> — green is what a <i>perfect</i> picker could win from N "
+    "candidates; red is what the critic claims for its own pick. The gap is the winner's curse. <b>Right</b> — "
+    "the two ensemble heads on the same candidates; they pick the same best candidate <b>42%</b> of frames "
+    "(chance 6%). What this panel does NOT contain: any ground truth about which candidate is actually better — "
+    "the candidates were never executed and the critic grades itself.</p>"
+    "<p>So the bias was measured <b>separately</b>: pick with critic A, score with the other <b>eight</b>.</p>"
+    + table(
+        ["N=16", "what the critic claims", "what the other 8 critics say", "bias"],
+        [["", "+1.20 +/- 0.16", "<b>+0.69 +/- 0.22</b>", "+0.51 +/- 0.16"]],
+    )
+    + "<p><b>Best-of-16 is really worth +0.69 steps = 0.023 s</b>, and 43% of the claim is bias — almost exactly "
+    "the head-based lower bound (+0.47). Averaging four independently trained critics halves the bias (+0.19) and "
+    "raises the real gain to +0.80. It has to be separate <i>critics</i>, not more heads: two heads inside one "
+    "critic share a backbone.</p>"
+    "<h4>2. Steering — the gradient points where the data never constrained anything</h4>"
+    + img(
+        P / "33_ood_2_steering.png",
+        "steering: Q is flat where the policy varies, climbs along the gradient, and pessimism cannot reach it",
+    )
+    + "<p class='cap'><b>Left</b> — Q on the plane spanned by the top two principal components of the 16 BC draws "
+    "(the two directions this policy is actually uncertain about here); the ellipse is that cloud at +/-2 sigma. "
+    "<b>Across the whole box, Q moves only -0.7 to +0.9</b> — the directions the policy varies in are nearly "
+    "Q-flat. <b>Middle</b> — pushing along grad_a Q. x is the L2 displacement of the whole 420-number chunk "
+    "in normalized action units (1.0 does NOT mean adding 1.0 to each coordinate). <b>+12.7 +/- 1.6</b> at the box "
+    "edge, <b>+32.9 +/- 5.0</b> at three box-widths — the claim that an action the data never took is 33 steps "
+    "(1.1 s) better than the one that actually reached the goal. <b>Right</b> — the pessimism coefficient rho that "
+    "would undo it: <b>2.5</b> at the box edge and <b>4.6</b> at 3x, where QPILOTS uses 0.5 and the strongest "
+    "available with K=2 (the min) is 1.0.</p>"
+    "<p><b>The control is what makes this a finding.</b> grad Q is by definition the steepest-ascent direction, so "
+    '"Q rises along it" alone is a tautology. Going the same distances along three <b>random unit directions</b>:</p>'
+    + table(
+        ["distance (normalized action units)", "along grad_a Q", "random directions", "ratio"],
+        [
+            ["1.0 (box edge)", "+12.6 +/- 1.6", "-0.06 +/- 0.16", "—"],
+            ["3.0", "<b>+32.8 +/- 5.0</b>", "<b>-0.13 +/- 0.49</b>", "200x"],
+        ],
+    )
+    + "<p>Random directions come out <b>negative</b> — leaving the distribution in an arbitrary direction is "
+    "correctly penalised. The error is not spread out; it is <b>concentrated in a very narrow direction</b>, and "
+    "the gradient finds exactly that direction by construction. All nine behave the same (grad +20 to +33, random "
+    "-0.43 to +0.36). <b>Correction (2026-09-06)</b>: this said only <s>73% of grad_a Q's energy lies "
+    "outside the subspace the 16 draws span (96% by chance)</s>. The number is right and the reading was "
+    "wrong. 73% &lt; 96% means the gradient is far MORE drawn to the policy's own directions than chance: "
+    "27% of its energy sits in a 16-of-420 subspace where chance is 3.8%, a <b>7.1x concentration</b>. It "
+    "is also true that 73% still leaves that subspace. Both hold; quoting only the first made it read as "
+    '"the gradient points where the policy never goes".</p>'
+    "<p><b>Steering is not a procedure for finding actions the critic likes. It is a procedure for climbing the "
+    "faint gradient the critic left behind while ignoring its action input.</b></p>"
+    "<h4>3. What moves this and what does not — three candidate explanations, judged</h4>"
+    + img(P / "33_ood_3_axes.png", "what moves the two failures: base strength, N, and where the state came from")
+    + "<p class='cap'><b>Left</b> — BC checkpoints at 100k/150k/200k. Green (left axis) is the cross-critic-scored "
+    "real best-of-N gain; red (right axis) is the gradient overestimation at t=3.0. <b>The two axes move "
+    "independently.</b> <b>Middle</b> — N=16 vs 50 (what DEAS's real robot and V-GPS use). <b>The selection "
+    "gain does move</b> (+0.68 to +0.88); <b>the gradient overestimation does not</b> (32.8 to 32.9). The "
+    "selection curve in this panel has been corrected once — see the correction below. "
+    "<b>Right</b> — ranking signal divided by ranking noise, by where the state came from: blue is demonstrations, "
+    "orange is states a deployed policy actually reached. Below the dashed line the ranking is noise-dominated.</p>"
+    + table(
+        ["", "action-variance fraction", "ranking signal", "real bon gain", "grad Q at t=3.0"],
+        [
+            ["BC 100k (weaker)", "0.0048%", "1.10", "<b>+1.08</b>", "32.6"],
+            ["BC 150k", "0.0031%", "0.85", "+0.82", "32.9"],
+            ["BC 200k (default)", "0.0020%", "0.71", "+0.68", "32.8"],
+            ["BC 200k, N=50", "0.0021%", "0.72", "<b>+0.88</b>", "32.9"],
+        ],
+    )
+    + "<ul>"
+    "<li><b>Correction (2026-09-06) — too few candidates is NOT rejected.</b> This said "
+    "<s>at N=50 the real gain moves +0.68 to +0.71, so the objection is rejected</s>. That was wrong. "
+    "The selection code capped the candidate subset at <code>min(16, N)</code> (plot_ood_axes.py:64), so "
+    "the N=50 arm was still a best-of-16. The two points matched by construction, not by measurement, and "
+    "the pre-registered objection — DEAS and V-GPS use N about 50, you under-powered it — was <b>never "
+    "actually tested</b>. With the cap removed, on the same frozen probe, the real gain moves "
+    "<b>+0.68 to +0.88</b> (episode-paired Δ = +0.197 ± 0.080, significant), and sweeping k is monotone: "
+    "0.24 / 0.43 / 0.59 / 0.71 / 0.82 / 0.88 at k = 2, 4, 8, 16, 32, 50. The bias grows with it, +0.51 to "
+    "+0.69. So <b>more candidates really does buy more selection gain</b>. The correction does <b>not</b> "
+    "touch the gradient result: that series comes from q_absray, never passes through the cap, and is flat "
+    "at 32.8 / 32.9. The verdict on steering stands.</li>"
+    "<li><b>Base strength touches selection only.</b> A less-trained policy has less homogeneous draws: 2.4x the "
+    "action variance and 59% more real gain (+1.08 vs +0.68). That is why V-GPS gains on generalist bases. "
+    "<b>But the gradient overestimation is 32.6 / 32.9 / 32.8 — flat.</b></li>"
+    "<li><b>At deployment states the ranking really does collapse.</b> Signal/noise runs 1.45 (demos), 0.92 "
+    "(implicit), 0.87 (bon8), <b>0.58</b> (qpilots alpha=0.1), and it survives matching on episode phase "
+    "(early demo frames 1.69 vs qpilots 0.58). A policy that exploits the critic <b>drives itself into the states "
+    "where the critic is least reliable.</b></li>"
+    "</ul>"
+    "<p>-> <b>The steering failure cannot be fixed by changing the policy. It is a property of the critic.</b></p>"
+    "<h4>4. All nine critics show it</h4>"
+    + img(
+        P / "33_ood_4_critics.png",
+        "nine critics: the rise by expectile, by augmentation, all nine, and what min() removes",
+    )
+    + "<p class='cap'>Nine critics on the same frames and the same BC draws. <b>None is flat</b> (+20 to +33 at "
+    "t=3). The axes predicted beforehand did not separate — expectile 0.7 to 0.9 is -1.6 and mc_floor is -1.8, "
+    "neither resolvable (though the expectile fully explains the <i>absolute</i> calibration; see section 0). "
+    "What did separate is <b>macro_group_size</b>: 4/4 in the same direction across the pairs holding every other "
+    "axis fixed (+4.3 to +8.7, macro=30 the more optimistic). macro=5 supervises the chunk at six commitment "
+    "prefixes instead of one. <b>Provisional</b> — post-hoc, nine critics, four pairs.</p>"
+    "<p class='cap'>The 'min' here is not a separate estimator. With K=2, <code>min = mean - 1 sigma</code> is an "
+    "identity, so mean / mean-0.5 sigma / min are one family at k = 0, 0.5, 1. This panel therefore shows that "
+    "<b>k &lt;= 1 fails</b>, not that the strongest possible pessimism fails; the k actually required is 2.5-4.6.</p>"
+    "<h4>5. Why the standard prescription (CQL / Cal-QL) would not catch this</h4>"
+    "<p>The CQL family adds <code>log sum_a exp Q(s,a) - Q(s,a_data)</code>, pushing Q down on "
+    "actions the data does not contain. That sum is approximated by sampling a from <b>uniform</b> actions and "
+    "from the <b>policy</b>. What is at those two places, as excess over the demonstrator:</p>"
+    + table(
+        ["where the penalty samples", "fraction above the demonstrator", "mean excess"],
+        [
+            ["the 16 policy samples (CQL's source 1)", "51.7%", "+0.11"],
+            ["random directions (CQL's source 2)", "49.5%", "+0.03"],
+            ["the whole box in the policy's plane", "54.0%", "+0.11"],
+            ["<b>along grad Q (where steering goes)</b>", "<b>99.4%</b>", "<b>+18.21</b>"],
+        ],
+    )
+    + "<p><b>Both places the penalty probes are already fine</b> — a coin flip, mean +0.03 to +0.11. The "
+    "overestimation lives in a narrow direction that neither uniform nor policy sampling can practically reach: "
+    "in 420 dimensions, a random draw essentially never lands on it. This appears to be why this repo's "
+    "<span class='xref' data-eid='calql'>CalQL arm</span> came out null (n=8, mean -0.018 CI[-0.103,+0.068]) — the "
+    'penalty was idling, and not because "the candidates are all in-support" but because '
+    "<b>everywhere the penalty samples is already well-behaved</b>. Our own trainer has no CQL term at all "
+    '(<code>train_patch_critic.py:328</code> — "Cal-QL\'s calibration idea <i>without</i> the CQL penalty").</p>'
+    "<h4>Verdict</h4><ul>"
+    "<li><b>Confirmed</b> — the critic barely discriminates actions (0.002%). Selection is worth +0.69 steps "
+    "(0.023 s) and 43% of the claim is bias.</li>"
+    "<li><b>Confirmed</b> — the error is concentrated, not diffuse (grad Q +32.9 vs random -0.13), in all nine. "
+    "Pessimism cannot reach it (needs rho 2.5-4.6, maximum available 1.0).</li>"
+    "<li><b>Confirmed</b> — neither N (up to 50) nor base strength (100k-200k) changes the gradient "
+    "overestimation. Base strength changes only the <i>selection</i> gain.</li>"
+    "<li><b>Confirmed</b> — the ranking collapses at deployment states (1.45 to 0.58), surviving a phase control.</li>"
+    "<li><b>Confirmed</b> — cross-critic disagreement is 0.70 steps on support (the same size as the signal, "
+    "0.71) and 8.55 at t=3.0, a <b>12x</b> growth, where two heads inside one critic grow only 4.50 to 7.42 "
+    "(1.6x). Epistemic uncertainty needs independently trained critics, not more heads.</li>"
+    "<li><b>Provisional</b> — macro_group_size sets how optimistic the critic is off-support (4/4 consistent).</li>"
+    "<li><b>Untested</b> — whether a critic with an OOD constraint (EDAC's gradient diversification, or a CQL "
+    "term whose negatives come from gradient ascent) shrinks the rise. Handed to worker D.</li>"
+    "</ul>"
+    "<h4>What to do</h4><ul>"
+    "<li><b>Do not serve argmax.</b> It scored below the BC baseline on the robot (1.70 vs 2.1) and 43% of its "
+    "claimed gain is bias. Use a rule that does not commit to the maximum, like implicit (2.70).</li>"
+    "<li><b>Hold grad-Q-based arms (QPILOTS, QAM, FlowDPG) until a critic with an OOD constraint exists.</b> That "
+    "direction was never constrained by data.</li>"
+    "<li><b>Do not pick a serving rule by offline critic consensus.</b> It inverted the robot's ordering three "
+    "times here. Cross-critic scoring removes only <i>independent</i> noise, and the nine are less independent "
+    "than they look — their pairwise ranking Spearman is <b>0.50</b> (argmax agreement 37%), essentially the same "
+    "as the two heads inside one critic (0.50, 42%). That is why the cross-critic bias (+0.51) and the head-based "
+    "bias (+0.47) agree.</li>"
+    "</ul>"
+    "<h4>Limits</h4><ul>"
+    "<li><b>There is no offline ground truth for action quality.</b> The dataset gives ground truth for progress "
+    "(section 0), but which <i>action</i> is better is exactly what no counterfactual can answer here — which is "
+    "the diagnosis itself. This probe does not explain why argmax (1.70) fell below BC (2.1) on the robot.</li>"
+    "<li>Every frame comes from a <b>successful demonstration</b> (outside the rollout comparison). The failure "
+    "and recovery states steering actually reaches have no coverage.</li>"
+    "<li>40 frames / 20 episodes is not enough to rank critics individually — several CIs overlap. The robot runs "
+    "are 10 episodes per condition.</li>"
+    "<li>One task, one robot, one base-policy family.</li>"
+    "</ul>"
+    "<h4>Where this sits in the literature</h4>"
+    "<p>Nearly every prior work that uses a critic at inference time uses <b>Cal-QL</b> — V-GPS (2410.13816, "
+    "K=50), Q-VGM (2606.08015), CO-RFT (2508.02219, though training-only) — and Cal-QL explicitly penalises Q on "
+    "OOD actions. DEAS (2510.07730) is the one expectile-family method, and it steers values toward "
+    "in-distribution actions via detached value learning. <b>We are the ones exploiting a pure IQL critic at "
+    "inference time.</b></p>"
+    "<p>The closest method is <b>QGF</b> (2606.11087), which gradient-steers a flow policy at test time with an "
+    'IQL critic — structurally the same as QPILOTS. It observes the same failure (<i>"an overly large guidance '
+    'weight can also hurt performance by pushing the actions outside of the dataset support"</i>) but offers no '
+    "principled weight, only a sensitivity study. Our contribution is <b>the regime where that window collapses "
+    "to zero, and the mechanism</b>.</p>"
+    "<p>The one prescription aimed squarely at this diagnosis appears to be <b>EDAC</b> (An et al., NeurIPS "
+    "2021): penalising the cosine similarity of dQ/da across ensemble members so that OOD actions acquire high "
+    "Q-variance. It targets exactly what we measured — the disagreement failing to grow along grad Q — and it is "
+    "<b>untested here</b>.</p>"
+    "<h4>Reproduce</h4>"
+    "<pre><code>uv run python scripts/probe_q_landscape.py \\\n"
+    "  --critic ~/hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_*/ \\\n"
+    "  --policy-dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000 \\\n"
+    "  --frames 40 --per-episode 2 --n-bc 16 --grid-n 21 --grid-max 2.0\n"
+    "# rollout states:  --dataset ~/lerobot_rollout/&lt;run&gt; --all-outcomes --per-episode 4\n"
+    "uv run python scripts/plot_ood.py           # figures 1 and 2\n"
+    "uv run python scripts/plot_ood_axes.py      # figure 3\n"
+    "uv run python scripts/plot_q_landscape_critics.py   # figure 4</code></pre>"
+    "<p>The raw probe ships in the repo as <code>slurm/probes/q_landscape.json.gz</code>, and "
+    "<code>fig_33_q_landscape()</code> in <code>make_figures.py</code> rebuilds every figure from it on each "
+    "report build, so a figure cannot drift from its data. The probe is built ON the serving wrapper, so the "
+    "normalisation, the proprio slice and the policy-to-critic action map are the ones a rollout uses.</p>",
+)
+
 en(
     "three-forces",
     "The balance of four forces — synthesis of the adaptive-chunking theory, with testable predictions",
