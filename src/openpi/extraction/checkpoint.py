@@ -17,6 +17,7 @@ Checkpoints written before 2026-09-03 used a bare orbax tree ({"expert": ...} or
 no params/ or assets/ subdirectory; `scripts/export_extraction_checkpoint.py` converts those.
 """
 
+import json
 import os
 import pathlib
 import shutil
@@ -54,6 +55,12 @@ def save_servable(step_dir: pathlib.Path | str, params: dict, *, assets_from: pa
     with ocp.StandardCheckpointer() as c:
         c.save(tmp / "params", {"params": params})
     shutil.copytree(assets_src, tmp / "assets")
+    # The base this run started from, recorded WITH the arm. A whole-model save does not need it to
+    # be served -- that is the point of this layout -- but the provenance question it answers is one
+    # this project got wrong: the trainers' --init-ckpt default said 100000 for months while every
+    # robot evaluation ran 200000, and nothing on disk recorded which was used. An arm you cannot
+    # date to its base cannot be compared method-only-diff against a BC baseline.
+    (tmp / "arm_meta.json").write_text(json.dumps({"init_ckpt": str(pathlib.Path(assets_from).absolute())}, indent=1))
     if step_dir.exists():
         shutil.rmtree(step_dir)
     os.rename(tmp, step_dir)

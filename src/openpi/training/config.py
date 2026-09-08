@@ -1542,9 +1542,18 @@ _CONFIGS.append(
     # which is where the operator's homing motion (and their hand) enters the cameras. So
     # success_only is left off here - there is nothing left to filter.
     #
-    # repo_id resolves under HF_LEROBOT_HOME; point that at
-    # /NHNHOME/WORKSPACE/gwanwoo/rl_specialist/cache/huggingface/lerobot to use the local copy, or
-    # override with --data.repo-id Gwanwoo/lerobot_cable_tie_100_clean to pull from the Hub.
+    # jellyho/yam_cable_tie on the Hub: 160 episodes / 251,080 frames / 30 fps, the same three
+    # cameras as the lego set. It replaces rl_specialist/lerobot_cable_tie_100_clean, which resolved
+    # under an NHNHOME path that does not mount on this cluster and does not exist on the Hub under
+    # that name or under Gwanwoo/ (both checked, RepositoryNotFoundError).
+    #
+    # --data.success-only resolves 150 of the 160 episodes. It did not until 2026-09-07, and the
+    # reason is worth keeping: the verdicts landed on `main` on 09-02, but lerobot pins
+    # CODEBASE_VERSION = "v3.0" and resolves that TAG for every read (lerobot_dataset.py:83, :96),
+    # and the tag still pointed before the verdict commit. Every consumer saw a dataset without
+    # next.success / next.done while the Hub page showed one with them. The same was true of
+    # jellyho/yam_lego_taxi; its success-only runs worked only because a local cache predated the
+    # tag, i.e. they would not have reproduced on a clean machine. See scripts/move_lerobot_v3_tag.py.
     TrainConfig(
         name="pi05_yam_cable_tie",
         model=pi0_config.Pi0Config(
@@ -1554,7 +1563,7 @@ _CONFIGS.append(
             discrete_state_input=False,
         ),
         data=LeRobotYAMDataConfig(
-            repo_id="rl_specialist/lerobot_cable_tie_100_clean",
+            repo_id="jellyho/yam_cable_tie",
             delta_mode="joint",
             base_config=DataConfig(prompt_from_task=True),
         ),
@@ -1566,9 +1575,7 @@ _CONFIGS.append(
         num_train_steps=100_000,
         save_interval=10_000,
         action_dist_interval=0,  # disabled: action_dist metric no longer logged to wandb
-        # There is no launcher script for this config, so the lab entity is set here rather than
-        # passed on the command line the way run_train_yam.sh does it.
-        wandb_entity="RSS-PFT_RLLAB",
+        wandb_entity="jellyho_",
     )
 )
 
