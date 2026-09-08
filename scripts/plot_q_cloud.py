@@ -56,7 +56,7 @@ def main(a):
     d = json.loads(gzip.decompress(pp.read_bytes()) if pp.suffix == ".gz" else pp.read_text())
     name = a.critic_name or d["critics"][0]
     rows = [r["critics"][name] for r in d["rows"] if name in r["critics"]]
-    n = int(round(len(rows[0]["q_near"][0]) ** 0.5))
+    n = round(len(rows[0]["q_near"][0]) ** 0.5)
     print(f"critic: {name}  ({len(rows)} frames, {n}x{n} grid)")
 
     sig = np.asarray([r["pc_sigma"] for r in rows], np.float32).mean(axis=0)

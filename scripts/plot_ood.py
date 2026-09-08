@@ -211,7 +211,7 @@ def fig_steer(rows, eps, name, out):
 
     # --- 1. where the policy lives, and how flat Q is there ---------------------------------
     ax = axes[0]
-    n = int(round(len(rows[0]["q_far"][0]) ** 0.5))
+    n = round(len(rows[0]["q_far"][0]) ** 0.5)
     far = (
         (np.asarray([r["q_far"] for r in rows], np.float64).mean(axis=1) - data.mean(axis=1)[:, None])
         .mean(axis=0)
@@ -283,7 +283,7 @@ def fig_steer(rows, eps, name, out):
         # mostly leaves the span, AND it is strongly drawn to it. Stating only the first was the
         # error.
         f"{100 * span.mean():.0f}% of $\\nabla_a Q$'s energy lies INSIDE the\n"
-        f"{int(round(dim))}-dim subspace the {int(round(dim))} draws span, where chance is "
+        f"{round(dim)}-dim subspace the {round(dim)} draws span, where chance is "
         f"{100 * chance:.0f}%\n"
         f"({span.mean() / max(chance, 1e-9):.1f}$\\times$ concentrated) \u2014 but {100 * (1 - span.mean()):.0f}% still leaves it",
         transform=ax.transAxes,

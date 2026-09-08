@@ -147,8 +147,8 @@ def main() -> None:
 
     res: dict = {
         "dataset": str(ds_dir),
-        "n_frames": int(len(rows)),
-        "n_episodes": int(len(np.unique(epi))),
+        "n_frames": len(rows),
+        "n_episodes": len(np.unique(epi)),
         "horizon": H,
         "tail_dropped": a.tail,
         "state_dims": int(S.shape[1]),
