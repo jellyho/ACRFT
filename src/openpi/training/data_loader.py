@@ -14,6 +14,7 @@ import torch
 import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+import openpi.training.progress as _progress
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -274,10 +275,61 @@ def create_torch_dataset(
     if skip_videos:
         dataset._query_videos = _StubVideoQuery()
 
+    if data_config.drop_failure_homing:
+        dataset = _drop_failure_homing(dataset, data_config)
+
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(_task_index_to_prompt(dataset_meta))])
 
     return dataset
+
+
+def _drop_failure_homing(dataset, data_config: _config.DataConfig):
+    """Remove the trailing return-to-home frames of FAILURE episodes from the training pool.
+
+    This is the only frame-level filter in the BC path -- everything else here selects whole
+    episodes -- because the thing being removed is a behaviour, not a demonstration. A failure's
+    homing is the operator retracting from an unfinished task, and it is the one signal in the set
+    that teaches "give up from here". A success's homing is left in: retracting once the task is
+    done is correct, and it is what the policy should do at the end of an episode.
+
+    Both facts it needs come from the dataset itself, so nothing has to be passed in or kept in sync:
+    the verdicts from next.success / next.done, the onsets from observation.control_mode.
+    """
+    import torch.utils.data as _tud
+
+    onsets = _progress.homing_onsets(data_config.repo_id)
+    if onsets is None:
+        raise ValueError(
+            f"drop_failure_homing=True but {data_config.repo_id} has no observation.control_mode "
+            "column, so there is nothing to say where an episode's return-to-home motion begins. "
+            "Train without the flag, or record control_mode."
+        )
+    succ = _progress.success_episode_indices(data_config.repo_id)
+    if succ is None:
+        raise ValueError(
+            f"drop_failure_homing=True but {data_config.repo_id} carries no episode verdicts, so "
+            "failure episodes cannot be identified. Train without the flag."
+        )
+    succ = set(succ)
+    hf = dataset.hf_dataset
+    ep = np.asarray(hf["episode_index"], np.int64).reshape(-1)
+    fr = np.asarray(hf["frame_index"], np.int64).reshape(-1)
+    cut = np.array([onsets.get(int(e), 1 << 30) for e in ep], np.int64)
+    drop = (~np.isin(ep, list(succ))) & (fr >= cut)
+    keep = np.flatnonzero(~drop)
+    n_ep = len(set(ep[drop].tolist()))
+    logging.info(
+        "drop_failure_homing: cut %d of %d frames (%.2f%%) -- the return-to-home tails of %d failure "
+        "episodes. Success homing is kept.",
+        len(ep) - len(keep),
+        len(ep),
+        100 * (len(ep) - len(keep)) / max(len(ep), 1),
+        n_ep,
+    )
+    if len(keep) == len(ep):
+        logging.warning("drop_failure_homing: nothing was cut -- no failure episode has a homing tail.")
+    return _tud.Subset(dataset, keep.tolist())
 
 
 def _task_index_to_prompt(dataset_meta: lerobot_dataset.LeRobotDatasetMetadata) -> dict[int, str]:

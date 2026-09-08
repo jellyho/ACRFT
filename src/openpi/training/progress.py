@@ -233,3 +233,58 @@ class AddProgress(_transforms.DataTransformFn):
             **data,
             "progress": self.labels.progress(data["episode_index"], frame),
         }
+
+
+def trailing_homing_onset(seq: np.ndarray, teleop_value: float = 0.0, tol: int = 5) -> int:
+    """Start of an episode's trailing return-to-home run, or ``len(seq)`` if it has none.
+
+    ``seq`` is the episode's ``observation.control_mode`` (teleop_value during the task, something
+    else -- 4.0 on the YAM rig -- while the arms drive themselves home).
+
+    The obvious reading, 1 + the last teleop frame, assumes the homing run is the strict suffix. It
+    is not: 275 of 347 jellyho/yam_lego_taxi episodes and 160 of 160 jellyho/yam_cable_tie episodes
+    end [... 4. 4. 4. 4. 0.], one stray teleop frame after the arms are already home, which makes
+    that rule return the episode length and find no homing at all. So take the LAST run of homing
+    frames and accept it as the tail when it reaches within ``tol`` frames of the end.
+    """
+    homing = seq != teleop_value
+    n = len(seq)
+    if not homing.any():
+        return n
+    idx = np.flatnonzero(homing)
+    if idx[-1] < n - 1 - tol:  # the last homing run is interior, not a tail
+        return n
+    breaks = np.flatnonzero(np.diff(idx) > 1)
+    return int(idx[breaks[-1] + 1] if len(breaks) else idx[0])
+
+
+def homing_onsets(repo_id: str, *, teleop_value: float = 0.0, tol: int = 5) -> dict[int, int] | None:
+    """``{episode_index: homing_onset}`` read from the dataset's own ``observation.control_mode``.
+
+    Returns None when the dataset does not record control_mode, which is the honest answer for a
+    dataset that cannot say where its homing starts -- callers must not silently assume "no homing".
+    No video is decoded; this reads two low-dimensional parquet columns.
+    """
+    from lerobot.datasets import lerobot_dataset as _lrd
+
+    meta = _lrd.LeRobotDatasetMetadata(repo_id)
+    root = pathlib.Path(meta.root)
+    import pyarrow.dataset as pads
+
+    files = sorted(root.glob("data/chunk-*/file-*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"No LeRobot v3 parquet files under {root}/data/chunk-*/file-*.parquet")
+    ds = pads.dataset(files, format="parquet")
+    if "observation.control_mode" not in ds.schema.names:
+        return None
+    tbl = ds.to_table(columns=["episode_index", "frame_index", "observation.control_mode"])
+    ep = tbl["episode_index"].to_numpy()
+    fr = tbl["frame_index"].to_numpy()
+    raw = tbl["observation.control_mode"].to_pylist()
+    cm = np.asarray([x[0] if isinstance(x, list) else x for x in raw], np.float32)
+    out: dict[int, int] = {}
+    for e in np.unique(ep):
+        m = ep == e
+        order = np.argsort(fr[m])
+        out[int(e)] = trailing_homing_onset(cm[m][order], teleop_value, tol)
+    return out

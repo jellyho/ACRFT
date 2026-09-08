@@ -92,6 +92,14 @@ class DataConfig:
     data_transforms: _transforms.Group = dataclasses.field(default_factory=_transforms.Group)
     # Model specific transforms. Will be applied after the data is normalized.
     model_transforms: _transforms.Group = dataclasses.field(default_factory=_transforms.Group)
+    # Drop each FAILURE episode's trailing return-to-home frames from training. A failure's homing is
+    # "arms retracting from a task that is not done", and it is the only supervision in the set that
+    # says give up: measured on jellyho/yam_lego_taxi, those frames sit at cosine 0.956 from their
+    # nearest success-task frame (success-task frames sit at 0.981 from each other) while the action
+    # they teach is 3.5x further from what that look-alike neighbour was taught. Near-identical
+    # picture, opposite action. A success's homing is left alone -- "retract once done" is correct
+    # behaviour, and it is what the policy should do at the end of an episode.
+    drop_failure_homing: bool = False
     # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
     use_quantile_norm: bool = False
 
@@ -547,6 +555,12 @@ class LeRobotYAMDataConfig(DataConfigFactory):
     # the dataset's own verdict features (next.success / next.done) and trains (and computes norm
     # stats) on exactly those.
     success_only: bool = False
+    # Keep the failure episodes but cut their return-to-home tails. Orthogonal to success_only, so
+    # the three data conditions are reachable from the config alone:
+    #   success_only=False, drop_failure_homing=False -> every frame (what the deployed policy saw)
+    #   success_only=False, drop_failure_homing=True  -> failures for their task behaviour, no give-up
+    #   success_only=True                             -> no failure frames at all
+    drop_failure_homing: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -607,6 +621,9 @@ class LeRobotYAMDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             action_sequence_keys=("action",),
             episodes=episodes,
+            # success_only already removes every failure frame, so cutting failure homing on top is
+            # a no-op; say so rather than letting the loader do the work and find nothing.
+            drop_failure_homing=self.drop_failure_homing and not self.success_only,
         )
 
 

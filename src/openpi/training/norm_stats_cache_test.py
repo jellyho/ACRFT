@@ -1,5 +1,6 @@
 """The cache must find statistics by what they were computed on, not by where someone filed them."""
 
+import dataclasses
 import json
 import pathlib
 
@@ -7,6 +8,7 @@ import numpy as np
 import pytest
 
 from openpi.shared import normalize as _normalize
+from openpi.training import config as _config
 from openpi.training import norm_stats_cache as nsc
 
 
@@ -94,3 +96,44 @@ def test_naming_an_asset_that_does_not_exist_is_an_error_not_a_silent_skip(tmp_p
     )
     with pytest.raises(FileNotFoundError, match="named explicitly"):
         cfg.data.create(cfg.assets_dirs, cfg.model)
+
+
+def test_failure_homing_is_dropped_and_success_homing_is_not(tmp_path, monkeypatch):
+    """The filter must cut a failure's give-up tail and leave a success's correct retraction alone.
+
+    A failure's homing is the operator retracting from a task that is not done -- the only
+    supervision in the set that says give up, and it sits at cosine 0.956 from its nearest
+    success-task frame while teaching an action 3.5x further away than that neighbour's.
+    """
+
+    from openpi.training import data_loader
+    from openpi.training import progress
+
+    class _HF:
+        def __getitem__(self, k):
+            # two episodes of 10 frames: ep0 success, ep1 failure, both homing from frame 7
+            return {"episode_index": [0] * 10 + [1] * 10, "frame_index": list(range(10)) * 2}[k]
+
+    class _DS:
+        hf_dataset = _HF()
+
+        def __len__(self):
+            return 20
+
+    monkeypatch.setattr(progress, "homing_onsets", lambda *a, **k: {0: 7, 1: 7})
+    monkeypatch.setattr(progress, "success_episode_indices", lambda *a, **k: [0])
+    cfg = dataclasses.replace(_config.DataConfig(), repo_id="x/y", drop_failure_homing=True)
+    out = data_loader._drop_failure_homing(_DS(), cfg)
+    kept = set(out.indices)
+    assert kept == set(range(10)) | set(range(10, 17)), "ep0 kept whole; ep1 cut from its onset"
+    assert len(kept) == 17
+
+
+def test_the_filter_refuses_rather_than_guessing_when_control_mode_is_missing(tmp_path, monkeypatch):
+    from openpi.training import data_loader
+    from openpi.training import progress
+
+    monkeypatch.setattr(progress, "homing_onsets", lambda *a, **k: None)
+    cfg = dataclasses.replace(_config.DataConfig(), repo_id="x/y", drop_failure_homing=True)
+    with pytest.raises(ValueError, match="observation.control_mode"):
+        data_loader._drop_failure_homing(object(), cfg)
