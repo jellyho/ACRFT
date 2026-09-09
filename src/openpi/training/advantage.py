@@ -5,10 +5,17 @@ per frame, in LeRobot global-frame-index order (the same order the patch-feature
 i of either file is frame i of the dataset). This module turns that pair into the label the arms
 actually consume and attaches it to a sample.
 
-The z-score lives here, not in the model, because it is a statistic of the WHOLE dataset --
-computing it per batch would make the weights depend on batch composition, which is exactly the bug
-xbpeng/awr avoids by normalizing over the replay buffer (awr_agent.py:403). Temperature and clipping
-stay on the model config, where they are swept.
+Normalization lives here, not in the model, because it is a statistic of the WHOLE dataset --
+computing it per batch would make a sample's label depend on who it was batched with, exactly the
+bug xbpeng/awr avoids by normalizing over the replay buffer (awr_agent.py:403).
+
+Which normalization is not a detail the arms share, so the data config states it and the arm's
+`with_*` transform sets it:
+
+  ``zscore``  AWR. (A - mean) / (std + eps); the model exponentiates and clips it.
+  ``raw``     CFGRL. A itself, because its label is the hard indicator 1{A > 0}
+              (iql_diffusion.py:157) and a z-score would silently retarget that threshold to
+              1{A > mean(A)} -- a different, larger set, with nothing to notice it by.
 """
 
 import dataclasses
@@ -22,27 +29,31 @@ import openpi.transforms as _transforms
 logger = logging.getLogger(__name__)
 
 
-def normalized_advantage(advantage_dir: str | pathlib.Path, *, eps: float = 1e-5) -> np.ndarray:
-    """Load `q_data.npy` / `v_data.npy` and return A = z-score(Q - V), one entry per frame.
+def load_advantage(advantage_dir: str | pathlib.Path, *, normalize: str = "zscore", eps: float = 1e-5) -> np.ndarray:
+    """Load `q_data.npy` / `v_data.npy` and return A = Q - V, one entry per frame.
 
-    eps matches awr_agent.py:403 (`(adv - mean) / (std + 1e-5)`).
+    `normalize` is "zscore" (eps matches awr_agent.py:403, `(adv - mean) / (std + 1e-5)`) or "raw".
+    See the module docstring for why the choice belongs to the arm.
     """
+    if normalize not in ("zscore", "raw"):
+        raise ValueError(f"normalize must be 'zscore' or 'raw', got {normalize!r}")
     d = pathlib.Path(advantage_dir)
     q = np.load(d / "q_data.npy")
     v = np.load(d / "v_data.npy")
     if q.shape != v.shape:
         raise ValueError(f"{d}: q_data {q.shape} and v_data {v.shape} disagree")
     adv = np.asarray(q - v, dtype=np.float32)
-    norm = (adv - adv.mean()) / (adv.std() + eps)
+    out = adv if normalize == "raw" else (adv - adv.mean()) / (adv.std() + eps)
     logger.info(
-        "advantage %s: n=%d  raw mean %.4f std %.4f -> normalized std %.4f",
+        "advantage %s: n=%d  raw mean %.4f std %.4f  frac>0 %.3f  -> %s",
         d,
-        norm.size,
+        adv.size,
         float(adv.mean()),
         float(adv.std()),
-        float(norm.std()),
+        float((adv > 0).mean()),
+        normalize,
     )
-    return norm.astype(np.float32)
+    return out.astype(np.float32)
 
 
 @dataclasses.dataclass(frozen=True)
