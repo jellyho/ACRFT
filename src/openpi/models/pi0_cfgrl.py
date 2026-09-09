@@ -68,6 +68,32 @@ class Pi0CFGRL(Pi0):
         adarms = adarms + self.opt_embed[opt_idx]
         return tokens, mask, ar_mask, adarms
 
+    @override
+    def compute_loss(self, rng, observation, actions, *, train: bool = False):
+        """The trainer's entry point: the CFGRL objective, not the inherited BC one.
+
+        Until this override existed, `Pi0CFGRL` overrode only `sample_actions`, so a run launched as
+        `train.py <task>_cfgrl` trained PLAIN BC under a CFGRL name -- the checkpoint served with
+        guidance, the objective never saw an optimality label, and nothing in the logs said so. The
+        arm was reachable only through its own script.
+
+        The label is the official hard indicator O = 1{A > 0} (iql_diffusion.py:157) on the RAW
+        advantage, which is why the data config for this arm must load it with normalize="raw": a
+        z-scored A would move the threshold to 1{A > mean(A)}, a different and larger positive set.
+        """
+        if observation.advantage is None:
+            raise ValueError(
+                "Pi0CFGRL needs Observation.advantage to build its optimality label O = 1{A > 0}. "
+                "Use a data config built with advantage_dir=<annotate_advantage.py output> and "
+                'advantage_norm="raw" (with_cfgrl sets both) -- without it this would silently '
+                "train plain BC, which is exactly the defect this override fixes."
+            )
+        label = (observation.advantage > 0).astype(jnp.float32)
+        loss, aux = self.compute_loss_cfgrl(rng, observation, actions, label)
+        # `bc_loss` is the key every config emits so arms and a plain BC run compare on one chart;
+        # for CFGRL the conditional branch on the optimal samples is the closest thing to it.
+        return loss, {"bc_loss": aux["uncond"], **aux}
+
     def compute_loss_cfgrl(self, rng, observation, actions, label):
         """Both CFGRL branches in ONE llm pass by doubling the batch (equivalent to the official
         two passes at iql_diffusion.py:168-177: identical x_t/time feed both heads).

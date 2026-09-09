@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import openpi.models.pi0_awr as pi0_awr
+import openpi.models.pi0_cfgrl as pi0_cfgrl
 import openpi.training.advantage as _advantage
 
 
@@ -28,7 +29,7 @@ def test_advantage_is_z_scored_over_the_whole_dataset(tmp_path):
     """Per-batch normalization would make a sample's weight depend on who it was batched with."""
     q = np.arange(100, dtype=np.float32)
     v = np.zeros(100, np.float32)
-    a = _advantage.normalized_advantage(_write(tmp_path, q, v))
+    a = _advantage.load_advantage(_write(tmp_path, q, v))
     assert a.shape == (100,)
     assert a.dtype == np.float32
     np.testing.assert_allclose(a.mean(), 0.0, atol=1e-5)
@@ -38,15 +39,33 @@ def test_advantage_is_z_scored_over_the_whole_dataset(tmp_path):
     np.testing.assert_allclose(a, (adv - adv.mean()) / (adv.std() + 1e-5), rtol=1e-6)
 
 
+def test_raw_mode_keeps_the_sign_the_cfgrl_threshold_reads(tmp_path):
+    """CFGRL's label is 1{A > 0} on the RAW advantage (iql_diffusion.py:157). Z-scoring moves that
+    threshold to 1{A > mean(A)} -- a different, larger set, and nothing downstream would notice."""
+    q = np.array([-3.0, -1.0, 1.0, 9.0], np.float32)  # mean 1.5, so the two thresholds disagree
+    v = np.zeros(4, np.float32)
+    d = _write(tmp_path, q, v)
+    raw = _advantage.load_advantage(d, normalize="raw")
+    z = _advantage.load_advantage(d, normalize="zscore")
+    np.testing.assert_allclose(raw, q)
+    assert (raw > 0).tolist() == [False, False, True, True]
+    assert (z > 0).tolist() == [False, False, False, True], "z-score really does move the threshold"
+
+
+def test_an_unknown_normalization_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="zscore"):
+        _advantage.load_advantage(_write(tmp_path, np.zeros(4), np.zeros(4)), normalize="minmax")
+
+
 def test_mismatched_q_and_v_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="disagree"):
-        _advantage.normalized_advantage(_write(tmp_path, np.zeros(10), np.zeros(11)))
+        _advantage.load_advantage(_write(tmp_path, np.zeros(10), np.zeros(11)))
 
 
 def test_the_label_is_addressed_by_the_global_frame_index(tmp_path):
     """LeRobot's `index` is the row the annotation files are keyed by; getting this wrong pairs
     every frame with another frame's advantage, which is silent -- the loss still trains."""
-    a = _advantage.normalized_advantage(_write(tmp_path, np.arange(50), np.zeros(50)))
+    a = _advantage.load_advantage(_write(tmp_path, np.arange(50), np.zeros(50)))
     add = _advantage.AddAdvantage(a)
     out = add({"index": np.array([0, 7, 49]), "state": "untouched"})
     np.testing.assert_allclose(out["advantage"], a[[0, 7, 49]])
@@ -55,13 +74,13 @@ def test_the_label_is_addressed_by_the_global_frame_index(tmp_path):
 
 def test_it_is_a_no_op_at_serving_time(tmp_path):
     """The same transform chain serves, where the raw item carries no index and there is no label."""
-    add = _advantage.AddAdvantage(_advantage.normalized_advantage(_write(tmp_path, np.arange(5), np.zeros(5))))
+    add = _advantage.AddAdvantage(_advantage.load_advantage(_write(tmp_path, np.arange(5), np.zeros(5))))
     assert "advantage" not in add({"state": 1})
 
 
 def test_an_annotation_from_a_different_dataset_is_caught(tmp_path):
     """Otherwise a shorter annotation silently wraps or reads garbage for the tail of the dataset."""
-    add = _advantage.AddAdvantage(_advantage.normalized_advantage(_write(tmp_path, np.arange(10), np.zeros(10))))
+    add = _advantage.AddAdvantage(_advantage.load_advantage(_write(tmp_path, np.arange(10), np.zeros(10))))
     with pytest.raises(IndexError, match="past the 10 annotated frames"):
         add({"index": np.array([9, 10])})
 
@@ -122,3 +141,35 @@ def test_the_arm_trains_the_action_expert_only():
     # ...and the escape hatch really does widen it to the BC budget.
     wide = _tiny_awr(freeze_backbone=False)
     assert len(trainable_paths(*wide)) > len(paths)
+
+
+def _tiny_cfgrl(**over):
+    cfg = pi0_cfgrl.Pi0CFGRLConfig(
+        pi05=True,
+        action_horizon=4,
+        discrete_state_input=False,
+        paligemma_variant="dummy",
+        action_expert_variant="dummy",
+        **over,
+    )
+    return cfg, cfg.create(jax.random.key(0))
+
+
+def test_cfgrl_trains_its_own_objective_not_plain_bc():
+    """The defect this override fixes: Pi0CFGRL used to inherit Pi0.compute_loss, so a run launched
+    as `train.py <task>_cfgrl` trained BC under a CFGRL name and nothing said so."""
+    cfg, model = _tiny_cfgrl()
+    obs = dataclasses.replace(cfg.fake_obs(batch_size=4), advantage=jnp.array([1.0, -1.0, 2.0, -2.0]))
+    act = cfg.fake_act(batch_size=4)
+    loss, aux = model.compute_loss(jax.random.key(1), obs, act, train=True)
+
+    # the CFGRL objective reports its two branches; plain BC reports neither
+    assert {"cond", "uncond", "frac_pos"} <= set(aux)
+    np.testing.assert_allclose(aux["frac_pos"], 0.5)  # 1{A > 0} over [1, -1, 2, -2]
+    assert loss.ndim == 0
+
+
+def test_cfgrl_refuses_to_run_without_its_label():
+    cfg, model = _tiny_cfgrl()
+    with pytest.raises(ValueError, match=r"needs Observation\.advantage"):
+        model.compute_loss(jax.random.key(1), cfg.fake_obs(batch_size=2), cfg.fake_act(batch_size=2), train=True)

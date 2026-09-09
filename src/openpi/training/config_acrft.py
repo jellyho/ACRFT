@@ -46,9 +46,12 @@ class LeRobotYAMDataConfig(DataConfigFactory):
 
     delta_mode: str = "joint"  # joint (relative) | none (absolute)
     # Directory written by scripts/annotate_advantage.py (q_data.npy + v_data.npy). When set, every
-    # sample carries `advantage` -- the dataset-z-scored A(s, a_chunk) the extraction arms weight
-    # by. Left None for plain BC, where nothing reads it.
+    # sample carries `advantage` = A(s, a_chunk). Left None for plain BC, where nothing reads it.
     advantage_dir: str | None = None
+    # How that advantage is normalized: "zscore" for AWR's exponential weight, "raw" for CFGRL's
+    # 1{A > 0} indicator. The arm's `with_*` transform sets this together with the model, because
+    # the two have to agree -- see openpi/training/advantage.py.
+    advantage_norm: str = "zscore"
     # Dataset column holding the sparse success signal, used to resolve `success_only` below.
     reward_key: str = "next.reward"
     # Train on successful episodes only. The YAM teleop set is 100 success / 19 fail; with this off
@@ -79,7 +82,9 @@ class LeRobotYAMDataConfig(DataConfigFactory):
         repack_inputs = []
         if self.advantage_dir is not None:
             structure["advantage"] = "advantage"
-            repack_inputs.append(_advantage.AddAdvantage(_advantage.normalized_advantage(self.advantage_dir)))
+            repack_inputs.append(
+                _advantage.AddAdvantage(_advantage.load_advantage(self.advantage_dir, normalize=self.advantage_norm))
+            )
         repack_inputs.append(_transforms.RepackTransform(structure))
         repack_transform = _transforms.Group(inputs=repack_inputs)
 
@@ -285,7 +290,24 @@ def _yam_alphaflow_config(
 CONFIGS.append(_yam_alphaflow_config())
 
 
-def with_cfgrl(base: TrainConfig, *, cfg_w: float = 1.5, suffix: str = "cfgrl") -> TrainConfig:
+# The artefacts both extraction arms refine and score against. They are ABSOLUTE because they name
+# artefacts, not repo files, and they point at the old slurm cluster's filesystem -- on any other
+# machine they have to be repointed here. The config still loads either way; the failure surfaces at
+# training start as a missing checkpoint, not as a bad run. Repoint here rather than on the command
+# line: the config name is the experiment.
+_ADVANTAGE_DIR = "/NHNHOME/jellyho/jellyho/ACRFT/.scratch/extraction/advantage_fixed_tau9min"
+_BC_CHECKPOINT = "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000/params"
+
+
+def with_cfgrl(
+    base: TrainConfig,
+    *,
+    advantage_dir: str,
+    init_checkpoint: str,
+    cfg_w: float = 1.5,
+    num_train_steps: int = 30_000,
+    suffix: str = "cfgrl",
+) -> TrainConfig:
     """CFGRL variant OF ANY pi0.5 task config — a method transform, not a task config.
 
     Policy-extraction methods are orthogonal to the task: the same CFGRL recipe should apply to
@@ -310,6 +332,17 @@ def with_cfgrl(base: TrainConfig, *, cfg_w: float = 1.5, suffix: str = "cfgrl") 
             **{f.name: getattr(base.model, f.name) for f in dataclasses.fields(base.model)},
             cfg_w=cfg_w,
         ),
+        # RAW advantage: the label is the hard indicator 1{A > 0} (iql_diffusion.py:157), so a
+        # z-score would retarget the threshold to 1{A > mean(A)} without anything to notice it by.
+        data=dataclasses.replace(base.data, advantage_dir=advantage_dir, advantage_norm="raw"),
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(init_checkpoint),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=0, peak_lr=5e-5, decay_steps=num_train_steps, decay_lr=5e-5
+        ),
+        ema_decay=None,
+        num_train_steps=num_train_steps,
+        save_interval=10_000,
+        keep_period=10_000,
     )
 
 
@@ -362,22 +395,20 @@ def with_awr(
     )
 
 
-CONFIGS.append(with_cfgrl(_yam_bc_config()))
+CONFIGS.append(
+    with_cfgrl(
+        _yam_bc_config(),
+        advantage_dir=_ADVANTAGE_DIR,
+        init_checkpoint=_BC_CHECKPOINT,
+    )
+)
 
 # The AWR extraction arm on the deployed YAM BC policy.
-#
-# Both paths are absolute because they name ARTEFACTS, not repo files: the advantage annotation and
-# the BC run this arm refines. They point at the old slurm cluster's filesystem, so on any other
-# machine they have to be repointed -- the config still loads either way, and the failure surfaces
-# at training start as a missing-checkpoint error rather than silently. Repoint them here rather
-# than on the command line: the config name is the experiment.
 CONFIGS.append(
     with_awr(
         _yam_bc_config(),
-        advantage_dir="/NHNHOME/jellyho/jellyho/ACRFT/.scratch/extraction/advantage_fixed_tau9min",
-        init_checkpoint=(
-            "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000/params"
-        ),
+        advantage_dir=_ADVANTAGE_DIR,
+        init_checkpoint=_BC_CHECKPOINT,
     )
 )
 
