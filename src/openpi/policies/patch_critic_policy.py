@@ -12,7 +12,7 @@ scores, declared at handshake). Two modes:
   * ``bon``      execute the full chunk of the argmax-Q candidate (best-of-N).
   * ``adaptive`` execute only that candidate's highest-value commitment prefix K, then replan.
 
-The critic dir must hold ``config.json`` + ``params.msgpack`` (written by train_patch_critic.py). The
+The critic dir must hold ``config.json`` + ``params.msgpack`` (written by scripts/train_patch_critic_cached.py). The
 camera keys default to YAM's (agentview, wrist_left, wrist_right) in the order the critic was trained.
 """
 

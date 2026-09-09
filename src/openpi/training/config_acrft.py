@@ -17,9 +17,11 @@ from typing_extensions import override
 
 import openpi.models.model as _model
 import openpi.models.pi0_alphaflow as pi0_alphaflow
+import openpi.models.pi0_awr as pi0_awr
 import openpi.models.pi0_cfgrl as pi0_cfgrl
 import openpi.models.pi0_config as pi0_config
 import openpi.policies.yam_policy as yam_policy
+import openpi.training.advantage as _advantage
 from openpi.training.config import DataConfig
 from openpi.training.config import DataConfigFactory
 from openpi.training.config import ModelTransformFactory
@@ -43,6 +45,10 @@ class LeRobotYAMDataConfig(DataConfigFactory):
     """
 
     delta_mode: str = "joint"  # joint (relative) | none (absolute)
+    # Directory written by scripts/annotate_advantage.py (q_data.npy + v_data.npy). When set, every
+    # sample carries `advantage` -- the dataset-z-scored A(s, a_chunk) the extraction arms weight
+    # by. Left None for plain BC, where nothing reads it.
+    advantage_dir: str | None = None
     # Dataset column holding the sparse success signal, used to resolve `success_only` below.
     reward_key: str = "next.reward"
     # Train on successful episodes only. The YAM teleop set is 100 success / 19 fail; with this off
@@ -68,7 +74,14 @@ class LeRobotYAMDataConfig(DataConfigFactory):
             "actions": "action",
             "prompt": "prompt",
         }
-        repack_transform = _transforms.Group(inputs=[_transforms.RepackTransform(structure)])
+        # `advantage` has to be mapped explicitly (RepackTransform drops anything unlisted) and
+        # produced by AddAdvantage, which runs first, while the raw LeRobot `index` still exists.
+        repack_inputs = []
+        if self.advantage_dir is not None:
+            structure["advantage"] = "advantage"
+            repack_inputs.append(_advantage.AddAdvantage(_advantage.normalized_advantage(self.advantage_dir)))
+        repack_inputs.append(_transforms.RepackTransform(structure))
+        repack_transform = _transforms.Group(inputs=repack_inputs)
 
         data_transforms = _transforms.Group(
             inputs=[yam_policy.YAMInputs(model_type=model_config.model_type)],
@@ -300,7 +313,73 @@ def with_cfgrl(base: TrainConfig, *, cfg_w: float = 1.5, suffix: str = "cfgrl") 
     )
 
 
+def with_awr(
+    base: TrainConfig,
+    *,
+    advantage_dir: str,
+    init_checkpoint: str,
+    temp: float = 1.0,
+    weight_clip: float = 20.0,
+    num_train_steps: int = 30_000,
+    suffix: str = "awr",
+) -> TrainConfig:
+    """AWR variant OF ANY pi0.5 task config -- a method transform, like `with_cfgrl`.
+
+    Unlike CFGRL the network is unchanged, so this swaps only the loss (Pi0AWRConfig) and the three
+    things that make it an EXTRACTION run rather than a BC run:
+
+      * it starts from a finished BC checkpoint, not pi05_base;
+      * it trains the action expert only (Pi0AWRConfig.get_freeze_filter), so every arm gets the
+        same budget on the same frozen features;
+      * its data carries the advantage annotation the loss weights by.
+
+    Those three used to be argparse flags in scripts/train_awr.py, which meant the run was defined
+    by what someone typed. Here the config name is the experiment -- and the arm gets --resume,
+    FSDP, checkpoint pruning and norm-stats resolution from the ordinary trainer for free.
+    """
+    if not isinstance(base.model, pi0_config.Pi0Config):
+        raise TypeError(f"with_awr needs a pi0.5 base config, got {type(base.model).__name__}")
+    return dataclasses.replace(
+        base,
+        name=f"{base.name}_{suffix}",
+        model=pi0_awr.Pi0AWRConfig(
+            **{f.name: getattr(base.model, f.name) for f in dataclasses.fields(base.model)},
+            awr_temp=temp,
+            awr_weight_clip=weight_clip,
+        ),
+        data=dataclasses.replace(base.data, advantage_dir=advantage_dir),
+        # Start from the BC policy this arm refines, keeping anything the base checkpoint lacks.
+        weight_loader=weight_loaders.CheckpointWeightLoaderKeepMissing(init_checkpoint),
+        # The arms ran a flat 5e-5 with no EMA; the BC default (cosine + EMA 0.99) would confound
+        # "the objective helped" with "the schedule helped".
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=0, peak_lr=5e-5, decay_steps=num_train_steps, decay_lr=5e-5
+        ),
+        ema_decay=None,
+        num_train_steps=num_train_steps,
+        save_interval=10_000,
+        keep_period=10_000,
+    )
+
+
 CONFIGS.append(with_cfgrl(_yam_bc_config()))
+
+# The AWR extraction arm on the deployed YAM BC policy.
+#
+# Both paths are absolute because they name ARTEFACTS, not repo files: the advantage annotation and
+# the BC run this arm refines. They point at the old slurm cluster's filesystem, so on any other
+# machine they have to be repointed -- the config still loads either way, and the failure surfaces
+# at training start as a missing-checkpoint error rather than silently. Repoint them here rather
+# than on the command line: the config name is the experiment.
+CONFIGS.append(
+    with_awr(
+        _yam_bc_config(),
+        advantage_dir="/NHNHOME/jellyho/jellyho/ACRFT/.scratch/extraction/advantage_fixed_tau9min",
+        init_checkpoint=(
+            "/data5/jellyho/ACRFT/openpi/checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000/params"
+        ),
+    )
+)
 
 
 def _data_condition(base: TrainConfig, suffix: str, doc: str, **data_kwargs) -> TrainConfig:

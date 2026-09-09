@@ -23,6 +23,8 @@ maintained code.
 | Space tooling | `space_add_entry.py`, `space_build.py`, `space_migrate.py`, `space_offload_figs.py`, `SPACE_ENTRIES_SCHEMA.md` | the `space_v2/` publishing path |
 | probes / diagnostics | `diag_*.py`, `probe_*.py`, `measure_*.py`, `replicate_*.py`, `eval_mbac_offline.py`, `eval_onestep_bc.py`, `score_critic_auc.py`, `legoprog_stats.py` | one question each, usually behind a published entry |
 | retired training runs | `train_bc_probe.py`, `train_latent_dynamics.py`, `train_mve_critic.py`, `train_v_react.py`, `train_cheapz_dynamics_v1.py`, `fql_smoke.py`, `alphaflow_jvp_stress.py` | experiment arms that are not the current line |
+| retired research lines | `train_cheap_z.py`, `train_cheapz_dynamics{,_v1}.py`, `make_cheapz_annot.py`, `probe_cheap_z.py` | the cheap-z study (design doc 2026-08-07), measured entirely on RoboCasa PrepareCoffee and aimed at replacing the RLT VLA token — both retired. The patch critic is what shipped from it. |
+| superseded trainers | `train_patch_critic.py` | the pre-cache patch-critic trainer (IQL on transition dirs). The live path is `convert_yam_to_patchcritic` -> `cache_patch_features` -> `train_patch_critic_cached`. |
 | data / ops one-offs | `convert_*.py`, `sync_bc_checkpoints.py`, `upload_extraction_arms.py`, `watch_upload_ckpts.py`, `smoke_deploy_hud.py`, `qpilots_steer.py`, `annotate_advantage.py`, `idql_select.py` | |
 
 ## Note on published reports
