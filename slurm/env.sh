@@ -30,9 +30,10 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS="${JAX_PERSISTENT_CACHE_MIN_CO
 export ANNOT_ROOT="${ANNOT_ROOT:-$CACHE_DIR/annot}"
 export CRITIC_RUNS="${CRITIC_RUNS:-$CACHE_DIR/critic_runs}"
 export SLURM_LOGS="${SLURM_LOGS:-$CACHE_DIR/logs}"
-# The exp dir the annotation's meta.json records as its source: pi05_robocasa_PrepareCoffee_rlt,
-# exp PrepareCoffee_rlt5_pardec_noprop, step 70000.
-export VLA_CKPT="${VLA_CKPT:-$CACHE_DIR/checkpoints/pi05_robocasa_PrepareCoffee_rlt/PrepareCoffee_rlt5_pardec_noprop/70000}"
+# The VLA checkpoint an annotation was produced from. It had a RoboCasa default until 2026-09-09;
+# RoboCasa is retired, so there is no sensible default left — set it explicitly when you need it
+# (only `fetch_data.sh --ckpt` reads it now that the sim rollout eval is gone).
+export VLA_CKPT="${VLA_CKPT:-}"
 
 # HF datasets/models. The token lives in the default user cache, which moving HF_HOME hides — carry
 # it over explicitly so a private repo still resolves. (acrft-annot-noprop itself is public.)
@@ -48,13 +49,10 @@ fi
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.92}"
 
-# In-process sim rollout: headless offscreen GL, and robocasa imported from the submodule
-# (it is not installed into the venv — examples/robocasa/setup_eval_env.sh uses the same path).
+# Headless offscreen GL, for anything that renders through mujoco (the mimicgen probes,
+# misc/viz). The third_party/robocasa PYTHONPATH entry that used to sit here went with the
+# RoboCasa sim rollout eval on 2026-09-09 — nothing imports robocasa any more.
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
-case ":${PYTHONPATH:-}:" in
-    *":$ACRFT_REPO/third_party/robocasa:"*) ;;
-    *) export PYTHONPATH="$ACRFT_REPO/third_party/robocasa${PYTHONPATH:+:$PYTHONPATH}" ;;
-esac
 
 export WANDB_PROJECT="${WANDB_PROJECT:-acrft_critic}"
 export WANDB_ENTITY="${WANDB_ENTITY:-RSS-PFT_RLLAB}"

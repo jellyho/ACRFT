@@ -57,9 +57,10 @@ dev = [
     "matplotlib>=3.10.0",
     "pynvml>=12.0.0",
 ]
-# RoboCasa sim rollout client (examples/robocasa/main.py, run_eval.sh). Install with
-# `uv sync --group eval`. robocasa itself is used from third_party/robocasa via PYTHONPATH
-# (not installed). numpy is pinned to the exact version robocasa asserts at import.
+# Sim dependencies. Install with `uv sync --group eval`. The RoboCasa rollout client that
+# originally needed these was retired on 2026-09-09; what still uses them is
+# slurm/probes/mimicgen_{data,eval}.py (robosuite, h5py) and misc/viz/geometry.py (mujoco).
+# The numpy pin is inherited from that era and is the version robosuite was resolved against.
 eval = [
     # RoboCasa 365 needs robosuite's `robocasa-dev` branch (adds load_model_on_init / lite_physics
     # used by robocasa's kitchen env); the PyPI 1.5.2 release and current master lack it.
@@ -159,4 +160,4 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 markers = ["manual: should be run manually."]
-testpaths = ["src", "scripts", "packages"]
+testpaths = ["tests", "packages"]

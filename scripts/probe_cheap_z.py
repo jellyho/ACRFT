@@ -19,7 +19,7 @@ frame set with the IDENTICAL episode split, so rows are directly comparable.
 Run under slurm (one GPU decodes video + runs the 22M encoder comfortably):
   sbatch ... uv run scripts/probe_cheap_z.py \
       --annot rlt5=.scratch/annot_noprop mae05=.scratch/annot_mae05 \
-      --repo-id jellyho/robocasa365-PrepareCoffee --num-frames 20000 --out .scratch/probe_cheap_z.json
+      --repo-id jellyho/yam_lego_taxi --num-frames 20000 --out .scratch/probe_cheap_z.json
 """
 
 import argparse

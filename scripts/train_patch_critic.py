@@ -3,7 +3,7 @@
 Mirrors the validated ``scripts/train_rlt_critic.py`` IQL recipe, with ONE change: the observation is
 a FROZEN DINOv2 patch grid (computed once up front and cached) instead of the RLT VLA token.
 
-Data: the per-step transition dirs written by ``examples/robocasa/collect_rollouts_patchcritic.py``
+Data: the per-step transition dirs written by ``scripts/convert_yam_to_patchcritic.py``
 (images[N,3,224,224,3] state[N,16] action[N,12] reward[N] done[N] episode_index[N]). The action
 CHUNK for frame t is action[t:t+H] within the same episode (zero-padded past the episode end); the
 per-prefix / MC targets come from the dense sparse reward.

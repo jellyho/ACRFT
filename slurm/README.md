@@ -14,19 +14,29 @@ critic is trained here.
 | `train_critic.sbatch` | one critic variant: train → offline diagnostics. Array-aware. |
 | `sweep.sh` | writes the ablation manifest and submits it as one array job |
 | `collect.py` | one table from all the `diag.json` files + the rollout lines in the job logs |
+| `extract_proprio.py` / `merge_annot.py` / `transform_annot.py` | annotation-side helpers `sweep.sh` and the report build call |
+| `make_master_report.py` | the single source of truth for every published entry (see ../CLAUDE.md) |
+| `make_figures.py` / `plot_style.py` | figure regeneration and the house plot style |
+| `sync_hub.py` / `gen_entry.py` / `make_weekly_deck.py` | publish to the HF Space; compose entries and the weekly deck |
+
+The training and eval launchers alongside these (`train_bc_*`, `train_alphaflow_*`,
+`critic_cable_tie`, `cache_features_cable_tie`, `extraction_*`, `norm_stats`) are the
+current set. One-off smoke and superseded launchers were removed on 2026-09-09, and the retired
+report generators moved to `../misc/reports/` — see its README. To train without slurm at all, use
+`scripts/train_local.sh`.
 
 ---
 
 ## Once
 
 ```bash
-ROLLOUT=1 slurm/setup.sh      # drop ROLLOUT=1 if you do not want in-training sim rollouts
+slurm/setup.sh
 ```
 
-`uv sync`, the scratch directories, and — with `ROLLOUT=1` — `uv sync --group eval`, the robocasa
-submodule and ~10 GB of kitchen assets. Run it on the **login node**: it needs network, and doing it
+`uv sync` and the scratch directories. Run it on the **login node**: it needs network, and doing it
 once here is what lets the array members run `uv run --no-sync` instead of fourteen jobs racing to
-sync the same `.venv`.
+sync the same `.venv`. (The old `ROLLOUT=1` mode — sim deps, the robocasa submodule and ~10 GB of
+kitchen assets — went away with RoboCasa on 2026-09-09; the sweep runs the offline diagnostics.)
 
 Everything lands under `/scratch/jellyho/acrft` (`CACHE_DIR`). `/scratch` is an NFS share mounted on
 every node with ~10 T free, so a login-node download is visible to the jobs.
@@ -52,7 +62,7 @@ The `acrft-annot-noprop` set, for reference:
 | reward | `sparse`, terminal success, gamma 0.99, support [0, 1] — already re-labelled |
 | on disk | 7.7 GB float32 |
 | **GPU-resident during training** | **5.94 GB** (token + candidates + executed chunks; the held-out set is read only by `eval_rlt_critic.py`) |
-| source VLA | `pi05_robocasa_PrepareCoffee_rlt`, exp `PrepareCoffee_rlt5_pardec_noprop`, step 70000 |
+| source VLA | `pi05_robocasa_PrepareCoffee_rlt` (retired 2026-09-09; the annotations on the Hub predate it) |
 
 N=16 matters for the sweep: `train_rlt_critic.py` only subsamples when `0 < --bootstrap-candidates <
 N`, so that arm is generated as N/2 and N/4 rather than hardcoded.
@@ -101,7 +111,7 @@ slurm/sweep.sh               # 14 runs, 8 at a time, 48 GB tier
 ```
 
 Two separate knobs, deliberately: `DATA_NAME` (default `noprop`) is the dataset dir under
-`$ANNOT_ROOT`, `TASK` (default `PrepareCoffee`) is the RoboCasa env the rollout eval builds. They are
+`$ANNOT_ROOT`. (`TASK` is inert since the RoboCasa rollout eval was retired.) They are
 not the same string and sharing one variable would hand `make_env()` a dataset name.
 
 The sweep is **one-factor-at-a-time from one baseline**, not a cross product — with rollout eval on,
@@ -144,8 +154,8 @@ a100 sit behind their own.
 
 | `TIER=` | Partitions | GPU | Batch | Note |
 |---|---|---|---|---|
-| `a6000` | suma_a6000, gigabyte_a6000, tyan_a6000, asus_6000ada | 48 GB | 1024 | ~20 nodes; the default when `ROLLOUT=1` |
-| `wide` | the above + 3090/4090 | 48/24 GB | **256** | the default when `ROLLOUT=0`; 379 GPUs instead of 106 |
+| `a6000` | suma_a6000, gigabyte_a6000, tyan_a6000, asus_6000ada | 48 GB | 1024 | ~20 nodes |
+| `wide` | the above + 3090/4090 | 48/24 GB | **256** | the default; 379 GPUs instead of 106 |
 | `ampere` | 3090 / 4090 / A5000 | 24 GB | **256** | most nodes, shortest queue |
 | `pro6000` | asus_pro6000, gigabyte_pro6000 | 96 GB | 1024 | most headroom, only 4 nodes |
 | `a100` | suma_a100 | 80 GB | 1024 | own QOS |
