@@ -190,7 +190,7 @@ class PatchTrunk(nn.Module):
     allocation), while a shared trunk is ~2.66 GB plus ~8 MB per member.
 
     The independence this gives up is REPRESENTATION diversity. Measured
-    (scripts/diag_ensemble_independence.py, 96 states), that is not what our members had anyway: two
+    (misc/scripts/diag_ensemble_independence.py, 96 states), that is not what our members had anyway: two
     members of one checkpoint have entirely separate trunks and heads and still show the HIGHEST
     grad_a Q cosine of any pair we can form (0.332, against 0.049 for unrelated directions), while
     changing the recipe -- macro_group_size or expectile -- halves it to 0.185. Separate weights buy

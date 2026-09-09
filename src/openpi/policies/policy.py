@@ -387,7 +387,7 @@ class CriticSelectPolicy(BasePolicy):
             "critic_choice": np.full((chunk, 1), best, np.float32),  # (X, 1)
         }
         # The full [N, P] grid is everything a HUD needs to reconstruct this replan on top of
-        # the above (examples/robocasa/hud.py draws exactly these). It rides along only when the
+        # the above (examples/yam/hud.py draws exactly these). It rides along only when the
         # client sets ``critic_hud`` so a plain critic_select response stays small.
         if want_hud:
             out["critic_grid"] = np.broadcast_to(q, (chunk, *q.shape)).copy()  # (X, N, P)

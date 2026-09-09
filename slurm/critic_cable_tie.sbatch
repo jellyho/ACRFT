@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Patch critic for the YAM cable-tie task. Modelled on slurm/critic_ood.sbatch -- the only committed
-# critic launcher that --chdir's into THIS repo; critic_cont / train_critic_nofloor /
-# train_critic_tau9_noaug / score_iql_pair all chdir into /data5/jellyho/ACRFT/openpi-alphaflow,
-# whose scripts/ copies have diverged (its train_patch_critic_cached.py makes --outcomes required).
+# Patch critic for the YAM cable-tie task. It is now the only committed critic launcher: it was
+# modelled on critic_ood.sbatch, and that one plus critic_cont / train_critic{,_nofloor,_tau9_noaug}
+# / score_iql_pair were removed on 2026-09-09 -- every one of them --chdir'd into
+# /data5/jellyho/ACRFT/openpi-alphaflow, whose scripts/ copies had diverged from this repo's (its
+# train_patch_critic_cached.py makes --outcomes required). Recover them from git if that tree
+# matters again.
 #
 #   sbatch --export=ALL,NAME=fixed_tau9_min_200k,K=2,RED=min,SEED=0,ARCH=independent,HO=0 \
 #          slurm/critic_cable_tie.sbatch

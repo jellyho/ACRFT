@@ -27,4 +27,4 @@ exec /data5/jellyho/ACRFT/openpi/.venv/bin/python -u scripts/train.py pi05_yam_c
   --exp-name="${NAME:-yam_bc_cable_tie_all160}" --project-name yam-rlt --wandb-entity jellyho_ \
   --checkpoint-base-dir /data1/jellyho/acrft_ckpts --overwrite \
   --num-train-steps "${STEPS:-100000}" --save-interval "${SAVE:-25000}" ${SUCC_ARGS} \
-  --num-workers 12
+  --num-workers 8
