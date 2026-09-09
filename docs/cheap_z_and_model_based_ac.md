@@ -53,8 +53,8 @@ cheap-z **dominates the VLA token on every probe** at ~1/130 the encoder size, w
 annotation step. Critic-level A/B (same labels/candidates/seed IQL, only z differs) is
 running; that is the decision-grade test.
 
-Files: `scripts/probe_cheap_z.py` (harness), `scripts/train_cheap_z.py` (recipe),
-`scripts/make_cheapz_annot.py` (packages z as an annotate_rlt-compatible dir so the
+Files: `misc/scripts/probe_cheap_z.py` (harness), `misc/scripts/train_cheap_z.py` (recipe),
+`misc/scripts/make_cheapz_annot.py` (packages z as an annotate_rlt-compatible dir so the
 whole critic stack runs unmodified), `.scratch/dino_cache_PrepareCoffee/` (features).
 
 ## 3. Model-based Adaptive Chunking — the design

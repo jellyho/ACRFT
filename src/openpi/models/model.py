@@ -108,7 +108,8 @@ class Observation(Generic[ArrayT]):
     # Token loss mask (for FAST autoregressive model).
     token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
 
-    # Pi0RLT specific fields.
+    # Policy-extraction fields. Optional per-sample labels the data config attaches when an
+    # extraction arm needs them; absent at inference/serving, where there is no label.
 
     # Scalar task progress in [0, 1] (1 = task succeeded), used as an auxiliary target for the RL
     # token. Only populated when the data config injects it; see training/progress.py.
@@ -118,6 +119,12 @@ class Observation(Generic[ArrayT]):
     # term (make z_rl un-decodable into "which demo"). Only populated when the data config injects it
     # (include_episode_index=True); absent at inference/serving, where there is no episode.
     episode_index: at.Int[ArrayT, "*b"] | None = None
+
+    # Dataset-normalized advantage A(s, a_chunk), z-scored over the whole dataset by the data
+    # config. AWR turns it into a per-sample regression weight inside the loss; keeping the RAW
+    # normalized advantage here (rather than the weight) leaves temperature and clipping on the
+    # MODEL config, where they are swept.
+    advantage: at.Float[ArrayT, "*b"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
@@ -141,6 +148,7 @@ class Observation(Generic[ArrayT]):
             token_loss_mask=data.get("token_loss_mask"),
             progress=data.get("progress"),
             episode_index=data.get("episode_index"),
+            advantage=data.get("advantage"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -222,6 +230,7 @@ def preprocess_observation(
         token_loss_mask=observation.token_loss_mask,
         progress=observation.progress,
         episode_index=observation.episode_index,
+        advantage=observation.advantage,
     )
 
 
