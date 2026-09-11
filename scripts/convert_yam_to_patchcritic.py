@@ -47,7 +47,16 @@ def main():
         default=None,
         help="legacy outcomes.jsonl (deprecated: the verdict is read from the dataset's next.success / next.done)",
     )
-    ap.add_argument("--max-frames", type=int, default=160000)
+    ap.add_argument(
+        "--max-frames",
+        type=int,
+        default=0,
+        help="0 (default) converts the WHOLE dataset. A cap exists because images.dat is raw uint8 -- "
+        "451 KB per frame at 3 cams x 224^2 -- so yam_lego_taxi's 938k frames are 424 GB. "
+        "yam_cable_tie's 251k are 113 GB and need no cap. When a cap does apply, FAIL episodes are "
+        "taken first: they are the scarce negatives the cost_to_goal critic needs, and capping by "
+        "frame count would otherwise drop them last-in-first-out.",
+    )
     ap.add_argument("--img-size", type=int, default=224)
     ap.add_argument("--out", type=pathlib.Path, required=True)
     ap.add_argument("--limit-frames-test", type=int, default=0, help="convert only the first k frames (smoke)")
@@ -71,13 +80,14 @@ def main():
     fails = [e for e in labeled if outc[e] != "success"]
     succ = [e for e in labeled if outc[e] == "success"]
     print(f"labeled episodes: {len(labeled)} ({len(fails)} fail / {len(succ)} success)", flush=True)
-    # all fails first (scarce negatives), then successes, until the frame budget is hit
+    # all fails first (scarce negatives), then successes, until the frame budget is hit.
+    # budget 0 = no budget: take every labeled episode.
     order, kept, tot = fails + succ, [], 0
     for e in order:
         length = int(ends[e] - starts[e])
         kept.append(e)
         tot += length
-        if tot >= a.max_frames:
+        if a.max_frames and tot >= a.max_frames:
             break
     n_kept = sum(int(ends[e] - starts[e]) for e in kept)
     nfail = sum(1 for e in kept if e in set(fails))
@@ -143,7 +153,10 @@ def main():
         "action_dim": action_dim,
         "state_dim": state_dim,
         "img_size": S,
-        "task": "yam_lego_taxi",
+        # Derived, never hard-coded: this file was written as "yam_lego_taxi" while converting
+        # yam_cable_tie, which is the same class of mislabelling that makes a checkpoint dir lie
+        # about what it trained on. `source` below carries the repo id it came from.
+        "task": a.repo_id.split("/")[-1],
         "source": a.repo_id,
         "fps": 30,
         "shapes": {"images": [int(w), 3, S, S, 3], "state": [int(w), state_dim], "action": [int(w), action_dim]},
