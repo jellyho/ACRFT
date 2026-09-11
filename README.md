@@ -33,15 +33,12 @@ on the same teleop set the policy was finetuned on — successes *and* failures.
                never modified again -- everything downstream reads it, nothing writes to it.
                           │  the demos, plus their success/fail verdicts (next.success / next.done)
                           ▼
-   Stage 2     Critic data                     scripts/convert_yam_to_patchcritic.py
-   ─────────   3 cameras at 224, state[42], action[14], sparse terminal reward from the labels.
+   Stage 2     Feature cache                   scripts/cache_patch_features.py
+   ─────────   Reads the LeRobot demos DIRECTLY and runs frozen DINOv2 once per frame. The backbone
+               never trains, so its output never changes -- caching the pooled tokens makes critic
+               training ~20-40x faster and byte-identical.
                FAILURES ARE THE POINT: cost-to-goal needs the negatives, and they are the scarce
-               half (s347 = 300 success / 47 fail).
-                          │  frozen DINOv2, run once per frame
-                          ▼
-               Feature cache                   scripts/cache_patch_features.py
-   ─────────   The backbone never trains, so its output never changes -- caching the pooled tokens
-               makes critic training ~20-40x faster and byte-identical.
+               half (cable tie: 150 success / 10 fail).
                           │
                           ▼
    Stage 3     Critic training                 scripts/train_patch_critic_cached.py
@@ -115,11 +112,9 @@ uv run scripts/train.py pi05_yam_lego_taxi --exp-name yam_bc
 # node-local arrow cache, loader workers) and refuses to silently resume or clobber a run:
 scripts/train_local.sh pi05_yam_lego_taxi          # --list for the config names, --help for the rest
 
-# Stage 2 — critic data, then the frozen-feature cache
-uv run python scripts/convert_yam_to_patchcritic.py \
-    --repo-id jellyho/yam_lego_taxi --root ~/lerobot_data \
-    --max-frames 160000 --out ~/pc_rollouts/lego_taxi
-uv run python scripts/cache_patch_features.py --data ~/pc_rollouts/lego_taxi --out ~/pc_cache/yam_s347
+# Stage 2 — the frozen-feature cache, straight from the LeRobot demos
+uv run python scripts/cache_patch_features.py \
+    --repo-id jellyho/yam_cable_tie --out ~/pc_cache/cable_tie
 
 # Stage 3 — critic (any GPU; the features are a memmap, the model is a small transformer)
 uv run python scripts/train_patch_critic_cached.py --cache ~/pc_cache/yam_s347 \
@@ -428,7 +423,9 @@ src/openpi/patch_critic/critic.py        VLA-independent patch critic (frozen DI
 src/openpi/patch_critic/backbone.py      the frozen DINOv2 feature extractor
 src/openpi/patch_critic/preproc.py       shares the base VLA's state/action preprocessing
 src/openpi/patch_critic/spec.py          the critic's input contract, validated at serve time
-scripts/convert_yam_to_patchcritic.py    LeRobot demos + their next.success verdicts -> per-step transitions
+scripts/convert_yam_to_patchcritic.py    LeRobot demos -> per-step transitions (images.dat). NOT on the
+                                         cached path: cache_patch_features reads LeRobot directly. Only
+                                         misc/scripts/train_patch_critic.py (pre-cache) consumes this.
 scripts/cache_patch_features.py          precompute the frozen features once (~20-40x faster training)
 scripts/train_patch_critic_cached.py     patch-critic training from that cache
 scripts/score_critic_cached.py           success-vs-failure AUC + deep-atom diagnostics
