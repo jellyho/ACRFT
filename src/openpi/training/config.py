@@ -1847,7 +1847,7 @@ def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:
 _CONFIGS.append(_robocasa365_pretrain_config())
 
 
-def _data_condition(base: TrainConfig, suffix: str, doc: str, **data_kwargs) -> TrainConfig:
+def _data_condition(base: TrainConfig, suffix: str, doc: str, cfg_kwargs=None, **data_kwargs) -> TrainConfig:
     """A named config for one episode/frame condition, derived from `base`.
 
     The condition belongs in the config, not in a flag on the command line, because a flag can be
@@ -1864,7 +1864,12 @@ def _data_condition(base: TrainConfig, suffix: str, doc: str, **data_kwargs) -> 
     accident. Norm stats still resolve themselves: the content cache finds an existing asset computed
     on this exact episode set wherever it was filed, and computes one only on a genuine miss.
     """
-    return dataclasses.replace(base, name=f"{base.name}_{suffix}", data=dataclasses.replace(base.data, **data_kwargs))
+    return dataclasses.replace(
+        base,
+        name=f"{base.name}_{suffix}",
+        data=dataclasses.replace(base.data, **data_kwargs),
+        **(cfg_kwargs or {}),
+    )
 
 
 # The YAM data conditions, as configs rather than as flags. Only the two BC bases that experiments
@@ -1872,11 +1877,18 @@ def _data_condition(base: TrainConfig, suffix: str, doc: str, **data_kwargs) -> 
 # combinations nothing runs.
 for _base_name in ("pi05_yam_lego_taxi", "pi05_yam_cable_tie"):
     _base = next(c for c in _CONFIGS if c.name == _base_name)
+    # The lego BC config registers 500k steps, but every lego BC run -- the deployed baseline
+    # included -- was launched with --num-train-steps 200000. Match the RUN, not the registration, so
+    # a data-condition arm stays comparable to the policy on the robot. lr_schedule is deliberately
+    # untouched: decay_steps was fixed at 500k when the base config was built, so the baseline
+    # trained 200k steps on a 500k decay horizon and these arms have to do the same.
+    _over = {"num_train_steps": 200_000} if _base_name == "pi05_yam_lego_taxi" else None
     _CONFIGS.append(
         _data_condition(
             _base,
             "success",
             "successful episodes only",
+            cfg_kwargs=_over,
             success_only=True,
         )
     )
@@ -1891,6 +1903,7 @@ for _base_name in ("pi05_yam_lego_taxi", "pi05_yam_cable_tie"):
             _base,
             "nogiveup",
             "all episodes, failure give-up tails cut",
+            cfg_kwargs=_over,
             drop_failure_homing=True,
         )
     )

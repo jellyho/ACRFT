@@ -30,7 +30,19 @@ CAMS = ["observation.images.agentview", "observation.images.wrist_left", "observ
 
 
 def analytic_targets(
-    pos, ep_len, succ, jloc, img_pad_row, prefixes, discount, h_goal, v_min, scheme, failure_reward, discount1=None
+    pos,
+    ep_len,
+    succ,
+    jloc,
+    img_pad_row,
+    prefixes,
+    discount,
+    h_goal,
+    v_min,
+    scheme,
+    failure_reward,
+    discount1=None,
+    failure_terminal="absorbing",
 ):
     """Per-transition cost_to_goal target pieces, computed from episode geometry (no next-state decode).
 
@@ -79,6 +91,17 @@ def analytic_targets(
     # cannot bootstrap to a shallow value and get preferred over a long success. Valid even when the
     # successor lands past the (truncated) episode end -- it is the absorbing terminal, not a real frame.
     fail_term = (~succ[:, None]) & (nxt >= ep_len[:, None] - 1) & in_clip & not_pad
+    if failure_terminal == "truncate":
+        # A human giving up is a TRUNCATION, not a termination. The robot and the scene are still
+        # there and the state still has a value; what ended was the operator's patience. Standard
+        # offline-RL loaders keep the two apart -- `masks = 1 - terminals` decides whether to
+        # bootstrap, and a time limit or an abandoned attempt sets terminals without clearing masks.
+        # Treating it as an absorbing state instead hardcodes the value of that state, which is the
+        # bias Kostrikov et al. (DAC, ICLR 2019) name: for goal-reaching tasks it pulls the whole
+        # episode toward the terminal's value. Measured here: v_min = -2777.8 discounts only to
+        # 0.605 over a 1400-frame episode, so it reaches frame 0 (failure V(s0) -1761.6 against
+        # -1308.8 for successes) and the success/fail bit alone explains 44% of the target variance.
+        fail_term = np.zeros_like(fail_term)
     reward_nxt = np.where(fail_term, failure_reward, reward_nxt).astype(np.float32)
     done_nxt = np.where(fail_term, 1.0, done_nxt).astype(np.float32)
     valid = np.where(fail_term, 1.0, valid).astype(np.float32)
@@ -87,7 +110,11 @@ def analytic_targets(
         goal_start = ep_len - h_goal
         steps_to_goal = np.maximum(0, goal_start - pos)  # -1 per step until goal region, then 0
         mc = -(1 - discount1**steps_to_goal) / (1 - discount1)
-        mc = np.where(succ, mc, v_min).astype(np.float32)  # failure: pin to floor (not a valid bound)
+        # A failure's MC return is not a valid bound either way, but under truncation there is no
+        # absorbing value to floor it at -- leave it at what the episode actually accrued.
+        if failure_terminal != "truncate":
+            mc = np.where(succ, mc, v_min)
+        mc = mc.astype(np.float32)
     else:
         mc = np.zeros(T, np.float32)
     return cum, reward_nxt, done_nxt, valid, mc, jnxt

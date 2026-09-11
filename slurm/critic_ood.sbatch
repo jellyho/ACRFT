@@ -57,6 +57,15 @@
 #SBATCH --output=/data5/jellyho/ACRFT/openpi/logs/critic_ood_%j.slurm.log
 export UV_PROJECT_ENVIRONMENT=/data5/jellyho/ACRFT/openpi/.venv
 export PYTHONPATH=/data5/jellyho/ACRFT/openpi:/data5/jellyho/ACRFT/openpi/src
+# The failure terminal's depth. Default v_min = -1/(1-discount) is "infinitely far from the goal",
+# and with gamma=0.99964 over a ~1400-frame episode it barely discounts (gamma^1400 = 0.605), so it
+# reaches frame 0: measured V(s0) -1761.6 for failures against -1308.8 for successes. That gap is a
+# free bit, and it is 44% of the target variance -- the critic learns "will this episode fail" rather
+# than "which action is better here". FAILR sets a less extreme anchor so the bit shrinks.
+FTERM_ARGS=""
+if [ -n "${FTERM:-}" ]; then FTERM_ARGS="--failure-terminal ${FTERM}"; fi
+FAILR_ARGS=""
+if [ -n "${FAILR:-}" ]; then FAILR_ARGS="--failure-reward ${FAILR}"; fi
 EDAC_ARGS=""
 if [ -n "${EDAC:-}" ]; then EDAC_ARGS="--edac-weight ${EDAC}"; fi
 INV_ARGS=""
@@ -83,6 +92,6 @@ exec /data5/jellyho/ACRFT/openpi/.venv/bin/python -u scripts/train_patch_critic_
   --h-goal 30 --lr 1e-4 --steps "${STEPS:-200000}" \
   --num-critics "${K:-2}" --q-reduction "${RED:-min}" --seed "${SEED:-0}" \
   --heldout-frac "${HO:-0.15}" --eval-every "${EVERY:-5000}" \
-  --critic-arch "${ARCH:-shared}" --value-head "${VH:-categorical}" --floq-steps "${FSTEPS:-8}" ${EDAC_ARGS} ${CQL_ARGS} ${INV_ARGS} \
+  --critic-arch "${ARCH:-shared}" --value-head "${VH:-categorical}" --floq-steps "${FSTEPS:-8}" ${EDAC_ARGS} ${CQL_ARGS} ${INV_ARGS} ${FAILR_ARGS} ${FTERM_ARGS} \
   --wandb --wandb-name "${NAME:?}" --wandb-group patch-critic-ood \
   --out "/data5/jellyho/ACRFT/openpi/.scratch/patch_critic_yam_s347_${NAME}"
