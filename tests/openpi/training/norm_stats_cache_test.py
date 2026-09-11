@@ -166,9 +166,10 @@ def test_delta_mode_does_not_collide_in_the_key(tmp_path):
     ka = nsc.stats_key(absolute.data.create(absolute.assets_dirs, absolute.model), absolute.model.action_horizon)
     assert kj != ka
     # ... while two configs that really do share a transform pipeline and data must still share
-    # stats, even when the model differs (cfgrl is the same BC data behind a different model).
-    cfgrl = _config.get_config("pi05_yam_lego_taxi_cfgrl")
-    assert nsc.stats_key(cfgrl.data.create(cfgrl.assets_dirs, cfgrl.model), cfgrl.model.action_horizon) == kj
+    # stats, even when the model differs. alphaflow is the same BC data behind a different model;
+    # the extraction arms would do too, but their data configs load an annotation from disk.
+    af = _config.get_config("pi05_yam_lego_taxi_alphaflow")
+    assert nsc.stats_key(af.data.create(af.assets_dirs, af.model), af.model.action_horizon) == kj
 
 
 def test_resolving_an_asset_carries_its_provenance(tmp_path):

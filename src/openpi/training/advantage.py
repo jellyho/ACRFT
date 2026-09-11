@@ -38,6 +38,14 @@ def load_advantage(advantage_dir: str | pathlib.Path, *, normalize: str = "zscor
     if normalize not in ("zscore", "raw"):
         raise ValueError(f"normalize must be 'zscore' or 'raw', got {normalize!r}")
     d = pathlib.Path(advantage_dir)
+    missing = [f for f in ("q_data.npy", "v_data.npy") if not (d / f).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"{d} is missing {', '.join(missing)}. An extraction arm's config names this annotation, "
+            "and it is produced by misc/scripts/annotate_advantage.py from a trained patch critic "
+            "and its feature cache. If the workspace moved, repoint _ADVANTAGE_DIR in "
+            "openpi/training/config_acrft.py rather than passing a flag at launch."
+        )
     q = np.load(d / "q_data.npy")
     v = np.load(d / "v_data.npy")
     if q.shape != v.shape:
