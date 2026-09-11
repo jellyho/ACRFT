@@ -39,8 +39,9 @@
 # explicitly is an instruction, so the cache steps aside and a missing file fails loudly. Compute it
 # first in that case:  uv run python scripts/compute_norm_stats.py --config-name <config> --asset-id <id>
 #
-# EPISODE CONDITIONS are config names, not flags. `pi05_yam_lego_taxi_success` (successes only) and
-# `pi05_yam_lego_taxi_nogiveup` (failure give-up tails cut) each carry their own norm stats and
+# EPISODE CONDITIONS are config names, not flags. Since 2026-09-11 the plain name already drops the
+# failure give-up tails; `pi05_yam_lego_taxi_success` (successes only) and `..._withhoming` (the old
+# default, give-up supervision kept) name the other two. Each carries its own norm stats and
 # checkpoint dir. Do not reach for --data.success-only: a flag can be forgotten between two runs and
 # a config name cannot, which is exactly how the deployed baseline ended up mislabelled once.
 set -euo pipefail

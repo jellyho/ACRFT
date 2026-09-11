@@ -62,10 +62,18 @@ class LeRobotYAMDataConfig(DataConfigFactory):
     success_only: bool = False
     # Keep the failure episodes but cut their return-to-home tails. Orthogonal to success_only, so
     # the three data conditions are reachable from the config alone:
-    #   success_only=False, drop_failure_homing=False -> every frame (what the deployed policy saw)
     #   success_only=False, drop_failure_homing=True  -> failures for their task behaviour, no give-up
+    #   success_only=False, drop_failure_homing=False -> every frame, give-up supervision included
     #   success_only=True                             -> no failure frames at all
-    drop_failure_homing: bool = False
+    #
+    # DEFAULT TRUE since 2026-09-11. A failure's homing is the operator retracting from a task that
+    # is NOT done -- the one signal in the set that teaches "give up". Measured on lego, those frames
+    # sit at cosine 0.956 from their nearest success-task frame while the action they teach is 3.5x
+    # further away than that neighbour's: near-identical picture, opposite action. Training on it by
+    # default was a footgun -- it is what you get by typing the plain config name, and a run that
+    # wanted it cut had to remember a suffix. The default is now the condition we actually want, and
+    # `_withhoming` names the old one for anything that has to reproduce a pre-09-11 run.
+    drop_failure_homing: bool = True
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -446,17 +454,15 @@ for _base_name in ("pi05_yam_lego_taxi", "pi05_yam_cable_tie"):
             success_only=True,
         )
     )
-    # Keeps the failure episodes for their task behaviour and drops only their return-to-home tails:
-    # a failure's homing is the operator retracting from a task that is NOT done, the one signal in
-    # the set that teaches give up. Measured on lego, those frames sit at cosine 0.956 from their
-    # nearest success-task frame while the action they teach is 3.5x further away than that
-    # neighbour's -- near-identical picture, opposite action. This is the arm that separates
-    # "failure demonstrations help" from "give-up supervision hurts"; `_success` removes both at once.
+    # The give-up condition is the DEFAULT now (see LeRobotYAMDataConfig.drop_failure_homing), so
+    # the arm that needs a name is the other one: every frame, give-up supervision included. That is
+    # what every run before 2026-09-11 trained on, including the deployed policy, so it has to stay
+    # reachable by name -- a comparison against those runs is a comparison against this condition.
     CONFIGS.append(
         _data_condition(
             _base,
-            "nogiveup",
-            "all episodes, failure give-up tails cut",
-            drop_failure_homing=True,
+            "withhoming",
+            "all episodes, failure give-up tails KEPT (the pre-2026-09-11 default)",
+            drop_failure_homing=False,
         )
     )
