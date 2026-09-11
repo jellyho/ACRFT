@@ -1708,11 +1708,14 @@ def _yam_bc_config(
     )
 
 
-_CONFIGS.extend(_yam_bc_config(_m, num_train_steps=500_000) for _m in ("joint", "none"))
+# 200k, which is what every lego BC run actually trained for -- the deployed baseline
+# included. The registration used to say 500k while every launcher passed
+# --num-train-steps 200000, so the config described a run nobody performed.
+_CONFIGS.extend(_yam_bc_config(_m, num_train_steps=200_000) for _m in ("joint", "none"))
 # Chunk-length ablation for the BC policy. The adaptive-chunking work needs a base policy whose chunk
 # is long enough that stopping early is a real choice; at horizon 30 the longest commitment the critic
 # can score is one second.
-_CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=500_000))
+_CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=200_000))
 
 
 def _yam_alphaflow_config(
@@ -1847,7 +1850,7 @@ def _robocasa365_pretrain_config(fsdp_devices: int = 4) -> TrainConfig:
 _CONFIGS.append(_robocasa365_pretrain_config())
 
 
-def _data_condition(base: TrainConfig, suffix: str, doc: str, cfg_kwargs=None, **data_kwargs) -> TrainConfig:
+def _data_condition(base: TrainConfig, suffix: str, doc: str, **data_kwargs) -> TrainConfig:
     """A named config for one episode/frame condition, derived from `base`.
 
     The condition belongs in the config, not in a flag on the command line, because a flag can be
@@ -1868,7 +1871,6 @@ def _data_condition(base: TrainConfig, suffix: str, doc: str, cfg_kwargs=None, *
         base,
         name=f"{base.name}_{suffix}",
         data=dataclasses.replace(base.data, **data_kwargs),
-        **(cfg_kwargs or {}),
     )
 
 
@@ -1877,18 +1879,11 @@ def _data_condition(base: TrainConfig, suffix: str, doc: str, cfg_kwargs=None, *
 # combinations nothing runs.
 for _base_name in ("pi05_yam_lego_taxi", "pi05_yam_cable_tie"):
     _base = next(c for c in _CONFIGS if c.name == _base_name)
-    # The lego BC config registers 500k steps, but every lego BC run -- the deployed baseline
-    # included -- was launched with --num-train-steps 200000. Match the RUN, not the registration, so
-    # a data-condition arm stays comparable to the policy on the robot. lr_schedule is deliberately
-    # untouched: decay_steps was fixed at 500k when the base config was built, so the baseline
-    # trained 200k steps on a 500k decay horizon and these arms have to do the same.
-    _over = {"num_train_steps": 200_000} if _base_name == "pi05_yam_lego_taxi" else None
     _CONFIGS.append(
         _data_condition(
             _base,
             "success",
             "successful episodes only",
-            cfg_kwargs=_over,
             success_only=True,
         )
     )
@@ -1903,7 +1898,6 @@ for _base_name in ("pi05_yam_lego_taxi", "pi05_yam_cable_tie"):
             _base,
             "nogiveup",
             "all episodes, failure give-up tails cut",
-            cfg_kwargs=_over,
             drop_failure_homing=True,
         )
     )
