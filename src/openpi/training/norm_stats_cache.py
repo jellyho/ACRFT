@@ -327,4 +327,30 @@ def _compute(config: _config.TrainConfig, data_config: _config.DataConfig, *, ma
     return {k: r.get_statistics() for k, r in running.items()}
 
 
-__all__ = ["ensure_norm_stats", "stats_key"]
+def resolve_for_config(config_name: str, *, max_frames: int | None = None) -> pathlib.Path:
+    """The norm_stats.json a TRAIN CONFIG resolves to, computing it on a genuine miss.
+
+    This is the seam anything downstream of a policy should use instead of being handed a path.
+    A critic scores a policy's actions, so it has to normalize them the way that policy does; naming
+    the config says WHICH policy in a way a path does not. Hand-passed paths went stale three ways
+    in practice: the asset key moved when a data condition changed (a config's stats live under
+    `<repo_id>__<key>`, and the key is a function of the episode subset and transforms), the
+    directory name did not say which condition it was, and an absolute path stopped existing when
+    the workspace moved machines.
+
+    Going through `ensure_norm_stats` also means a miss RECOMPUTES rather than failing, and a hit is
+    matched on content, so the file returned provably matches what that config trains on.
+    """
+    import openpi.training.config as _cfg
+
+    config = _cfg.get_config(config_name)
+    data_config = ensure_norm_stats(config, config.data.create(config.assets_dirs, config.model), max_frames=max_frames)
+    if data_config.asset_id is None:
+        raise ValueError(f"{config_name} resolved no norm-stats asset; it may have no repo_id")
+    path = pathlib.Path(config.assets_dirs) / data_config.asset_id / "norm_stats.json"
+    if not path.exists():
+        raise FileNotFoundError(f"{config_name} resolved to {path}, which does not exist")
+    return path
+
+
+__all__ = ["ensure_norm_stats", "resolve_for_config", "stats_key"]

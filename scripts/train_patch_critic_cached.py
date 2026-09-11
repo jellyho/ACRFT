@@ -358,7 +358,21 @@ def main():
         help="pi05: state/actions go through the base VLA's own preprocessing (joint delta + "
         "quantile norm), so the sampler's output IS the critic's input. raw: legacy dataset units.",
     )
-    ap.add_argument("--norm-stats", type=pathlib.Path, default=None, help="norm_stats.json (required for pi05)")
+    ap.add_argument(
+        "--policy-config",
+        default=None,
+        help="train-config name of the policy this critic scores (e.g. pi05_yam_cable_tie). Its norm "
+        "stats are resolved through the SAME content-addressed cache training uses, so the critic "
+        "normalizes actions exactly as that policy does and a changed data condition cannot leave "
+        "the two disagreeing. Preferred over --norm-stats.",
+    )
+    ap.add_argument(
+        "--norm-stats",
+        type=pathlib.Path,
+        default=None,
+        help="explicit norm_stats.json, overriding --policy-config. A hand-passed path does not say "
+        "which policy it belongs to and goes stale when the asset key moves, so prefer --policy-config.",
+    )
     ap.add_argument(
         "--proprio-dims",
         choices=sorted(critic_preproc.PROPRIO_SETS),
@@ -468,14 +482,26 @@ def main():
     pre = None
     embedded = None
     if a.input_mode == "pi05":
-        if a.norm_stats is None:
-            raise SystemExit("--input-mode pi05 needs --norm-stats (the base checkpoint's norm_stats.json)")
+        norm_stats_path = a.norm_stats
+        if norm_stats_path is None:
+            if a.policy_config is None:
+                raise SystemExit(
+                    "--input-mode pi05 needs the policy's normalization: pass --policy-config "
+                    "<train config name> (preferred), or --norm-stats <path> to override it."
+                )
+            from openpi.training import norm_stats_cache as _nsc
+
+            norm_stats_path = _nsc.resolve_for_config(a.policy_config)
+            print(f"norm stats: resolved {a.policy_config} -> {norm_stats_path}", flush=True)
         from openpi.policies import yam_policy
 
-        pre = critic_preproc.Pi05Preproc.build(a.norm_stats, yam_policy.joint_delta_reference())
-        spec.update(pre.spec(a.norm_stats))
+        pre = critic_preproc.Pi05Preproc.build(norm_stats_path, yam_policy.joint_delta_reference())
+        spec.update(pre.spec(norm_stats_path))
+        # Which POLICY these statistics belong to, not just which file -- the path alone does not say,
+        # and serving has to be able to tell whether critic and policy agree.
+        spec["policy_config"] = a.policy_config
         embedded = pre.embedded()
-        print(f"input mode: pi05 preprocessing (joint delta + quantile norm) from {a.norm_stats}", flush=True)
+        print(f"input mode: pi05 preprocessing (joint delta + quantile norm) from {norm_stats_path}", flush=True)
     feats = np.memmap(a.cache / "features.dat", np.float16, "r", shape=(N, npatch, emb))
     states = np.memmap(a.cache / "state.dat", np.float32, "r", shape=(N, sd_raw))
     actions = np.memmap(a.cache / "action.dat", np.float32, "r", shape=(N, ad))
