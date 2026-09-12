@@ -1708,11 +1708,14 @@ def _yam_bc_config(
     )
 
 
-_CONFIGS.extend(_yam_bc_config(_m, num_train_steps=500_000) for _m in ("joint", "none"))
+# 200k, which is what every lego BC run actually trained for -- the deployed baseline
+# included. The registration used to say 500k while every launcher passed
+# --num-train-steps 200000, so the config described a run nobody performed.
+_CONFIGS.extend(_yam_bc_config(_m, num_train_steps=200_000) for _m in ("joint", "none"))
 # Chunk-length ablation for the BC policy. The adaptive-chunking work needs a base policy whose chunk
 # is long enough that stopping early is a real choice; at horizon 30 the longest commitment the critic
 # can score is one second.
-_CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=500_000))
+_CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=200_000))
 
 
 def _yam_alphaflow_config(
@@ -1864,7 +1867,11 @@ def _data_condition(base: TrainConfig, suffix: str, doc: str, **data_kwargs) -> 
     accident. Norm stats still resolve themselves: the content cache finds an existing asset computed
     on this exact episode set wherever it was filed, and computes one only on a genuine miss.
     """
-    return dataclasses.replace(base, name=f"{base.name}_{suffix}", data=dataclasses.replace(base.data, **data_kwargs))
+    return dataclasses.replace(
+        base,
+        name=f"{base.name}_{suffix}",
+        data=dataclasses.replace(base.data, **data_kwargs),
+    )
 
 
 # The YAM data conditions, as configs rather than as flags. Only the two BC bases that experiments

@@ -345,6 +345,15 @@ def main():
     ap.add_argument("--steps", type=int, default=120000)
     ap.add_argument("--save-every", type=int, default=20000)
     ap.add_argument("--failure-reward", type=float, default=None)
+    ap.add_argument(
+        "--failure-terminal",
+        choices=["absorbing", "truncate"],
+        default="absorbing",
+        help="absorbing (today's): a failure's last frame is a terminal whose value is failure_reward "
+        "(default v_min), and TD carries that back through the episode. truncate: no terminal at all "
+        "-- the operator gave up, which ends the recording, not the MDP. The state still has a value "
+        "and the critic predicts it, so the success/fail label stops entering the value target.",
+    )
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-project", default="acrft-critic")
     ap.add_argument("--wandb-group", default="patch-critic-cached")
@@ -444,6 +453,7 @@ def main():
     spec["discount2"] = g2
     spec["hlg_sigma_frac"] = a.hlg_sigma_frac
     spec["terminal"] = a.terminal
+    spec["failure_terminal"] = a.failure_terminal
     spec["support"] = a.support
     spec["zero_init_head"] = a.zero_init_head
     spec["seed"] = a.seed
@@ -1157,6 +1167,7 @@ def main():
             a.reward_scheme,
             failure_reward,
             discount1=g1,
+            failure_terminal=a.failure_terminal,
         )
         gcur = g0 + pos
         nxt_pos = np.clip(pos[:, None] + pref[None], 0, full[:, None] - 1)
