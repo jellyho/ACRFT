@@ -65,14 +65,16 @@ def main():
     from openpi.patch_critic.critic import HLGauss
     from openpi.patch_critic.critic import PatchCriticEnsemble
 
-    cc, _ = critic_spec.load(a.critic)
+    # run dir or step dir; weights and the embedded norm stats must come from the SAME step
+    _ckpt_dir = critic_spec.resolve_checkpoint_dir(a.critic)
+    cc, _ = critic_spec.load(_ckpt_dir)
     # Scoring MUST reproduce the critic's training inputs. Reading them off its own input_spec is the
     # only way that stays true as the preprocessing changes: feeding a pi05-space critic raw absolute
     # actions produces confident, meaningless numbers rather than an error.
     isp = cc.get("input_spec", {})
     pre = None
     if isp.get("normalization") == "pi05":
-        ns = a.critic / isp.get("norm_stats_file", "pi05_norm_stats.json")
+        ns = _ckpt_dir / isp.get("norm_stats_file", "pi05_norm_stats.json")
         pre = critic_preproc.Pi05Preproc(
             ref=np.asarray(isp["joint_delta_reference"], np.int64),
             stats=critic_preproc.load_norm_stats(ns if ns.exists() else isp["norm_stats"]),
@@ -101,14 +103,14 @@ def main():
     net = PatchCriticEnsemble(
         action_dim=ad, horizon=H, num_critics=cc["num_critics"], macro_group_size=gsz, num_atoms=atoms
     )
-    params = flax.serialization.msgpack_restore((a.critic / "params.msgpack").read_bytes())
+    params = flax.serialization.msgpack_restore((_ckpt_dir / "params.msgpack").read_bytes())
     hl = HLGauss(cc["v_min"], cc["v_max"], atoms)
     centers = jnp.asarray(hl.centers)
 
     from openpi.patch_critic.critic import PatchV
 
     v_net = PatchV(num_atoms=atoms)
-    v_params = flax.serialization.msgpack_restore((a.critic / "v_params.msgpack").read_bytes())
+    v_params = flax.serialization.msgpack_restore((_ckpt_dir / "v_params.msgpack").read_bytes())
 
     @jax.jit
     def value(p, chunk, s):

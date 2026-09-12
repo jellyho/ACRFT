@@ -201,6 +201,9 @@ class PatchCriticSelectPolicy(BasePolicy):
 
         from openpi.patch_critic import spec as critic_spec
 
+        # Resolve once: a run directory means its last saved step, and the weights, the embedded
+        # norm stats and the recorded provenance all have to come from that SAME step.
+        critic_dir = critic_spec.resolve_checkpoint_dir(critic_dir)
         cc, self._norm_stats = critic_spec.load(critic_dir)
         # A critic's inputs are RAW dataset units (see openpi.patch_critic.spec). The wrapper honours that by
         # reading state before the input transform and un-normalizing candidates through the output

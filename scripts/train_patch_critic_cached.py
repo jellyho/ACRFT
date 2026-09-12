@@ -1282,8 +1282,11 @@ def main():
         if a.save_every and (s + 1) % a.save_every == 0:
             a._step = s + 1
             _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
-    a._step = a.steps
-    _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
+    # The loop already saved this step when the budget divides it; saving again would only rewrite
+    # the same directory.
+    if not (a.save_every and a.steps % a.save_every == 0):
+        a._step = a.steps
+        _save(a, carry[0], carry[3], npatch, v_min, prefixes, ad, spec=spec, stats=stats, embedded=embedded)
     if wb is not None:
         wb.finish()
 
