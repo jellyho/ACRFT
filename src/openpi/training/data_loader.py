@@ -259,12 +259,6 @@ def create_torch_dataset(
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    if data_config.norm_stats_required and data_config.norm_stats is None:
-        raise FileNotFoundError(
-            f"norm stats asset '{data_config.asset_id}' was named explicitly but does not exist. "
-            "Compute it (slurm/norm_stats.sbatch with ASSET_ID=...) or drop --data.assets.asset-id "
-            "to let the content cache resolve stats for this episode subset."
-        )
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     _check_norm_stats_provenance(data_config, dataset_meta)
     dataset = lerobot_dataset.LeRobotDataset(
@@ -514,6 +508,12 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
+    if data_config.norm_stats_required and data_config.norm_stats is None:
+        raise FileNotFoundError(
+            f"norm stats asset '{data_config.asset_id}' was named explicitly but does not exist. "
+            "Compute it (slurm/norm_stats.sbatch with ASSET_ID=...) or drop --data.assets.asset-id "
+            "to let the content cache resolve stats for this episode subset."
+        )
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 

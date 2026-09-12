@@ -107,8 +107,12 @@ def test_naming_an_asset_that_does_not_exist_is_an_error_not_a_silent_skip(tmp_p
     dc = cfg.data.create(cfg.assets_dirs, cfg.model)
     assert dc.norm_stats_required
     assert dc.norm_stats is None
+    # ... on the TRAINING path. create_torch_dataset must stay usable: compute_norm_stats.py builds
+    # a dataset through it precisely in order to WRITE the asset it names, and a raise there makes
+    # the job that produces the file fail for want of the file (job 37773 died exactly this way).
+    data_loader.create_torch_dataset(dc, cfg.model.action_horizon, cfg.model, skip_videos=True)
     with pytest.raises(FileNotFoundError, match="named explicitly"):
-        data_loader.create_torch_dataset(dc, cfg.model.action_horizon, cfg.model, skip_videos=True)
+        data_loader.create_torch_data_loader(dc, cfg.model, cfg.model.action_horizon, batch_size=1)
 
 
 def test_failure_homing_is_dropped_and_success_homing_is_not(tmp_path, monkeypatch):
