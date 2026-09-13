@@ -253,3 +253,20 @@ def test_corrupt_provenance_does_not_crash(tmp_path):
     d.mkdir()
     (d / "provenance.json").write_text("{not json")
     assert nsc._provenance_key(d) is None
+
+
+def test_a_capped_pass_is_never_matched(tmp_path):
+    """A truncated pass describes the right episodes and the wrong distribution.
+
+    assets/pi05_yam_lego_taxi_rlt/jellyho/yam_lego_taxi_s300 was one, and carried no provenance at
+    all: std within 0.75% of a full pass while state q01 was off by 13.73%, because means and stds
+    converge on a subsample and extreme quantiles do not. pi05 normalises by quantiles, so q01/q99
+    ARE the scale, and every lego patch critic trained against that file.
+    """
+    on = {"repo_id": "jellyho/yam_lego_taxi", "episodes_subset": list(range(300))}
+    _write(tmp_path / "cfg" / "capped", {"computed_on": {**on, "full_pass": False, "max_frames": 100_000}})
+    dc = _DC(tuple(range(300)))
+    assert nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30) is None
+    # the same record without the cap is a match, so it is the cap being rejected and not the shape
+    _write(tmp_path / "cfg2" / "full", {"computed_on": {**on, "full_pass": True, "max_frames": None}})
+    assert nsc._search(tmp_path, dc, nsc.stats_key(dc, 30), 30) is not None

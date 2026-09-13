@@ -128,9 +128,11 @@ def main(
     keys = ["state", "actions"]
     stats = {key: normalize.RunningStats() for key in keys}
 
+    frames_seen = 0
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
         for key in keys:
             stats[key].update(np.asarray(batch[key]))
+        frames_seen += len(np.asarray(batch[keys[0]]))
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
@@ -153,6 +155,16 @@ def main(
                 "total_episodes": _meta.total_episodes,
                 "total_frames": _meta.total_frames,
                 "episodes_subset": sorted(data_config.episodes) if data_config.episodes else "all",
+                # Whether the pass actually SAW the whole subset. A capped pass produces means and
+                # stds that look right -- they converge on a subsample -- while the extreme quantiles
+                # do not, and pi05 normalises by quantiles, so q01/q99 ARE the scale. Measured on
+                # assets/pi05_yam_lego_taxi_rlt/.../yam_lego_taxi_s300, which carried no provenance
+                # at all: std within 0.75% of a full pass while state q01 was off by 13.73%. Every
+                # lego patch critic trained against that file. Recording it is what stops a partial
+                # pass from ever again being indistinguishable from a complete one.
+                "max_frames": max_frames,
+                "frames_seen": int(frames_seen),
+                "full_pass": max_frames is None,
             }
         }
         (output_path / "provenance.json").write_text(_json.dumps(_prov, indent=2))

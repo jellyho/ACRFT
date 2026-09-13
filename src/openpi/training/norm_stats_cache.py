@@ -128,6 +128,12 @@ def _match(prov: dict, data_config: _config.DataConfig, key: str, horizon: int) 
     on = prov.get("computed_on")
     if not isinstance(on, dict) or on.get("repo_id") != data_config.repo_id:
         return None
+    # A capped pass is not these statistics, whatever its episode list says. It saw a prefix of the
+    # subset, so its means and stds land close while its quantiles do not -- and quantiles are the
+    # scale under pi05 normalisation. Refusing it here is what keeps the cache from handing a run a
+    # file that describes the right episodes and the wrong distribution.
+    if on.get("full_pass") is False:
+        return None
     # A horizon the record does not state cannot disagree with ours. Norm stats are marginals over
     # action dimensions, so the horizon barely moves them, but a stated one that differs is a real
     # signal that these are some other run's statistics.
