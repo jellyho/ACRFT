@@ -5,7 +5,7 @@
 > 원스텝 생성기면 actor 업데이트가 forward 1회로 끝난다. 그리고 distillation과 달리 α-Flow는
 > **데이터 위 회귀만으로** 거기 도달한다 — 학습 중 VLA가 샘플링할 일이 없다.
 
-구현: `src/openpi/models/pi0_alphaflow.py` · 테스트: `..._test.py`(CPU), `scripts/alphaflow_smoke.py`(GPU)
+구현: `src/openpi/models/pi0_alphaflow.py` · 테스트: `tests/openpi/models/pi0_alphaflow_test.py`(CPU), `tests/manual/alphaflow_smoke.py`(GPU)
 설정: `pi05_yam_lego_taxi_alphaflow` (단일 run, in-training 커리큘럼)
 
 ## 무엇이 바뀌나
@@ -81,7 +81,7 @@ CPU 단위테스트 10건 통과: α 스케줄·클램핑, α=1에서 타깃이 
 border(r=t) 행의 fallback, `z_s` 오일러 스텝, adaptive weight, phase별 `two_pass`, config 검증.
 기존 `pi0_test`+`pi0_rlt_test` 포함 32 passed (무회귀).
 
-GPU 스모크 (`scripts/alphaflow_smoke.py`, gemma_2b_lora/300m_lora, batch 2):
+GPU 스모크 (`tests/manual/alphaflow_smoke.py`, gemma_2b_lora/300m_lora, batch 2):
 
 ```
 [1] max |u(z,t,t) - u(z,0,t)|      = 0.000e+00   r 조건 zero-init 확인

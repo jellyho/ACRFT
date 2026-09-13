@@ -98,7 +98,8 @@ class CriticQ:
 
 
 def load(critic_dir) -> CriticQ:
-    d = pathlib.Path(critic_dir)
+    # run dir or step dir: a run dir means its last saved step (patch_critic.spec)
+    d = critic_spec.resolve_checkpoint_dir(critic_dir)
     cc, _ = critic_spec.load(d)
     isp = cc.get("input_spec", {})
     if isp.get("normalization") != "pi05":

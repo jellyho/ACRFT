@@ -56,6 +56,11 @@ srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
       --mode adaptive --num-samples 8 --port 8000'
 ```
 
+> `--critic` takes either a run directory or one of its `step_NNNNNN/` directories. A run directory
+> means its last saved step. Runs from before 2026-09-12 also kept a copy of the final step in the
+> run directory itself; both layouts load, so an existing deploy command keeps working.
+
+
 Wait for `Serving ... listening on 0.0.0.0:8000`. Swap in whichever step you are evaluating, and
 **record it in the report** — a value comparison is only valid between method-only-diff checkpoints.
 

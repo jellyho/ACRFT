@@ -33,7 +33,7 @@
 #    TIER       a6000|ampere|wide|pro6000|a100          default: a6000 if ROLLOUT=1 else wide
 #    MAXPAR     max array members running at once       default 8
 #    STEPS      training steps per variant              default 200000
-#    ROLLOUT    1 = sim rollout eval inside the job     default 1
+#    ROLLOUT    retired with RoboCasa (2026-09-09)      default 0
 #    DRYRUN     1 = build the manifest and stop
 # ============================================================================================
 set -euo pipefail
@@ -55,7 +55,8 @@ AXES="${AXES:-discount,structure,target,stability,iql}"
 SEEDS="${SEEDS:-0}"
 MAXPAR="${MAXPAR:-8}"
 STEPS="${STEPS:-200000}"
-ROLLOUT="${ROLLOUT:-1}"
+# The in-job sim rollout eval needed RoboCasa, retired 2026-09-09; offline diagnostics only.
+ROLLOUT="${ROLLOUT:-0}"
 # ROLLOUT=1 keeps a 3 B VLA resident alongside the data, so it stays on the 48 GB tier. With the
 # rollout off, `wide` opens 379 GPUs instead of 106 — on a cluster this busy that is the whole game.
 TIER="${TIER:-$([[ "$ROLLOUT" == "1" ]] && echo a6000 || echo wide)}"

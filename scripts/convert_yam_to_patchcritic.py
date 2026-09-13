@@ -6,13 +6,13 @@ VLA tokens. So we build a patch-critic dataset straight from the LeRobot demos: 
 reward from outcomes.jsonl (success episode -> reward 1 on its last frame). The cost_to_goal relabel
 + the value support / discount are applied at TRAIN time (train_patch_critic.py --reward-scheme).
 
-Episodes are selected up to --max-frames, all FAIL episodes first (they are the scarce negatives the
+Every labeled episode is converted, FAIL episodes first (they are the scarce negatives the
 cost_to_goal critic needs) then SUCCESS episodes, keeping whole episodes contiguous.
 
     uv run python scripts/convert_yam_to_patchcritic.py \
         --repo-id jellyho/yam_lego_taxi --root /data5/jellyho/yam_v2/lerobot \
         --outcomes /data5/jellyho/yam_v2/lerobot/jellyho/yam_lego_taxi/outcomes.jsonl \
-        --max-frames 160000 --out /data5/jellyho/pc_rollouts_yam/lego_taxi
+        --out /data5/jellyho/pc_rollouts_yam/lego_taxi
 """
 
 import argparse
@@ -47,7 +47,6 @@ def main():
         default=None,
         help="legacy outcomes.jsonl (deprecated: the verdict is read from the dataset's next.success / next.done)",
     )
-    ap.add_argument("--max-frames", type=int, default=160000)
     ap.add_argument("--img-size", type=int, default=224)
     ap.add_argument("--out", type=pathlib.Path, required=True)
     ap.add_argument("--limit-frames-test", type=int, default=0, help="convert only the first k frames (smoke)")
@@ -71,14 +70,19 @@ def main():
     fails = [e for e in labeled if outc[e] != "success"]
     succ = [e for e in labeled if outc[e] == "success"]
     print(f"labeled episodes: {len(labeled)} ({len(fails)} fail / {len(succ)} success)", flush=True)
-    # all fails first (scarce negatives), then successes, until the frame budget is hit
+    # Every labeled episode, always. There used to be a --max-frames cap here, defaulting to 160,000
+    # against yam_lego_taxi's 938k frames, and the README passed it explicitly -- so the documented
+    # invocation converted part of the dataset while the output was named as though it were all of
+    # it. A partial dataset you did not ask for is worse than running out of disk, which at least
+    # says so. (images.dat is raw uint8: 451 KB per frame at 3 cams x 224^2, so budget ~113 GB for
+    # cable tie and ~424 GB for lego taxi.)
+    #
+    # Fails first: they are the scarce negatives cost_to_goal needs, and keeping them at the front
+    # keeps their episodes contiguous at a known offset.
     order, kept, tot = fails + succ, [], 0
     for e in order:
-        length = int(ends[e] - starts[e])
         kept.append(e)
-        tot += length
-        if tot >= a.max_frames:
-            break
+        tot += int(ends[e] - starts[e])
     n_kept = sum(int(ends[e] - starts[e]) for e in kept)
     nfail = sum(1 for e in kept if e in set(fails))
     print(f"keeping {len(kept)} episodes ({nfail} fail / {len(kept) - nfail} success) = {n_kept} frames", flush=True)
@@ -143,7 +147,10 @@ def main():
         "action_dim": action_dim,
         "state_dim": state_dim,
         "img_size": S,
-        "task": "yam_lego_taxi",
+        # Derived, never hard-coded: this file was written as "yam_lego_taxi" while converting
+        # yam_cable_tie, which is the same class of mislabelling that makes a checkpoint dir lie
+        # about what it trained on. `source` below carries the repo id it came from.
+        "task": a.repo_id.split("/")[-1],
         "source": a.repo_id,
         "fps": 30,
         "shapes": {"images": [int(w), 3, S, S, 3], "state": [int(w), state_dim], "action": [int(w), action_dim]},

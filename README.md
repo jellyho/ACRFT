@@ -14,11 +14,11 @@ on the same teleop set the policy was finetuned on — successes *and* failures.
 > [Quickstart](#quickstart). openpi's own model/setup docs are preserved in
 > [`docs/openpi_upstream.md`](docs/openpi_upstream.md).
 
-> **The RL-token (RLT) pipeline this repo started as is legacy.** The RLT bottleneck existed to
-> feed a critic a compact state vector; the patch critic reads frozen DINOv2 instead and needs
-> nothing from inside the VLA, so the base policy went back to being an ordinary BC finetune. The
-> code and docs are still here — see [Legacy: the RLT pipeline](#legacy-the-rlt-pipeline) — and
-> RoboCasa remains as a sim environment, but neither is where the work is.
+> **The RL-token (RLT) pipeline this repo started as has been removed.** The RLT bottleneck existed
+> to feed a critic a compact state vector; the patch critic reads frozen DINOv2 instead and needs
+> nothing from inside the VLA, so the base policy went back to being an ordinary BC finetune. What
+> was deleted and what survives it is in [Legacy: the RLT pipeline](#legacy-the-rlt-pipeline-removed);
+> RoboCasa went with it on 2026-09-09 — the critic is now trained and scored on real YAM data.
 
 ---
 
@@ -33,15 +33,12 @@ on the same teleop set the policy was finetuned on — successes *and* failures.
                never modified again -- everything downstream reads it, nothing writes to it.
                           │  the demos, plus their success/fail verdicts (next.success / next.done)
                           ▼
-   Stage 2     Critic data                     scripts/convert_yam_to_patchcritic.py
-   ─────────   3 cameras at 224, state[42], action[14], sparse terminal reward from the labels.
+   Stage 2     Feature cache                   scripts/cache_patch_features.py
+   ─────────   Reads the LeRobot demos DIRECTLY and runs frozen DINOv2 once per frame. The backbone
+               never trains, so its output never changes -- caching the pooled tokens makes critic
+               training ~20-40x faster and byte-identical.
                FAILURES ARE THE POINT: cost-to-goal needs the negatives, and they are the scarce
-               half (s347 = 300 success / 47 fail).
-                          │  frozen DINOv2, run once per frame
-                          ▼
-               Feature cache                   scripts/cache_patch_features.py
-   ─────────   The backbone never trains, so its output never changes -- caching the pooled tokens
-               makes critic training ~20-40x faster and byte-identical.
+               half (cable tie: 150 success / 10 fail).
                           │
                           ▼
    Stage 3     Critic training                 scripts/train_patch_critic_cached.py
@@ -81,7 +78,6 @@ Key design choices, and where they live:
 git clone --recurse-submodules <this repo>            # or: git submodule update --init --recursive
 GIT_LFS_SKIP_SMUDGE=1 uv sync
 GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
-uv sync --group eval                                  # sim deps (robosuite/mujoco), for the RoboCasa path
 ```
 
 Requires an NVIDIA GPU with ≥70 GB for full fine-tuning (π₀.₅ is 3B); L40S/48 GB is enough for
@@ -106,20 +102,19 @@ Datasets recorded before this carried an `outcomes.jsonl` sidecar. They are migr
 the recorder's `workstation/yam-data migrate-outcomes <dataset-dir>` (i2rt_rllab); until then,
 `success_only` refuses rather than guessing, and the recorder refuses to append.
 
-RoboCasa 365 demos (for the sim path) are in
-[examples/robocasa/README.md](examples/robocasa/README.md).
 
 ### Run the pipeline
 
 ```bash
 # Stage 1 — BC finetune (node with ≥70 GB VRAM)
 uv run scripts/train.py pi05_yam_lego_taxi --exp-name yam_bc
+# ...or scripts/train_local.sh, which sets the environment the slurm jobs set (video backend,
+# node-local arrow cache, loader workers) and refuses to silently resume or clobber a run:
+scripts/train_local.sh pi05_yam_lego_taxi          # --list for the config names, --help for the rest
 
-# Stage 2 — critic data, then the frozen-feature cache
-uv run python scripts/convert_yam_to_patchcritic.py \
-    --repo-id jellyho/yam_lego_taxi --root ~/lerobot_data \
-    --max-frames 160000 --out ~/pc_rollouts/lego_taxi
-uv run python scripts/cache_patch_features.py --data ~/pc_rollouts/lego_taxi --out ~/pc_cache/yam_s347
+# Stage 2 — the frozen-feature cache, straight from the LeRobot demos
+uv run python scripts/cache_patch_features.py \
+    --repo-id jellyho/yam_cable_tie --out ~/pc_cache/cable_tie
 
 # Stage 3 — critic (any GPU; the features are a memmap, the model is a small transformer)
 uv run python scripts/train_patch_critic_cached.py --cache ~/pc_cache/yam_s347 \
@@ -159,82 +154,27 @@ Self-contained: it carries its own copy of the arm's kinematics and the rig's ag
 so it needs nothing from the robot repo. See [misc/README.md](misc/README.md) — including which of
 those files are snapshots to re-copy after a recalibration.
 
-## Legacy: the RLT pipeline
+## Legacy: the RLT pipeline (removed)
 
-Everything from here to [Serving a policy](#serving-a-policy) is the **RL-token** pipeline the repo
-started as: a bottleneck trained jointly with BC produces a compact `z_rl`, an annotation pass
-freezes it into flat arrays, and a critic trains on those. It is superseded by the patch critic —
-which needs nothing from inside the VLA, so the base policy no longer carries a bottleneck at all —
-but the code runs and the RoboCasa results below are what motivated the switch.
+The repo started as an **RL-token** pipeline: a bottleneck trained jointly with BC produced a compact
+`z_rl`, an annotation pass froze it into flat arrays, and a critic trained on those. It is superseded
+by the patch critic, which reads frozen DINOv2 patches and needs nothing from inside the VLA — so the
+base policy went back to being an ordinary BC finetune.
 
-### Stage 1 — RLT training
+**The RLT training path has been removed** (2026-09-09): `Pi0RLT`, its train configs
+(`pi05_robocasa_<Task>_rlt`, `pi05_yam_lego_taxi_rlt`, `pi05_gr1_rlt`), the `run_train_rlt.sh` /
+`annotate_rlt.py` launchers, and the RoboCasa per-task and GR1 configs. Recover any of it from git
+history (`git log -- src/openpi/models/pi0_rlt.py`) if a result needs reproducing.
 
-`examples/robocasa/run_train_rlt.sh <Task> [<Task> ...] [flags]` wraps `scripts/train.py`. It
-computes/checks norm stats, then trains `pi05_robocasa_<Task>_rlt`. Every ablation flag tags the
-experiment name so runs never share a checkpoint dir.
+RoboCasa followed on the same day: its configs, `robocasa_policy.py`, `examples/robocasa/`, the
+sim rollout eval (`slurm/eval_rollout.sbatch`) and `setup.sh`'s `ROLLOUT=1` mode are all gone. The
+YAM deployment HUD that lived in that directory moved to `examples/yam/`.
 
-```bash
-examples/robocasa/run_train_rlt.sh PrepareCoffee                        # baseline: recon, stop-grad, proprio
-examples/robocasa/run_train_rlt.sh PrepareCoffee --objective progress   # progress objective
-examples/robocasa/run_train_rlt.sh PrepareCoffee --no-proprio           # image+language-only token
-examples/robocasa/run_train_rlt.sh PrepareCoffee --backbone-grad        # (ablation: known to fail)
-examples/robocasa/run_train_rlt.sh PrepareCoffee --help                 # full flag list
-```
+What remains, because the patch-critic line still uses it: `src/openpi/rlt_critic/` (the validated
+HL-Gauss / ARQ critic heads that `patch_critic` imports), `scripts/train_rlt_critic.py` and the
+offline `slurm/` sweep around it.
 
-The switches (each also has an env-var form) map to `Pi0RLTConfig` fields:
-
-| Flag | Config field | What it does | Default |
-|---|---|---|---|
-| `--objective STR` | `rlt_objective` | `reconstruction` / `progress` / `reconstruction+progress` | reconstruction |
-| `--scalar-head` | `rlt_progress_head` | progress head = MSE regression instead of HL-Gauss histogram | distributional |
-| `--no-proprio` | `rlt_include_proprio` | drop the proprio token from the bottleneck (paper-faithful; critic must supply proprio) | keep |
-| `--backbone-grad` | `rlt_backbone_gradient` | let the RLT loss reshape the VLM backbone | off (readout) |
-| `--parallel-decoder` | `rlt_decoder_mode` | decode every token from `z_rl` alone (no teacher forcing) — prevents context-bypass | autoregressive |
-| `--loss-weight F` | `rlt_loss_weight` | weight of the RLT loss vs BC | 1.0 |
-
-**How to choose:** start from the default (reconstruction, stop-grad, proprio). Compare objectives
-with `--objective`; test the proprio and decoder axes one flag at a time (not a full grid). Judge a
-run on **`bc_loss`** (policy quality — every config logs it, comparable to a plain BC run) plus
-**`rlt/probe_progress_r2`** and the sim eval curves, *not* on `loss_recon` (a low recon loss can just
-mean the decoder is ignoring the token — watch `rlt/bypass_ratio`, which should be ≫1).
-
-Monitoring is logged to wandb (project `acrft`): per-step loss components, a periodic
-participation-ratio / bypass-ratio monitor, and an embedding visualization (PCA + t-SNE/UMAP
-trajectories with camera-view-on-hover). With `rlt_bc_probe` / `rlt_probe_eval_interval` set (on by
-default for the RLT configs), it also runs an in-process headless sim eval of the VLA and the latent
-probe every 10k steps. The **RLT metrics guide** on the [dashboard](examples/robocasa/site/index.html)
-explains how to read each metric.
-
-### Stage 2 — annotation
-
-`examples/robocasa/annotate_rlt.py` runs the trained VLA over every frame once and writes memmap
-arrays (resumable, `--resume`). Notable flags:
-
-| Flag | Meaning |
-|---|---|
-| `--num-samples N` | base-policy action candidates per frame (default 32) |
-| `--stride K` | keep every K-th frame (default 1; the critic needs stride 1) |
-| `--dtype` | `float32` (default) / `float16` / `bfloat16` — 16-bit halves the files (6.7 → 3.4 GB/task) |
-| `--num-flow-steps` | flow-matching denoising steps for the candidates (default 10) |
-
-### Stage 3 — RLT critic
-
-`scripts/train_rlt_critic.py --data <annot dir> --kind {qc,arq}`. The whole (numeric) dataset is
-loaded onto the GPU once; there is no data loader. Key flags: `--num-atoms` (1 = scalar Q, >1 =
-HL-Gauss distributional), `--macro-group-size` (ARQ: steps per prefix token), `--num-critics`
-(ensemble), plus capacity knobs (`--hidden-dims`, `--num-layers`, …).
-
-### Evaluation (RoboCasa sim)
-
-`examples/robocasa/run_eval.sh <Task>` evaluates every checkpoint of a run with N sim rollouts each,
-writing `summary.csv` + a plot. Override the config/exp to evaluate an RLT run:
-
-```bash
-CONFIG=pi05_robocasa_PrepareCoffee_rlt EXP=PrepareCoffee_rlt examples/robocasa/run_eval.sh PrepareCoffee
-uv run examples/robocasa/plot_eval.py --task PrepareCoffee   # success-rate-vs-checkpoint plot
-```
-
-### RoboCasa results (PrepareCoffee, 50 trials/checkpoint)
+### Why the switch — RoboCasa results (PrepareCoffee, 50 trials/checkpoint)
 
 | Variant | best success | takeaway |
 |---|---|---|
@@ -242,12 +182,13 @@ uv run examples/robocasa/plot_eval.py --task PrepareCoffee   # success-rate-vs-c
 | **RLT (stop-grad)** | **78% @ 60k** | ≈ BC through 40k, ahead at the peak — the token does not hurt the policy |
 | RLT + backbone-grad | 22% (mostly <10%) | letting the RLT loss into the backbone **breaks** the policy |
 
-So the RLT bottleneck can be learned jointly with BC at no policy cost (stop-gradient), and
-backbone-gradient is a clear negative — the token was free, but it was also not necessary. That is
+So the RLT bottleneck could be learned jointly with BC at no policy cost (stop-gradient), and
+backbone-gradient was a clear negative — the token was free, but it was also not necessary. That is
 what sent the critic to frozen DINOv2 patches instead: the same per-prefix value, with no claim on
 the policy's internals and no retraining of the VLA when the critic changes.
 
 ---
+
 
 ## Serving a policy
 
@@ -482,11 +423,29 @@ src/openpi/patch_critic/critic.py        VLA-independent patch critic (frozen DI
 src/openpi/patch_critic/backbone.py      the frozen DINOv2 feature extractor
 src/openpi/patch_critic/preproc.py       shares the base VLA's state/action preprocessing
 src/openpi/patch_critic/spec.py          the critic's input contract, validated at serve time
-scripts/convert_yam_to_patchcritic.py    LeRobot demos + their next.success verdicts -> per-step transitions
+scripts/convert_yam_to_patchcritic.py    LeRobot demos -> per-step transitions (images.dat). NOT on the
+                                         cached path: cache_patch_features reads LeRobot directly. Only
+                                         misc/scripts/train_patch_critic.py (pre-cache) consumes this.
 scripts/cache_patch_features.py          precompute the frozen features once (~20-40x faster training)
 scripts/train_patch_critic_cached.py     patch-critic training from that cache
 scripts/score_critic_cached.py           success-vs-failure AUC + deep-atom diagnostics
 docs/deploy_yam_patch_critic.md          deploying the critic: contract, verification, limitations
+```
+
+**Tests** live in `tests/`, mirroring the package layout (`tests/openpi/training/...`,
+`tests/scripts/...`); `src/` and `scripts/` are code only. `uv run pytest` runs them and `packages/`.
+
+**`scripts/` holds the 41 entry points that are actually wired up** — invoked by a launcher in
+`slurm/`, imported by `src/`, or documented as a step above. The one-off figure, probe and report
+scripts moved to [`misc/scripts/`](misc/scripts/README.md); the retired report generators are in
+[`misc/reports/`](misc/reports/README.md).
+
+**Train configs**
+```
+src/openpi/training/config.py            upstream openpi's own configs (Aloha, DROID, LIBERO, debug)
+src/openpi/training/config_acrft.py      every config this project adds (the YAM arms); config.py
+                                         appends them to the registry, so `get_config(name)` is
+                                         unchanged
 ```
 
 **Serving**
@@ -504,15 +463,14 @@ misc/rollout_stats.py                    commitment lengths, latency, the critic
 misc/stats_plots.py                      those numbers as figures, in the house plot style
 ```
 
-**Legacy (RLT / RoboCasa)**
+**RLT-era code the critic line still uses** (the RLT policy itself is gone — see
+[Legacy](#legacy-the-rlt-pipeline-removed))
 ```
-src/openpi/models/pi0_rlt.py             Pi0RLT: RL-token bottleneck, progress head, latent BC probe
-src/openpi/rlt_critic/critic.py          QC / ARQ critics (scalar + HL-Gauss), ensemble
+src/openpi/rlt_critic/critic.py          QC / ARQ critics (scalar + HL-Gauss), ensemble;
+                                         patch_critic imports its HL-Gauss head
 src/openpi/training/progress.py          per-episode progress labels; also resolves success_only
 scripts/train_rlt_critic.py              RLT critic training (GPU-resident, lax.scan)
-examples/robocasa/run_train_rlt.sh       RLT launcher with ablation flags
-examples/robocasa/annotate_rlt.py        RLT annotation
-examples/robocasa/                       RoboCasa data prep, eval, dashboard  (see its README)
+examples/yam/                            the deployment HUD (hud.py, deploy_hud.py, render_yam_hud.py)
 ```
 
 ```

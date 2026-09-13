@@ -49,7 +49,7 @@ pi05-normalized inputs. Disjoint from the current per-prefix ARQ trainer — `V_
 
 ## Diagnostic first (measure_reactive_map)
 
-Before training the honest heads, `scripts/measure_reactive_map.py` reports the leak on the CURRENT
+Before training the honest heads, `misc/scripts/measure_reactive_map.py` reports the leak on the CURRENT
 critic as `Q_reg − Q_syn` per frame, where `Q_reg` is the trained chunk-conditioned `Q(o, a_{1:k})` and
 `Q_syn` is the synthetic reconstruction `Σ γ^j r_j + γ^k V(o_{t+k})` from the analytic reward and the
 critic's boundary `V`. This is a **window-level** leak proxy (the boundary `V` is still the leaky one),

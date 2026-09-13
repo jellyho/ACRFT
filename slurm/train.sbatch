@@ -2,7 +2,7 @@
 # One launcher for every training run. The CONFIG names the experiment; nothing else here does.
 #
 #   sbatch --export=ALL,CONFIG=pi05_yam_cable_tie_success  slurm/train.sbatch
-#   sbatch --export=ALL,CONFIG=pi05_yam_cable_tie_nogiveup slurm/train.sbatch
+#   sbatch --export=ALL,CONFIG=pi05_yam_cable_tie_withhoming slurm/train.sbatch
 #   sbatch --export=ALL,CONFIG=pi05_yam_cable_tie          slurm/train.sbatch
 #
 # WHAT IS AND IS NOT ON THE COMMAND LINE. Everything that defines the experiment -- episode subset,

@@ -443,16 +443,20 @@ def _git_stamp():
 
 
 def _save(a, params, v_params, npatch, v_min, prefixes, ad, *, spec=None, stats=None, embedded=None):
-    """Write a checkpoint. Periodic saves go to <out>/step_NNNNNN so a run leaves a step-budget curve
-    instead of overwriting itself; the last one is also written to <out> so the run has a stable
-    'final' path."""
+    """Write a checkpoint to <out>/step_NNNNNN, one directory per saved step.
+
+    Every step gets its own directory, the last one included. It used to be copied to <out> as well,
+    for a stable 'final' path, and that cost more than it bought: the run directory then held a
+    nameless copy of some step, so `ls` showed 50k/100k/150k and the final 200k was invisible unless
+    you knew the convention. Consumers take a DIRECTORY and read params.msgpack inside it, so
+    pointing them at <out>/step_200000 costs nothing and says which step is being served.
+    `patch_critic.spec.resolve_checkpoint_dir` accepts the run dir too and means "the last step",
+    which is what keeps older runs (final copied to <out>) loadable."""
     import flax.serialization
     import jax
 
-    out = a.out
     step = getattr(a, "_step", None)
-    if step is not None and step != getattr(a, "steps", None):
-        out = a.out / f"step_{step:06d}"
+    out = a.out if step is None else a.out / f"step_{step:06d}"
     a.out.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     (out / "params.msgpack").write_bytes(flax.serialization.msgpack_serialize(jax.device_get(params)))

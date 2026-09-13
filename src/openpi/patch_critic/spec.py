@@ -14,6 +14,7 @@ the server check it at load time.
 
 import json
 import pathlib
+import re
 
 import numpy as np
 
@@ -115,9 +116,38 @@ def out_of_range(stats: dict, state: np.ndarray, *, slack: float = 4.0) -> list[
     return np.nonzero((s < lo - pad) | (s > hi + pad))[0].tolist()
 
 
-def load(critic_dir) -> tuple[dict, dict | None]:
-    """(config, norm_stats-or-None) for a saved critic directory."""
+_STEP_DIR = re.compile(r"^step_(\d+)$")
+
+
+def resolve_checkpoint_dir(critic_dir) -> pathlib.Path:
+    """The directory that actually holds a critic's weights, given what a user typed.
+
+    A training run writes one directory per saved step (`step_000050000/`, ...). Passing the run
+    directory itself is the common case and should mean "the last step you finished", so that is
+    what this returns; passing a step directory means that step.
+
+    Runs written before 2026-09-12 also copied the final step to the run directory, so a bare
+    `params.msgpack` there is a complete checkpoint and is used as-is. Serving a run directory
+    therefore keeps working across the layout change, which matters because critic paths are typed
+    into deploy commands and baked into rollout records.
+    """
     d = pathlib.Path(critic_dir)
+    if (d / "params.msgpack").exists():
+        return d
+    steps = sorted(
+        ((int(m.group(1)), c) for c in d.iterdir() if c.is_dir() and (m := _STEP_DIR.match(c.name))),
+        key=lambda t: t[0],
+    )
+    if not steps:
+        raise FileNotFoundError(
+            f"{d} holds neither params.msgpack nor any step_* directory -- it is not a critic run dir."
+        )
+    return steps[-1][1]
+
+
+def load(critic_dir) -> tuple[dict, dict | None]:
+    """(config, norm_stats-or-None) for a saved critic directory (run dir or step dir)."""
+    d = resolve_checkpoint_dir(critic_dir)
     cfg = json.loads((d / "config.json").read_text())
     p = d / "norm_stats.json"
     return cfg, (json.loads(p.read_text()) if p.exists() else None)

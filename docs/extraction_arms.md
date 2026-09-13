@@ -97,7 +97,7 @@ property of the run rather than of the command that serves it.
 
 ## Critic-consuming arms
 
-All of these take `--critic <critic dir>` and differ only in `--critic-mode`.
+All of these take `--critic <critic dir>` and differ only in `--critic-mode`. The directory is either a run directory (meaning its last saved step) or a `step_NNNNNN/` inside one.
 
 ```bash
 CRITIC=~/hf_utils_downloads/acrft-yam-critics/patch_critic_yam_s347_fixed_tau9_min_200k
