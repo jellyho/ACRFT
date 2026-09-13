@@ -161,3 +161,8 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 markers = ["manual: should be run manually."]
 testpaths = ["tests", "packages"]
+# The repo root, so `from scripts import train` resolves. tests/scripts/{train,serve_policy_readme}
+# _test.py import from scripts/, which is not a package on sys.path by default, so `pytest tests/`
+# fails at COLLECTION -- and a suite that cannot collect reports nothing rather than reporting
+# failures. Two modules were affected after the tests moved under tests/.
+pythonpath = ["."]

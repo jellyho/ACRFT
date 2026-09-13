@@ -37,7 +37,12 @@ def _commands() -> list[list[str]]:
     text = text.replace("$CRITIC", "/tmp/critic")
     text = re.sub(r"<[^>\n]+>", "/tmp/x", text)
     for raw in _CMD.findall(text):
-        cmd = raw.replace("\\\n", " ")
+        # Drop trailing shell comments before joining the continuations. docs/extraction_arms.md
+        # annotates its --policy.dir lines with "# any <out>/<step>, ...", which is valid shell a
+        # reader can paste as-is, but joining the lines first turns the comment into arguments and
+        # the command fails to parse for a reason the docs do not have.
+        uncommented = re.sub(r"(?m)(?<=\s)#[^\n]*$", "", raw)
+        cmd = uncommented.replace("\\\n", " ")
         if cmd.count("'") % 2:  # the srun example lives inside bash -lc '...'
             cmd = cmd.rstrip().rstrip("'")
         argv = shlex.split(cmd)

@@ -206,7 +206,7 @@ and then runs the next line as its own command. Copy carefully, or paste the one
 
 ```bash
 cd /path/to/ACRFT
-uv run scripts/serve_policy.py --port 8000 policy:checkpoint --policy.config pi05_yam_lego_taxi_rlt --policy.dir <checkpoint>/100000
+uv run scripts/serve_policy.py --port 8000 policy:checkpoint --policy.config pi05_yam_lego_taxi --policy.dir <checkpoint>/200000
 ```
 
 ```bash
@@ -267,16 +267,16 @@ uv run scripts/serve_policy.py \
     --num-samples 16 \
     --port 8000 \
     policy:checkpoint \
-    --policy.config pi05_yam_lego_taxi_rlt \
-    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_rlt_s300/200000
+    --policy.config pi05_yam_lego_taxi \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_bc_s300_h30/200000
 
 
 # same checkpoint family, absolute joint targets
 uv run scripts/serve_policy.py \
     --port 8000 \
     policy:checkpoint \
-    --policy.config pi05_yam_lego_taxi_none_rlt \
-    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_none_rlt_s200/100000
+    --policy.config pi05_yam_lego_taxi_none \
+    --policy.dir ~/hf_utils_downloads/pi05_yam_lego_taxi_none_s200/100000
 ```
 
 It is up when the log reads:
@@ -351,8 +351,8 @@ srun -p debug --gres=gpu:L40S:1 --cpus-per-task=8 --mem=64G -t 08:00:00 \
       --critic /data5/jellyho/critics/yam/fixed_pi05_s347 \
       --critic-mode bon \
       policy:checkpoint \
-      --policy.config pi05_yam_lego_taxi_rlt \
-      --policy.dir checkpoints/pi05_yam_lego_taxi_rlt/yam_lego_taxi_rlt_s300_successonly/280000'
+      --policy.config pi05_yam_lego_taxi \
+      --policy.dir checkpoints/pi05_yam_lego_taxi/yam_bc_s300_h30_successonly/200000'
 ```
 
 ```bash
