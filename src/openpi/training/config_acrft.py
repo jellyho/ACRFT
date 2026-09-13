@@ -197,11 +197,14 @@ def _yam_bc_config(
     )
 
 
-CONFIGS.extend(_yam_bc_config(_m, num_train_steps=500_000) for _m in ("joint", "none"))
+# 200k, which is what every lego BC run actually trained for -- the deployed baseline
+# included. The registration used to say 500k while every launcher passed
+# --num-train-steps 200000, so the config described a run nobody performed.
+CONFIGS.extend(_yam_bc_config(_m, num_train_steps=200_000) for _m in ("joint", "none"))
 # Chunk-length ablation for the BC policy. The adaptive-chunking work needs a base policy whose chunk
 # is long enough that stopping early is a real choice; at horizon 30 the longest commitment the critic
 # can score is one second.
-CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=500_000))
+CONFIGS.append(_yam_bc_config("joint", horizon=50, num_train_steps=200_000))
 
 # Cable tie: the same BC recipe as lego-taxi, pointed at the cable-tie teleop set. The baseline every
 # other arm on this task is compared against, and the policy to deploy on the real arm.

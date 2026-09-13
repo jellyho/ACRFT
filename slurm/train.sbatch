@@ -20,7 +20,13 @@
 # NAME defaults to the config name, so a run is self-identifying unless you deliberately relabel it.
 #SBATCH --job-name=train
 #SBATCH --partition=debug
-#SBATCH --gres=gpu:1
+# B200, not a bare gpu:1. pi05 BC at batch 32 does not fit an L40S's 48 GB: jobs 37504/37505/37506
+# and 37768/37769 all landed on node100 and died identically with
+# "RESOURCE_EXHAUSTED: Out of memory while trying to allocate 301989888 bytes" during
+# init_train_state. The per-task launchers this file replaced all asked for B200 explicitly, and
+# dropping that when the launcher was generalised is what let them be scheduled somewhere too small.
+# Override at submit time (`sbatch --gres=gpu:L40S:1 ...`) for a config that genuinely fits.
+#SBATCH --gres=gpu:B200:1
 #SBATCH --cpus-per-task=16
 #SBATCH --time=7-00:00:00
 #SBATCH --chdir=/data5/jellyho/ACRFT/openpi
