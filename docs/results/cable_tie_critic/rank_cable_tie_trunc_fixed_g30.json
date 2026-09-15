@@ -1,0 +1,13 @@
+{
+  "critic": "/NHNHOME/jellyho/jellyho/critics/cable_tie_trunc_fixed_g30/step_200000",
+  "frames": 4096,
+  "episodes": 160,
+  "episodes_scored_within": 157,
+  "spearman_within_ep": 0.9987622216121,
+  "spearman_within_ep_median": 0.9999999999999999,
+  "spearman_within_ep_frac_positive": 1.0,
+  "spearman_global": 0.9988869966974182,
+  "auc_early": 0.128345498783455,
+  "q_mean": -527.8084551948123,
+  "in_sample": true
+}

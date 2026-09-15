@@ -1,0 +1,13 @@
+{
+  "critic": "/NHNHOME/jellyho/jellyho/critics/cable_tie_macro_g5",
+  "frames": 4096,
+  "episodes": 160,
+  "episodes_scored_within": 157,
+  "spearman_within_ep": 0.9197535971261289,
+  "spearman_within_ep_median": 0.9999999999999999,
+  "spearman_within_ep_frac_positive": 0.9617834394904459,
+  "spearman_global": 0.9007351556416135,
+  "auc_early": 1.0,
+  "q_mean": -566.3553065117449,
+  "in_sample": true
+}

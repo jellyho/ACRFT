@@ -1,0 +1,25 @@
+input space: pi05  proprio=pos  homing=all
+cache N=251080 frames, 160 episodes; scoring stride=10
+  scored 10 episodes  (192s)
+  scored 20 episodes  (346s)
+  scored 30 episodes  (477s)
+  scored 40 episodes  (574s)
+  scored 50 episodes  (744s)
+  scored 60 episodes  (898s)
+  scored 70 episodes  (973s)
+  scored 80 episodes  (1051s)
+  scored 90 episodes  (1166s)
+  scored 100 episodes  (1280s)
+  scored 110 episodes  (1374s)
+  scored 120 episodes  (1413s)
+  scored 130 episodes  (1488s)
+  scored 140 episodes  (1584s)
+  scored 150 episodes  (1678s)
+  scored 160 episodes  (1715s)
+critic cable_tie_fixed_g30  |  150 success / 10 fail episodes
+  AUC(mean value) = 1.0000
+  AUC(max value)  = 1.0000
+  AUC(last value) = 1.0000
+  success : k*= 30.0  Vslope= 0.95  V(s0)=  -913.3  first    -915.5  last     -60.1  mean    -523.1  min    -925.4  deep-atom mass 0.002
+  fail    : k*= 30.0  Vslope=  n/a  V(s0)= -1483.0  first   -1488.3  last   -1520.8  mean   -1505.6  min   -1521.0  deep-atom mass 1.000
+  (v_min = -1531.4; 'deep-atom mass' = probability below 0.72*v_min)

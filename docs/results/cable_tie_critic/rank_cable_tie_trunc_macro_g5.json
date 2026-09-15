@@ -1,0 +1,13 @@
+{
+  "critic": "/NHNHOME/jellyho/jellyho/critics/cable_tie_trunc_macro_g5/step_200000",
+  "frames": 4096,
+  "episodes": 160,
+  "episodes_scored_within": 157,
+  "spearman_within_ep": 0.9994044626852849,
+  "spearman_within_ep_median": 1.0,
+  "spearman_within_ep_frac_positive": 1.0,
+  "spearman_global": 0.9999090687434008,
+  "auc_early": 0.13017031630170317,
+  "q_mean": -528.9713068655692,
+  "in_sample": true
+}

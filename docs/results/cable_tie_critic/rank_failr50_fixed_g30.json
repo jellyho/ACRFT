@@ -1,0 +1,13 @@
+{
+  "critic": "/NHNHOME/jellyho/jellyho/critics/cable_tie_failr50_fixed_g30/step_200000",
+  "frames": 4096,
+  "episodes": 160,
+  "episodes_scored_within": 157,
+  "spearman_within_ep": 0.9983057339525317,
+  "spearman_within_ep_median": 0.9999999999999998,
+  "spearman_within_ep_frac_positive": 1.0,
+  "spearman_global": 0.9281289728477171,
+  "auc_early": 0.7864963503649635,
+  "q_mean": -547.5840407982469,
+  "in_sample": true
+}

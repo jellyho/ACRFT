@@ -42,7 +42,12 @@ def load_bins(critic_dir, *, action_dim, horizon):
         num_critics=cfg.get("num_critics", 2),
     )
     hl = critic_mod.HLGauss(v_min=cfg.get("v_min", 0.0), v_max=cfg.get("v_max", 1.0), num_atoms=num_atoms)
-    params = flax.serialization.msgpack_restore((critic_dir / "params.msgpack").read_bytes())
+    # Checkpoints are one directory per saved step since 2026-09-12; a run directory means its
+    # last step. Resolving here keeps a run dir working and lets a step dir be named explicitly.
+    import openpi.patch_critic.spec as _cspec
+
+    _ckpt_dir = _cspec.resolve_checkpoint_dir(critic_dir)
+    params = flax.serialization.msgpack_restore((_ckpt_dir / "params.msgpack").read_bytes())
 
     @jax.jit
     def probs(obs, actions):

@@ -1,0 +1,9 @@
+critic /NHNHOME/jellyho/jellyho/critics/cable_tie_failr50_fixed_g30/step_200000
+  anchors 4096 frames / 160 episodes  (IN-SAMPLE: see module docstring)
+  spearman within-episode : +0.9983   <- the honest ranking number
+      median +1.0000   frac>0 1.000   over 157 episodes
+  spearman global         : +0.9281   (mixes in episode pace)
+  AUC(success vs fail, early frames) = 0.7865   <- HIGH here means the outcome
+      label is readable from the state, which is the shortcut, not the skill
+  Q mean -547.6
+  wrote /NHNHOME/jellyho/jellyho/critic_scores/rank_failr50_fixed_g30.json

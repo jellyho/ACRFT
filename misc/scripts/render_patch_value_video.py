@@ -77,7 +77,12 @@ def main():
     m = json.loads((a.data / "meta.json").read_text())  # dims come from the data, not hardcoded
     adim, sdim = m["action_dim"], m["state_dim"]
     net = PatchCriticEnsemble(action_dim=adim, horizon=H, num_critics=nc, macro_group_size=gsz, num_atoms=atoms)
-    params = flax.serialization.msgpack_restore((a.critic / "params.msgpack").read_bytes())
+    # Checkpoints are one directory per saved step since 2026-09-12; a run directory means its
+    # last step. Resolving here keeps a run dir working and lets a step dir be named explicitly.
+    import openpi.patch_critic.spec as _cspec
+
+    _ckpt_dir = _cspec.resolve_checkpoint_dir(a.critic)
+    params = flax.serialization.msgpack_restore((_ckpt_dir / "params.msgpack").read_bytes())
     hl = HLGauss(vmin, vmax, atoms)
     centers = np.asarray(hl.centers)
     prefixes = list(range(gsz, H + 1, gsz))  # commitment horizons the per-prefix heads score

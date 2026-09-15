@@ -1,0 +1,8 @@
+input space: pi05  proprio=pos  homing=all
+cache N=251080 frames, 160 episodes; scoring stride=10
+  scored 10 episodes  (193s)
+  scored 20 episodes  (343s)
+  scored 30 episodes  (473s)
+  scored 40 episodes  (570s)
+  scored 50 episodes  (739s)
+  scored 60 episodes  (888s)
