@@ -347,12 +347,16 @@ def main():
     ap.add_argument("--failure-reward", type=float, default=None)
     ap.add_argument(
         "--failure-terminal",
-        choices=["absorbing", "truncate"],
+        choices=["absorbing", "truncate", "penalty"],
         default="absorbing",
         help="absorbing (today's): a failure's last frame is a terminal whose value is failure_reward "
         "(default v_min), and TD carries that back through the episode. truncate: no terminal at all "
         "-- the operator gave up, which ends the recording, not the MDP. The state still has a value "
-        "and the critic predicts it, so the success/fail label stops entering the value target.",
+        "and the critic predicts it, so the success/fail label stops entering the value target. "
+        "penalty: the give-up costs failure_reward once but does NOT terminate -- the state keeps a "
+        "learned value. absorbing pins that value and the pin is what reaches frame 0; truncate says "
+        "nothing was wrong at all and failures then score ABOVE successes, because a cut homing tail "
+        "leaves them short and cost_to_goal reads short as near-the-goal.",
     )
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-project", default="acrft-critic")

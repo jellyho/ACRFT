@@ -91,6 +91,19 @@ def analytic_targets(
     # cannot bootstrap to a shallow value and get preferred over a long success. Valid even when the
     # successor lands past the (truncated) episode end -- it is the absorbing terminal, not a real frame.
     fail_term = (~succ[:, None]) & (nxt >= ep_len[:, None] - 1) & in_clip & not_pad
+    if failure_terminal == "penalty":
+        # Penalty WITHOUT termination: the give-up costs failure_reward once, but the state keeps a
+        # learned value instead of being pinned to it. absorbing does both at once, and the pinning
+        # is what reaches frame 0 -- V(s_T) fixed at failure_reward forces every earlier state toward
+        # gamma^k * failure_reward, which is the free success/fail bit. truncate drops both, and then
+        # nothing says the give-up was bad at all: with the homing tail cut, a failure is simply
+        # SHORT, and cost_to_goal reads short as near-the-goal (measured: failures scored ABOVE
+        # successes, AUC 0.13). Keeping the reward and clearing `done` says "that last action was
+        # costly" without also asserting what the state is worth.
+        done_nxt = np.where(fail_term, 0.0, done_nxt).astype(np.float32)
+        reward_nxt = np.where(fail_term, failure_reward, reward_nxt).astype(np.float32)
+        valid = np.where(fail_term, 1.0, valid).astype(np.float32)
+        fail_term = np.zeros_like(fail_term)
     if failure_terminal == "truncate":
         # A human giving up is a TRUNCATION, not a termination. The robot and the scene are still
         # there and the state still has a value; what ended was the operator's patience. Standard
