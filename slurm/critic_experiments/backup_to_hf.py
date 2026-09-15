@@ -4,22 +4,34 @@ Order is by what cannot be recreated. The BC checkpoints are 2.5 GPU-days each a
 hours each; the 35 GB feature cache is 12 minutes from a dataset that already lives on the Hub, so it
 is deliberately NOT uploaded -- spending the remaining time on it would risk the things that matter.
 """
-import sys, pathlib, time
+
+import pathlib
+import time
+
 from huggingface_hub import HfApi
 
 api = HfApi()
 JOBS = [
     # (local path, repo_id, repo_type, path_in_repo)
     ("/NHNHOME/jellyho/jellyho/critics", "jellyho/acrft-cable-tie-critics", "model", "."),
-    ("/NHNHOME/jellyho/jellyho/ACRFT/checkpoints/pi05_yam_cable_tie/yam_cable_tie",
-     "jellyho/pi05_yam_cable_tie_bc", "model", "withhoming_200k"),
-    ("/NHNHOME/jellyho/jellyho/ACRFT/checkpoints/pi05_yam_cable_tie_success/yam_cable_tie_success",
-     "jellyho/pi05_yam_cable_tie_bc", "model", "success_200k"),
+    (
+        "/NHNHOME/jellyho/jellyho/ACRFT/checkpoints/pi05_yam_cable_tie/yam_cable_tie",
+        "jellyho/pi05_yam_cable_tie_bc",
+        "model",
+        "withhoming_200k",
+    ),
+    (
+        "/NHNHOME/jellyho/jellyho/ACRFT/checkpoints/pi05_yam_cable_tie_success/yam_cable_tie_success",
+        "jellyho/pi05_yam_cable_tie_bc",
+        "model",
+        "success_200k",
+    ),
 ]
 for src, repo, rtype, dest in JOBS:
     p = pathlib.Path(src)
     if not p.exists():
-        print(f"SKIP (missing): {src}", flush=True); continue
+        print(f"SKIP (missing): {src}", flush=True)
+        continue
     print(f"[{time.strftime('%T')}] -> {repo}/{dest}  from {src}", flush=True)
     try:
         api.create_repo(repo, repo_type=rtype, private=True, exist_ok=True)
